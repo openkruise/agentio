@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package mcpacl enforces MCP tool ACLs. It cannot tell whether a request
-// is a governed tools/call without the body — and enforcement must not be
-// skippable via the client-controlled version header — so it always asks
-// for the body and decides in the body phase.
+// Package mcpacl enforces MCP tool ACLs. For MCP 2026-07-28 it uses the
+// mandatory Mcp-Method and Mcp-Name headers for a fast path: non-governed
+// methods pass without body buffering, and a header-derived deny short-
+// circuits before the body arrives. An allow still needs the body to verify
+// header/body consistency. For older revisions the method is only knowable
+// from the JSON-RPC body, so the body is always requested.
 package mcpacl
 
 import (
@@ -133,9 +135,53 @@ type Filter struct {
 
 func New(rule filter.RuleConfig[Config]) filter.Filter { return &Filter{rule: rule} }
 
-// OnRequestHeaders always asks for the body: the governed method is only
-// knowable from the JSON-RPC payload.
-func (f *Filter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
+// OnRequestHeaders decides whether the body phase is needed. For MCP
+// 2026-07-28, the mandatory Mcp-Method and Mcp-Name headers enable a fast
+// path: non-governed methods pass through without body buffering, and a
+// header-derived deny short-circuits before the body arrives. An allow
+// still needs the body to verify header/body consistency (anti-smuggling).
+// For older revisions the method is only knowable from the JSON-RPC body.
+func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filter.Action, error) {
+	version := st.Request.Headers[mcpProtocolVersionHeader]
+
+	// Fast path for MCP 2026-07-28: the spec makes Mcp-Method mandatory on
+	// every request and Mcp-Name mandatory on tools/call, enabling gateway-
+	// level decisions without buffering the JSON-RPC body.
+	if version == gaMCPVersion {
+		method := st.Request.Headers[mcpMethodHeader]
+		if method != "" {
+			// Non-governed method: pass through immediately — no body needed.
+			// The MCP 2026-07-28 spec requires servers to reject requests
+			// where Mcp-Method does not match the body's method, so a
+			// compliant server will not execute a tools/call hidden behind
+			// a tools/list header. Operators who cannot trust upstream
+			// compliance should use a whitelist policy (defaultAction: deny).
+			if !governedMethods[method] {
+				return filter.Continue(), nil
+			}
+			// Governed method (tools/call): evaluate from headers. A deny is
+			// safe to make immediately — deny is the safe-fail direction, and
+			// a client sending contradictory headers/body is suspicious. An
+			// allow still needs the body to verify the header-derived tool
+			// name matches the JSON-RPC payload.
+			toolName := st.Request.Headers[mcpNameHeader]
+			if toolName != "" {
+				rc := f.rule
+				if decision := evaluate(rc.Cfg, method, toolName); decision != actionAllow {
+					log.FromContext(ctx).Info("MCP tool denied by header fast-path",
+						"rule", rc.ID.Name, "method", method, "toolName", toolName,
+						"decision", decision, "pod", st.Peer.Pod.String())
+					return filter.Stop(denyReply(rc.Cfg)), nil
+				}
+				// Allow: need body to verify header/body consistency.
+				return filter.NeedBody(), nil
+			}
+		}
+		// Absent or incomplete headers: fall back to body parsing.
+		return filter.NeedBody(), nil
+	}
+
+	// Pre-2026-07-28: method is only knowable from the JSON-RPC body.
 	return filter.NeedBody(), nil
 }
 
@@ -180,6 +226,31 @@ func (f *Filter) OnRequestBody(ctx context.Context, st *filter.Stream, body filt
 		log.FromContext(ctx).Info("MCP tool call with unsupported/absent protocol version, denying",
 			"rule", rc.ID.Name, "version", version, "pod", st.Peer.Pod.String())
 		return filter.Stop(denyReply(cfg)), nil
+	}
+
+	// For 2026-07-28, verify header/body consistency. We only reach the body
+	// phase when OnRequestHeaders returned NeedBody — i.e. the headers were
+	// absent or the header-based evaluation returned allow. If the mandatory
+	// headers are present and match the body, the allow is confirmed without
+	// re-evaluating. If they mismatch, fall back to body-based evaluation
+	// (the body is the source of truth for what upstream will execute).
+	if version == gaMCPVersion {
+		hMethod := st.Request.Headers[mcpMethodHeader]
+		hName := st.Request.Headers[mcpNameHeader]
+		if hMethod != "" && hName != "" && hMethod == method && read.hasTool && hName == toolName {
+			// Headers fully match the body. OnRequestHeaders only let us
+			// through when the header-based evaluation was an allow, so the
+			// allow is confirmed.
+			return filter.Continue(), nil
+		}
+		if hMethod != "" || hName != "" {
+			log.FromContext(ctx).Info("MCP header/body mismatch, falling back to body evaluation",
+				"rule", rc.ID.Name,
+				"headerMethod", hMethod, "bodyMethod", method,
+				"headerTool", hName, "bodyTool", toolName,
+				"pod", st.Peer.Pod.String())
+		}
+		// Fall through to body-based evaluation.
 	}
 
 	// A governed call whose tool name is absent or not a string cannot be

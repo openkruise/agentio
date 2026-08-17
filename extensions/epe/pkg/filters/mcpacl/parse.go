@@ -26,6 +26,20 @@ import (
 // every request. Header map keys are lowercased by the request handler.
 const mcpProtocolVersionHeader = "mcp-protocol-version"
 
+// mcpMethodHeader and mcpNameHeader are the mandatory routing headers
+// introduced in MCP 2026-07-28 (SEP-2243). Mcp-Method carries the JSON-RPC
+// method on every request; Mcp-Name carries the tool/resource name only for
+// methods that reference one (tools/call, resources/read, prompts/get).
+// Header map keys are lowercased by the request handler.
+const (
+	mcpMethodHeader = "mcp-method"
+	mcpNameHeader   = "mcp-name"
+)
+
+// gaMCPVersion is the MCP 2026-07-28 GA revision, which made Mcp-Method and
+// Mcp-Name headers mandatory on every Streamable HTTP request.
+const gaMCPVersion = "2026-07-28"
+
 // supportedMCPVersions is the set of MCP revisions this ACL enforces. Traffic
 // declaring any other version (or no identifiable supported version) is ignored
 // and passed through — we only police the protocol versions we understand.
