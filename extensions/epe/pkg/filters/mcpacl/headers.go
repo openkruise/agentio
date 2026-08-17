@@ -27,16 +27,19 @@ import (
 // cannot be safely represented as plain ASCII — non-ASCII characters,
 // control characters, or leading/trailing whitespace. The format is:
 //
-//	=?base64?<RFC-4648-Base64-of-UTF-8>?=
+//	=?base64?<Base64-of-UTF-8>?=
 //
-// The markers are case-sensitive and must be lowercase. The entire value
-// must be wrapped (all-or-nothing); partial encoding is not supported.
+// The MCP spec says "Base64 encoding of the UTF-8 representation" without
+// naming a specific RFC for the Base64 scheme; standard Base64 (A-Za-z0-9+/
+// with = padding) is what the spec examples use. The markers are
+// case-sensitive and must be lowercase. The entire value must be wrapped
+// (all-or-nothing); partial encoding is not supported.
 const (
 	base64SentinelPrefix = "=?base64?"
 	base64SentinelSuffix = "?="
 )
 
-// canonicalBase64 matches valid RFC 4648 §4 Base64 with required padding.
+// canonicalBase64 matches valid standard Base64 with required padding.
 // Invalid padding, invalid characters, or non-canonical form do not match.
 var canonicalBase64 = regexp.MustCompile(`^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`)
 

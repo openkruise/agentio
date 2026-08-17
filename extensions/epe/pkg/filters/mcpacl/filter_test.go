@@ -365,3 +365,107 @@ func TestOnRequestBody_Base64Verification(t *testing.T) {
 		}
 	})
 }
+
+// TestFullFlow_GAVersion exercises the complete request lifecycle for MCP
+// 2026-07-28: OnRequestHeaders returns NeedBody for an allowed tool (not
+// Stop), then OnRequestBody confirms the allow when header and body match.
+// A denied tool short-circuits in OnRequestHeaders and never reaches the body
+// phase. This is the only test that drives both phases in sequence for the GA
+// version, covering the interaction between the header fast-path and the
+// body-phase consistency check.
+func TestFullFlow_GAVersion(t *testing.T) {
+	allowedBody := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"allowed-tool"}}`
+
+	t.Run("allowed tool: headers NeedBody then body confirms allow", func(t *testing.T) {
+		cfg := whitelistCfg()
+		st := streamWithHeaders(gaMCPVersion, "tools/call", "allowed-tool")
+
+		// Headers phase: allowed tool → NeedBody (not Stop).
+		hdrAct := runHeaders(t, cfg, st)
+		if hdrAct.Kind() != filter.KindNeedBody {
+			t.Fatalf("OnRequestHeaders Kind = %v, want KindNeedBody for allowed tool", hdrAct.Kind())
+		}
+
+		// Body phase: header/body match → confirmed allow.
+		bodyAct := runBody(t, cfg, st, allowedBody)
+		if bodyAct.Kind() != filter.KindContinue {
+			t.Errorf("OnRequestBody Kind = %v, want KindContinue (header-confirmed allow)", bodyAct.Kind())
+		}
+	})
+
+	t.Run("denied tool: headers Stop, body phase never reached", func(t *testing.T) {
+		cfg := whitelistCfg()
+		st := streamWithHeaders(gaMCPVersion, "tools/call", "evil")
+
+		// Headers phase: denied tool → Stop (fast-path deny).
+		hdrAct := runHeaders(t, cfg, st)
+		if hdrAct.Kind() != filter.KindStop {
+			t.Fatalf("OnRequestHeaders Kind = %v, want KindStop for denied tool", hdrAct.Kind())
+		}
+		r, _ := hdrAct.Reply()
+		if r.Status != 451 || string(r.Body) != "denied-by-whitelist" {
+			t.Errorf("Reply = %+v, want status=451 body=denied-by-whitelist", r)
+		}
+	})
+
+	t.Run("non-governed method: headers Continue, no body needed", func(t *testing.T) {
+		cfg := whitelistCfg()
+		st := streamWithHeaders(gaMCPVersion, "tools/list", "")
+
+		hdrAct := runHeaders(t, cfg, st)
+		if hdrAct.Kind() != filter.KindContinue {
+			t.Fatalf("OnRequestHeaders Kind = %v, want KindContinue for non-governed method", hdrAct.Kind())
+		}
+	})
+
+	t.Run("encoded allowed tool: headers NeedBody then body confirms allow", func(t *testing.T) {
+		cfg := whitelistCfg()
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("allowed-tool"))
+
+		// Headers phase: encoded allowed tool → NeedBody (not Stop).
+		hdrAct := runHeaders(t, cfg, st)
+		if hdrAct.Kind() != filter.KindNeedBody {
+			t.Fatalf("OnRequestHeaders Kind = %v, want KindNeedBody for encoded allowed tool", hdrAct.Kind())
+		}
+
+		// Body phase: decoded header matches body → confirmed allow.
+		bodyAct := runBody(t, cfg, st, allowedBody)
+		if bodyAct.Kind() != filter.KindContinue {
+			t.Errorf("OnRequestBody Kind = %v, want KindContinue (encoded header-confirmed allow)", bodyAct.Kind())
+		}
+	})
+}
+
+// TestOnRequestBody_PartialGAHeaders covers when only one of Mcp-Method or
+// Mcp-Name is present for the GA version: the consistency check cannot
+// confirm an allow, so the filter falls back to body-based evaluation.
+func TestOnRequestBody_PartialGAHeaders(t *testing.T) {
+	allowedBody := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"allowed-tool"}}`
+	evilBody := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"evil"}}`
+
+	t.Run("method present, name absent falls back to body allow", func(t *testing.T) {
+		// Only mcp-method is set; body evaluation decides.
+		st := streamWithHeaders(gaMCPVersion, "tools/call", "")
+		act := runBody(t, whitelistCfg(), st, allowedBody)
+		if act.Kind() != filter.KindContinue {
+			t.Errorf("Kind = %v, want KindContinue (body-derived allow with partial headers)", act.Kind())
+		}
+	})
+
+	t.Run("method present, name absent denies from body", func(t *testing.T) {
+		st := streamWithHeaders(gaMCPVersion, "tools/call", "")
+		act := runBody(t, whitelistCfg(), st, evilBody)
+		if act.Kind() != filter.KindStop {
+			t.Errorf("Kind = %v, want KindStop (body-derived deny with partial headers)", act.Kind())
+		}
+	})
+
+	t.Run("name present, method absent falls back to body allow", func(t *testing.T) {
+		// Only mcp-name is set; body evaluation decides.
+		st := streamWithHeaders(gaMCPVersion, "", "allowed-tool")
+		act := runBody(t, whitelistCfg(), st, allowedBody)
+		if act.Kind() != filter.KindContinue {
+			t.Errorf("Kind = %v, want KindContinue (body-derived allow with partial headers)", act.Kind())
+		}
+	})
+}

@@ -381,10 +381,12 @@ func TestFinalize_VersionGate_Passthrough(t *testing.T) {
 	})
 }
 
-// A tool call must come from a supported protocol version. The version header is
-// attacker-controlled, so it can only make enforcement stricter: a missing or
-// unsupported version on a tools/call is denied, never a free pass. Non-tool
-// methods are unaffected (they pass regardless — see NonToolMethodsPassThrough).
+// A tool call must come from a supported protocol version. The version header
+// is attacker-controlled, so it can only make enforcement stricter: a missing
+// or unsupported version on a tools/call is denied, never a free pass. A
+// supported version with an allowed tool must still pass (no false denial).
+// Non-tool methods are unaffected (they pass regardless — see
+// NonToolMethodsPassThrough).
 func TestFinalize_VersionGate(t *testing.T) {
 	// Whitelist that allows the "safe" tool; "delete_repo" would be denied.
 	policy := &Config{
@@ -407,15 +409,16 @@ func TestFinalize_VersionGate(t *testing.T) {
 		}
 	})
 
-	// A tools/call is DENIED when the version is unsupported, absent, or the
-	// other supported value — the header cannot disable enforcement.
+	// The version header cannot disable enforcement: unsupported or absent
+	// versions deny the call, while other supported versions still allow the
+	// whitelisted tool.
 	for name, version := range map[string]string{
 		"unsupported (2025-03-26)": "2025-03-26",
 		"absent":                   "",
 		"other supported":          "2025-06-18",
 		"GA (2026-07-28)":          "2026-07-28",
 	} {
-		t.Run("tools/call denied on "+name, func(t *testing.T) {
+		t.Run("tools/call on "+name, func(t *testing.T) {
 			rctx := makeRctx("application/json")
 			if version == "" {
 				delete(rctx.Request.Headers, "mcp-protocol-version")
@@ -428,8 +431,8 @@ func TestFinalize_VersionGate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			// ...but on an unsupported/absent version the whole call is denied;
-			// only supported versions (2025-06-18, 2026-07-28) should pass.
+			// Supported versions (2025-06-18, 2026-07-28) allow the whitelisted
+			// tool; unsupported or absent versions deny the whole call.
 			if version == "2025-06-18" || version == "2026-07-28" {
 				if result.Action != legacyContinue {
 					t.Errorf("allowed tool on supported %q should pass, got %v", version, result.Action)

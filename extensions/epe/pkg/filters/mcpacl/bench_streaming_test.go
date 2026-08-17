@@ -723,10 +723,3 @@ func TestPerformanceReport(t *testing.T) {
 	fmt.Println("║   ext_proc doesn't block waiting for the full body to arrive    ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
