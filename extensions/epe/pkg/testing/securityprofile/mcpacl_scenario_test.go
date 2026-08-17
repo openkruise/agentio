@@ -167,3 +167,50 @@ func TestScenario_ChunkedBodyDelivery(t *testing.T) {
 		verdict.RequireBlockedBody(t, 451, "denied-by-mcp-whitelist")
 	}
 }
+
+// TestScenario_GAFastPath exercises the MCP 2026-07-28 GA fast path through
+// the full engine. The mandatory Mcp-Method and Mcp-Name headers enable:
+//   - Denied tools/call: blocked from headers alone (Stop, no body buffering).
+//   - Allowed tools/call: NeedsBody for header/body verification, then passes.
+//   - Non-governed methods: Continue immediately (no body buffering).
+func TestScenario_GAFastPath(t *testing.T) {
+	h := New(t, Options{})
+	h.Fixture.ApplyYAML(mcpPolicyYAML)
+
+	peer := func() *enginetest.RequestBuilder {
+		return enginetest.NewRequest("POST", "server.example.com", "/mcp").
+			Peer("test-ns", "sandbox-pod", map[string]string{"app": "sandbox"}).
+			Header("content-type", "application/json").
+			Header("mcp-protocol-version", "2026-07-28")
+	}
+
+	// Denied tool: fast-path deny from headers alone — body never processed.
+	denied := h.Run(t, peer().
+		Header("mcp-method", "tools/call").
+		Header("mcp-name", "evil").
+		Body([]byte(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evil"}}`)))
+	denied.RequireBlockedBody(t, 451, "denied-by-mcp-whitelist")
+
+	// Allowed tool: fast-path NeedBody, then body confirms the allow.
+	allowed := h.Run(t, peer().
+		Header("mcp-method", "tools/call").
+		Header("mcp-name", "allowed-tool").
+		Body([]byte(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"allowed-tool"}}`)))
+	if allowed.Kind == enginetest.VerdictBlocked {
+		t.Fatalf("allowed tool was blocked: %+v", allowed)
+	}
+	if allowed.ModeOverride == nil {
+		t.Fatal("expected ModeOverride for allowed tool — NeedsBody should request body buffering")
+	}
+
+	// Non-governed method: fast-path Continue, no body buffering needed.
+	nonGoverned := h.Run(t, peer().
+		Header("mcp-method", "tools/list").
+		Body([]byte(`{"jsonrpc":"2.0","id":"1","method":"tools/list"}`)))
+	if nonGoverned.Kind == enginetest.VerdictBlocked {
+		t.Fatalf("non-governed method was blocked: %+v", nonGoverned)
+	}
+	if nonGoverned.ModeOverride != nil {
+		t.Fatal("non-governed method should not request body buffering — fast-path Continue")
+	}
+}

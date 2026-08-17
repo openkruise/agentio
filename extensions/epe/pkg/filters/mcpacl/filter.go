@@ -181,15 +181,13 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 						"decision", decision, "pod", st.Peer.Pod.String())
 					return filter.Stop(denyReply(rc.Cfg)), nil
 				}
-				// Allow: need body to verify header/body consistency.
-				return filter.NeedBody(), nil
+				// Allow: fall through to NeedBody for header/body verification.
 			}
 		}
-		// Absent or incomplete headers: fall back to body parsing.
-		return filter.NeedBody(), nil
 	}
 
-	// Pre-2026-07-28: method is only knowable from the JSON-RPC body.
+	// Pre-2026-07-28, absent/incomplete GA headers, or allow pending
+	// body verification: method is only knowable from the JSON-RPC body.
 	return filter.NeedBody(), nil
 }
 
