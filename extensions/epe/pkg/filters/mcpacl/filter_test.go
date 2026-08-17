@@ -15,6 +15,7 @@ package mcpacl
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
 	"istio.io/istio/extensions/epe/pkg/httpreq"
@@ -52,6 +53,12 @@ func streamWithHeaders(version, method, name string) *filter.Stream {
 		headers[mcpNameHeader] = name
 	}
 	return &filter.Stream{Request: httpreq.HTTPRequest{Headers: headers}}
+}
+
+// encodeMcpName wraps a tool name in the Base64 sentinel encoding used by
+// MCP 2026-07-28 for non-ASCII header values.
+func encodeMcpName(name string) string {
+	return base64SentinelPrefix + base64.StdEncoding.EncodeToString([]byte(name)) + base64SentinelSuffix
 }
 
 func runBody(t *testing.T, cfg Config, st *filter.Stream, body string) filter.Action {
@@ -288,6 +295,73 @@ func TestOnRequestBody_HeaderVerification(t *testing.T) {
 		act := runBody(t, whitelistCfg(), st, evilBody)
 		if act.Kind() != filter.KindStop {
 			t.Errorf("Kind = %v, want KindStop (body-derived deny)", act.Kind())
+		}
+	})
+}
+
+// TestFastPath_Base64EncodedName covers the Base64 sentinel decoding in
+// the OnRequestHeaders fast-path: denied tools are stopped from encoded
+// headers, allowed tools still request the body, and invalid encoding
+// falls back to body parsing.
+func TestFastPath_Base64EncodedName(t *testing.T) {
+	t.Run("encoded denied tool fast Stop", func(t *testing.T) {
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("evil"))
+		act := runHeaders(t, whitelistCfg(), st)
+		if act.Kind() != filter.KindStop {
+			t.Errorf("Kind = %v, want KindStop (encoded denied tool)", act.Kind())
+		}
+	})
+
+	t.Run("encoded allowed tool requests body", func(t *testing.T) {
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("allowed-tool"))
+		act := runHeaders(t, whitelistCfg(), st)
+		if act.Kind() != filter.KindNeedBody {
+			t.Errorf("Kind = %v, want KindNeedBody (encoded allowed tool)", act.Kind())
+		}
+	})
+
+	t.Run("invalid encoding falls back to body", func(t *testing.T) {
+		// Invalid Base64 padding in the sentinel — cannot decode, cannot
+		// evaluate from header, must fall back to body.
+		st := streamWithHeaders(gaMCPVersion, "tools/call", base64SentinelPrefix+"SGVsbG8"+base64SentinelSuffix)
+		act := runHeaders(t, whitelistCfg(), st)
+		if act.Kind() != filter.KindNeedBody {
+			t.Errorf("Kind = %v, want KindNeedBody (invalid encoding fallback)", act.Kind())
+		}
+	})
+}
+
+// TestOnRequestBody_Base64Verification covers the body-phase Base64
+// decoding: an encoded header matching the body confirms the allow, and a
+// mismatch (different tool after decoding) falls back to body evaluation.
+func TestOnRequestBody_Base64Verification(t *testing.T) {
+	allowedBody := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"allowed-tool"}}`
+	evilBody := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"evil"}}`
+
+	t.Run("encoded header matches body confirms allow", func(t *testing.T) {
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("allowed-tool"))
+		act := runBody(t, whitelistCfg(), st, allowedBody)
+		if act.Kind() != filter.KindContinue {
+			t.Errorf("Kind = %v, want KindContinue (encoded header-confirmed allow)", act.Kind())
+		}
+	})
+
+	t.Run("encoded header mismatch falls back to body", func(t *testing.T) {
+		// Header says "allowed-tool" (encoded) but body says "evil".
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("allowed-tool"))
+		act := runBody(t, whitelistCfg(), st, evilBody)
+		if act.Kind() != filter.KindStop {
+			t.Errorf("Kind = %v, want KindStop (body-derived deny after encoded mismatch)", act.Kind())
+		}
+	})
+
+	t.Run("encoded denied header, allowed body falls back", func(t *testing.T) {
+		// Header says "evil" (encoded) but body says "allowed-tool".
+		// Mismatch → body evaluation → evaluate("allowed-tool") → allow.
+		st := streamWithHeaders(gaMCPVersion, "tools/call", encodeMcpName("evil"))
+		act := runBody(t, whitelistCfg(), st, allowedBody)
+		if act.Kind() != filter.KindContinue {
+			t.Errorf("Kind = %v, want KindContinue (body-derived allow after mismatch)", act.Kind())
 		}
 	})
 }

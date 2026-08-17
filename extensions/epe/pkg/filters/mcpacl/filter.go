@@ -166,6 +166,14 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 			// name matches the JSON-RPC payload.
 			toolName := st.Request.Headers[mcpNameHeader]
 			if toolName != "" {
+				// Decode Base64 sentinel encoding (MCP 2026-07-28 SEP-2243)
+				// for non-ASCII tool names before evaluation.
+				if decoded, ok := decodeMcpHeaderValue(toolName); ok {
+					toolName = decoded
+				} else {
+					// Invalid encoding: cannot evaluate from header, fall back to body.
+					return filter.NeedBody(), nil
+				}
 				rc := f.rule
 				if decision := evaluate(rc.Cfg, method, toolName); decision != actionAllow {
 					log.FromContext(ctx).Info("MCP tool denied by header fast-path",
@@ -237,6 +245,14 @@ func (f *Filter) OnRequestBody(ctx context.Context, st *filter.Stream, body filt
 	if version == gaMCPVersion {
 		hMethod := st.Request.Headers[mcpMethodHeader]
 		hName := st.Request.Headers[mcpNameHeader]
+		if hName != "" {
+			// Decode Base64 sentinel encoding before comparing to the body.
+			// If decoding fails, hName stays raw and won't match the body's
+			// tool name — triggering a mismatch fallback to body evaluation.
+			if decoded, ok := decodeMcpHeaderValue(hName); ok {
+				hName = decoded
+			}
+		}
 		if hMethod != "" && hName != "" && hMethod == method && read.hasTool && hName == toolName {
 			// Headers fully match the body. OnRequestHeaders only let us
 			// through when the header-based evaluation was an allow, so the
