@@ -111,6 +111,12 @@ func TestFilter_UnsupportedVersion(t *testing.T) {
 			t.Errorf("Kind = %v, want KindContinue per policy", act.Kind())
 		}
 	})
+	t.Run("supported GA version allows tool", func(t *testing.T) {
+		act := runBody(t, whitelistCfg(), streamWithVersion("2026-07-28"), body)
+		if act.Kind() != filter.KindContinue {
+			t.Errorf("Kind = %v, want KindContinue for 2026-07-28 (GA)", act.Kind())
+		}
+	})
 }
 
 func TestEvaluateDefaultActionFallback(t *testing.T) {

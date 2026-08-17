@@ -96,7 +96,7 @@ Both commands run in the selected workload container. A request made from the op
 
 ## Supported framing and matching behavior
 
-EPE always buffers the full request body for a matching `mcpToolPolicy`; it does not make a decision from the client-controlled version header alone. The current implementation supports MCP protocol versions `2025-06-18` and `2025-11-25`.
+EPE always buffers the full request body for a matching `mcpToolPolicy`; it does not make a decision from the client-controlled version header alone. The current implementation supports MCP protocol versions `2025-06-18`, `2025-11-25`, and `2026-07-28`.
 
 - Only JSON-RPC method `tools/call` is governed. `initialize`, `ping`, `tools/list`, resource, prompt, task, logging, and other methods pass through.
 - Rules are considered in document order. The first matching rule wins. An empty `toolNames` list matches every tool name for that method; multiple names are ORed.

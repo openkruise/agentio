@@ -413,6 +413,7 @@ func TestFinalize_VersionGate(t *testing.T) {
 		"unsupported (2025-03-26)": "2025-03-26",
 		"absent":                   "",
 		"other supported":          "2025-06-18",
+		"GA (2026-07-28)":          "2026-07-28",
 	} {
 		t.Run("tools/call denied on "+name, func(t *testing.T) {
 			rctx := makeRctx("application/json")
@@ -428,8 +429,8 @@ func TestFinalize_VersionGate(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			// ...but on an unsupported/absent version the whole call is denied;
-			// only "other supported" (2025-06-18) should pass.
-			if version == "2025-06-18" {
+			// only supported versions (2025-06-18, 2026-07-28) should pass.
+			if version == "2025-06-18" || version == "2026-07-28" {
 				if result.Action != legacyContinue {
 					t.Errorf("allowed tool on supported %q should pass, got %v", version, result.Action)
 				}
