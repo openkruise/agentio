@@ -59,7 +59,7 @@ func BenchmarkMatches(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					benchSink = store.Matches("default", benchPodLabels)
+					benchSink = store.Matches("", "default", benchPodLabels)
 				}
 			})
 		}
@@ -82,7 +82,7 @@ func BenchmarkMatches_GlobalAndNamespaced(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchSink = store.Matches("default", benchPodLabels)
+				benchSink = store.Matches("", "default", benchPodLabels)
 			}
 		})
 	}

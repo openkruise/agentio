@@ -139,9 +139,12 @@ func run() error {
 
 	group := &runnable.Group{}
 
-	// Create the in-memory config store, materialized from krt collections of
-	// compiled SecurityProfile / GlobalSecurityProfile objects. Registration
-	// replays current collection state and then applies every event batch.
+	// Create the in-memory config store, materialized from one joined krt
+	// collection of compiled SecurityProfile / GlobalSecurityProfile objects
+	// and per-Sandbox inline rule profiles (agents.kruise.io/security-rules
+	// annotation, looked up by verified pod identity and evaluated after the
+	// selector-matched profiles). Registration replays current collection
+	// state and then applies every event batch.
 	store := profilestore.NewStore()
 	profiles := profilestore.NewCollection(client, nil, ctx.Done())
 	profileReg := store.RegisterCollection(profiles)

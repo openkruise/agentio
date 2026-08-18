@@ -27,8 +27,12 @@ import (
 // the consumer side, rather than imported from pkg/policy/profilestore: the
 // store holds *Profile values, so naming that package from this one would be
 // an import cycle. The profilestore Store satisfies this implicitly.
+//
+// Matches returns every profile that applies to the pod in evaluation
+// order: selector-matched administrator profiles first, then the pod's own
+// inline rule profile (looked up by exact identity, never by labels).
 type Matcher interface {
-	Matches(podNamespace string, podLabels map[string]string) []*Profile
+	Matches(podName, podNamespace string, podLabels map[string]string) []*Profile
 }
 
 // NewResolver adapts the SecurityProfile store and binder to the ext_proc
@@ -49,7 +53,7 @@ func NewResolver(matcher Matcher, regs []filter.Registration, sink audit.Sink) e
 		sink = audit.NopSink()
 	}
 	return func(_ context.Context, pod inputs.Pod, req *httpreq.HTTPRequest) (engine.Resolution, error) {
-		profiles := matcher.Matches(pod.Namespace, pod.Labels)
+		profiles := matcher.Matches(pod.Name, pod.Namespace, pod.Labels)
 		if len(profiles) == 0 {
 			return engine.Resolution{}, nil
 		}

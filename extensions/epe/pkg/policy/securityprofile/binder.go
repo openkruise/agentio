@@ -58,7 +58,16 @@ type binder struct {
 	regs []filter.Registration
 
 	mu    sync.Mutex
-	cache map[types.NamespacedName]*cacheEntry
+	cache map[cacheKey]*cacheEntry
+}
+
+// cacheKey identifies a projection cache slot. Meta.Source is part of the
+// key because an inline per-Sandbox profile and a SecurityProfile CR in the
+// same namespace can share a name and even a resourceVersion; keying on
+// namespace/name alone would let them cross-return each other's projections.
+type cacheKey struct {
+	source string
+	types.NamespacedName
 }
 
 type cacheEntry struct {
@@ -80,7 +89,7 @@ func newBinder(regs []filter.Registration) *binder {
 	frozen := append([]filter.Registration(nil), regs...)
 	return &binder{
 		regs:  frozen,
-		cache: map[types.NamespacedName]*cacheEntry{},
+		cache: map[cacheKey]*cacheEntry{},
 	}
 }
 
@@ -151,15 +160,21 @@ func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, pod inputs.
 
 // projections returns the cached per-rule projections for the profile,
 // recomputing when the profile version changed. Entries are keyed by
-// identity and replaced in place, so cache size is bounded by the number
-// of live profiles (plus deleted ones until process restart).
+// source and identity and replaced in place, so cache size is bounded by
+// the number of live profiles (plus deleted ones until process restart).
 //
 // The cache key is Meta.Version (the CR's resourceVersion), which does NOT
 // change when a referenced ConfigMap re-resolves Profile.Inputs. Projection
 // therefore must only read the rule spec (payloadsFor), never Profile.Inputs;
 // Inputs are read at bind time from the live profile pointer instead.
 func (b *binder) projections(profile *Profile) *cacheEntry {
-	key := types.NamespacedName{Namespace: profile.Meta.Namespace, Name: profile.Meta.Name}
+	key := cacheKey{
+		source: profile.Meta.Source,
+		NamespacedName: types.NamespacedName{
+			Namespace: profile.Meta.Namespace,
+			Name:      profile.Meta.Name,
+		},
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if e, ok := b.cache[key]; ok && e.version == profile.Meta.Version {

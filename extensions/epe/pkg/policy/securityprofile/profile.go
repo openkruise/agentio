@@ -338,7 +338,17 @@ type Meta struct {
 	// Version is the source object's resourceVersion, captured so
 	// downstream projection caches can key on (identity, version).
 	Version string
+	// Source identifies the object kind the profile was compiled from:
+	// empty for SecurityProfile/GlobalSecurityProfile, SourceInline for
+	// per-Sandbox annotation chains. A Sandbox and a SecurityProfile in one
+	// namespace may share a name and even a resourceVersion, so caches keyed
+	// on namespace/name must include the source to stay collision-free.
+	Source string
 }
+
+// SourceInline marks profiles compiled from the per-Sandbox inline security
+// rules annotation rather than from a SecurityProfile CR.
+const SourceInline = "inline"
 
 // Profile is the in-memory representation of a Profile or
 // GlobalSecurityProfile with its label selector, rule regexps, and audit
@@ -360,13 +370,20 @@ type Profile struct {
 
 // ResourceName implements krt.ResourceNamer so compiled profiles can be held
 // in krt collections. Cluster-scoped GlobalSecurityProfiles (empty namespace)
-// key by bare name; namespaced SecurityProfiles key by namespace/name, so the
-// two scopes can never collide inside a joined collection.
+// key by bare name and namespaced SecurityProfiles key by namespace/name, so
+// the two scopes can never collide inside a joined collection. Inline
+// profiles carry a source prefix on top: a Sandbox and a SecurityProfile in
+// the same namespace can share a name, and without the prefix one would
+// silently replace the other in a joined collection.
 func (sp Profile) ResourceName() string {
-	if sp.Meta.Namespace == "" {
-		return sp.Meta.Name
+	name := sp.Meta.Name
+	if sp.Meta.Namespace != "" {
+		name = sp.Meta.Namespace + "/" + sp.Meta.Name
 	}
-	return sp.Meta.Namespace + "/" + sp.Meta.Name
+	if sp.Meta.Source != "" {
+		return sp.Meta.Source + "/" + name
+	}
+	return name
 }
 
 // NewProfile converts a SecurityProfile / GlobalSecurityProfile into

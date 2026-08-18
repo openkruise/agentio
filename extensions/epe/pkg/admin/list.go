@@ -100,7 +100,9 @@ func (h *handler) handleMatch(w http.ResponseWriter, r *http.Request, namespace 
 		writeError(w, http.StatusBadRequest, "namespace is required when pod_labels is provided")
 		return
 	}
-	matched := h.store.Matches(namespace, labels)
+	// The listing endpoint matches by labels only; the empty pod name skips
+	// the per-Sandbox inline rule lookup, which needs a concrete identity.
+	matched := h.store.Matches("", namespace, labels)
 	views := make([]ProfileView, 0, len(matched))
 	for _, p := range matched {
 		v := toView(p)

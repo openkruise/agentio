@@ -57,7 +57,7 @@ func TestProfileCollection_ConfigMapInputDependency(t *testing.T) {
 	}
 
 	assertInputs := func(want map[string]any) error {
-		matched := store.Matches("ns-a", map[string]string{"app": "test"})
+		matched := store.Matches("", "ns-a", map[string]string{"app": "test"})
 		if len(matched) != 1 {
 			return fmt.Errorf("matched profiles = %d, want 1", len(matched))
 		}
@@ -131,7 +131,7 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 
 	// Initial state replay delivers the pre-existing profile.
 	retry.UntilSuccessOrFail(t, func() error {
-		if n := len(store.Matches("ns-a", map[string]string{"app": "test"})); n != 1 {
+		if n := len(store.Matches("", "ns-a", map[string]string{"app": "test"})); n != 1 {
 			return fmt.Errorf("expected 1 match in ns-a, got %d", n)
 		}
 		return nil
@@ -143,7 +143,7 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry.UntilSuccessOrFail(t, func() error {
-		if n := len(store.Matches("ns-b", map[string]string{"app": "test"})); n != 1 {
+		if n := len(store.Matches("", "ns-b", map[string]string{"app": "test"})); n != 1 {
 			return fmt.Errorf("expected 1 match in ns-b, got %d", n)
 		}
 		return nil
@@ -155,7 +155,7 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry.UntilSuccessOrFail(t, func() error {
-		if n := len(store.Matches("ns-c", map[string]string{"app": "test"})); n != 1 {
+		if n := len(store.Matches("", "ns-c", map[string]string{"app": "test"})); n != 1 {
 			return fmt.Errorf("expected global profile to match ns-c, got %d", n)
 		}
 		return nil
@@ -175,7 +175,7 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 		if compiled == nil || compiled.CompileError == "" {
 			return fmt.Errorf("compiled collection has not observed invalid update")
 		}
-		matched := store.Matches("ns-b", map[string]string{"app": "test"})
+		matched := store.Matches("", "ns-b", map[string]string{"app": "test"})
 		if len(matched) != 2 {
 			names := make([]string, 0, len(matched))
 			for _, sp := range matched {
@@ -191,9 +191,47 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry.UntilSuccessOrFail(t, func() error {
-		if n := len(store.Matches("ns-c", map[string]string{"app": "test"})); n != 0 {
+		if n := len(store.Matches("", "ns-c", map[string]string{"app": "test"})); n != 0 {
 			return fmt.Errorf("expected global profile removal, still %d matches", n)
 		}
 		return nil
 	}, retry.Timeout(5*time.Second))
+}
+
+// The Sandbox CRD may be absent: the EPE chart does not install the
+// agents.kruise.io CRDs, and the e2e clusters start without them. The joined
+// collection must still sync so startup is not wedged behind
+// WaitUntilSynced. The fake apiserver tolerates unknown GVRs, so this test
+// cannot reproduce the real 404-retry hang of a non-delayed informer; it
+// pins the delayed-informer wiring (CRD-absent sync plus an empty result
+// set) so the intent documented here stays visible.
+func TestProfileCollection_SyncsWithoutSandboxCRD(t *testing.T) {
+	agentsCS := agentsfake.NewSimpleClientset()
+	RegisterTypes(agentsCS)
+
+	c := kube.NewFakeClient()
+	clienttest.MakeCRD(t, c, securityProfileGVR)
+	clienttest.MakeCRD(t, c, globalSecurityProfileGVR)
+	// Deliberately no Sandbox CRD.
+	stop := test.NewStop(t)
+
+	store := NewStore()
+	profiles := NewCollection(c, krt.GlobalDebugHandler, stop)
+	reg := store.RegisterCollection(profiles)
+	c.RunAndWait(stop)
+
+	synced := make(chan struct{})
+	go func() {
+		if reg.WaitUntilSynced(stop) {
+			close(synced)
+		}
+	}()
+	select {
+	case <-synced:
+	case <-time.After(10 * time.Second):
+		t.Fatal("collection did not sync while the Sandbox CRD is absent")
+	}
+	if got := store.Matches("sbx-1", "sandboxes", nil); len(got) != 0 {
+		t.Fatalf("Matches = %+v, want no profiles without the CRD", got)
+	}
 }

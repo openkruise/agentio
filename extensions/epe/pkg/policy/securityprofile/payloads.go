@@ -23,12 +23,13 @@ import (
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
-	// The four filter packages are imported for their FilterName
+	// The filter packages are imported for their FilterName
 	// constants only: the payload keys must be the registered names, and
 	// hardcoded strings would drift. This is the one place the policy
 	// layer names filter packages.
 	"istio.io/istio/extensions/epe/pkg/filters/block"
 	"istio.io/istio/extensions/epe/pkg/filters/bypass"
+	"istio.io/istio/extensions/epe/pkg/filters/headermutation"
 	"istio.io/istio/extensions/epe/pkg/filters/mcpacl"
 	"istio.io/istio/extensions/epe/pkg/filters/tokentransform"
 )
@@ -59,6 +60,13 @@ func payloadsFor(rule *Rule) (map[string]json.RawMessage, error) {
 		}
 		m[mcpacl.FilterName] = raw
 	}
+	if a := rule.Actions.HeaderManipulation; a != nil {
+		raw, err := headerManipulationPayload(a)
+		if err != nil {
+			return nil, fmt.Errorf("build headerManipulation payload: %w", err)
+		}
+		m[headermutation.FilterName] = raw
+	}
 	// Disabled is absorbed here: an open payload map expresses "off" by
 	// omitting the key, so a disabled action simply produces no payload.
 	if a := rule.Actions.TokenTransformation; a != nil && !a.Disabled {
@@ -85,4 +93,18 @@ func tokenTransformPayload(a *v1alpha1.TokenTransformationAction) (json.RawMessa
 	normalized.CredentialRef = ref
 	normalized.Disabled = false
 	return json.Marshal(&normalized)
+}
+
+// headerManipulationPayload wraps the CRD's flat set/remove lists in the
+// headermutation filter's phase-based schema. SecurityRule header
+// manipulation is defined for egress requests only, so both lists land on
+// the request phase and the response phase stays empty.
+func headerManipulationPayload(a *v1alpha1.HeaderManipulationAction) (json.RawMessage, error) {
+	type opSpec struct {
+		Set    []v1alpha1.HeaderValue `json:"set,omitempty"`
+		Remove []string               `json:"remove,omitempty"`
+	}
+	return json.Marshal(struct {
+		Request opSpec `json:"request"`
+	}{Request: opSpec{Set: a.Set, Remove: a.Remove}})
 }

@@ -138,7 +138,7 @@ func TestMatches(t *testing.T) {
 			store := MakeFakeStore()
 			store.ProfileSet(newTestProfile("test-profile", "default", tt.profileLabels))
 
-			matched := store.Matches(tt.ns, tt.podLabels)
+			matched := store.Matches("", tt.ns, tt.podLabels)
 			if len(matched) != tt.want {
 				t.Fatalf("expected %d profiles, got %d", tt.want, len(matched))
 			}
@@ -162,7 +162,7 @@ func TestMatches_TieBreakOnName(t *testing.T) {
 			store.ProfileSet(p)
 		}
 
-		matched := store.Matches("default", map[string]string{"app": "ai-agent"})
+		matched := store.Matches("", "default", map[string]string{"app": "ai-agent"})
 		if len(matched) != 4 {
 			t.Fatalf("attempt %d: expected 4 profiles, got %d", attempt, len(matched))
 		}
@@ -260,7 +260,7 @@ func TestMatches_PriorityOrdering(t *testing.T) {
 			for _, p := range tt.profiles {
 				store.ProfileSet(p)
 			}
-			matched := store.Matches("default", map[string]string{"app": "test"})
+			matched := store.Matches("", "default", map[string]string{"app": "test"})
 			if len(matched) != len(tt.want) {
 				t.Fatalf("expected %d profiles, got %d", len(tt.want), len(matched))
 			}
@@ -309,19 +309,19 @@ func TestMatches_GlobalMatchesAllNamespaces(t *testing.T) {
 	store.ProfileSet(newTestProfile("ns-profile", "ns-a", map[string]string{"app": "test"}))
 
 	// Pod in ns-a: matched by both the global and the namespace profile.
-	matchedA := store.Matches("ns-a", map[string]string{"app": "test"})
+	matchedA := store.Matches("", "ns-a", map[string]string{"app": "test"})
 	if got := profileNames(matchedA); len(got) != 2 {
 		t.Fatalf("ns-a: expected 2 profiles, got %v", got)
 	}
 
 	// Pod in ns-b: matched by the global profile only.
-	matchedB := store.Matches("ns-b", map[string]string{"app": "test"})
+	matchedB := store.Matches("", "ns-b", map[string]string{"app": "test"})
 	if got := profileNames(matchedB); len(got) != 1 || got[0] != "g1" {
 		t.Fatalf("ns-b: expected [g1], got %v", got)
 	}
 
 	// Non-matching labels match nothing, even for the global profile.
-	if got := store.Matches("ns-b", map[string]string{"app": "other"}); len(got) != 0 {
+	if got := store.Matches("", "ns-b", map[string]string{"app": "other"}); len(got) != 0 {
 		t.Fatalf("expected 0 profiles for non-matching labels, got %d", len(got))
 	}
 }
@@ -345,7 +345,7 @@ func TestMatches_GlobalAndNamespaceInterleaveByPriority(t *testing.T) {
 	nsLow.Spec.Priority = ptr.To[int32](10)
 	store.ProfileSet(nsLow)
 
-	matched := store.Matches("ns-a", map[string]string{"app": "test"})
+	matched := store.Matches("", "ns-a", map[string]string{"app": "test"})
 	want := []string{"ns-high", "global-mid", "ns-low"}
 	got := profileNames(matched)
 	if len(got) != len(want) {
@@ -378,7 +378,7 @@ func TestProfileSet_InvalidSelectorIsSkipped(t *testing.T) {
 	if _, ok := store.ProfileGet(types.NamespacedName{Name: "bad", Namespace: "default"}); ok {
 		t.Fatal("expected invalid-selector profile to be skipped on initial Set, but it was stored")
 	}
-	if got := store.Matches("default", map[string]string{"app": "ai-agent"}); len(got) != 0 {
+	if got := store.Matches("", "default", map[string]string{"app": "ai-agent"}); len(got) != 0 {
 		t.Fatalf("expected 0 matched profiles, got %d", len(got))
 	}
 }
@@ -416,7 +416,7 @@ func TestProfileSet_InvalidSelectorOnUpdateRetainsLastKnownGood(t *testing.T) {
 	if got.Meta.Version != good.ResourceVersion {
 		t.Fatalf("effective version = %q, want original %q", got.Meta.Version, good.ResourceVersion)
 	}
-	if matched := store.Matches("default", map[string]string{"app": "ai-agent"}); len(matched) != 1 {
+	if matched := store.Matches("", "default", map[string]string{"app": "ai-agent"}); len(matched) != 1 {
 		t.Fatalf("expected last-known-good profile to keep matching, got %d", len(matched))
 	}
 }
@@ -442,7 +442,7 @@ func TestApplyBatch_AddUpdateDelete(t *testing.T) {
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{New: compiledAdd, Event: controllers.EventAdd},
 	})
-	if matched := s.Matches("default", map[string]string{"app": "x"}); len(matched) != 1 {
+	if matched := s.Matches("", "default", map[string]string{"app": "x"}); len(matched) != 1 {
 		t.Fatalf("after add: expected 1 match, got %d", len(matched))
 	}
 
@@ -454,10 +454,10 @@ func TestApplyBatch_AddUpdateDelete(t *testing.T) {
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{Old: compiledAdd, New: compiledUpdated, Event: controllers.EventUpdate},
 	})
-	if matched := s.Matches("default", map[string]string{"app": "y"}); len(matched) != 1 {
+	if matched := s.Matches("", "default", map[string]string{"app": "y"}); len(matched) != 1 {
 		t.Fatalf("after update: expected 1 match for app=y, got %d", len(matched))
 	}
-	if matched := s.Matches("default", map[string]string{"app": "x"}); len(matched) != 0 {
+	if matched := s.Matches("", "default", map[string]string{"app": "x"}); len(matched) != 0 {
 		t.Fatalf("after update: stale app=x entry still matches")
 	}
 
@@ -488,7 +488,7 @@ func TestApplyBatch_InvalidUpdateRetainsLastKnownGood(t *testing.T) {
 		{Old: compiled, New: invalid, Event: controllers.EventUpdate},
 	})
 
-	matched := s.Matches("default", map[string]string{"app": "x"})
+	matched := s.Matches("", "default", map[string]string{"app": "x"})
 	if len(matched) != 1 {
 		t.Fatalf("matched profiles = %d, want retained last-known-good profile", len(matched))
 	}

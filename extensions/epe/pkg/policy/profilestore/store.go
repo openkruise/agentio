@@ -52,31 +52,41 @@ const (
 // and admin endpoints. Writes are driven exclusively by RegisterCollection,
 // which replays and then tails a krt compiled-profile collection in batches.
 type Store interface {
-	// List returns all profiles, both namespace- and cluster-scoped.
+	// List returns all selector-matched profiles, both namespace- and
+	// cluster-scoped. Per-Sandbox inline profiles are not listed; they are
+	// reachable only through their pod identity.
 	List() []*securityprofile.Profile
 
-	// Matches returns the profiles whose selectors match the given pod
-	// labels. Both cluster-scoped GlobalSecurityProfiles and namespace-scoped
-	// SecurityProfiles in podNamespace are considered. Returns profiles sorted
-	// by priority (lower first), then creation time, then name, then namespace.
-	Matches(podNamespace string, podLabels map[string]string) []*securityprofile.Profile
+	// Matches returns the profiles that apply to the given pod: profiles
+	// whose selectors match the pod labels (cluster-scoped
+	// GlobalSecurityProfiles and namespace-scoped SecurityProfiles in
+	// podNamespace, sorted by priority, creation time, name, namespace),
+	// followed by the pod's own inline rule profile when one exists.
+	// Inline profiles are keyed by exact identity — the Sandbox name is the
+	// Pod name — and always evaluate after the selector-matched
+	// administrator profiles. An empty podName skips the inline lookup.
+	Matches(podName, podNamespace string, podLabels map[string]string) []*securityprofile.Profile
 }
 
 // profileSnapshot is an immutable point-in-time view of all profiles.
 // It is replaced atomically on every write operation (copy-on-write).
 //
-// Profiles are indexed by namespace in byNamespace. Cluster-scoped
-// GlobalSecurityProfiles use an empty string as the namespace key.
-// All slices are pre-sorted by the shared profile comparator.
+// Selector profiles are indexed by namespace in byNamespace; cluster-scoped
+// GlobalSecurityProfiles use an empty string as the namespace key, and all
+// slices are pre-sorted by the shared profile comparator. Per-Sandbox inline
+// profiles live in inlineByKey, looked up by exact pod identity and never
+// matched by labels.
 type profileSnapshot struct {
 	byKey       map[types.NamespacedName]*securityprofile.Profile
 	byNamespace map[string][]*securityprofile.Profile
+	inlineByKey map[types.NamespacedName]*securityprofile.Profile
 }
 
 func newEmptySnapshot() *profileSnapshot {
 	return &profileSnapshot{
 		byKey:       make(map[types.NamespacedName]*securityprofile.Profile),
 		byNamespace: make(map[string][]*securityprofile.Profile),
+		inlineByKey: make(map[types.NamespacedName]*securityprofile.Profile),
 	}
 }
 
@@ -103,9 +113,12 @@ func (s *store) RegisterCollection(profiles krt.Collection[securityprofile.Profi
 	return profiles.RegisterBatch(s.applyBatch, true)
 }
 
-// applyBatch folds one krt event batch into a new snapshot. Invalid profile
-// items carry identity plus CompileError; they leave the prior effective
-// entry untouched. Only a real source delete removes an installed profile.
+// applyBatch folds one krt event batch into a new snapshot. Events route on
+// the profile source: inline profiles maintain the identity-keyed map, and
+// CRD profiles maintain the selector index. Invalid CRD profile items carry
+// identity plus CompileError; they leave the prior effective entry untouched,
+// and only a real source delete removes an installed profile. Inline
+// profiles have no invalid form here — a compile failure emits no item.
 func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,17 +128,30 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 	old := s.snapshot.Load()
 	newByKey := make(map[types.NamespacedName]*securityprofile.Profile, len(old.byKey))
 	maps.Copy(newByKey, old.byKey)
+	newInline := make(map[types.NamespacedName]*securityprofile.Profile, len(old.inlineByKey))
+	maps.Copy(newInline, old.inlineByKey)
 
 	for _, ev := range events {
 		if ev.Event == controllers.EventDelete {
 			m := ev.Latest().Meta
-			delete(newByKey, types.NamespacedName{Namespace: m.Namespace, Name: m.Name})
+			key := types.NamespacedName{Namespace: m.Namespace, Name: m.Name}
+			if m.Source == securityprofile.SourceInline {
+				delete(newInline, key)
+				continue
+			}
+			delete(newByKey, key)
 			profileStale.DeleteLabelValues(m.Namespace, m.Name)
 			profileUnenforced.DeleteLabelValues(m.Namespace, m.Name)
 			continue
 		}
 		sp := ev.New
 		key := types.NamespacedName{Namespace: sp.Meta.Namespace, Name: sp.Meta.Name}
+		if sp.Meta.Source == securityprofile.SourceInline {
+			if sp.CompileError == "" {
+				newInline[key] = sp
+			}
+			continue
+		}
 		if sp.CompileError != "" {
 			profileCompileFailuresTotal.WithLabelValues(profileScope(sp.Meta.Namespace)).Inc()
 			// The two outcomes differ in severity and get separate series.
@@ -149,7 +175,7 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 		newByKey[key] = sp
 	}
 
-	s.snapshot.Store(buildSnapshot(newByKey))
+	s.snapshot.Store(buildSnapshot(newByKey, newInline))
 }
 
 // --- Read path (lock-free) ---
@@ -163,7 +189,7 @@ func (s *store) List() []*securityprofile.Profile {
 	return result
 }
 
-func (s *store) Matches(podNamespace string, podLabels map[string]string) []*securityprofile.Profile {
+func (s *store) Matches(podName, podNamespace string, podLabels map[string]string) []*securityprofile.Profile {
 	snap := s.snapshot.Load()
 
 	ls := labels.Set(podLabels)
@@ -193,7 +219,7 @@ func (s *store) Matches(podNamespace string, podLabels map[string]string) []*sec
 		}
 	}
 	if len(matched) == 0 {
-		return nil
+		return appendInline(nil, snap, podName, podNamespace)
 	}
 	// Each snapshot slice is already sorted by securityprofile.SortProfiles, and filtering
 	// preserves that order. Only when both the cluster- and namespace-scoped
@@ -203,15 +229,31 @@ func (s *store) Matches(podNamespace string, podLabels map[string]string) []*sec
 	if globalMatches > 0 && globalMatches < len(matched) {
 		securityprofile.SortProfiles(matched)
 	}
+	return appendInline(matched, snap, podName, podNamespace)
+}
+
+// appendInline adds the pod's own inline rule profile after the
+// selector-matched administrator profiles: tenant rules must never evaluate
+// ahead of them. An empty podName (e.g. the admin listing endpoint) skips
+// the lookup.
+func appendInline(matched []*securityprofile.Profile, snap *profileSnapshot, podName, podNamespace string) []*securityprofile.Profile {
+	if podName == "" {
+		return matched
+	}
+	if p, ok := snap.inlineByKey[types.NamespacedName{Namespace: podNamespace, Name: podName}]; ok {
+		return append(matched, p)
+	}
 	return matched
 }
 
-// buildSnapshot constructs a complete profileSnapshot from a byKey map. Every
-// profile is indexed under its namespace in byNamespace; entries with an empty
-// Namespace are cluster-scoped GlobalSecurityProfiles and land under the ""
-// key, which Matches merges into every namespace's result. Each
-// per-namespace slice is sorted by securityprofile.SortProfiles.
-func buildSnapshot(byKey map[types.NamespacedName]*securityprofile.Profile) *profileSnapshot {
+// buildSnapshot constructs a complete profileSnapshot from the selector and
+// inline profile maps. Every selector profile is indexed under its namespace
+// in byNamespace; entries with an empty Namespace are cluster-scoped
+// GlobalSecurityProfiles and land under the "" key, which Matches merges into
+// every namespace's result. Each per-namespace slice is sorted by
+// securityprofile.SortProfiles. Inline profiles are carried as-is; they are
+// looked up by identity only.
+func buildSnapshot(byKey, inlineByKey map[types.NamespacedName]*securityprofile.Profile) *profileSnapshot {
 	byNamespace := make(map[string][]*securityprofile.Profile)
 
 	for nn, sp := range byKey {
@@ -225,5 +267,6 @@ func buildSnapshot(byKey map[types.NamespacedName]*securityprofile.Profile) *pro
 	return &profileSnapshot{
 		byKey:       byKey,
 		byNamespace: byNamespace,
+		inlineByKey: inlineByKey,
 	}
 }

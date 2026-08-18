@@ -267,3 +267,52 @@ func TestMatchIndexMatchesRuleMatchingIndex(t *testing.T) {
 		t.Fatalf("MatchIndex = %d, want 1", units[0].MatchIndex)
 	}
 }
+
+// A Sandbox and a SecurityProfile in one namespace may share a name and even
+// a resourceVersion. The projection cache must keep the two apart; otherwise
+// whichever profile bound last would serve its projections to the other.
+func TestProjectionCacheDoesNotCrossInlineAndCRProfiles(t *testing.T) {
+	calls := 0
+	b := newBinder(claimAll(t, &calls))
+
+	cr := compile(t, "shared", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("cr-rule")})
+	inline := compile(t, "shared", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("inline-rule")})
+	inline.Meta.Source = SourceInline
+
+	req := testRequest("example.com")
+	pod := inputs.Pod{Namespace: "ns", Name: "shared"}
+
+	for i := 0; i < 3; i++ {
+		units, err := b.bind([]*Profile{cr, inline}, req, pod)
+		if err != nil {
+			t.Fatalf("bind %d: %v", i, err)
+		}
+		if len(units) != 2 {
+			t.Fatalf("bind %d: got %d units, want 2", i, len(units))
+		}
+		for _, want := range []struct {
+			scope, rule string
+		}{
+			{"ns/shared", "cr-rule"},
+			{"ns/shared", "inline-rule"},
+		} {
+			idx := 0
+			if want.rule == "inline-rule" {
+				idx = 1
+			}
+			u := units[idx]
+			if u.ID.Scope != want.scope || u.ID.Name != want.rule {
+				t.Errorf("bind %d unit %d ID = %+v, want scope %q rule %q", i, idx, u.ID, want.scope, want.rule)
+			}
+			if cfg, ok := u.Cfgs[0].(string); !ok || cfg != want.rule {
+				t.Errorf("bind %d unit %d cfg = %#v, want the %q projection", i, idx, u.Cfgs[0], want.rule)
+			}
+		}
+	}
+
+	// One projection per source: a cross-returning cache would skip one of
+	// the two initial projections and stay at 1.
+	if calls != 2 {
+		t.Fatalf("project ran %d times, want 2 (one per source)", calls)
+	}
+}

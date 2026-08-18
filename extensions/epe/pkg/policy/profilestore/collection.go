@@ -28,6 +28,7 @@ import (
 
 	"istio.io/istio/extensions/epe/pkg/policy/securityprofile"
 
+	"github.com/go-logr/logr"
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	agentsclient "github.com/openkruise/agents-api/client/clientset/versioned"
 	corev1 "k8s.io/api/core/v1"
@@ -58,13 +59,17 @@ var (
 	globalSecurityProfileGVK = schema.GroupVersionKind{
 		Group: "agents.kruise.io", Version: "v1alpha1", Kind: "GlobalSecurityProfile",
 	}
+	sandboxGVR = schema.GroupVersionResource{
+		Group: "agents.kruise.io", Version: "v1alpha1", Resource: "sandboxes",
+	}
 )
 
 // RegisterTypes registers the agents-api SecurityProfile and
 // GlobalSecurityProfile types with the kubeclient informer mechanism so that
 // NewDelayedInformer can use typed List/Watch instead of unstructured. It
-// must be called once before NewCollection, with the clientset the
-// informers should use.
+// must be called once before NewCollection, with the clientset the informers
+// should use. Sandboxes need no registration: they are watched through the
+// metadata client only.
 func RegisterTypes(agentsCS agentsclient.Interface) {
 	kubeclient.Register[*agentsv1alpha1.SecurityProfile](securityProfileGVR, securityProfileGVK,
 		func(c kubeclient.ClientGetter, ns string, opts metav1.ListOptions) (runtime.Object, error) {
@@ -134,9 +139,44 @@ func NewCollection(client kube.Client, debugger *krt.DebugHandler, stop <-chan s
 	// batch per window (KRT_EVENT_DISTRIBUTE_DEBOUNCE[_MAX], default off),
 	// so RegisterCollection's applyBatch rebuilds the snapshot once per
 	// batch instead of once per profile change.
-	return krt.JoinCollection([]krt.Collection[securityprofile.Profile]{compiledSPs, compiledGSPs},
+	return krt.JoinCollection([]krt.Collection[securityprofile.Profile]{compiledSPs, compiledGSPs, newInlineCollection(client, opts, log)},
 		append(opts.WithName("CompiledProfiles"),
 			krt.WithDebounce(features.KrtEventDistributeDebounce, features.KrtEventDistributeDebounceMax))...)
+}
+
+// newInlineCollection watches Sandbox metadata and compiles the objects
+// carrying the agents.kruise.io/security-rules annotation into per-Sandbox
+// inline rule profiles. The informer is metadata-only (PartialObjectMetadata):
+// the compiler never reads spec or status, and a Sandbox carries a full pod
+// template that would otherwise be transferred and cached for every Sandbox
+// in the cluster. It is also delayed, like the profile informers: the Sandbox
+// CRD may not exist in the cluster, and a non-delayed informer would retry
+// the 404 list forever, never sync, and wedge startup behind
+// WaitUntilSynced. Objects without the annotation emit nil and contribute no
+// rules.
+func newInlineCollection(client kube.Client, opts krt.OptionsBuilder, log logr.Logger) krt.Collection[securityprofile.Profile] {
+	sandboxInf := kclient.NewDelayedInformer[*metav1.PartialObjectMetadata](client,
+		sandboxGVR, kubetypes.MetadataInformer,
+		kclient.Filter{ObjectFilter: client.ObjectFilter()})
+	sandboxInf.Start(opts.Stop())
+	sandboxes := krt.WrapClient(sandboxInf, opts.WithName("Sandboxes")...)
+
+	return krt.NewCollection(sandboxes, func(_ krt.HandlerContext, o *metav1.PartialObjectMetadata) *securityprofile.Profile {
+		if o.GetAnnotations()[securityprofile.AnnotationSecurityRules] == "" {
+			return nil
+		}
+		p, err := securityprofile.NewInlineProfile(o)
+		if err != nil {
+			// The annotation is written by the Sandbox Manager, so a compile
+			// failure indicates a schema disagreement; drop the rules rather
+			// than guessing. Unlike CRD profiles there is no last-known-good:
+			// the pod's own rules cannot be served from a prior version
+			// once the pod moved on.
+			log.Error(err, "inline security rules failed to compile", "sandbox", o.Namespace+"/"+o.Name)
+			return nil
+		}
+		return p
+	}, opts.WithName("CompiledInlineProfiles")...)
 }
 
 func compileProfile(

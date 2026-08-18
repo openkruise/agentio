@@ -23,6 +23,11 @@ rules:
   - apiGroups: ["agents.kruise.io"]
     resources: ["securityprofiles/status", "globalsecurityprofiles/status"]
     verbs: ["get"]
+  # Sandboxes carry the per-workload inline security rules annotation; EPE
+  # only reads them and evaluates the rules under the Pod's own identity.
+  - apiGroups: ["agents.kruise.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
   # The profile collections are delayed informers, so the process starts a CRD
   # watcher to learn when the profile CRDs appear (cmd/epe/main.go). Without this
   # rule that watcher never syncs, both profile informers block, and the process

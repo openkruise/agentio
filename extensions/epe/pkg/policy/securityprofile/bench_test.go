@@ -30,7 +30,7 @@ var benchSink any
 // clock. profilestore has its own benchmark for that half.
 type benchStore struct{ profiles []*Profile }
 
-func (s benchStore) Matches(string, map[string]string) []*Profile { return s.profiles }
+func (s benchStore) Matches(string, string, map[string]string) []*Profile { return s.profiles }
 
 // benchProfiles compiles nProfiles profiles of nRules rules each. Every rule
 // matches, which is the worst case: each one becomes a unit.
