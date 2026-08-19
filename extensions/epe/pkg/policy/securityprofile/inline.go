@@ -65,9 +65,6 @@ func NewInlineProfile(sandbox metav1.Object) (*Profile, error) {
 		return nil, fmt.Errorf("%s annotation contains no rules", AnnotationSecurityRules)
 	}
 	for i := range specRules {
-		if err := validateInlineActions(&specRules[i].Actions); err != nil {
-			return nil, fmt.Errorf("rule %q: %w", specRules[i].Name, err)
-		}
 		escapeInlineHeaderValues(specRules[i].Actions.HeaderManipulation)
 	}
 	rules, err := compileRules(specRules)
@@ -85,29 +82,6 @@ func NewInlineProfile(sandbox metav1.Object) (*Profile, error) {
 		Selector: labels.Nothing(),
 		Rules:    rules,
 	}, nil
-}
-
-// validateInlineActions enforces the reduced inline action set. The tenant
-// authored these rules through the E2B API surface, which cannot carry
-// credentials and must not be able to short-circuit administrator profiles,
-// so only block and headerManipulation are admitted.
-func validateInlineActions(actions *v1alpha1.SecurityRuleActions) error {
-	if actions.Bypass {
-		return fmt.Errorf("bypass is not allowed in inline rules")
-	}
-	if actions.TokenTransformation != nil {
-		return fmt.Errorf("tokenTransformation is not supported in inline rules")
-	}
-	if actions.MCPToolPolicy != nil {
-		return fmt.Errorf("mcpToolPolicy is not supported in inline rules")
-	}
-	if len(actions.Audit) > 0 {
-		return fmt.Errorf("audit is not supported in inline rules")
-	}
-	if actions.Block == nil && actions.HeaderManipulation == nil {
-		return fmt.Errorf("at least one of block or headerManipulation is required")
-	}
-	return nil
 }
 
 // escapeInlineHeaderValues neutralizes Go template delimiters in inline set

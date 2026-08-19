@@ -22,11 +22,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	agentsfake "github.com/openkruise/agents-api/client/clientset/versioned/fake"
 	"istio.io/istio/extensions/epe/pkg/policy/profilestore"
+	"istio.io/istio/extensions/epe/pkg/policy/securityprofile"
 )
 
 func testSP(name, namespace string, priority int32, matchLabels map[string]string) *v1alpha1.SecurityProfile {
@@ -317,6 +319,131 @@ func TestHandleProfiles_ListMode_POST(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleProfiles_InlineProfiles(t *testing.T) {
+	const rules = `[{"name":"trace","match":[{"domains":["*"]}],` +
+		`"actions":{"headerManipulation":{"set":[{"name":"X-T","value":"v"}]}}}]`
+	sbx := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "sbx-1",
+			Namespace:   "sandboxes",
+			Annotations: map[string]string{securityprofile.AnnotationSecurityRules: rules},
+		},
+	}
+	sp := testSP("sp-team", "sandboxes", 5, map[string]string{"app": "sleep"})
+
+	store := profilestore.MakeFakeStore()
+	store.ProfileSet(sp)
+	store.InlineProfileSet(sbx)
+	client := agentsfake.NewSimpleClientset(sp)
+	// NewSimpleClientset seeds objects under a guessed plural ("sandboxs"),
+	// which does not match the typed client's "sandboxes"; seed the tracker
+	// with the explicit resource instead.
+	if err := client.Tracker().Create(
+		schema.GroupVersionResource{Group: "agents.kruise.io", Version: "v1alpha1", Resource: "sandboxes"},
+		sbx, sbx.Namespace); err != nil {
+		t.Fatalf("seed sandbox: %v", err)
+	}
+	h := NewHandler(Options{EnableDebug: true, Store: store, Client: client})
+
+	tests := []struct {
+		name       string
+		method     string
+		target     string
+		body       string
+		wantStatus int
+		wantNames  []string
+		wantKinds  []string
+	}{
+		{
+			name:       "GET pod_name appends the inline profile after selector matches",
+			method:     http.MethodGet,
+			target:     "/debug/profiles?namespace=sandboxes&pod_name=sbx-1&pod_labels=app=sleep",
+			wantStatus: http.StatusOK,
+			wantNames:  []string{"sp-team", "sbx-1"},
+			wantKinds:  []string{kindSecurityProfile, kindSandbox},
+		},
+		{
+			name:       "GET pod_name alone triggers match mode",
+			method:     http.MethodGet,
+			target:     "/debug/profiles?namespace=sandboxes&pod_name=sbx-1",
+			wantStatus: http.StatusOK,
+			wantNames:  []string{"sbx-1"},
+			wantKinds:  []string{kindSandbox},
+		},
+		{
+			name:       "POST pod_name in body",
+			method:     http.MethodPost,
+			target:     "/debug/profiles",
+			body:       `{"namespace":"sandboxes","pod_name":"sbx-1"}`,
+			wantStatus: http.StatusOK,
+			wantNames:  []string{"sbx-1"},
+			wantKinds:  []string{kindSandbox},
+		},
+		{
+			name:       "list mode includes inline profiles",
+			method:     http.MethodGet,
+			target:     "/debug/profiles?namespace=sandboxes",
+			wantStatus: http.StatusOK,
+			wantNames:  []string{"sbx-1", "sp-team"},
+			wantKinds:  []string{kindSandbox, kindSecurityProfile},
+		},
+		{
+			name:       "GET pod_name without namespace is 400",
+			method:     http.MethodGet,
+			target:     "/debug/profiles?pod_name=sbx-1",
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.target, strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+			var resp ListResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if resp.Count != len(tt.wantNames) {
+				t.Fatalf("count = %d, want %d (body: %s)", resp.Count, len(tt.wantNames), rec.Body.String())
+			}
+			for i := range tt.wantNames {
+				if resp.Profiles[i].Name != tt.wantNames[i] || resp.Profiles[i].Kind != tt.wantKinds[i] {
+					t.Errorf("profiles[%d] = %s/%s, want %s/%s", i,
+						resp.Profiles[i].Kind, resp.Profiles[i].Name, tt.wantKinds[i], tt.wantNames[i])
+				}
+			}
+		})
+	}
+
+	// Full mode decodes the annotation into the shared spec shape.
+	req := httptest.NewRequest(http.MethodGet,
+		"/debug/profiles?namespace=sandboxes&pod_name=sbx-1&full=true", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("full mode status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	var resp ListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Count != 1 || resp.Profiles[0].Error != "" {
+		t.Fatalf("full mode response = %s", rec.Body.String())
+	}
+	spec := resp.Profiles[0].Spec
+	if spec == nil || len(spec.Rules) != 1 || spec.Rules[0].Name != "trace" {
+		t.Fatalf("full mode spec = %+v, want the annotation's rule chain", spec)
 	}
 }
 

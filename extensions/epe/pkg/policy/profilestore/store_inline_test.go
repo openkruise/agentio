@@ -66,9 +66,9 @@ func TestStoreInlineProfiles(t *testing.T) {
 		t.Fatalf("Matches with empty pod name = %+v, want the inline lookup skipped", got)
 	}
 
-	// Inline profiles never appear in the listing surface.
-	if got := s.List(); len(got) != 0 {
-		t.Fatalf("List() = %+v, want inline profiles excluded", got)
+	// Inline profiles appear on the listing surface alongside CRD profiles.
+	if got := s.List(); len(got) != 1 || got[0].Meta.Source != securityprofile.SourceInline {
+		t.Fatalf("List() = %+v, want the inline profile listed", got)
 	}
 
 	// An update replaces the profile in place (new resourceVersion).

@@ -28,6 +28,8 @@ import (
 	log "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentsclient "github.com/openkruise/agents-api/client/clientset/versioned"
+
+	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"istio.io/istio/extensions/epe/pkg/policy/profilestore"
 )
 
@@ -79,6 +81,7 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "  GET|POST /debug/profiles                          list all loaded profiles\n")
 		fmt.Fprintf(w, "  GET|POST /debug/profiles?namespace=<ns>           filter by namespace\n")
 		fmt.Fprintf(w, "  GET|POST /debug/profiles?namespace=<ns>&pod_labels=k=v,k=v  match profiles for pod labels\n")
+		fmt.Fprintf(w, "  GET|POST /debug/profiles?namespace=<ns>&pod_name=<pod>      include the pod's inline rule profile\n")
 		fmt.Fprintf(w, "  add ?full=true (POST: {\"full\":true}) for complete profile spec\n")
 	}
 }
@@ -93,7 +96,10 @@ func enabledText(enabled bool) string {
 // toView builds the default (identity-only) view of a compiled profile.
 func toView(p *securityprofile.Profile) ProfileView {
 	kind := kindSecurityProfile
-	if p.Meta.Namespace == "" {
+	switch {
+	case p.Meta.Source == securityprofile.SourceInline:
+		kind = kindSandbox
+	case p.Meta.Namespace == "":
 		kind = kindGlobalSecurityProfile
 	}
 	return ProfileView{
@@ -112,7 +118,8 @@ func (h *handler) enrich(ctx context.Context, v *ProfileView) {
 		v.Error = "full content unavailable: no clientset configured"
 		return
 	}
-	if v.Kind == kindGlobalSecurityProfile {
+	switch v.Kind {
+	case kindGlobalSecurityProfile:
 		gsp, err := h.client.AgentsV1alpha1().GlobalSecurityProfiles().Get(ctx, v.Name, metav1.GetOptions{})
 		if err != nil {
 			v.Error = err.Error()
@@ -121,16 +128,33 @@ func (h *handler) enrich(ctx context.Context, v *ProfileView) {
 		ct := gsp.CreationTimestamp
 		v.CreationTimestamp = &ct
 		v.Spec = &gsp.Spec
-		return
+	case kindSandbox:
+		sbx, err := h.client.AgentsV1alpha1().Sandboxes(v.Namespace).Get(ctx, v.Name, metav1.GetOptions{})
+		if err != nil {
+			v.Error = err.Error()
+			return
+		}
+		var rules []v1alpha1.SecurityRule
+		raw := sbx.Annotations[securityprofile.AnnotationSecurityRules]
+		if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+			v.Error = fmt.Sprintf("decode %s annotation: %v", securityprofile.AnnotationSecurityRules, err)
+			return
+		}
+		ct := sbx.CreationTimestamp
+		v.CreationTimestamp = &ct
+		// Inline rules have no CRD object; present them through the shared
+		// spec shape with no selector (they match by identity only).
+		v.Spec = &v1alpha1.SecurityProfileSpec{Rules: rules}
+	default:
+		sp, err := h.client.AgentsV1alpha1().SecurityProfiles(v.Namespace).Get(ctx, v.Name, metav1.GetOptions{})
+		if err != nil {
+			v.Error = err.Error()
+			return
+		}
+		ct := sp.CreationTimestamp
+		v.CreationTimestamp = &ct
+		v.Spec = &sp.Spec
 	}
-	sp, err := h.client.AgentsV1alpha1().SecurityProfiles(v.Namespace).Get(ctx, v.Name, metav1.GetOptions{})
-	if err != nil {
-		v.Error = err.Error()
-		return
-	}
-	ct := sp.CreationTimestamp
-	v.CreationTimestamp = &ct
-	v.Spec = &sp.Spec
 }
 
 // writeJSON serializes v as JSON with the given status code.

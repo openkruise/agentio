@@ -89,11 +89,6 @@ func TestNewInlineProfileRejections(t *testing.T) {
 		{"invalid json", `{`, "decode"},
 		{"empty array", `[]`, "contains no rules"},
 		{"unknown field", `[{"name":"r","priority":3,"match":[{"domains":["a.example.com"]}],"actions":{"block":{}}}]`, "decode"},
-		{"bypass", `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":{"bypass":true,"block":{}}}]`, "bypass is not allowed"},
-		{"tokenTransformation", `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":{"tokenTransformation":{}}}]`, "tokenTransformation is not supported"},
-		{"mcpToolPolicy", `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":{"mcpToolPolicy":{"defaultAction":"deny"}}}]`, "mcpToolPolicy is not supported"},
-		{"audit", `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":{"block":{},"audit":[{"name":"log"}]}}]`, "audit is not supported"},
-		{"no action", `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":{}}]`, "at least one of block or headerManipulation"},
 		{"bad regex", `[{"name":"r","match":[{"domains":["a.example.com"],"paths":[{"type":"Regex","value":"["}]}],"actions":{"block":{}}}]`, "regex"},
 	}
 	for _, tt := range tests {
@@ -106,6 +101,22 @@ func TestNewInlineProfileRejections(t *testing.T) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// Inline rules admit the full SecurityRule action set — the annotation schema
+// is the CRD rule schema, not a reduced one.
+func TestNewInlineProfileAdmitsAllActions(t *testing.T) {
+	raw := `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":` +
+		`{"bypass":true,"tokenTransformation":{},"audit":[{"name":"log"}],` +
+		`"mcpToolPolicy":{"defaultAction":"deny"}}}]`
+	p, err := NewInlineProfile(sandboxWithRules("sbx", "ns", raw))
+	if err != nil {
+		t.Fatalf("NewInlineProfile: %v", err)
+	}
+	a := p.Rules[0].Actions
+	if !a.Bypass || a.TokenTransformation == nil || a.MCPToolPolicy == nil || len(a.Audit) != 1 {
+		t.Fatalf("actions = %+v, want every action preserved", a)
 	}
 }
 

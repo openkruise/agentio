@@ -52,9 +52,8 @@ const (
 // and admin endpoints. Writes are driven exclusively by RegisterCollection,
 // which replays and then tails a krt compiled-profile collection in batches.
 type Store interface {
-	// List returns all selector-matched profiles, both namespace- and
-	// cluster-scoped. Per-Sandbox inline profiles are not listed; they are
-	// reachable only through their pod identity.
+	// List returns all installed profiles: selector-matched ones (both
+	// namespace- and cluster-scoped) and per-Sandbox inline profiles.
 	List() []*securityprofile.Profile
 
 	// Matches returns the profiles that apply to the given pod: profiles
@@ -182,8 +181,11 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 
 func (s *store) List() []*securityprofile.Profile {
 	snap := s.snapshot.Load()
-	result := make([]*securityprofile.Profile, 0, len(snap.byKey))
+	result := make([]*securityprofile.Profile, 0, len(snap.byKey)+len(snap.inlineByKey))
 	for _, p := range snap.byKey {
+		result = append(result, p)
+	}
+	for _, p := range snap.inlineByKey {
 		result = append(result, p)
 	}
 	return result
@@ -217,9 +219,6 @@ func (s *store) Matches(podName, podNamespace string, podLabels map[string]strin
 		if sp.Selector.Matches(ls) {
 			matched = append(matched, sp)
 		}
-	}
-	if len(matched) == 0 {
-		return appendInline(nil, snap, podName, podNamespace)
 	}
 	// Each snapshot slice is already sorted by securityprofile.SortProfiles, and filtering
 	// preserves that order. Only when both the cluster- and namespace-scoped

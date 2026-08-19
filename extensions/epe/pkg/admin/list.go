@@ -25,19 +25,21 @@ import (
 // maxBodyBytes caps POST request body size to prevent abuse.
 const maxBodyBytes = 1 << 20 // 1 MiB
 
-// handleList serves two modes based on the presence of pod_labels:
-// - Without pod_labels: lists all profiles (optionally filtered by namespace)
-// - With pod_labels: returns matched profiles in evaluation order
+// handleList serves two modes based on the presence of pod_labels/pod_name:
+//   - Without them: lists all profiles (optionally filtered by namespace)
+//   - With pod_labels and/or pod_name: returns matched profiles in evaluation
+//     order; pod_name additionally resolves the pod's inline rule profile.
 //
 // Accepts GET with query params or POST with JSON body.
 func (h *handler) handleList(w http.ResponseWriter, r *http.Request) {
-	var namespace, podLabelsRaw string
+	var namespace, podName, podLabelsRaw string
 	var full bool
 
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
 		namespace = q.Get("namespace")
+		podName = q.Get("pod_name")
 		podLabelsRaw = q.Get("pod_labels")
 		full = q.Get("full") == "true"
 	case http.MethodPost:
@@ -49,8 +51,8 @@ func (h *handler) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		namespace = req.Namespace
 		full = req.Full
-		if len(req.PodLabels) > 0 {
-			h.handleMatch(w, r, namespace, req.PodLabels, full)
+		if len(req.PodLabels) > 0 || req.PodName != "" {
+			h.handleMatch(w, r, req.PodName, namespace, req.PodLabels, full)
 			return
 		}
 	default:
@@ -59,12 +61,8 @@ func (h *handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if podLabelsRaw != "" {
-		if namespace == "" {
-			writeError(w, http.StatusBadRequest, "namespace is required when pod_labels is provided")
-			return
-		}
-		h.handleMatch(w, r, namespace, labels.ParseLabelPairs(podLabelsRaw), full)
+	if podLabelsRaw != "" || podName != "" {
+		h.handleMatch(w, r, podName, namespace, labels.ParseLabelPairs(podLabelsRaw), full)
 		return
 	}
 
@@ -93,16 +91,16 @@ func (h *handler) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ListResponse{Count: len(views), Profiles: views})
 }
 
-// handleMatch finds profiles matching the given pod labels and writes the response.
-// Called by both GET (after CSV label parsing) and POST (with pre-parsed map).
-func (h *handler) handleMatch(w http.ResponseWriter, r *http.Request, namespace string, labels map[string]string, full bool) {
+// handleMatch finds profiles matching the given pod identity and labels and
+// writes the response. Called by both GET (after CSV label parsing) and POST
+// (with pre-parsed map). A non-empty podName also resolves the pod's own
+// inline rule profile, which is looked up by exact identity.
+func (h *handler) handleMatch(w http.ResponseWriter, r *http.Request, podName, namespace string, labels map[string]string, full bool) {
 	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace is required when pod_labels is provided")
+		writeError(w, http.StatusBadRequest, "namespace is required when pod_labels or pod_name is provided")
 		return
 	}
-	// The listing endpoint matches by labels only; the empty pod name skips
-	// the per-Sandbox inline rule lookup, which needs a concrete identity.
-	matched := h.store.Matches("", namespace, labels)
+	matched := h.store.Matches(podName, namespace, labels)
 	views := make([]ProfileView, 0, len(matched))
 	for _, p := range matched {
 		v := toView(p)

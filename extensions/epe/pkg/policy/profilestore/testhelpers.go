@@ -67,6 +67,20 @@ func (s *FakeStore) GlobalProfileSet(profile *v1alpha1.GlobalSecurityProfile) {
 	s.apply(profile, &profile.Spec)
 }
 
+// InlineProfileSet compiles a Sandbox's inline security-rules annotation and
+// installs the resulting profile synchronously. Objects without the
+// annotation or with an invalid chain are ignored, mirroring the inline
+// collection, which emits nothing for them.
+func (s *FakeStore) InlineProfileSet(sandbox metav1.Object) {
+	p, err := securityprofile.NewInlineProfile(sandbox)
+	if err != nil || p == nil {
+		return
+	}
+	s.applyBatch([]krt.Event[securityprofile.Profile]{
+		{New: p, Event: controllers.EventAdd},
+	})
+}
+
 // apply compiles obj/spec and folds the outcome through applyBatch. A
 // compilation failure is folded as an identity-bearing CompileError item
 // rather than dropped, so — exactly as in NewCollection — an invalid update

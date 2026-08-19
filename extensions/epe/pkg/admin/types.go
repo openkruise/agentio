@@ -19,10 +19,13 @@ import (
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
 
-// CRD kinds surfaced in ProfileView.Kind.
+// Kinds surfaced in ProfileView.Kind.
 const (
 	kindSecurityProfile       = "SecurityProfile"
 	kindGlobalSecurityProfile = "GlobalSecurityProfile"
+	// kindSandbox marks profiles compiled from a Sandbox's inline
+	// security-rules annotation rather than a profile CRD.
+	kindSandbox = "Sandbox"
 )
 
 // ProfileView is the serialized view of a single profile.
@@ -50,6 +53,9 @@ type debugRequest struct {
 	// PodLabels is the pod label set to match selectors against. When non-empty,
 	// triggers match mode and returns profiles in evaluation order.
 	PodLabels map[string]string `json:"pod_labels,omitempty"`
+	// PodName is the pod name. When set, match mode also includes the pod's
+	// per-Sandbox inline rule profile, which is keyed by exact identity.
+	PodName string `json:"pod_name,omitempty"`
 	// Full requests the complete profile spec (fetched live from the
 	// apiserver via the typed clientset) in addition to the identity fields.
 	// Defaults to false.
