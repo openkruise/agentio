@@ -19,6 +19,10 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	agentsclient "github.com/openkruise/agents-api/client/clientset/versioned"
+	corev1 "k8s.io/api/core/v1"
+
+	kubesecrets "istio.io/istio/pilot/pkg/credentials/kube"
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pkg/config/schema/kubeclient"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/kclient"
@@ -56,6 +60,61 @@ func registerTypes(agentsCS agentsclient.Interface) {
 			return agentsCS.AgentsV1alpha1().GlobalTrafficPolicies().Watch(context.Background(), opts)
 		},
 		nil,
+	)
+
+	registerSecurityProfileType(agentsCS)
+}
+
+var securityProfileGVR = schema.GroupVersionResource{
+	Group: "agents.kruise.io", Version: "v1alpha1", Resource: "securityprofiles",
+}
+
+var securityProfileGVK = schema.GroupVersionKind{
+	Group: "agents.kruise.io", Version: "v1alpha1", Kind: "SecurityProfile",
+}
+
+// registerSecurityProfileType registers SecurityProfile with the kubeclient
+// informer mechanism. Unlike the TrafficPolicy registrations above it also
+// supplies a write function: kclient derives its Patcher from that function,
+// and the status controller needs the Patcher to server-side-apply status.
+func registerSecurityProfileType(agentsCS agentsclient.Interface) {
+	kubeclient.Register[*agentsv1alpha1.SecurityProfile](securityProfileGVR, securityProfileGVK,
+		func(c kubeclient.ClientGetter, ns string, opts metav1.ListOptions) (runtime.Object, error) {
+			return agentsCS.AgentsV1alpha1().SecurityProfiles(ns).List(context.Background(), opts)
+		},
+		func(c kubeclient.ClientGetter, ns string, opts metav1.ListOptions) (watch.Interface, error) {
+			return agentsCS.AgentsV1alpha1().SecurityProfiles(ns).Watch(context.Background(), opts)
+		},
+		func(c kubeclient.ClientGetter, ns string) kubetypes.WriteAPI[*agentsv1alpha1.SecurityProfile] {
+			return agentsCS.AgentsV1alpha1().SecurityProfiles(ns)
+		},
+	)
+}
+
+func newSecurityProfilesCollection(
+	client kube.Client,
+	stop <-chan struct{},
+	opts krt.OptionsBuilder,
+) krt.Collection[*agentsv1alpha1.SecurityProfile] {
+	inf := kclient.NewDelayedInformer[*agentsv1alpha1.SecurityProfile](client,
+		securityProfileGVR,
+		kubetypes.StandardInformer, kclient.Filter{ObjectFilter: client.ObjectFilter()})
+	inf.Start(stop)
+	return krt.WrapClient(inf, opts.WithName("SecurityProfiles")...)
+}
+
+// newSecretsCollection mirrors the Gateway API controller's secret informer
+// (pilot/pkg/config/kube/gateway/controller.go:189-195): the field selector
+// excludes the two largest secret types in a typical cluster, and an empty
+// RestrictedSecretsScope means watch every namespace.
+func newSecretsCollection(client kube.Client, opts krt.OptionsBuilder) krt.Collection[*corev1.Secret] {
+	return krt.WrapClient(
+		kclient.NewFiltered[*corev1.Secret](client, kubetypes.Filter{
+			FieldSelector: kubesecrets.SecretsFieldSelector,
+			ObjectFilter:  client.ObjectFilter(),
+			Namespace:     features.RestrictedSecretsScope,
+		}),
+		opts.WithName("SecurityProfileSecrets")...,
 	)
 }
 

@@ -35,6 +35,11 @@ var (
 
 	ValidateTlsTerminatedSNI = env.Register("VALIDATE_TLS_TERMINATED_SNI", true, "Validate if sni and host header is consistent after tls terminated.").Get()
 
+	EnableSecurityProfileStatus = env.Register("ENABLE_SECURITY_PROFILE_STATUS", true,
+		"If enabled, the agentio controller writes status to SecurityProfile resources. "+
+			"Only the elected leader for the revision writes; disabling this stops all "+
+			"status writes without affecting the data plane.").Get()
+
 	MeshConfigMapName = env.Register("MESH_CONFIG_MAP_NAME", "istio",
 		"Name of the ConfigMap (without revision suffix) that holds the mesh configuration. "+
 			"When a non-default revision is used, the suffix '-<revision>' is still appended to this name.").Get()

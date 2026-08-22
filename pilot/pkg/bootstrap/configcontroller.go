@@ -107,6 +107,7 @@ func (s *Server) initConfigController(args *PilotArgs) error {
 		MeshConfig: s.environment.Watcher,
 		Debugger:   s.krtDebugger,
 		Stop:       s.internalStop,
+		Revision:   args.Revision,
 	})
 	if err != nil {
 		return err
@@ -130,6 +131,22 @@ func (s *Server) initConfigController(args *PilotArgs) error {
 				Reason: model.NewReasonStats(model.OnDemandEviction),
 				Forced: true,
 			})
+		})
+	}
+	if features.EnableSecurityProfileStatus {
+		s.addTerminatingStartFunc("securityprofile status", func(stop <-chan struct{}) error {
+			leaderelection.
+				NewPerRevisionLeaderElection(args.Namespace, args.PodName,
+					leaderelection.SecurityProfileStatusController, args.Revision, s.kubeClient).
+				AddRunFunction(func(leaderStop <-chan struct{}) {
+					log.Infof("Starting securityprofile status writer for revision: %s", args.Revision)
+					agentioController.SetSecurityProfileStatusWrite(true)
+					<-leaderStop
+					log.Infof("Stopping securityprofile status writer")
+					agentioController.SetSecurityProfileStatusWrite(false)
+				}).
+				Run(stop)
+			return nil
 		})
 	}
 	// If running in ingress mode (requires k8s), wrap the config controller.

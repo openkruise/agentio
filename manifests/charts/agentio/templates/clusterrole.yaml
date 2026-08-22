@@ -10,10 +10,19 @@ rules:
   resources:
   - trafficpolicies
   - globaltrafficpolicies
+  - securityprofiles
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - agents.kruise.io
+  resources:
+  - securityprofiles/status
+  verbs:
+  # Server-side apply is a PATCH with content-type
+  # application/apply-patch+yaml, so `patch` alone is sufficient.
+  - patch
 - apiGroups:
   - networking.k8s.io
   resources:

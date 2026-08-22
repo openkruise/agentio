@@ -26,12 +26,16 @@ import (
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller/agentio/extensions"
+	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller/agentio/spstatus"
+	"istio.io/istio/pilot/pkg/status"
 	"istio.io/istio/pkg/config/mesh/meshwatcher"
 	"istio.io/istio/pkg/env"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
+	"istio.io/istio/pkg/kube/kclient"
 	"istio.io/istio/pkg/kube/krt"
 	istiolog "istio.io/istio/pkg/log"
+	"istio.io/istio/pkg/revisions"
 	"istio.io/istio/pkg/util/sets"
 	"istio.io/istio/pkg/workloadapi/security"
 	corev1 "k8s.io/api/core/v1"
@@ -69,6 +73,7 @@ type Options struct {
 	MeshConfig meshwatcher.WatcherCollection
 	Debugger   *krt.DebugHandler
 	Stop       <-chan struct{}
+	Revision   string
 }
 
 type Controller struct {
@@ -85,7 +90,11 @@ type Controller struct {
 	trafficPolicies       krt.Collection[*agentsv1alpha1.TrafficPolicy]
 	globalTrafficPolicies krt.Collection[*agentsv1alpha1.GlobalTrafficPolicy]
 
-	stop <-chan struct{}
+	spStatusCollections *status.StatusCollections
+	spStatusQueue       *spstatus.Queue
+
+	revision string
+	stop     <-chan struct{}
 }
 
 func NewController(options Options) (*Controller, error) {
@@ -115,6 +124,7 @@ func NewController(options Options) (*Controller, error) {
 		meshConfig:            options.MeshConfig,
 		globalTrafficPolicies: GlobalTrafficPolicies,
 		agentioConfig:         agentioConfig,
+		revision:              options.Revision,
 	}
 
 	if features.EnableOnDemandCerts {
@@ -125,6 +135,9 @@ func NewController(options Options) (*Controller, error) {
 	}
 
 	c.initExternalNamesController()
+	if features.EnableSecurityProfileStatus {
+		c.initSecurityProfileStatus(options.KubeClient, opts)
+	}
 	c.initWorkloadConfigs(opts)
 	return c, nil
 }
@@ -213,6 +226,44 @@ func (c *Controller) initExternalNamesController() {
 
 	c.externalNamesController = externalNamesController
 	c.externalNamesController.Start(c.stop)
+}
+
+// initSecurityProfileStatus builds the status pipeline but does not start
+// writing. SetSecurityProfileStatusWrite turns writing on once this instance
+// wins leader election.
+func (c *Controller) initSecurityProfileStatus(kc kube.Client, opts krt.OptionsBuilder) {
+	profiles := newSecurityProfilesCollection(kc, c.stop, opts)
+	secrets := newSecretsCollection(kc, opts)
+	col := spstatus.NewCollection(profiles, secrets, opts)
+
+	patcher := kclient.ToPatcher(kclient.NewWriteClient[*agentsv1alpha1.SecurityProfile](kc))
+	c.spStatusQueue = spstatus.NewQueue(patcher, col)
+	c.spStatusCollections = &status.StatusCollections{}
+
+	tagWatcher := revisions.NewTagWatcher(kc, c.revision, c.meshConfig.Get().RootNamespace)
+	go tagWatcher.Run(c.stop)
+	spstatus.Register(c.spStatusCollections, col, tagWatcher)
+
+	go c.spStatusQueue.Run(c.stop)
+}
+
+// SetSecurityProfileStatusWrite turns status writing on or off. Only the
+// elected leader for a revision should write.
+//
+// Enabling registers the krt handler, which replays the current state
+// (pkg/kube/krt/collection.go:743-746); disabling unregisters it, so a
+// non-leader neither computes nor writes. This mirrors
+// gateway.Controller.SetStatusWrite (pilot/pkg/config/kube/gateway/controller.go:515).
+func (c *Controller) SetSecurityProfileStatusWrite(enabled bool) {
+	if c.spStatusCollections == nil {
+		// Feature disabled; nothing was built.
+		return
+	}
+	if enabled {
+		c.spStatusCollections.SetQueue(c.spStatusQueue)
+		return
+	}
+	c.spStatusCollections.UnsetQueue()
 }
 
 func (c *Controller) initWorkloadConfigs(opts krt.OptionsBuilder) {

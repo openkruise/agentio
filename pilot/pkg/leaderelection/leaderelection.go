@@ -49,6 +49,10 @@ var (
 	// this was formally "istio-gateway-leader"; because they are a different API group we need a different
 	// election to ensure we do not only handle one or the other.
 	GatewayStatusController = features.LeaderElectionPrefix + "-gateway-status-leader"
+	// SecurityProfileStatusController controls writing status to
+	// agents.kruise.io SecurityProfile objects. It is per-revision and uses a
+	// Lease, matching GatewayDeploymentController's reasoning below.
+	SecurityProfileStatusController = features.LeaderElectionPrefix + "-securityprofile-status"
 	// StatusController controls writing Istio status to objects
 	StatusController  = features.LeaderElectionPrefix + "-status-leader"
 	AnalyzeController = features.LeaderElectionPrefix + "-analyze-leader"
