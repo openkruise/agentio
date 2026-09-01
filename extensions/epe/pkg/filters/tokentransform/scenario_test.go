@@ -20,8 +20,10 @@
 package tokentransform_test
 
 import (
+	"bytes"
 	"testing"
 
+	extProcV3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -34,6 +36,16 @@ import (
 const injectPayload = `{
 	"credentialRef": {"secret": {"name": "api-cred", "namespace": "test-ns"}},
 	"apiKey": {"valueTemplate": "Bearer {{ .Token }}"}
+}`
+
+const bodyInjectPayload = `{
+	"credentialRef": {"secret": {"name": "api-cred", "namespace": "test-ns"}},
+	"apiKey": {
+		"target": {"body": {
+			"cel": "pod.namespace == 'test-ns' && value == 'rendered-' + token && header.name == '' && request.headers['content-type'] == 'application/json' ? json(request.body).merge({'api_key': value}) : request.body"
+		}},
+		"value": {"template": "rendered-{{ .Token }}"}
+	}
 }`
 
 func newInjectHarness(t *testing.T, payload string, objects ...*corev1.Secret) *enginetest.Harness {
@@ -98,6 +110,51 @@ func TestScenario_SecretTokenInjectedIntoMultipleHeaders(t *testing.T) {
 	verdict.RequireOutcome(t, "mutated")
 	verdict.RequireHeader(t, "authorization", "Bearer secret-token-123")
 	verdict.RequireHeader(t, "x-api-key", "Bearer secret-token-123")
+}
+
+// Body targets request buffering at header time, then expose the same CEL
+// surface as header mutations: raw token, rendered value, contextual header,
+// request scope, and JSON helpers. The expression itself decides whether the
+// body needs JSON handling; there is no format knob.
+func TestScenario_SecretTokenInjectedIntoBodyByCEL(t *testing.T) {
+	h := newInjectHarness(t, bodyInjectPayload, apiKeySecret("test-ns", "api-cred", "secret-token-123"))
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        []byte
+		want        []byte
+	}{
+		{
+			name:        "CEL parses and merges JSON",
+			contentType: "application/json",
+			body:        []byte(`{"keep":true}`),
+			want:        []byte(`{"api_key":"rendered-secret-token-123","keep":true}`),
+		},
+		{
+			name:        "CEL leaves a non-JSON body raw",
+			contentType: "text/plain",
+			body:        []byte("not-json\n"),
+			want:        []byte("not-json\n"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := enginetest.NewRequest("POST", "api.example.com", "/v1").
+				Header("content-type", tc.contentType).
+				Peer("test-ns", "sandbox-a", map[string]string{"app": "sandbox"}).
+				Body(tc.body)
+			verdict := h.Run(t, request)
+			verdict.RequireOutcome(t, "mutated")
+			if verdict.ModeOverride == nil || verdict.ModeOverride.GetRequestBodyMode() != extProcV3.ProcessingMode_BUFFERED {
+				t.Fatalf("ModeOverride = %v, want BUFFERED request body", verdict.ModeOverride)
+			}
+			if !verdict.RequestBodyChanged {
+				t.Fatalf("RequestBodyChanged = false, want a body mutation (raw=%v)", verdict.Raw)
+			}
+			if !bytes.Equal(verdict.RequestBody, tc.want) {
+				t.Fatalf("request body = %q, want %q", verdict.RequestBody, tc.want)
+			}
+		})
+	}
 }
 
 // A missing credential resolves through the payload's failStrategy, never

@@ -35,26 +35,54 @@ var (
 	valueEnvErr  error
 )
 
-// commonEnvOptions declares the request-time variables and extensions shared
-// by audit conditions and credential-provider parameter values.
-func commonEnvOptions() []cel.EnvOption {
+// RestrictedRequestCELCostLimit bounds request-time mutation work in cel-go
+// runtime cost units. Consumers share the same budget and add only the
+// declarations required by their own expression contract.
+const RestrictedRequestCELCostLimit uint64 = 10_000
+
+// requestVariableOptions declares the request-time scope shared by every CEL
+// environment. It returns a fresh slice so consumer declarations cannot leak
+// between independently constructed environments.
+func requestVariableOptions() []cel.EnvOption {
 	return []cel.EnvOption{
 		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("pod", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("profile", cel.MapType(cel.StringType, cel.StringType)),
 		cel.Variable("rule", cel.MapType(cel.StringType, cel.StringType)),
 		cel.Variable("inputs", cel.MapType(cel.StringType, cel.DynType)),
+	}
+}
+
+// commonEnvOptions declares the request-time variables and extensions shared
+// by audit conditions and credential-provider parameter values.
+func commonEnvOptions() []cel.EnvOption {
+	options := requestVariableOptions()
+	return append(options,
 		ext.Bindings(),
 		ext.Strings(),
 		ext.Sets(),
 		ext.Lists(),
-	}
+	)
 }
 
 // NewRequestEnv returns the standard request-time CEL environment plus
 // consumer-specific declarations. Callers constrain their own result type.
 func NewRequestEnv(extra ...cel.EnvOption) (*cel.Env, error) {
 	options := append([]cel.EnvOption{}, commonEnvOptions()...)
+	options = append(options, extra...)
+	return cel.NewEnv(options...)
+}
+
+// NewRestrictedRequestEnv returns the request-time variables and safe
+// extension subset used by mutation expressions. lists.range is deliberately
+// omitted so request data cannot control an unbounded collection constructor.
+func NewRestrictedRequestEnv(extra ...cel.EnvOption) (*cel.Env, error) {
+	options := append(requestVariableOptions(),
+		ext.Bindings(),
+		ext.Strings(),
+		ext.Sets(),
+		ext.Lists(ext.ListsVersion(1)),
+	)
 	options = append(options, extra...)
 	return cel.NewEnv(options...)
 }

@@ -60,7 +60,7 @@ func (s *preparingSigner) Prepare(_ *filter.Stream, _ *inputs.Scope, _ any) (any
 	return s.prepared, s.empty, s.prepareErr
 }
 
-func (s *preparingSigner) WantsBody(*filter.Stream) (bool, error) { return s.wantsBody, nil }
+func (s *preparingSigner) WantsBody(*filter.Stream, any) (bool, error) { return s.wantsBody, nil }
 
 func (s *preparingSigner) Sign(_ context.Context, _ *filter.Stream, _ []byte, _ *inputs.Scope, cred Credential, cfg any) ([]filter.Mutation, error) {
 	s.signCalls++
@@ -110,6 +110,24 @@ func streamWithPeerToken() *filter.Stream {
 
 func streamWithoutPeerToken() *filter.Stream {
 	return &filter.Stream{Peer: filter.Peer{Pod: types.NamespacedName{Namespace: "podns", Name: "pod-x"}}}
+}
+
+func bodyTargetCfg(t *testing.T, failBlock bool, expression string) Config {
+	t.Helper()
+	tmpl, err := eval.CompileTemplate("apiKey.value.template", "{{ .Token }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := eval.CompileBodyMutation(expression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := secretCfg(failBlock)
+	cfg.SignerCfg = ApiKeyConfig{Body: &ApiKeyBodyConfig{
+		Program: prog,
+		Value:   HeaderValueSource{Template: tmpl},
+	}}
+	return cfg
 }
 
 func TestFilterSignerPreparationBeforeCredentialFetch(t *testing.T) {
@@ -200,7 +218,7 @@ func TestFilterSignerPreparationBeforeCredentialFetch(t *testing.T) {
 		if headersAct.Kind() != filter.KindNeedBody || len(source.got) != 0 {
 			t.Fatalf("headers action = %+v, fetches=%d; want NeedBody with no fetch", headersAct, len(source.got))
 		}
-		bodyAct, err := f.OnRequestBody(context.Background(), st, filter.Body{Bytes: []byte("body")})
+		bodyAct, err := f.OnRequestBody(context.Background(), st, filter.Body{Bytes: []byte("body"), Complete: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,6 +247,89 @@ func TestFilterSignerPreparationBeforeCredentialFetch(t *testing.T) {
 			t.Fatalf("fetches = %d, want 1", len(source.got))
 		}
 	})
+}
+
+func TestFilterAPIKeyBodyTargetDefersAndMutates(t *testing.T) {
+	src := &fakeSource{cred: Credential{Token: "new-token"}}
+	f := newTestFilter(src, nil, bodyTargetCfg(t, true,
+		"json(request.body).merge({'api_key': value})"))
+	st := streamWithPeerToken()
+	st.Request.Method = "POST"
+	st.Request.Headers = map[string]string{"content-type": "application/json"}
+
+	headers, err := f.OnRequestHeaders(context.Background(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headers.Kind() != filter.KindNeedBody {
+		t.Fatalf("headers action kind = %v, want KindNeedBody", headers.Kind())
+	}
+	if len(src.got) != 0 {
+		t.Fatalf("credential fetched before body arrived: %d fetches", len(src.got))
+	}
+
+	body, err := f.OnRequestBody(context.Background(), st, filter.Body{
+		Bytes: []byte(`{"keep":true}`), Complete: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutations := body.Mutations()
+	if len(mutations) != 1 || string(mutations[0].Body) != `{"api_key":"new-token","keep":true}` {
+		t.Fatalf("body mutations = %+v", mutations)
+	}
+	if len(mutations[0].HeaderOps) != 0 {
+		t.Fatalf("body target also changed headers: %+v", mutations[0].HeaderOps)
+	}
+	if len(src.got) != 1 {
+		t.Fatalf("credential fetches = %d, want 1 in body phase", len(src.got))
+	}
+}
+
+func TestFilterAPIKeyBodyTargetFailureUsesFailStrategy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failBlock bool
+		wantKind  filter.ActionKind
+	}{
+		{name: "block", failBlock: true, wantKind: filter.KindStop},
+		{name: "allow", failBlock: false, wantKind: filter.KindContinue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeSource{cred: Credential{Token: "TOKEN-MUST-NOT-LEAK"}}
+			f := newTestFilter(src, nil, bodyTargetCfg(t, tc.failBlock, "json(request.body)"))
+			st := streamWithPeerToken()
+			headers, _ := f.OnRequestHeaders(context.Background(), st)
+			if headers.Kind() != filter.KindNeedBody {
+				t.Fatalf("headers action kind = %v, want KindNeedBody", headers.Kind())
+			}
+			body, _ := f.OnRequestBody(context.Background(), st, filter.Body{
+				Bytes: []byte("BODY-MUST-NOT-LEAK"), Complete: true,
+			})
+			if body.Kind() != tc.wantKind || len(body.Mutations()) != 0 {
+				t.Fatalf("body action = %+v, want kind %v without mutations", body, tc.wantKind)
+			}
+		})
+	}
+}
+
+func TestFilterAPIKeyBodyTargetRejectsIncompleteBody(t *testing.T) {
+	src := &fakeSource{cred: Credential{Token: "new-token"}}
+	f := newTestFilter(src, nil, bodyTargetCfg(t, true, "request.body"))
+	st := streamWithPeerToken()
+	headers, _ := f.OnRequestHeaders(context.Background(), st)
+	if headers.Kind() != filter.KindNeedBody {
+		t.Fatalf("headers action kind = %v, want KindNeedBody", headers.Kind())
+	}
+	body, _ := f.OnRequestBody(context.Background(), st, filter.Body{
+		Bytes: []byte("{}"), Complete: false,
+	})
+	if body.Kind() != filter.KindStop || len(body.Mutations()) != 0 {
+		t.Fatalf("body action = %+v, want fail-closed stop", body)
+	}
+	if len(src.got) != 0 {
+		t.Fatalf("credential fetched for incomplete body: %d fetches", len(src.got))
+	}
 }
 
 func TestFilterInjectsForEligibleRule(t *testing.T) {
@@ -402,7 +503,7 @@ func TestFilterSecretNamespaceFallbackToPod(t *testing.T) {
 
 type wantBodySigner struct{ apiKeySigner }
 
-func (wantBodySigner) WantsBody(*filter.Stream) (bool, error) { return true, nil }
+func (wantBodySigner) WantsBody(*filter.Stream, any) (bool, error) { return true, nil }
 
 func TestFilterDefersToBodyPhase(t *testing.T) {
 	src := &fakeSource{cred: Credential{Token: "k"}}
@@ -416,7 +517,7 @@ func TestFilterDefersToBodyPhase(t *testing.T) {
 	if len(src.got) != 0 {
 		t.Fatalf("fetches in headers phase = %d, want 0 (deferred)", len(src.got))
 	}
-	bodyAct, _ := f.OnRequestBody(context.Background(), st, filter.Body{Bytes: []byte("x")})
+	bodyAct, _ := f.OnRequestBody(context.Background(), st, filter.Body{Bytes: []byte("x"), Complete: true})
 	if len(bodyAct.Mutations()) != 1 {
 		t.Fatalf("body action = %+v, want the injection", bodyAct)
 	}
@@ -424,7 +525,7 @@ func TestFilterDefersToBodyPhase(t *testing.T) {
 
 type ineligibleSigner struct{ apiKeySigner }
 
-func (ineligibleSigner) WantsBody(*filter.Stream) (bool, error) {
+func (ineligibleSigner) WantsBody(*filter.Stream, any) (bool, error) {
 	return false, errors.New("cannot detect scheme")
 }
 

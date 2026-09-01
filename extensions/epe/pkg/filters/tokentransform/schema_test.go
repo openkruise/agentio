@@ -65,6 +65,82 @@ func TestParseClaimsApiKeyAction(t *testing.T) {
 	}
 }
 
+func TestParseExplicitAPIKeyTargets(t *testing.T) {
+	const secret = `"credentialRef":{"secret":{"name":"backend"}}`
+	t.Run("header target normalizes through current header config", func(t *testing.T) {
+		cfg, err := parse(json.RawMessage(`{` + secret + `,"apiKey":{
+			"target":{"header":{"name":"X-API-Key"}},
+			"value":{"template":"Bearer {{ .Token }}"}
+		}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		apiKey := cfg.SignerCfg.(ApiKeyConfig)
+		if apiKey.Body != nil || len(apiKey.Headers) != 1 ||
+			!reflect.DeepEqual(apiKey.Headers[0].Names, []string{"x-api-key"}) {
+			t.Fatalf("SignerCfg = %#v, want normalized x-api-key header target", apiKey)
+		}
+	})
+
+	t.Run("body target compiles CEL and legacy value template", func(t *testing.T) {
+		cfg, err := parse(json.RawMessage(`{` + secret + `,"apiKey":{
+			"target":{"body":{"cel":"json(request.body).merge({'api_key': value})"}},
+			"valueTemplate":"{{ .Token }}"
+		}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		apiKey := cfg.SignerCfg.(ApiKeyConfig)
+		if len(apiKey.Headers) != 0 || apiKey.Body == nil ||
+			apiKey.Body.Program == nil || apiKey.Body.Value.Template == nil {
+			t.Fatalf("SignerCfg = %#v, want compiled body target", apiKey)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		apiKey string
+		want   string
+	}{
+		{
+			name: "invalid body CEL",
+			apiKey: `{"target":{"body":{"cel":"json(request.body).merge("}},
+				"value":{"value":"x"}}`,
+			want: "compile apiKey.target.body.cel",
+		},
+		{
+			name:   "empty target union",
+			apiKey: `{"target":{},"value":{"value":"x"}}`,
+			want:   "exactly one of header or body",
+		},
+		{
+			name: "both target branches",
+			apiKey: `{"target":{"header":{"name":"x-api-key"},"body":{"cel":"request.body"}},
+				"value":{"value":"x"}}`,
+			want: "exactly one of header or body",
+		},
+		{
+			name: "target conflicts with targetHeaders",
+			apiKey: `{"target":{"body":{"cel":"request.body"}},
+				"targetHeaders":{"names":["x-api-key"]},"value":{"value":"x"}}`,
+			want: "must not be combined",
+		},
+		{
+			name: "invalid explicit header name",
+			apiKey: `{"target":{"header":{"name":"host"}},
+				"value":{"value":"x"}}`,
+			want: "cannot modify Host",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parse(json.RawMessage(`{` + secret + `,"apiKey":` + tc.apiKey + `}`))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("parse() error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseCanonicalHeaderRules(t *testing.T) {
 	restore := swapSigners()
 	defer restore()

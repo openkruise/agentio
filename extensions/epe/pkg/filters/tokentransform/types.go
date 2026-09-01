@@ -163,12 +163,12 @@ type SignerPreparer interface {
 	Prepare(st *filter.Stream, scope *inputs.Scope, cfg any) (prepared any, empty bool, err error)
 }
 
-// BodyWanter is the optional pre-claim probe of signers whose signature
-// consumes the request body. An error means the request is ineligible for
-// this signer and resolves through FailStrategy like other pre-claim
-// failures.
+// BodyWanter is the optional pre-claim probe of signers whose signature may
+// consume the request body. cfg is the request-prepared signer config when the
+// signer implements SignerPreparer, otherwise Config.SignerCfg. An error means
+// the request is ineligible and resolves through FailStrategy.
 type BodyWanter interface {
-	WantsBody(st *filter.Stream) (bool, error)
+	WantsBody(st *filter.Stream, cfg any) (bool, error)
 }
 
 // When gates signing on the existing value of one request header.

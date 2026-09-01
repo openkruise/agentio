@@ -39,16 +39,16 @@ func TestSignerKindAndRegistration(t *testing.T) {
 func TestWantsBodyUnknownSchemeErrors(t *testing.T) {
 	st := &filter.Stream{}
 	st.Request.Headers = map[string]string{}
-	if _, err := (New()).WantsBody(st); err == nil {
+	if _, err := (New()).WantsBody(st, nil); err == nil {
 		t.Fatal("undetectable scheme must error (pre-claim FailStrategy path)")
 	}
 }
 
 func TestWantsBodyV1RPCPostNeedsBody(t *testing.T) {
-	if needs, err := (New()).WantsBody(v1rpcPostStream()); err != nil || !needs {
+	if needs, err := (New()).WantsBody(v1rpcPostStream(), nil); err != nil || !needs {
 		t.Fatalf("WantsBody = %v, %v; want true, nil", needs, err)
 	}
-	if needs, err := (New()).WantsBody(v3Stream()); err != nil || needs {
+	if needs, err := (New()).WantsBody(v3Stream(), nil); err != nil || needs {
 		t.Fatalf("WantsBody(v3) = %v, %v; want false, nil", needs, err)
 	}
 }

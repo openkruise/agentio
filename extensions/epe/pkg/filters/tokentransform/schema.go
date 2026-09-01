@@ -26,7 +26,6 @@ import (
 	"regexp"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/ext"
 	"k8s.io/utils/ptr"
 
 	"istio.io/istio/extensions/epe/pkg/engine/filter"
@@ -42,11 +41,6 @@ const (
 	failStrategyIgnore = "Ignore"
 	maxHeaderRules     = 16
 	maxHeaderTargets   = 64
-	// tokenHeaderCELCostLimit bounds request-time selector and value work in
-	// cel-go runtime cost units. Ten thousand leaves ample room for an ordinary
-	// O(headers) filter over the 64-target contract while interrupting nested
-	// comprehensions before they can consume unbounded CPU.
-	tokenHeaderCELCostLimit uint64 = 10_000
 )
 
 // spec is the wire form of a tokentransform payload. Tags mirror the
@@ -92,6 +86,7 @@ type valueSourceSpec struct {
 type apiKeySpec struct {
 	TargetHeaders *headerSelectorSpec `json:"targetHeaders,omitempty"`
 	Value         *valueSourceSpec    `json:"value,omitempty"`
+	Body          *bodyTargetSpec     `json:"-"`
 }
 
 // apiKeyWireSpec exists only while decoding the released and current JSON
@@ -103,9 +98,24 @@ type apiKeyWireSpec struct {
 	ValueTemplate string              `json:"valueTemplate,omitempty"`
 	TargetHeaders *headerSelectorSpec `json:"targetHeaders,omitempty"`
 	Value         *valueSourceSpec    `json:"value,omitempty"`
+	Target        *apiKeyTargetSpec   `json:"target,omitempty"`
 	// NestedHeaders detects and rejects the unreleased apiKey.headers spelling
 	// from the branch baseline. It is never compiled as configuration.
 	NestedHeaders json.RawMessage `json:"headers,omitempty"`
+}
+
+type apiKeyTargetSpec struct {
+	Header *headerTargetSpec `json:"header,omitempty"`
+	Body   *bodyTargetSpec   `json:"body,omitempty"`
+}
+
+type headerTargetSpec struct {
+	Name string `json:"name,omitempty"`
+}
+
+type bodyTargetSpec struct {
+	CEL       string `json:"cel,omitempty"`
+	condition *whenSpec
 }
 
 type headerSelectorSpec struct {
@@ -138,6 +148,30 @@ func (s *apiKeySpec) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("apiKey.headers is not supported; use apiKey.targetHeaders and apiKey.value")
 	}
 	*s = apiKeySpec{}
+	if wire.Target != nil {
+		if wire.TargetHeaders != nil || wire.TargetHeader != "" {
+			return fmt.Errorf("apiKey target must not be combined with targetHeaders or targetHeader")
+		}
+		hasHeader := wire.Target.Header != nil
+		hasBody := wire.Target.Body != nil
+		if hasHeader == hasBody {
+			return fmt.Errorf("apiKey target must set exactly one of header or body")
+		}
+		if hasHeader {
+			s.TargetHeaders = &headerSelectorSpec{
+				Names:     []string{wire.Target.Header.Name},
+				condition: wire.When,
+			}
+		} else {
+			s.Body = wire.Target.Body
+			s.Body.condition = wire.When
+		}
+		s.Value = wire.Value
+		if s.Value == nil {
+			s.Value = &valueSourceSpec{Template: ptr.To(wire.ValueTemplate)}
+		}
+		return nil
+	}
 	if wire.TargetHeaders != nil {
 		s.TargetHeaders = wire.TargetHeaders
 		s.Value = wire.Value
@@ -198,17 +232,43 @@ func parse(raw json.RawMessage) (Config, error) {
 		if s.ApiKey.Value != nil {
 			value = *s.ApiKey.Value
 		}
-		cfg.SignerCfg, err = compileHeaderRules([]headerSpec{{
-			Names:     s.ApiKey.TargetHeaders.Names,
-			CEL:       s.ApiKey.TargetHeaders.CEL,
-			Value:     value,
-			Condition: s.ApiKey.TargetHeaders.condition,
-		}}, "apiKey")
+		if s.ApiKey.Body != nil {
+			cfg.SignerCfg, err = compileBodyTarget(*s.ApiKey.Body, value)
+		} else {
+			cfg.SignerCfg, err = compileHeaderRules([]headerSpec{{
+				Names:     s.ApiKey.TargetHeaders.Names,
+				CEL:       s.ApiKey.TargetHeaders.CEL,
+				Value:     value,
+				Condition: s.ApiKey.TargetHeaders.condition,
+			}}, "apiKey")
+		}
 	}
 	if err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func compileBodyTarget(body bodyTargetSpec, value valueSourceSpec) (ApiKeyConfig, error) {
+	program, err := eval.CompileBodyMutation(body.CEL)
+	if err != nil {
+		return ApiKeyConfig{}, fmt.Errorf("compile apiKey.target.body.cel: %w", err)
+	}
+	compiledValue, err := compileAPIKeyValue(value, "apiKey.value")
+	if err != nil {
+		return ApiKeyConfig{}, err
+	}
+	var condition *When
+	if body.condition != nil {
+		re, err := regexp.Compile(body.condition.Pattern)
+		if err != nil {
+			return ApiKeyConfig{}, fmt.Errorf("compile when pattern %q: %w", body.condition.Pattern, err)
+		}
+		condition = &When{Header: body.condition.Header, Re: re}
+	}
+	return ApiKeyConfig{Body: &ApiKeyBodyConfig{
+		Program: program, Value: compiledValue, Condition: condition,
+	}}, nil
 }
 
 func compileHeaderRules(rules []headerSpec, apiKeyPath ...string) (ApiKeyConfig, error) {
@@ -257,7 +317,7 @@ func compileHeaderRules(rules []headerSpec, apiKeyPath ...string) (ApiKeyConfig,
 				out.Names[j] = name
 			}
 		} else {
-			env, err := newTokenHeaderCELEnv()
+			env, err := eval.RequestMutationEnv()
 			if err != nil {
 				return ApiKeyConfig{}, fmt.Errorf("init %s selector CEL: %w", selectorPath, err)
 			}
@@ -267,70 +327,57 @@ func compileHeaderRules(rules []headerSpec, apiKeyPath ...string) (ApiKeyConfig,
 			}
 		}
 
-		branches := 0
-		if rule.Value.Value != nil {
-			branches++
+		compiledValue, err := compileAPIKeyValue(rule.Value, valuePath)
+		if err != nil {
+			return ApiKeyConfig{}, err
 		}
-		if rule.Value.Template != nil {
-			branches++
-		}
-		if rule.Value.Cel != nil {
-			branches++
-		}
-		if branches != 1 {
-			return ApiKeyConfig{}, fmt.Errorf("%s: exactly one of value, template or cel must be set", valuePath)
-		}
-		switch {
-		case rule.Value.Value != nil:
-			out.Value.Literal = ptr.To(*rule.Value.Value)
-		case rule.Value.Template != nil:
-			if *rule.Value.Template == "" {
-				return ApiKeyConfig{}, fmt.Errorf("%s.template is empty", valuePath)
-			}
-			tmpl, err := eval.CompileTemplate(valuePath+".template", *rule.Value.Template)
-			if err != nil {
-				return ApiKeyConfig{}, fmt.Errorf("compile %s.template: %w", valuePath, err)
-			}
-			if _, err := eval.ProbeRender(tmpl, ApiKeyTemplateData{}); err != nil {
-				return ApiKeyConfig{}, fmt.Errorf("probe %s.template: %w", valuePath, err)
-			}
-			out.Value.Template = tmpl
-		case rule.Value.Cel != nil:
-			env, err := newTokenHeaderCELEnv(
-				cel.Variable("token", cel.StringType),
-				cel.Variable("header", cel.MapType(cel.StringType, cel.StringType)),
-			)
-			if err != nil {
-				return ApiKeyConfig{}, fmt.Errorf("init %s CEL: %w", valuePath, err)
-			}
-			out.Value.CEL, err = compileCEL(env, valuePath+".cel", *rule.Value.Cel, cel.StringType)
-			if err != nil {
-				return ApiKeyConfig{}, err
-			}
-		}
+		out.Value = compiledValue
 		compiled = append(compiled, out)
 	}
 	return ApiKeyConfig{Headers: compiled}, nil
 }
 
-// newTokenHeaderCELEnv is intentionally separate from eval.NewRequestEnv:
-// token-header CEL runs on every selected request and must not expose a
-// request-controlled collection constructor. ListsVersion(1) retains bounded
-// list helpers while omitting lists.range, which was introduced in version 2.
-func newTokenHeaderCELEnv(extra ...cel.EnvOption) (*cel.Env, error) {
-	options := []cel.EnvOption{
-		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("pod", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("profile", cel.MapType(cel.StringType, cel.StringType)),
-		cel.Variable("rule", cel.MapType(cel.StringType, cel.StringType)),
-		cel.Variable("inputs", cel.MapType(cel.StringType, cel.DynType)),
-		ext.Bindings(),
-		ext.Strings(),
-		ext.Sets(),
-		ext.Lists(ext.ListsVersion(1)),
+func compileAPIKeyValue(source valueSourceSpec, valuePath string) (HeaderValueSource, error) {
+	branches := 0
+	if source.Value != nil {
+		branches++
 	}
-	options = append(options, extra...)
-	return cel.NewEnv(options...)
+	if source.Template != nil {
+		branches++
+	}
+	if source.Cel != nil {
+		branches++
+	}
+	if branches != 1 {
+		return HeaderValueSource{}, fmt.Errorf("%s: exactly one of value, template or cel must be set", valuePath)
+	}
+	var out HeaderValueSource
+	switch {
+	case source.Value != nil:
+		out.Literal = ptr.To(*source.Value)
+	case source.Template != nil:
+		if *source.Template == "" {
+			return HeaderValueSource{}, fmt.Errorf("%s.template is empty", valuePath)
+		}
+		tmpl, err := eval.CompileTemplate(valuePath+".template", *source.Template)
+		if err != nil {
+			return HeaderValueSource{}, fmt.Errorf("compile %s.template: %w", valuePath, err)
+		}
+		if _, err := eval.ProbeRender(tmpl, ApiKeyTemplateData{}); err != nil {
+			return HeaderValueSource{}, fmt.Errorf("probe %s.template: %w", valuePath, err)
+		}
+		out.Template = tmpl
+	case source.Cel != nil:
+		env, err := eval.RequestMutationEnv()
+		if err != nil {
+			return HeaderValueSource{}, fmt.Errorf("init %s CEL: %w", valuePath, err)
+		}
+		out.CEL, err = compileCEL(env, valuePath+".cel", *source.Cel, cel.StringType)
+		if err != nil {
+			return HeaderValueSource{}, err
+		}
+	}
+	return out, nil
 }
 
 func compileCEL(env *cel.Env, label, expression string, want *cel.Type) (cel.Program, error) {
@@ -344,7 +391,7 @@ func compileCEL(env *cel.Env, label, expression string, want *cel.Type) (cel.Pro
 	}
 	prog, err := env.Program(ast,
 		cel.EvalOptions(cel.OptOptimize),
-		cel.CostLimit(tokenHeaderCELCostLimit),
+		cel.CostLimit(eval.RestrictedRequestCELCostLimit),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("program %s: %w", label, err)

@@ -27,6 +27,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"istio.io/istio/extensions/epe/pkg/engine/filter"
+	"istio.io/istio/extensions/epe/pkg/eval"
 	"istio.io/istio/extensions/epe/pkg/httpreq"
 	"istio.io/istio/extensions/epe/pkg/inputs"
 )
@@ -482,6 +483,27 @@ func TestAPIKeySign(t *testing.T) {
 		}
 	})
 
+	t.Run("header CEL sees the shared mutation surface", func(t *testing.T) {
+		st, scope := testRequest(map[string]string{"x-context": "caller"})
+		cfg := mustAPIKeyConfig(t, headerSpec{
+			Names: []string{"x-context"},
+			Value: valueSourceSpec{Cel: ptr.To(
+				`cel.bind(m, json('{"prefix":"Bearer "}').merge({'credential': value}), m.prefix + token + '|' + m.credential + '|' + header.name)`,
+			)},
+		})
+		prepared, _, err := prepareAPIKey(t, st, scope, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		muts, err := signPreparedAPIKey(t, scope, prepared.Headers...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := muts[0].HeaderOps[0].Value, "Bearer tok-1|tok-1|x-context"; got != want {
+			t.Fatalf("value = %q, want %q", got, want)
+		}
+	})
+
 	failingTemplate := mustAPIKeyConfig(t, headerSpec{
 		Names: []string{"x"}, Value: valueSourceSpec{Template: ptr.To(`{{ fail "boom" }}`)},
 	}).Headers[0].Value.Template
@@ -551,11 +573,36 @@ func TestAPIKeySignerKind(t *testing.T) {
 	}
 }
 
+func TestAPIKeyBodyValueFailureDoesNotLeakToken(t *testing.T) {
+	program, err := eval.CompileBodyMutation("request.body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err := eval.CompileTemplate("apiKey.value.template", `{{ fail .Token }}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "TOKEN-MUST-NOT-LEAK"
+	muts, err := (apiKeySigner{}).Sign(context.Background(), &filter.Stream{}, []byte("body"), nil,
+		Credential{Token: token}, PreparedApiKeyConfig{Body: &ApiKeyBodyConfig{
+			Program: program, Value: HeaderValueSource{Template: tmpl},
+		}})
+	if err == nil || !strings.Contains(err.Error(), "render body value failed") {
+		t.Fatalf("Sign() = (%#v, %v), want sanitized body value error", muts, err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("Sign() error leaked credential: %v", err)
+	}
+}
+
 func TestAPIKeySignerRejectsForeignConfigs(t *testing.T) {
 	if _, _, err := (apiKeySigner{}).Prepare(&filter.Stream{}, nil, "not-mine"); err == nil {
 		t.Fatal("Prepare accepted a foreign config")
 	}
 	if _, err := (apiKeySigner{}).Sign(context.Background(), &filter.Stream{}, nil, nil, Credential{}, "not-mine"); err == nil {
 		t.Fatal("Sign accepted a foreign config")
+	}
+	if _, err := (apiKeySigner{}).WantsBody(&filter.Stream{}, "not-mine"); err == nil {
+		t.Fatal("WantsBody accepted a foreign config")
 	}
 }

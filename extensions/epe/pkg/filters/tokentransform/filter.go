@@ -106,7 +106,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 	}
 
 	if bw, ok := signer.(BodyWanter); ok {
-		needs, err := bw.WantsBody(st)
+		needs, err := bw.WantsBody(st, signerCfg)
 		if err != nil {
 			return f.failEligible(ctx, cfg, st, err), nil
 		}
@@ -123,6 +123,10 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 func (f *Filter) OnRequestBody(ctx context.Context, st *filter.Stream, body filter.Body) (filter.Action, error) {
 	if !f.pending {
 		return filter.Continue(), nil
+	}
+	if !body.Complete {
+		return f.failClaimed(ctx, f.rule.Cfg, st,
+			fmt.Errorf("request body is incomplete")), nil
 	}
 	return f.complete(ctx, &f.rule, st, body.Bytes)
 }

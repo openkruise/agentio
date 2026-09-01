@@ -149,6 +149,27 @@ func TestNewRequestEnvConsumerVariables(t *testing.T) {
 	}
 }
 
+func TestRestrictedRequestEnv(t *testing.T) {
+	withConsumer, err := NewRestrictedRequestEnv(cel.Variable("consumer", cel.StringType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issues := withConsumer.Compile(`consumer == "token" && request.method == "POST"`); issues != nil && issues.Err() != nil {
+		t.Fatalf("compile common and consumer variables: %v", issues.Err())
+	}
+	if _, issues := withConsumer.Compile(`lists.range(10)`); issues == nil || issues.Err() == nil {
+		t.Fatal("lists.range compiled in restricted request environment")
+	}
+
+	withoutConsumer, err := NewRestrictedRequestEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issues := withoutConsumer.Compile(`consumer`); issues == nil || issues.Err() == nil {
+		t.Fatal("consumer declaration leaked into a separate restricted environment")
+	}
+}
+
 func TestEvalBool(t *testing.T) {
 	if ok, err := EvalBool(nil, nil); err != nil || !ok {
 		t.Fatalf("nil program should return true, got (%v, %v)", ok, err)

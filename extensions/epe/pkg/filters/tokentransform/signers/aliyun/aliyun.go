@@ -45,7 +45,7 @@ func (s *Signer) Kind() tokentransform.CredentialKind { return tokentransform.Cr
 // WantsBody is the pre-claim probe: an undetectable scheme makes the
 // request ineligible (resolved through FailStrategy by the filter); a
 // body-consuming scheme (V1-RPC POST) defers signing to the body phase.
-func (s *Signer) WantsBody(st *filter.Stream) (bool, error) {
+func (s *Signer) WantsBody(st *filter.Stream, _ any) (bool, error) {
 	snap := snapshotFromStream(st)
 	version := sign.Detect(snap)
 	if version == sign.SignatureUnknown {

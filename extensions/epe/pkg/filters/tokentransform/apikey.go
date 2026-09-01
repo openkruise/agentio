@@ -51,6 +51,7 @@ const missingKeySentinel = "<no value>"
 
 type ApiKeyConfig struct {
 	Headers []ApiKeyHeaderConfig
+	Body    *ApiKeyBodyConfig
 }
 
 type ApiKeyHeaderConfig struct {
@@ -66,8 +67,15 @@ type HeaderValueSource struct {
 	CEL      cel.Program
 }
 
+type ApiKeyBodyConfig struct {
+	Program   cel.Program
+	Value     HeaderValueSource
+	Condition *When
+}
+
 type PreparedApiKeyConfig struct {
 	Headers []PreparedHeader
+	Body    *ApiKeyBodyConfig
 }
 
 type PreparedHeader struct {
@@ -114,6 +122,19 @@ func (apiKeySigner) Prepare(st *filter.Stream, scope *inputs.Scope, cfg any) (an
 	if !ok {
 		return nil, false, fmt.Errorf("apikey signer: config is %T, want ApiKeyConfig", cfg)
 	}
+	if ac.Body != nil {
+		if len(ac.Headers) != 0 {
+			return nil, false, fmt.Errorf("apikey signer: config has both header and body targets")
+		}
+		var requestHeaders map[string]string
+		if st != nil {
+			requestHeaders = st.Request.Headers
+		}
+		if !ac.Body.Condition.Met(requestHeaders) {
+			return nil, true, nil
+		}
+		return PreparedApiKeyConfig{Body: ac.Body}, false, nil
+	}
 	prepared := make([]PreparedHeader, 0)
 	seen := make(map[string]struct{})
 	var requestHeaders map[string]string
@@ -129,8 +150,11 @@ func (apiKeySigner) Prepare(st *filter.Stream, scope *inputs.Scope, cfg any) (an
 			if scope == nil {
 				return nil, false, fmt.Errorf("apikey signer: evaluate headers[%d] selector: evaluation scope unavailable", ruleIndex)
 			}
-			var err error
-			names, err = evalHeaderSelector(header.Selector, scope.Activation(), maxHeaderTargets-len(seen))
+			act, err := apiKeyCELActivation(scope.Activation(), "", "", HeaderTemplateData{})
+			if err != nil {
+				return nil, false, fmt.Errorf("apikey signer: build headers[%d] selector activation: %w", ruleIndex, err)
+			}
+			names, err = evalHeaderSelector(header.Selector, act, maxHeaderTargets-len(seen))
 			if err != nil {
 				return nil, false, fmt.Errorf("apikey signer: evaluate headers[%d] selector: %w", ruleIndex, err)
 			}
@@ -164,6 +188,14 @@ func (apiKeySigner) Prepare(st *filter.Stream, scope *inputs.Scope, cfg any) (an
 		return nil, true, nil
 	}
 	return PreparedApiKeyConfig{Headers: prepared}, false, nil
+}
+
+func (apiKeySigner) WantsBody(_ *filter.Stream, cfg any) (bool, error) {
+	ac, ok := cfg.(PreparedApiKeyConfig)
+	if !ok {
+		return false, fmt.Errorf("apikey signer: config is %T, want PreparedApiKeyConfig", cfg)
+	}
+	return ac.Body != nil, nil
 }
 
 // evalHeaderSelector keeps CEL's typed list representation until its reported
@@ -211,17 +243,10 @@ func renderHeaderValue(source HeaderValueSource, data ApiKeyTemplateData, scope 
 		if scope == nil {
 			return "", fmt.Errorf("header value CEL: evaluation scope unavailable")
 		}
-		top, err := cel.NewActivation(map[string]any{
-			"token": data.Token,
-			"header": map[string]string{
-				"name":  data.Header.Name,
-				"value": data.Header.Value,
-			},
-		})
+		act, err := apiKeyCELActivation(scope.Activation(), data.Token, data.Token, data.Header)
 		if err != nil {
 			return "", err
 		}
-		act := interpreter.NewHierarchicalActivation(scope.Activation(), top)
 		value, err := eval.EvalValue(source.CEL, act)
 		if err != nil {
 			return "", err
@@ -236,10 +261,31 @@ func renderHeaderValue(source HeaderValueSource, data ApiKeyTemplateData, scope 
 	}
 }
 
-func (apiKeySigner) Sign(_ context.Context, _ *filter.Stream, _ []byte, scope *inputs.Scope, cred Credential, cfg any) ([]filter.Mutation, error) {
+func (apiKeySigner) Sign(_ context.Context, st *filter.Stream, body []byte, scope *inputs.Scope, cred Credential, cfg any) ([]filter.Mutation, error) {
 	ac, ok := cfg.(PreparedApiKeyConfig)
 	if !ok {
 		return nil, fmt.Errorf("apikey signer: config is %T, want PreparedApiKeyConfig", cfg)
+	}
+	if ac.Body != nil {
+		if len(ac.Headers) != 0 {
+			return nil, fmt.Errorf("apikey signer: prepared config has both header and body targets")
+		}
+		data := apiKeyTemplateData(cred.Token, HeaderTemplateData{}, scope)
+		value, err := renderHeaderValue(ac.Body.Value, data, scope)
+		if err != nil {
+			// Template/CEL errors may contain the rendered token. Body-target
+			// failures are logged by failStrategy, so keep the runtime detail out.
+			return nil, fmt.Errorf("render body value failed")
+		}
+		act, err := apiKeyBodyActivation(st, body, cred.Token, value, scope)
+		if err != nil {
+			return nil, fmt.Errorf("apikey signer: build body CEL activation: %w", err)
+		}
+		replacement, err := eval.EvalBodyMutation(ac.Body.Program, act)
+		if err != nil {
+			return nil, fmt.Errorf("apikey signer: mutate request body: %w", err)
+		}
+		return []filter.Mutation{{Body: replacement}}, nil
 	}
 	if len(ac.Headers) == 0 {
 		return nil, fmt.Errorf("apikey signer: config has no output header")
@@ -251,17 +297,8 @@ func (apiKeySigner) Sign(_ context.Context, _ *filter.Stream, _ []byte, scope *i
 	// through the rule's failStrategy, exactly as a missing credential does.
 	ops := make([]filter.HeaderOp, 0, len(ac.Headers))
 	for _, header := range ac.Headers {
-		data := ApiKeyTemplateData{
-			Token:  cred.Token,
-			Header: HeaderTemplateData{Name: header.Name, Value: header.OriginalValue},
-		}
-		if scope != nil {
-			data.Request = scope.Request()
-			data.Pod = scope.Pod()
-			data.Profile = scope.Profile()
-			data.Rule = scope.Rule()
-			data.scope = scope
-		}
+		data := apiKeyTemplateData(cred.Token,
+			HeaderTemplateData{Name: header.Name, Value: header.OriginalValue}, scope)
 		value, err := renderHeaderValue(header.Value, data, scope)
 		if err != nil {
 			return nil, fmt.Errorf("render header %q: %w", header.Name, err)
@@ -284,4 +321,77 @@ func (apiKeySigner) Sign(_ context.Context, _ *filter.Stream, _ []byte, scope *i
 	// any change belongs behind an explicit policy knob rather than a silent
 	// default change.
 	return []filter.Mutation{{HeaderOps: ops}}, nil
+}
+
+func apiKeyTemplateData(token string, header HeaderTemplateData, scope *inputs.Scope) ApiKeyTemplateData {
+	data := ApiKeyTemplateData{Token: token, Header: header}
+	if scope != nil {
+		data.Request = scope.Request()
+		data.Pod = scope.Pod()
+		data.Profile = scope.Profile()
+		data.Rule = scope.Rule()
+		data.scope = scope
+	}
+	return data
+}
+
+func apiKeyBodyActivation(st *filter.Stream, body []byte, token, value string, scope *inputs.Scope) (cel.Activation, error) {
+	if st == nil {
+		return nil, fmt.Errorf("request stream is unavailable")
+	}
+	queryParams := make(map[string]string, len(st.Request.Query))
+	for name, values := range st.Request.Query {
+		if len(values) > 0 {
+			queryParams[name] = values[0]
+		}
+	}
+	headers := st.Request.Headers
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	request, err := cel.NewActivation(map[string]any{
+		"request": map[string]any{
+			"host":        st.Request.Host,
+			"port":        int64(st.Request.Port),
+			"path":        st.Request.Path,
+			"method":      st.Request.Method,
+			"scheme":      st.Request.Scheme,
+			"headers":     headers,
+			"queryParams": queryParams,
+			"body":        body,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	parent := cel.NoVars()
+	if scope != nil {
+		parent = scope.Activation()
+	}
+	return apiKeyCELActivation(
+		interpreter.NewHierarchicalActivation(parent, request),
+		token,
+		value,
+		HeaderTemplateData{},
+	)
+}
+
+// apiKeyCELActivation pins the shared mutation variables across phases.
+// Header value CEL receives the raw token as its initial value because that
+// expression is itself the value renderer; body CEL receives the separately
+// rendered value source. Selectors run before credential access and therefore
+// receive empty token, value, and header fields.
+func apiKeyCELActivation(parent cel.Activation, token, value string, header HeaderTemplateData) (cel.Activation, error) {
+	top, err := cel.NewActivation(map[string]any{
+		"token": token,
+		"value": value,
+		"header": map[string]string{
+			"name":  header.Name,
+			"value": header.Value,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return interpreter.NewHierarchicalActivation(parent, top), nil
 }
