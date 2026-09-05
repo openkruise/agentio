@@ -526,9 +526,11 @@ func relayDownstreamFilter() *listenerv3.Filter {
 }
 
 func captureSNIFilter() *listenerv3.Filter {
+	// Shared state must be Hashable so internal connections cannot be reused
+	// across different outer SNIs and spuriously fail the SNI/Host guard.
 	return networkFilter("envoy.filters.network.set_filter_state", &setstatenetworkv3.Config{OnNewConnection: []*setstatecommonv3.FilterStateValue{{
 		Key:                &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: outerSNIKey},
-		FactoryKey:         "envoy.string",
+		FactoryKey:         "istio.hashable_string",
 		Value:              &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString("%REQUESTED_SERVER_NAME%")},
 		SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
 		SkipIfEmpty:        true,

@@ -1290,7 +1290,7 @@
                   "on_new_connection": [
                     {
                       "object_key": "io.kruise.outer_sni",
-                      "factory_key": "envoy.string",
+                      "factory_key": "istio.hashable_string",
                       "format_string": {
                         "text_format_source": {
                           "inline_string": "%REQUESTED_SERVER_NAME%"

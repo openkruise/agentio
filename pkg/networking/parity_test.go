@@ -120,6 +120,32 @@ func TestSupportedGatewayListenerRouteParity(t *testing.T) {
 	}
 }
 
+func TestTLSOuterSNISeparatesInternalConnectionPools(t *testing.T) {
+	resources := buildCompleteGatewayGraph(t)
+	listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener { return &listenerv3.Listener{} })
+	chain := findFilterChain(t, listeners[MainInternal], tlsTerminateChain)
+	config := &setstatenetworkv3.Config{}
+	if err := chain.GetFilters()[0].GetTypedConfig().UnmarshalTo(config); err != nil {
+		t.Fatalf("decode SNI capture before TCP proxy: %v", err)
+	}
+	values := config.GetOnNewConnection()
+	if len(values) != 1 || values[0].GetObjectKey() != "io.kruise.outer_sni" {
+		t.Fatalf("SNI capture must propagate exactly the outer SNI: %v", values)
+	}
+	state := values[0]
+	// Envoy only includes Hashable shared state in the upstream pool key.
+	// A plain string allows another SNI to inherit this connection's identity.
+	if got := state.GetFactoryKey(); got != "istio.hashable_string" {
+		t.Errorf("outer SNI factory = %q, want istio.hashable_string for pool isolation", got)
+	}
+	if got := state.GetSharedWithUpstream().String(); got != "ONCE" {
+		t.Errorf("outer SNI sharing = %q, want ONCE for the internal listener hop", got)
+	}
+	if got := state.GetFormatString().GetTextFormatSource().GetInlineString(); got != "%REQUESTED_SERVER_NAME%" {
+		t.Errorf("outer SNI format = %q, want ClientHello server name", got)
+	}
+}
+
 func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	resources := buildCompleteGatewayGraph(t)
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
@@ -387,6 +413,19 @@ func supportedListenerRouteParityView(t *testing.T, resources map[string]proto.M
 					}
 					if value.GetName() == MainInternal && chain.GetName() == tlsTerminateChain {
 						chain.GetFilters()[0].Name = ""
+						// Legacy captures SNI as a non-hashable string. Pool isolation
+						// intentionally differs and is checked by the runtime contract test.
+						capture := chain.GetFilters()[0]
+						config := &setstatenetworkv3.Config{}
+						if err := capture.GetTypedConfig().UnmarshalTo(config); err != nil {
+							t.Fatalf("decode outer SNI capture: %v", err)
+						}
+						for _, state := range config.GetOnNewConnection() {
+							if state.GetObjectKey() == "io.kruise.outer_sni" {
+								state.FactoryKey = ""
+							}
+						}
+						capture.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: mustGatewayAny(t, config)}
 					}
 				}
 			}
