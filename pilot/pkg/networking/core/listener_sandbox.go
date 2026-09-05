@@ -130,13 +130,15 @@ func sniTrafficPolicyEnabled(metadata *model.NodeMetadata) bool {
 // tls-terminate chain. SharedWithUpstream=ONCE propagates the value across the
 // internal-listener hop into MainForwardName. SkipIfEmpty avoids writing an
 // invalid identity object when SNI is absent.
+// The shared value must be Hashable so different outer SNIs cannot reuse an
+// internal connection and spuriously fail the SNI/Host guard.
 func buildCaptureSNIFilter() *listener.Filter {
 	return &listener.Filter{
 		Name: networkSetFilterStateName,
 		ConfigType: &listener.Filter_TypedConfig{TypedConfig: protoconv.MessageToAny(&sfsnetwork.Config{
 			OnNewConnection: []*sfsvalue.FilterStateValue{{
 				Key:        &sfsvalue.FilterStateValue_ObjectKey{ObjectKey: outerSNIFilterStateKey},
-				FactoryKey: "envoy.string",
+				FactoryKey: "istio.hashable_string",
 				Value: &sfsvalue.FilterStateValue_FormatString{
 					FormatString: &core.SubstitutionFormatString{
 						OmitEmptyValues: true,

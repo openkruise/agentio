@@ -464,7 +464,7 @@ spec:
 	}
 }
 
-func TestBuildCaptureSNIFilter_OnlyPropagatesOuterSNI(t *testing.T) {
+func TestBuildCaptureSNIFilter_OuterSNISeparatesInternalConnectionPools(t *testing.T) {
 	cfg := &sfsnetwork.Config{}
 	if err := buildCaptureSNIFilter().GetTypedConfig().UnmarshalTo(cfg); err != nil {
 		t.Fatalf("decode network set_filter_state: %v", err)
@@ -478,7 +478,9 @@ func TestBuildCaptureSNIFilter_OnlyPropagatesOuterSNI(t *testing.T) {
 	if got, want := value.GetObjectKey(), outerSNIFilterStateKey; got != want {
 		t.Fatalf("captured SNI key = %q, want %q", got, want)
 	}
-	if got, want := value.GetFactoryKey(), "envoy.string"; got != want {
+	// Shared state must implement Hashable to separate the internal upstream
+	// pools; a plain string can carry another connection's SNI into RBAC.
+	if got, want := value.GetFactoryKey(), "istio.hashable_string"; got != want {
 		t.Fatalf("factory for %q = %q, want %q", value.GetObjectKey(), got, want)
 	}
 	if got, want := value.GetFormatString().GetTextFormatSource().GetInlineString(), "%REQUESTED_SERVER_NAME%"; got != want {
