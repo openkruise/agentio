@@ -50,6 +50,11 @@ func (s *Server) handleRequest(stream DeltaStream,
 	request *discoveryv3.DeltaDiscoveryRequest,
 ) error {
 	typeURL := request.GetTypeUrl()
+	connLog.Debug("Delta ADS request", "type_url", typeURL,
+		"sub", len(request.GetResourceNamesSubscribe()),
+		"unsub", len(request.GetResourceNamesUnsubscribe()),
+		"initial_versions", len(request.GetInitialResourceVersions()),
+		"nonce", request.GetResponseNonce())
 	known, allowed := typeAccess(scope.Class, typeURL)
 	if known && !allowed {
 		return status.Errorf(codes.PermissionDenied, "client class %s cannot subscribe to %s", scope.Class, typeURL)
@@ -74,12 +79,14 @@ func (s *Server) handleRequest(stream DeltaStream,
 	if detail := request.GetErrorDetail(); detail != nil {
 		metrics.Default.RecordXDSNACK()
 		connLog.Warn("xDS NACK", "principal", scope.Principal.String(),
-			"type_url", typeURL, "detail", detail.GetMessage())
+			"type_url", typeURL, "code", codes.Code(detail.GetCode()).String(),
+			"detail", detail.GetMessage())
 	}
 	if initial {
 		if known {
-			connLog.Info("Delta ADS watch started", "client_class", scope.Class,
-				"type_url", typeURL, "wildcard", watch.wildcard, "resource_names", sortedNames(watch.names))
+			connLog.Debug("Delta ADS watch started", "client_class", scope.Class,
+				"type_url", typeURL, "wildcard", watch.wildcard,
+				"resources", len(watch.names), "initial_versions", len(request.GetInitialResourceVersions()))
 		} else {
 			connLog.Warn("Delta ADS client subscribed to unsupported type; returning an empty response",
 				"client_class", scope.Class, "type_url", typeURL)
@@ -186,6 +193,7 @@ func (s *Server) generateAndSend(
 	delta, err := s.generator(request.TypeURL).Generate(stream.Context(), request)
 	if err != nil {
 		metrics.Default.RecordXDSPushFailure(metrics.XDSPushFailureGenerate, request.TypeURL)
+		logPushFailure(connLog, "generate", request.TypeURL, started, err)
 		return err
 	}
 	return s.sendGeneratedDelta(stream, connLog, watch, request, delta, force, started)
@@ -203,6 +211,7 @@ func (s *Server) sendGeneratedDelta(
 	resources, removed, err := validateGeneratedDelta(request.TypeURL, delta)
 	if err != nil {
 		metrics.Default.RecordXDSPushFailure(metrics.XDSPushFailureValidate, request.TypeURL)
+		logPushFailure(connLog, "validate", request.TypeURL, started, err)
 		return err
 	}
 	if request.TypeURL == model.ExtensionConfigurationType {
@@ -234,6 +243,7 @@ func (s *Server) sendGeneratedDelta(
 	}()
 	if err := stream.Send(response); err != nil {
 		metrics.Default.RecordXDSPushFailure(metrics.XDSPushFailureSend, request.TypeURL)
+		logPushFailure(connLog, "send", request.TypeURL, started, err)
 		return err
 	}
 	duration := time.Since(started)
@@ -242,8 +252,13 @@ func (s *Server) sendGeneratedDelta(
 	if request.Full && (len(resources) > 0 || len(removed) > 0) {
 		pushLog = connLog.Info
 	}
+	pushMode := "incremental"
+	if request.Full {
+		pushMode = "full"
+	}
 	pushLog("Delta ADS push", "principal", request.Scope.Principal.String(),
-		"type_url", request.TypeURL, "resources", len(resources), "removed", len(removed),
+		"type_url", request.TypeURL, "push", pushMode,
+		"resources", len(resources), "removed", len(removed),
 		"size", byteSize(sizeBytes), "duration", duration)
 	if delta.elideSentState {
 		// Replace, not clear, so a reconnect's InitialResourceVersions map does
@@ -259,6 +274,15 @@ func (s *Server) sendGeneratedDelta(
 	}
 	watch.nonce = nonce
 	return nil
+}
+
+func logPushFailure(connLog *agentlog.Logger, stage, typeURL string, started time.Time, err error) {
+	attrs := []any{"stage", stage, "type_url", typeURL, "duration", time.Since(started), "error", err}
+	if expectedStreamError(err) {
+		connLog.Debug("Delta ADS push failed", attrs...)
+		return
+	}
+	connLog.Warn("Delta ADS push failed", attrs...)
 }
 
 func responseResourceSize(resources []*discoveryv3.Resource) int {

@@ -78,6 +78,7 @@ type OnDemandIssuer struct {
 	changeGeneration atomic.Uint64
 	flights          map[string]*certificateFlight
 	signSlots        chan struct{}
+	done             chan struct{}
 }
 
 func NewOnDemandIssuer(
@@ -119,6 +120,7 @@ func NewOnDemandIssuer(
 		cacheUpdated: make(chan struct{}, 1),
 		flights:      make(map[string]*certificateFlight),
 		signSlots:    make(chan struct{}, options.SignConcurrency),
+		done:         make(chan struct{}),
 	}
 	issuer.changes = krt.NewStatic(
 		&CertificateGeneration{}, true, options.KrtOptions.WithName("OnDemand_Certificate_Generation")...)
@@ -137,8 +139,16 @@ func NewOnDemandIssuer(
 			issuer.notifyChanges()
 		}
 	})
-	go issuer.run(ctx)
+	go func() {
+		defer close(issuer.done)
+		issuer.run(ctx)
+	}()
 	return issuer, nil
+}
+
+// Done is closed after the issuer's background worker and rotation handler stop.
+func (i *OnDemandIssuer) Done() <-chan struct{} {
+	return i.done
 }
 
 func isNilDependency(dependency any) bool {

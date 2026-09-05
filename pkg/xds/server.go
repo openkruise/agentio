@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -262,7 +263,11 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		if err != nil {
 			attrs = append(attrs, "error", err)
 		}
-		connLog.Info("Delta ADS client disconnected", attrs...)
+		if expectedStreamError(err) {
+			connLog.Info("Delta ADS client disconnected", attrs...)
+			return
+		}
+		connLog.Error("Delta ADS client disconnected", attrs...)
 	}()
 
 	subscription := s.resources.Subscribe(stream.Context())
@@ -316,6 +321,26 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 			metrics.Default.RecordXDSConvergence(time.Since(push.Started))
 		}
 	}
+}
+
+func expectedStreamError(err error) bool {
+	if err == nil || errors.Is(err, io.EOF) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded:
+		return true
+	case codes.Unavailable:
+		message := err.Error()
+		for _, expected := range []string{"client disconnected", "error reading from server: EOF", "transport is closing"} {
+			if strings.Contains(message, expected) {
+				return true
+			}
+		}
+	}
+	message := err.Error()
+	return strings.Contains(message, "stream terminated by RST_STREAM with error code: NO_ERROR") ||
+		strings.Contains(message, "received prior goaway: code: NO_ERROR")
 }
 
 func (s *Server) acceptRequest(ctx context.Context) error {

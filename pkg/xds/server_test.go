@@ -30,6 +30,7 @@ import (
 	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"istio.io/istio/pkg/util/sets"
@@ -319,6 +320,128 @@ func TestServeDeltaLogsConnectionLifecycleWithConnectionID(t *testing.T) {
 	if strings.Contains(disconnected, "error=") {
 		t.Fatalf("clean shutdown logged an error: %s", disconnected)
 	}
+	if !strings.Contains(disconnected, "level=INFO") {
+		t.Fatalf("clean shutdown log = %s, want INFO", disconnected)
+	}
+}
+
+func TestDeltaRequestLogsSubscriptionCountsWithoutResourceNames(t *testing.T) {
+	var output bytes.Buffer
+	previousLogger := slog.Default()
+	previousLevel := agentlog.OutputLevel()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	agentlog.ConfigureOutputLevel(slog.LevelDebug)
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+		agentlog.ConfigureOutputLevel(previousLevel)
+	})
+
+	const firstName = "name-that-must-not-be-logged-a"
+	const secondName = "name-that-must-not-be-logged-b"
+	server := newTestServer(t, ztunnelScope(), nil, nil)
+	stream := newFakeStream(context.Background(), 4)
+	stream.send(nodeRequest(model.AddressType, firstName, secondName))
+	stream.send(&discoveryv3.DeltaDiscoveryRequest{
+		TypeUrl:                  model.AddressType,
+		ResourceNamesUnsubscribe: []string{firstName},
+	})
+	if err := server.run(t, stream); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := output.String()
+	var subscribeRequest, unsubscribeRequest, watchStarted string
+	for _, line := range strings.Split(logs, "\n") {
+		switch {
+		case strings.Contains(line, `msg="Delta ADS request"`) && strings.Contains(line, "sub=2"):
+			subscribeRequest = line
+		case strings.Contains(line, `msg="Delta ADS request"`) && strings.Contains(line, "unsub=1"):
+			unsubscribeRequest = line
+		case strings.Contains(line, `msg="Delta ADS watch started"`):
+			watchStarted = line
+		}
+	}
+	if subscribeRequest == "" || !strings.Contains(subscribeRequest, "unsub=0") {
+		t.Fatalf("missing initial request counts:\n%s", logs)
+	}
+	if unsubscribeRequest == "" || !strings.Contains(unsubscribeRequest, "sub=0") {
+		t.Fatalf("missing unsubscribe request counts:\n%s", logs)
+	}
+	if watchStarted == "" || !strings.Contains(watchStarted, "level=DEBUG") ||
+		!strings.Contains(watchStarted, "resources=2") {
+		t.Fatalf("watch-start log = %q, want DEBUG with resource count:\n%s", watchStarted, logs)
+	}
+	if strings.Contains(logs, "resource_names=") || strings.Contains(logs, firstName) || strings.Contains(logs, secondName) {
+		t.Fatalf("subscription resource names leaked into logs:\n%s", logs)
+	}
+}
+
+func TestNACKLogIncludesStatusCode(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	server := newTestServer(t, ztunnelScope(), nil, nil)
+	stream := newFakeStream(context.Background(), 3)
+	stream.send(nodeRequest(model.AddressType))
+	stream.send(&discoveryv3.DeltaDiscoveryRequest{
+		TypeUrl:       model.AddressType,
+		ResponseNonce: "1",
+		ErrorDetail: &rpcstatus.Status{
+			Code:    int32(codes.InvalidArgument),
+			Message: "rejected by the proxy",
+		},
+	})
+	if err := server.run(t, stream); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, `msg="xDS NACK"`) {
+			if !strings.Contains(line, "level=WARN") || !strings.Contains(line, "code=InvalidArgument") {
+				t.Fatalf("NACK log = %s, want WARN with status code", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing NACK log:\n%s", output.String())
+}
+
+func TestUnexpectedPushFailureIsLoggedBeforeErrorDisconnect(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	server := newTestServer(t, ztunnelScope(), []model.Resource{
+		addressResource(t, "workload-a", "payload"),
+	}, nil)
+	stream := newFakeStream(context.Background(), 1)
+	stream.setSendErr(errors.New("send failed"))
+	stream.send(nodeRequest(model.AddressType))
+	if err := server.run(t, stream); err == nil || err.Error() != "send failed" {
+		t.Fatalf("stream error = %v, want send failed", err)
+	}
+
+	logs := output.String()
+	var pushFailure, disconnected string
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, `msg="Delta ADS push failed"`) {
+			pushFailure = line
+		}
+		if strings.Contains(line, `msg="Delta ADS client disconnected"`) {
+			disconnected = line
+		}
+	}
+	if pushFailure == "" || !strings.Contains(pushFailure, "level=WARN") ||
+		!strings.Contains(pushFailure, "stage=send") || !strings.Contains(pushFailure, "error=\"send failed\"") {
+		t.Fatalf("push failure log = %q, want WARN with send stage and error:\n%s", pushFailure, logs)
+	}
+	if disconnected == "" || !strings.Contains(disconnected, "level=ERROR") ||
+		!strings.Contains(disconnected, "error=\"send failed\"") {
+		t.Fatalf("disconnect log = %q, want ERROR with cause:\n%s", disconnected, logs)
+	}
 }
 
 func TestPushLogUsesHumanReadableSizeAndDemotesEmptyPushes(t *testing.T) {
@@ -368,6 +491,9 @@ func TestPushLogUsesHumanReadableSizeAndDemotesEmptyPushes(t *testing.T) {
 	}
 	if !strings.Contains(populatedPush, "level=INFO") {
 		t.Fatalf("populated full push log = %s, want INFO", populatedPush)
+	}
+	if !strings.Contains(populatedPush, "push=full") {
+		t.Fatalf("populated full push log = %s, want full push mode", populatedPush)
 	}
 	if !strings.Contains(emptyPush, "level=DEBUG") {
 		t.Fatalf("empty forced push log = %s, want DEBUG", emptyPush)

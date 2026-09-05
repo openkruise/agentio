@@ -197,10 +197,12 @@ func (c *Controller) Run(ctx context.Context) error {
 		} else {
 			publication, err = c.store.Apply(changes)
 		}
-		metrics.Default.RecordCompile(time.Since(started), err, publication.Snapshot.Len())
+		compileDuration := time.Since(started)
+		metrics.Default.RecordCompile(compileDuration, err, publication.Snapshot.Len())
 		if err != nil {
 			log.Error("configuration compilation failed; preserving last-known-good snapshot",
-				"error", err)
+				"full", full, "changes", len(changes), "types", types,
+				"duration", compileDuration, "error", err)
 			return
 		}
 		for _, typeURL := range types {
@@ -210,6 +212,10 @@ func (c *Controller) Run(ctx context.Context) error {
 			metrics.Default.RecordPublish(time.Since(publishStarted))
 			metrics.Default.SetSnapshotResourcesByType(publication.Snapshot.CountsByType())
 		}
+		log.Debug("XDS configuration calculated", "full", full,
+			"changes", len(changes), "types", types,
+			"resources", publication.Snapshot.Len(), "changed", publication.Changed,
+			"duration", time.Since(started))
 	}
 	for {
 		select {

@@ -15,8 +15,10 @@
 package xds
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -29,6 +31,7 @@ import (
 
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/pkg/krt"
+	agentlog "github.com/openkruise/agentio/pkg/log"
 	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -204,6 +207,23 @@ type fakeResourcePublisher struct {
 	types    []string
 }
 
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(data)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
 func (f *fakeResourcePublisher) Replace(snapshot model.ResourceSet) Publication {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -235,6 +255,49 @@ func (f *fakeResourcePublisher) notifiedTypes() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.types...)
+}
+
+func TestControllerLogsConfigurationCalculationAtDebug(t *testing.T) {
+	var output synchronizedBuffer
+	previousLogger := slog.Default()
+	previousLevel := agentlog.OutputLevel()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	agentlog.ConfigureOutputLevel(slog.LevelDebug)
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+		agentlog.ConfigureOutputLevel(previousLevel)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	source := &stubSource{}
+	source.set(newSnapshot(t, "one"), nil)
+	sink := &fakeResourcePublisher{}
+	controller, err := NewController(source, sink, time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- controller.Run(ctx) }()
+	eventually(t, func() bool {
+		return strings.Contains(output.String(), `msg="XDS configuration calculated"`)
+	}, "configuration calculation logged")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	for _, line := range strings.Split(output.String(), "\n") {
+		if !strings.Contains(line, `msg="XDS configuration calculated"`) {
+			continue
+		}
+		for _, field := range []string{"level=DEBUG", "full=true", "changes=0", "resources=1", "changed=true", "duration="} {
+			if !strings.Contains(line, field) {
+				t.Fatalf("configuration calculation log missing %q: %s", field, line)
+			}
+		}
+		return
+	}
+	t.Fatalf("missing configuration calculation log:\n%s", output.String())
 }
 
 func TestControllerDebouncesTypeRefreshWithResourceChanges(t *testing.T) {

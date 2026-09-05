@@ -209,7 +209,6 @@ func TestOnDemandIssuerRotationUpdatesCacheGaugeSynchronously(t *testing.T) {
 		}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	issuer, err := NewOnDemandIssuer(ctx, signer.source(), &fakeGatewayAuthorizer{}, OnDemandOptions{
 		LeafLifetime: time.Hour,
 		RenewBefore:  10 * time.Minute,
@@ -218,6 +217,10 @@ func TestOnDemandIssuerRotationUpdatesCacheGaugeSynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		cancel()
+		<-issuer.Done()
+	})
 	if _, err := issuer.certificate(context.Background(), "api.example.com"); err != nil {
 		t.Fatal(err)
 	}
