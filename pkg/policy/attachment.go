@@ -82,7 +82,6 @@ type PolicyAttachment struct {
 	Name            string
 	Target          AttachmentTarget
 	Priority        int32
-	SourceOrder     int32
 	CreationTime    time.Time
 	SourceName      string
 	SourceNamespace string
@@ -107,7 +106,6 @@ func (p PolicyAttachment) Equals(other PolicyAttachment) bool {
 		apiequality.Semantic.DeepEqual(p.Target.Selector, other.Target.Selector) &&
 		p.Target.SandboxUID == other.Target.SandboxUID &&
 		p.Priority == other.Priority &&
-		p.SourceOrder == other.SourceOrder &&
 		p.CreationTime.Equal(other.CreationTime) &&
 		p.SourceName == other.SourceName &&
 		p.SourceNamespace == other.SourceNamespace
@@ -251,9 +249,6 @@ func policyAttachmentLess(left, right PolicyAttachment) bool {
 	if left.specificity() != right.specificity() {
 		return left.specificity() > right.specificity()
 	}
-	if left.SourceOrder != right.SourceOrder {
-		return left.SourceOrder < right.SourceOrder
-	}
 	if !left.CreationTime.Equal(right.CreationTime) {
 		return left.CreationTime.Before(right.CreationTime)
 	}
@@ -264,48 +259,6 @@ func policyAttachmentLess(left, right PolicyAttachment) bool {
 		return left.SourceNamespace < right.SourceNamespace
 	}
 	return left.Name < right.Name
-}
-
-func policyAttachmentFromBindableSNIPolicy(policy BindableSNIPolicy) *PolicyAttachment {
-	if policy.Name == "" || policy.Policy == nil {
-		return nil
-	}
-	target := AttachmentTarget{Selector: *policy.Selector.DeepCopy()}
-	if policy.SandboxUID != "" {
-		target.SandboxUID = policy.SandboxUID
-	} else if policy.Global {
-		target.Global = true
-	} else {
-		target.Namespaces = []string{policy.Namespace}
-	}
-	sourceName := policy.Name
-	if policy.Namespace != "" {
-		sourceName = strings.TrimPrefix(policy.Name, policy.Namespace+"/")
-	}
-	attachment, err := NewPolicyAttachment(PolicyAttachment{
-		Kind:            PolicyKindSNIPolicy,
-		Name:            policy.Name,
-		Target:          target,
-		Priority:        policy.Priority,
-		CreationTime:    policy.CreationTime,
-		SourceName:      sourceName,
-		SourceNamespace: policy.Namespace,
-		selector:        policy.selector,
-	})
-	if err != nil {
-		return nil
-	}
-	return &attachment
-}
-
-func NewSNIPolicyAttachmentsCollection(
-	policies krt.Collection[BindableSNIPolicy],
-	options krt.OptionsBuilder,
-) krt.Collection[PolicyAttachment] {
-	return krt.NewCollection(policies,
-		func(_ krt.HandlerContext, policy BindableSNIPolicy) *PolicyAttachment {
-			return policyAttachmentFromBindableSNIPolicy(policy)
-		}, options.WithName("sni-policy-attachments")...)
 }
 
 // PolicyBindingGroup contains the ordered resource names for one typed policy

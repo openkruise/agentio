@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,7 +38,6 @@ import (
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
-	"github.com/openkruise/agentio/pkg/policy"
 	kubernetesregistry "github.com/openkruise/agentio/pkg/registry/kubernetes"
 	"github.com/openkruise/agentio/pkg/security/attestation"
 	"github.com/openkruise/agentio/pkg/security/ca"
@@ -279,23 +277,14 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	bindingChanges := resourceCompiler.SandboxPolicyBindings().RegisterBatch(
-		func(events []krt.Event[policy.SandboxPolicyBindings]) {
-			for _, event := range events {
-				var oldNames, newNames []string
-				if event.Old != nil {
-					oldNames = event.Old.PolicyNames(policy.PolicyKindSNIPolicy)
-				}
-				if event.New != nil {
-					newNames = event.New.PolicyNames(policy.PolicyKindSNIPolicy)
-				}
-				if !slices.Equal(oldNames, newNames) {
-					controller.TriggerType(model.WorkloadType)
-					return
-				}
+	policyChanges := resourceCompiler.SandboxSNIPolicies().RegisterBatch(
+		func(events []krt.Event[compiler.SandboxSNIPolicy]) {
+			if len(events) > 0 {
+				controller.TriggerType(model.WorkloadType)
 			}
 		}, false)
-	defer bindingChanges.UnregisterHandler()
+	defer policyChanges.UnregisterHandler()
+
 	var ready atomic.Bool
 	scopeFuncs, err := mergeScopeFuncs(xds.ScopeFuncs{
 		model.AttestationKubernetes: xds.KubernetesScopeFunc(registry.PodScopeResolver(sources.Workloads)),

@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -84,8 +85,8 @@ func newPolicyCollections(
 			return compiled
 		}, options("authorizations")...)
 
-	bindableSNIPolicies := krt.NewCollection(inputs.SecurityProfiles,
-		func(ctx krt.HandlerContext, profile model.SecurityProfile) *policy.BindableSNIPolicy {
+	sniPolicies := krt.NewCollection(inputs.SecurityProfiles,
+		func(ctx krt.HandlerContext, profile model.SecurityProfile) *policy.CompiledSNIPolicy {
 			compiled, err := policy.CompileSNIProfile(profile)
 			if err != nil {
 				failures.record("SecurityProfile", profile.ResourceName(), err)
@@ -96,8 +97,8 @@ func newPolicyCollections(
 			return compiled
 		}, options("sni-policies")...)
 	egressPolicies := krt.NewManyCollection(configurations.AsCollection(),
-		func(ctx krt.HandlerContext, current configuration) []policy.BindableEgressPolicy {
-			compiled, err := policy.BindableEgressPolicies(inputs.RootNamespace, current.Egress)
+		func(ctx krt.HandlerContext, current configuration) []policy.CompiledEgressPolicy {
+			compiled, err := policy.CompiledEgressPolicies(inputs.RootNamespace, current.Egress)
 			if err != nil {
 				failures.record("AgentioConfig", "configuration", err)
 				ctx.DiscardResult()
@@ -106,9 +107,9 @@ func newPolicyCollections(
 			failures.clear("AgentioConfig", "configuration")
 			return compiled
 		}, options("bindable-egress-policies")...)
-	authorizationAttachments := policy.NewAuthorizationPolicyAttachmentsCollection(authorizations, builder)
-	sniAttachments := policy.NewSNIPolicyAttachmentsCollection(bindableSNIPolicies, builder)
-	egressAttachments := policy.NewEgressPolicyAttachmentsCollection(egressPolicies, builder)
+	authorizationAttachments := policy.NewPolicyAttachmentsCollection(authorizations, builder, "authorization-policy-attachments")
+	sniAttachments := policy.NewPolicyAttachmentsCollection(sniPolicies, builder, "sni-policy-attachments")
+	egressAttachments := policy.NewPolicyAttachmentsCollection(egressPolicies, builder, "egress-policy-attachments")
 	attachments := krt.JoinCollection([]krt.Collection[policy.PolicyAttachment]{
 		authorizationAttachments, sniAttachments, egressAttachments,
 	}, options("policy-attachments")...)
@@ -129,10 +130,11 @@ func newPolicyCollections(
 		}, options("validated-sandbox-policy-bindings")...)
 	clearFailureOnSourceDelete(sandboxBindings, failures, "Sandbox")
 	return policyCollections{
-		authorizations:      authorizations,
-		bindableSNIPolicies: bindableSNIPolicies,
-		egressPolicies:      egressPolicies,
-		sandboxBindings:     sandboxBindings,
+		authorizations:     authorizations,
+		sniPolicies:        sniPolicies,
+		egressPolicies:     egressPolicies,
+		sandboxBindings:    sandboxBindings,
+		sandboxSNIPolicies: newSandboxSNIPolicies(sandboxBindings, sniPolicies, options),
 	}
 }
 
@@ -168,23 +170,9 @@ func newAuthorizationResources(policies policyCollections, failures *failureReco
 		}, options("authorization-resources")...)
 }
 
-func newSNIResources(policies policyCollections, failures *failureRecorder, options collectionOptions) krt.Collection[model.Resource] {
-	clearFailureOnSourceDelete(policies.bindableSNIPolicies, failures, "SniTrafficPolicy")
-	return krt.NewCollection(policies.bindableSNIPolicies,
-		func(_ krt.HandlerContext, compiled policy.BindableSNIPolicy) *model.Resource {
-			resource, err := sniResource(compiled)
-			if err != nil {
-				failures.record("SniTrafficPolicy", compiled.ResourceName(), err)
-				return nil
-			}
-			failures.clear("SniTrafficPolicy", compiled.ResourceName())
-			return &resource
-		}, options("sni-resources")...)
-}
-
 func authorizationResource(authorization policy.CompiledAuthorization) (model.Resource, error) {
 	// The Any is built with the istio.security type URL because the local descriptor uses agentio.security.
-	data, err := proto.Marshal(authorization.Authorization)
+	data, err := proto.Marshal(authorization.Policy)
 	if err != nil {
 		return model.Resource{}, fmt.Errorf("marshal Authorization %s: %w", authorization.ResourceName(), err)
 	}
@@ -193,12 +181,12 @@ func authorizationResource(authorization policy.CompiledAuthorization) (model.Re
 		Value:   data,
 	}
 	facts := model.ResourceFacts{Authorization: &model.AuthorizationResourceFacts{}}
-	switch authorization.Authorization.GetScope() {
+	switch authorization.Policy.GetScope() {
 	case securityv1.Scope_GLOBAL:
 		facts.Authorization.Scope = model.AuthorizationScopeGlobal
 	case securityv1.Scope_NAMESPACE:
 		facts.Authorization.Scope = model.AuthorizationScopeNamespace
-		facts.Authorization.Namespace = authorization.Authorization.GetNamespace()
+		facts.Authorization.Namespace = authorization.Policy.GetNamespace()
 	case securityv1.Scope_WORKLOAD_SELECTOR:
 		facts.Authorization.Scope = model.AuthorizationScopeWorkload
 	}
@@ -209,14 +197,38 @@ func authorizationResource(authorization policy.CompiledAuthorization) (model.Re
 		}, "", value, nil, facts)
 }
 
-func sniResource(compiled policy.BindableSNIPolicy) (model.Resource, error) {
-	value, err := anypb.New(compiled.Policy)
-	if err != nil {
-		return model.Resource{}, fmt.Errorf("marshal SNI policy %s: %w", compiled.ResourceName(), err)
-	}
-	return model.NewResource(
-		model.ResourceKey{
-			TypeURL: model.SniTrafficPolicyType,
-			Name:    compiled.ResourceName(),
-		}, "", value, nil, model.ResourceFacts{})
+// SandboxSNIPolicy is the complete ordered SNI payload for direct Workload WDS.
+type SandboxSNIPolicy struct {
+	Name   string
+	Policy *extensionsv1.SniTrafficPolicy
+}
+
+func (p SandboxSNIPolicy) ResourceName() string { return p.Name }
+func (p SandboxSNIPolicy) Equals(other SandboxSNIPolicy) bool {
+	return p.Name == other.Name && proto.Equal(p.Policy, other.Policy)
+}
+func newSandboxSNIPolicies(bindings krt.Collection[policy.SandboxPolicyBindings], policies krt.Collection[policy.CompiledSNIPolicy], options collectionOptions) krt.Collection[SandboxSNIPolicy] {
+	return krt.NewCollection(bindings, func(ctx krt.HandlerContext, binding policy.SandboxPolicyBindings) *SandboxSNIPolicy {
+		if !binding.Valid() {
+			return nil
+		}
+		names := binding.PolicyNames(policy.PolicyKindSNIPolicy)
+		if len(names) == 0 {
+			return nil
+		}
+		result := &extensionsv1.SniTrafficPolicy{}
+		for _, name := range names {
+			payload := krt.FetchOne(ctx, policies, krt.FilterKey(name))
+			if payload == nil || payload.Policy == nil {
+				// Binding and content callbacks may arrive separately. Preserve the last
+				// complete payload while the keyed dependency waits for recovery.
+				ctx.DiscardResult()
+				return nil
+			}
+			for _, rule := range payload.Policy.Rules {
+				result.Rules = append(result.Rules, proto.Clone(rule).(*extensionsv1.SniRule))
+			}
+		}
+		return &SandboxSNIPolicy{Name: binding.SandboxUID, Policy: result}
+	}, options("sandbox-sni-policies")...)
 }

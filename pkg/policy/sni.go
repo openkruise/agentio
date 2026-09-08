@@ -18,59 +18,21 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
-	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/util/sets"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// BindableSNIPolicy is the complete SNI policy published over xDS together with
-// the immutable metadata needed to project its workload attachment.
-type BindableSNIPolicy struct {
-	Name         string
-	Namespace    string
-	SandboxUID   string
-	Global       bool
-	Priority     int32
-	CreationTime time.Time
-	Selector     metav1.LabelSelector
-	Policy       *extensionsv1.SniTrafficPolicy
-
-	// selector is the immutable compiled form used by PolicyAttachment. Selector
-	// is its canonical source of truth and is the only form used for equality.
-	selector labels.Selector
-}
-
-func (p BindableSNIPolicy) ResourceName() string { return p.Name }
-
-func (p BindableSNIPolicy) Equals(other BindableSNIPolicy) bool {
-	return p.Name == other.Name &&
-		p.Namespace == other.Namespace &&
-		p.SandboxUID == other.SandboxUID &&
-		p.Global == other.Global &&
-		p.Priority == other.Priority &&
-		p.CreationTime.Equal(other.CreationTime) &&
-		apiequality.Semantic.DeepEqual(p.Selector, other.Selector) &&
-		proto.Equal(p.Policy, other.Policy)
-}
-
-func (p BindableSNIPolicy) SourceResourceName() string {
-	if p.Global {
-		return "global/" + p.Name
-	}
-	return "namespaced/" + p.Name
-}
+// CompiledSNIPolicy is the SNI specialization of the shared compiled policy.
+type CompiledSNIPolicy = CompiledPolicy[*extensionsv1.SniTrafficPolicy]
 
 // CompileSNIProfile compiles one profile; profiles with no HTTPS-capable hosts return nil, nil.
-func CompileSNIProfile(profile model.SecurityProfile) (*BindableSNIPolicy, error) {
+func CompileSNIProfile(profile model.SecurityProfile) (*CompiledSNIPolicy, error) {
 	hosts, err := sniHosts(profile)
 	if err != nil {
 		return nil, err
@@ -97,15 +59,24 @@ func CompileSNIProfile(profile model.SecurityProfile) (*BindableSNIPolicy, error
 	if !profile.Global {
 		resourceName = profile.Namespace + "/" + profile.Name
 	}
-	return &BindableSNIPolicy{
-		Name:         resourceName,
-		Namespace:    profile.Namespace,
-		SandboxUID:   sandboxUID,
-		Global:       profile.Global,
-		Priority:     priority,
-		CreationTime: profile.CreationTime,
-		Selector:     *profile.Spec.Selector.DeepCopy(),
-		selector:     selector,
+	target := AttachmentTarget{Selector: profile.Spec.Selector}
+	if sandboxUID != "" {
+		target.SandboxUID = sandboxUID
+	} else if profile.Global {
+		target.Global = true
+	} else {
+		target.Namespaces = []string{profile.Namespace}
+	}
+	attachment, err := NewPolicyAttachment(PolicyAttachment{
+		Kind: PolicyKindSNIPolicy, Name: resourceName, Target: target,
+		Priority: priority, CreationTime: profile.CreationTime,
+		SourceName: profile.Name, SourceNamespace: profile.Namespace, selector: selector,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &CompiledSNIPolicy{
+		Name: resourceName, Attachment: &attachment,
 		Policy: &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
 			Match:  &extensionsv1.SniMatch{Sni: hosts},
 			Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION,
@@ -114,8 +85,8 @@ func CompileSNIProfile(profile model.SecurityProfile) (*BindableSNIPolicy, error
 }
 
 // CompileSNIProfiles compiles a whole set, ordered deterministically.
-func CompileSNIProfiles(profiles []model.SecurityProfile) ([]BindableSNIPolicy, error) {
-	result := make([]BindableSNIPolicy, 0, len(profiles))
+func CompileSNIProfiles(profiles []model.SecurityProfile) ([]CompiledSNIPolicy, error) {
+	result := make([]CompiledSNIPolicy, 0, len(profiles))
 	for _, profile := range profiles {
 		compiled, err := CompileSNIProfile(profile)
 		if err != nil {

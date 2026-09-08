@@ -58,8 +58,8 @@ func TestCompileSNIProfileSandboxUIDAssociation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileSNIProfile(): %v", err)
 			}
-			attachment := policyAttachmentFromBindableSNIPolicy(*compiled)
-			if compiled.SandboxUID != test.wantUID || attachment == nil || attachment.Target.SandboxUID != test.wantUID {
+			attachment := compiled.PolicyAttachment()
+			if attachment == nil || attachment.Target.SandboxUID != test.wantUID {
 				t.Fatalf("compiled/attachment = %+v / %+v, want exact Sandbox UID %q", compiled, attachment, test.wantUID)
 			}
 		})

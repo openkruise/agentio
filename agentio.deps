@@ -9,18 +9,18 @@
     "_comment": "Immutable digest of the multi-architecture CNI image.",
     "name": "CNI_IMAGE",
     "repository": "docker.io/openkruise/install-cni",
-    "digest": "sha256:c08ba3c8924fe83947b4cfe23dae1b4bf61ec84c1937d4b4e3bccd422f14e28f"
+    "digest": "sha256:6e0689ddf98d85860626cabc62953965145aa453ec1a0b10298593da06663ef8"
   },
   {
     "_comment": "Immutable digest of the multi-architecture proxy-init image.",
     "name": "PROXY_INIT_IMAGE",
     "repository": "docker.io/openkruise/proxy-init",
-    "digest": "sha256:d4d20846aefcc0a4c29d12b974dc766c01f306832331c280788f66b90b1ef03e"
+    "digest": "sha256:90149ed0be522e6ffa9f00d7d52076efbe12f9fd79af7c61e499d058c5312a38"
   },
   {
     "_comment": "Immutable digest of the multi-architecture gateway/proxyv2 image.",
     "name": "GATEWAY_IMAGE",
     "repository": "docker.io/openkruise/proxyv2",
-    "digest": "sha256:261958bc3728e0f94e07355a161310d19df2c93e8fd598f3e82888e856758830"
+    "digest": "sha256:850848747fa0481a31b0f01d33c7202305a9c2df50d745bdaa2684bb635de098"
   }
 ]

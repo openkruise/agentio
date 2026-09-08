@@ -17,9 +17,12 @@ package compiler
 import (
 	"fmt"
 
+	"google.golang.org/protobuf/proto"
+
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -91,13 +94,13 @@ func New(inputs Inputs, options krt.OptionsBuilder) (*Compiler, error) {
 
 // HasSynced reports whether the derived collections have processed the state present when they were created; do not publish a snapshot before this is true.
 func (c *Compiler) HasSynced() bool {
-	return c.graph.resources.HasSynced()
+	return c.graph.resources.HasSynced() && c.graph.policies.sandboxSNIPolicies.HasSynced()
 }
 
 // WaitUntilSynced blocks until the derived collections are populated, or until
 // stop is closed. It reports whether syncing completed.
 func (c *Compiler) WaitUntilSynced(stop <-chan struct{}) bool {
-	return c.graph.resources.WaitUntilSynced(stop)
+	return c.graph.resources.WaitUntilSynced(stop) && c.graph.policies.sandboxSNIPolicies.WaitUntilSynced(stop)
 }
 
 // Resources exposes the compiled resource event stream.
@@ -135,4 +138,18 @@ func (c *Compiler) Failures() map[string]string {
 
 func (c *Compiler) Snapshot() (model.ResourceSet, error) {
 	return model.NewResourceSet(c.graph.resources.List())
+}
+
+// SandboxSNIPolicies exposes inline payload changes, including rules-only edits.
+func (c *Compiler) SandboxSNIPolicies() krt.Collection[SandboxSNIPolicy] {
+	return c.graph.policies.sandboxSNIPolicies
+}
+
+// SNIPolicy returns a private copy of the complete payload for one Sandbox.
+func (c *Compiler) SNIPolicy(uid string) *extensionsv1.SniTrafficPolicy {
+	current := c.graph.policies.sandboxSNIPolicies.GetKey(uid)
+	if current == nil {
+		return nil
+	}
+	return proto.Clone(current.Policy).(*extensionsv1.SniTrafficPolicy)
 }

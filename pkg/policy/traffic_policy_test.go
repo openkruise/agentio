@@ -115,11 +115,11 @@ func TestCompileTrafficPolicySandboxUIDAssociation(t *testing.T) {
 			if len(compiled) != 1 {
 				t.Fatalf("compiled policies = %d, want 1", len(compiled))
 			}
-			attachment := authorizationAttachmentFromCompiled(compiled[0])
+			attachment := compiled[0].PolicyAttachment()
 			if attachment == nil || attachment.Target.SandboxUID != test.wantUID {
 				t.Fatalf("attachment = %+v, want exact Sandbox UID %q", attachment, test.wantUID)
 			}
-			if got := compiled[0].Authorization.GetScope(); got != securityv1.Scope_WORKLOAD_SELECTOR {
+			if got := compiled[0].Policy.GetScope(); got != securityv1.Scope_WORKLOAD_SELECTOR {
 				t.Fatalf("Authorization scope = %v, want WORKLOAD_SELECTOR", got)
 			}
 		})
@@ -180,16 +180,16 @@ func TestCompileTrafficPolicyResolvesPeersAndPreservesDirection(t *testing.T) {
 		t.Fatalf("compiled policies = %d, want 1", len(compiled))
 	}
 	got := compiled[0]
-	if got.ResourceName() != "demo/api-egress" || !got.Selects(SandboxSubject{
+	if got.ResourceName() != "demo/api-egress" || !got.Attachment.Selects(SandboxSubject{
 		Namespace: "demo",
 		Labels:    map[string]string{"app": "client"},
 	}) {
 		t.Fatalf("compiled identity/selector = %+v", got)
 	}
-	if got.Authorization.GetScope() != securityv1.Scope_WORKLOAD_SELECTOR || len(got.Authorization.GetGroups()) != 1 {
-		t.Fatalf("authorization scope/groups = %+v", got.Authorization)
+	if got.Policy.GetScope() != securityv1.Scope_WORKLOAD_SELECTOR || len(got.Policy.GetGroups()) != 1 {
+		t.Fatalf("authorization scope/groups = %+v", got.Policy)
 	}
-	matches := flattenMatches(got.Authorization)
+	matches := flattenMatches(got.Policy)
 	if !hasAddress(matches, "source", "10.1.0.5/32", false) ||
 		!hasAddress(matches, "destination", "10.0.0.0/24", false) ||
 		!hasAddress(matches, "destination", "10.96.0.10/32", false) ||
@@ -200,7 +200,7 @@ func TestCompileTrafficPolicyResolvesPeersAndPreservesDirection(t *testing.T) {
 	if !hasPortRange(matches, 8080, 8090, securityv1.Protocol_TCP, false) {
 		t.Fatalf("port range missing from %+v", matches)
 	}
-	extension := got.Authorization.GetAuthExtensions()[0]
+	extension := got.Policy.GetAuthExtensions()[0]
 	decoded := &extensionsv1.TrafficPolicyExtension{}
 	if err := extension.GetConfig().UnmarshalTo(decoded); err != nil {
 		t.Fatalf("decode traffic policy extension: %v", err)
@@ -253,7 +253,7 @@ func TestCompileTrafficPolicyWorkloadPeerMatchesSelectedPodsRegardlessOfRuntimeS
 	if err != nil {
 		t.Fatal(err)
 	}
-	matches := flattenMatches(compiled[0].Authorization)
+	matches := flattenMatches(compiled[0].Policy)
 	if !hasAddress(matches, "destination", "10.1.0.5/32", false) {
 		t.Fatalf("Pod peer address is missing: %+v", matches)
 	}
@@ -284,8 +284,8 @@ func TestCompileTrafficPolicySkipsInvalidPeerAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invalid peer address rejected the TrafficPolicy: %v", err)
 	}
-	if !hasAddress(flattenMatches(compiled[0].Authorization), "destination", "10.1.0.5/32", false) {
-		t.Fatalf("valid peer address was not preserved: %+v", compiled[0].Authorization)
+	if !hasAddress(flattenMatches(compiled[0].Policy), "destination", "10.1.0.5/32", false) {
+		t.Fatalf("valid peer address was not preserved: %+v", compiled[0].Policy)
 	}
 }
 
@@ -302,7 +302,7 @@ func TestCompileTrafficPolicyRejectUsesNegativeMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile reject policy: %v", err)
 	}
-	matches := flattenMatches(compiled[0].Authorization)
+	matches := flattenMatches(compiled[0].Policy)
 	if !hasAddress(matches, "source", "192.0.2.0/24", true) || !hasPortRange(matches, 0, 65535, securityv1.Protocol_UDP, true) {
 		t.Fatalf("reject did not compile to negative matches: %+v", matches)
 	}
@@ -339,7 +339,7 @@ func TestCompileTrafficPolicyRejectIncludesNotReadyEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile reject policy: %v", err)
 	}
-	matches := flattenMatches(compiled[0].Authorization)
+	matches := flattenMatches(compiled[0].Policy)
 	if !hasAddress(matches, "destination", "10.2.0.3/32", true) {
 		t.Fatalf("not-ready endpoint missing from negative match, widening traffic: %+v", matches)
 	}
@@ -384,7 +384,7 @@ func TestCompileTrafficPolicyServiceUsesPolicyNamespaceByDefault(t *testing.T) {
 			if serviceRef.Namespace != "" {
 				t.Fatalf("compiler mutated Service namespace to %q", serviceRef.Namespace)
 			}
-			matches := flattenMatches(compiled[0].Authorization)
+			matches := flattenMatches(compiled[0].Policy)
 			if !hasAddress(matches, "destination", "10.96.0.10/32", false) ||
 				!hasAddress(matches, "destination", "10.2.0.2/32", false) {
 				t.Fatalf("Kubernetes Service peer addresses missing: %+v", matches)
@@ -413,8 +413,8 @@ func TestCompileGlobalTrafficPolicyServiceUsesRootNamespaceByDefault(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasAddress(flattenMatches(compiled[0].Authorization), "destination", "10.96.0.20/32", false) {
-		t.Fatalf("root-namespace Service peer address missing: %+v", compiled[0].Authorization)
+	if !hasAddress(flattenMatches(compiled[0].Policy), "destination", "10.96.0.20/32", false) {
+		t.Fatalf("root-namespace Service peer address missing: %+v", compiled[0].Policy)
 	}
 }
 
@@ -432,8 +432,8 @@ func TestCompileTrafficPolicyMissingServiceFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(compiled[0].Authorization.GetGroups()) != 0 {
-		t.Fatalf("missing Service did not make the rule non-matching: %+v", compiled[0].Authorization)
+	if len(compiled[0].Policy.GetGroups()) != 0 {
+		t.Fatalf("missing Service did not make the rule non-matching: %+v", compiled[0].Policy)
 	}
 }
 
@@ -475,8 +475,15 @@ func TestCompileTrafficPolicyRootNamespaceScope(t *testing.T) {
 			if len(compiled) != 1 {
 				t.Fatalf("compiled = %d, want 1", len(compiled))
 			}
-			if got := compiled[0].Authorization.GetScope(); got != test.want {
+			if got := compiled[0].Policy.GetScope(); got != test.want {
 				t.Fatalf("scope = %v, want %v", got, test.want)
+			}
+			attachment := compiled[0].PolicyAttachment()
+			if (attachment != nil) != (test.want == securityv1.Scope_WORKLOAD_SELECTOR) {
+				t.Fatalf("scope %v produced unexpected attachment: %+v", test.want, attachment)
+			}
+			if attachment != nil && attachment.Name != compiled[0].ResourceName() {
+				t.Fatalf("attachment name %q differs from resource name %q", attachment.Name, compiled[0].ResourceName())
 			}
 		})
 	}
@@ -495,10 +502,10 @@ func TestCompileTrafficPolicyUnresolvedFQDNFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile unresolved policy: %v", err)
 	}
-	if len(compiled[0].Authorization.GetGroups()) != 0 {
-		t.Fatalf("unresolved FQDN did not make the rule non-matching: %+v", compiled[0].Authorization)
+	if len(compiled[0].Policy.GetGroups()) != 0 {
+		t.Fatalf("unresolved FQDN did not make the rule non-matching: %+v", compiled[0].Policy)
 	}
-	wire, err := proto.Marshal(compiled[0].Authorization)
+	wire, err := proto.Marshal(compiled[0].Policy)
 	if err != nil {
 		t.Fatalf("marshal authorization: %v", err)
 	}
@@ -529,8 +536,8 @@ func TestCompileTrafficPolicyPassesFQDNUnchangedToResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasAddress(flattenMatches(compiled[0].Authorization), "destination", "203.0.113.7/32", false) {
-		t.Fatalf("resolver did not receive the declared FQDN: %+v", compiled[0].Authorization)
+	if !hasAddress(flattenMatches(compiled[0].Policy), "destination", "203.0.113.7/32", false) {
+		t.Fatalf("resolver did not receive the declared FQDN: %+v", compiled[0].Policy)
 	}
 }
 
@@ -563,8 +570,8 @@ func TestCompileTrafficPolicyUnmatchedWorkloadPeerFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile policy: %v", err)
 			}
-			if len(compiled[0].Authorization.GetGroups()) != 0 {
-				t.Fatalf("unmatched workload peer did not make the rule non-matching: %+v", compiled[0].Authorization)
+			if len(compiled[0].Policy.GetGroups()) != 0 {
+				t.Fatalf("unmatched workload peer did not make the rule non-matching: %+v", compiled[0].Policy)
 			}
 		})
 	}
@@ -582,8 +589,8 @@ func TestCompileTrafficPolicyInvalidCIDRFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile invalid CIDR policy: %v", err)
 	}
-	if len(compiled[0].Authorization.GetGroups()) != 0 {
-		t.Fatalf("invalid CIDR did not make the rule non-matching: %+v", compiled[0].Authorization)
+	if len(compiled[0].Policy.GetGroups()) != 0 {
+		t.Fatalf("invalid CIDR did not make the rule non-matching: %+v", compiled[0].Policy)
 	}
 }
 
@@ -599,9 +606,9 @@ func TestCompileTrafficPolicyUnresolvedRuleDoesNotRemoveOtherRules(t *testing.T)
 	if err != nil {
 		t.Fatalf("compile mixed rules: %v", err)
 	}
-	groups := compiled[0].Authorization.GetGroups()
-	if len(groups) != 1 || !hasAddress(flattenMatches(compiled[0].Authorization), "destination", "192.0.2.0/24", false) {
-		t.Fatalf("unresolved rule affected valid sibling rule: %+v", compiled[0].Authorization)
+	groups := compiled[0].Policy.GetGroups()
+	if len(groups) != 1 || !hasAddress(flattenMatches(compiled[0].Policy), "destination", "192.0.2.0/24", false) {
+		t.Fatalf("unresolved rule affected valid sibling rule: %+v", compiled[0].Policy)
 	}
 }
 
@@ -620,9 +627,9 @@ func TestCompileTrafficPolicyResolvedPeerKeepsMixedPeerListMatchable(t *testing.
 	if err != nil {
 		t.Fatalf("compile mixed peers: %v", err)
 	}
-	groups := compiled[0].Authorization.GetGroups()
-	if len(groups) != 1 || !hasAddress(flattenMatches(compiled[0].Authorization), "destination", "192.0.2.0/24", false) {
-		t.Fatalf("resolved peer list did not remain matchable: %+v", compiled[0].Authorization)
+	groups := compiled[0].Policy.GetGroups()
+	if len(groups) != 1 || !hasAddress(flattenMatches(compiled[0].Policy), "destination", "192.0.2.0/24", false) {
+		t.Fatalf("resolved peer list did not remain matchable: %+v", compiled[0].Policy)
 	}
 }
 
@@ -637,7 +644,7 @@ func TestCompileTrafficPolicyRuleWithoutPeersRemainsWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile policy: %v", err)
 	}
-	group := compiled[0].Authorization.GetGroups()[0]
+	group := compiled[0].Policy.GetGroups()[0]
 	if len(group.GetRules()) != 0 {
 		t.Fatalf("peerless wildcard rule gained constraints: %+v", group)
 	}

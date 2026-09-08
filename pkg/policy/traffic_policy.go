@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
-	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,75 +37,8 @@ import (
 // tests may provide an in-memory implementation.
 type HostnameResolver func(krt.HandlerContext, string) []netip.Addr
 
-type CompiledAuthorization struct {
-	Source        model.TrafficPolicy
-	Authorization *securityv1.Authorization
-	selector      labels.Selector
-}
-
-func (p CompiledAuthorization) ResourceName() string {
-	return p.Authorization.GetNamespace() + "/" + p.Authorization.GetName()
-}
-
-// Equals lets krt suppress no-op events (reflect.DeepEqual would compare protobuf internals).
-func (p CompiledAuthorization) Equals(other CompiledAuthorization) bool {
-	return p.Source.Equals(other.Source) && proto.Equal(p.Authorization, other.Authorization)
-}
-
-func (p CompiledAuthorization) Selects(subject SandboxSubject) bool {
-	if p.Source.SandboxUID != "" && p.Source.SandboxUID != subject.SandboxUID {
-		return false
-	}
-	if p.Source.SandboxUID == "" && !p.Source.Global && p.Source.Namespace != subject.Namespace {
-		return false
-	}
-	return p.selector != nil && p.selector.Matches(labels.Set(subject.Labels))
-}
-
-// authorizationAttachmentFromCompiled projects only selector-scoped
-// authorization identity and targeting.
-func authorizationAttachmentFromCompiled(compiled CompiledAuthorization) *PolicyAttachment {
-	if compiled.Authorization == nil || compiled.Authorization.GetScope() != securityv1.Scope_WORKLOAD_SELECTOR {
-		return nil
-	}
-	target := AttachmentTarget{Selector: *compiled.Source.Spec.Selector.DeepCopy()}
-	if compiled.Source.SandboxUID != "" {
-		target.SandboxUID = compiled.Source.SandboxUID
-	} else if compiled.Source.Global {
-		target.Global = true
-	} else {
-		target.Namespaces = []string{compiled.Source.Namespace}
-	}
-	sourceOrder := int32(0)
-	if strings.HasSuffix(compiled.Authorization.GetName(), "-ingress") {
-		sourceOrder = 1
-	}
-	attachment, err := NewPolicyAttachment(PolicyAttachment{
-		Kind:            PolicyKindAuthorization,
-		Name:            compiled.ResourceName(),
-		Target:          target,
-		Priority:        compiled.Source.Spec.Priority,
-		SourceOrder:     sourceOrder,
-		CreationTime:    compiled.Source.CreationTime,
-		SourceName:      compiled.Source.Name,
-		SourceNamespace: compiled.Source.Namespace,
-	})
-	if err != nil {
-		return nil
-	}
-	attachment.selector = compiled.selector
-	return &attachment
-}
-
-func NewAuthorizationPolicyAttachmentsCollection(
-	authorizations krt.Collection[CompiledAuthorization],
-	options krt.OptionsBuilder,
-) krt.Collection[PolicyAttachment] {
-	return krt.NewCollection(authorizations,
-		func(_ krt.HandlerContext, compiled CompiledAuthorization) *PolicyAttachment {
-			return authorizationAttachmentFromCompiled(compiled)
-		}, options.WithName("authorization-policy-attachments")...)
-}
+// CompiledAuthorization is the authorization specialization of the shared compiled policy.
+type CompiledAuthorization = CompiledPolicy[*securityv1.Authorization]
 
 // TrafficPolicyInputs carries the collections and indexes a TrafficPolicy uses to resolve peers.
 type TrafficPolicyInputs struct {
@@ -216,7 +148,30 @@ func compileTrafficPolicyDirection(ctx krt.HandlerContext, source model.TrafficP
 		return CompiledAuthorization{}, err
 	}
 	authorization.AuthExtensions = []*securityv1.Extension{extension}
-	return CompiledAuthorization{Source: source, Authorization: authorization, selector: selector}, nil
+	compiled := CompiledAuthorization{
+		Name: authorization.GetNamespace() + "/" + authorization.GetName(), Policy: authorization,
+	}
+	if scope == securityv1.Scope_WORKLOAD_SELECTOR {
+		target := AttachmentTarget{Selector: source.Spec.Selector}
+		if source.SandboxUID != "" {
+			target.SandboxUID = source.SandboxUID
+		} else if source.Global {
+			target.Global = true
+		} else {
+			target.Namespaces = []string{source.Namespace}
+		}
+		attachment, err := NewPolicyAttachment(PolicyAttachment{
+			Kind: PolicyKindAuthorization, Name: compiled.Name, Target: target,
+			Priority:     source.Spec.Priority,
+			CreationTime: source.CreationTime, SourceName: source.Name,
+			SourceNamespace: source.Namespace, selector: selector,
+		})
+		if err != nil {
+			return CompiledAuthorization{}, err
+		}
+		compiled.Attachment = &attachment
+	}
+	return compiled, nil
 }
 
 func compileTrafficPolicyRule(ctx krt.HandlerContext, rule agentsv1alpha1.TrafficPolicyRule, policyNamespace string, inputs TrafficPolicyInputs) *securityv1.Group {

@@ -172,10 +172,8 @@ spec:
         {{- if and .Values.agentio .Values.agentio.env (index .Values.agentio.env `AGENTIO_ENABLE_SNI_TRAFFIC_POLICY`) }}
         - name: PEER_METADATA_DISCOVERY
           value: "true"
-        - name: POLICY_RUNTIME_CAPABILITIES
-          value: "sni_traffic_policy"
-        - name: POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD
-          value: "{{ index .Values.agentio.env `POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD` | default `15s` }}"
+        - name: ENABLE_POLICY_STORE
+          value: "true"
         {{- end }}
         - name: GOMEMLIMIT
           valueFrom:

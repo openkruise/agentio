@@ -97,10 +97,13 @@ func newBaseIndexes(inputs Inputs) baseIndexes {
 }
 
 type policyCollections struct {
-	authorizations      krt.Collection[policy.CompiledAuthorization]
-	bindableSNIPolicies krt.Collection[policy.BindableSNIPolicy]
-	egressPolicies      krt.Collection[policy.BindableEgressPolicy]
-	sandboxBindings     krt.Collection[policy.SandboxPolicyBindings]
+	sandboxSNIPolicies krt.Collection[SandboxSNIPolicy]
+
+	authorizations krt.Collection[policy.CompiledAuthorization]
+	sniPolicies    krt.Collection[policy.CompiledSNIPolicy]
+	egressPolicies krt.Collection[policy.CompiledEgressPolicy]
+
+	sandboxBindings krt.Collection[policy.SandboxPolicyBindings]
 }
 
 // graph retains the derived collections the Compiler reads after construction.
@@ -136,7 +139,6 @@ func buildGraph(inputs Inputs, failures *failureRecorder, builder krt.OptionsBui
 	)
 	resources := krt.JoinCollection([]krt.Collection[model.Resource]{
 		newAuthorizationResources(policies, failures, collectionOptions),
-		newSNIResources(policies, failures, collectionOptions),
 		workloadResources,
 		newServiceResources(inputs, gateways, failures, collectionOptions),
 		newGatewayResources(inputs, base, gatewayGlobalExtProc, gateways, failures, collectionOptions),
@@ -218,7 +220,7 @@ func newConfiguration(inputs Inputs, failures *failureRecorder, options collecti
 			return nil
 		}
 		// Validate attachment targets and Gateway identities before committing.
-		if _, err := policy.BindableEgressPolicies(inputs.RootNamespace, egress); err != nil {
+		if _, err := policy.CompiledEgressPolicies(inputs.RootNamespace, egress); err != nil {
 			failures.record("AgentioConfig", "configuration", err)
 			ctx.DiscardResult()
 			return nil

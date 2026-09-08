@@ -23,39 +23,30 @@ import (
 	"istio.io/istio/pkg/util/sets"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
-	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// BindableEgressPolicy keeps the typed payload separate from its payload-free
-// attachment projection.
-type BindableEgressPolicy struct {
-	Name       string
-	Attachment PolicyAttachment
-	Policy     *extensionsv1.EgressPolicy
+// CompiledEgressPolicy adds the resolved gateway identity to the shared policy.
+type CompiledEgressPolicy struct {
+	CompiledPolicy[*extensionsv1.EgressPolicy]
 	GatewayKey string
 }
 
-func (p BindableEgressPolicy) ResourceName() string { return p.Name }
-
-func (p BindableEgressPolicy) Equals(other BindableEgressPolicy) bool {
-	return p.Name == other.Name &&
-		p.Attachment.Equals(other.Attachment) &&
-		p.GatewayKey == other.GatewayKey &&
-		proto.Equal(p.Policy, other.Policy)
+func (p CompiledEgressPolicy) Equals(other CompiledEgressPolicy) bool {
+	return p.CompiledPolicy.Equals(other.CompiledPolicy) && p.GatewayKey == other.GatewayKey
 }
 
-// BindableEgressPolicies adapts the ordered ConfigMap policy list into typed
+// CompiledEgressPolicies adapts the ordered ConfigMap policy list into typed
 // payload values and the common attachment representation. The list index is
-// retained as both priority and source order, preserving first-match behavior.
-func BindableEgressPolicies(
+// retained as priority, preserving first-match behavior.
+func CompiledEgressPolicies(
 	rootNamespace string,
 	compiled *extensionsv1.EgressPolicies,
-) ([]BindableEgressPolicy, error) {
+) ([]CompiledEgressPolicy, error) {
 	if compiled == nil {
 		return nil, nil
 	}
-	result := make([]BindableEgressPolicy, 0, len(compiled.GetEgressPolicies()))
+	result := make([]CompiledEgressPolicy, 0, len(compiled.GetEgressPolicies()))
 	for index, source := range compiled.GetEgressPolicies() {
 		if source == nil {
 			return nil, fmt.Errorf("egress policy %d is nil", index)
@@ -70,7 +61,6 @@ func BindableEgressPolicies(
 			Name:            name,
 			Target:          target,
 			Priority:        int32(index),
-			SourceOrder:     int32(index),
 			SourceName:      "agentio-config",
 			SourceNamespace: rootNamespace,
 		})
@@ -86,34 +76,24 @@ func BindableEgressPolicies(
 					index, source.GetGateway().GetService())
 			}
 		}
-		result = append(result, BindableEgressPolicy{
-			Name: name, Attachment: attachment,
-			Policy: proto.Clone(source).(*extensionsv1.EgressPolicy), GatewayKey: gatewayKey,
+		result = append(result, CompiledEgressPolicy{
+			CompiledPolicy: CompiledPolicy[*extensionsv1.EgressPolicy]{
+				Name: name, Attachment: &attachment, Policy: proto.Clone(source).(*extensionsv1.EgressPolicy),
+			}, GatewayKey: gatewayKey,
 		})
 	}
 	return result, nil
 }
 
-func NewEgressPolicyAttachmentsCollection(
-	policies krt.Collection[BindableEgressPolicy],
-	options krt.OptionsBuilder,
-) krt.Collection[PolicyAttachment] {
-	return krt.NewCollection(policies,
-		func(_ krt.HandlerContext, policy BindableEgressPolicy) *PolicyAttachment {
-			attachment := policy.Attachment
-			return &attachment
-		}, options.WithName("egress-policy-attachments")...)
-}
-
 // SelectEgressPolicies returns the policy payloads and gateway keys named by one Sandbox binding, in binding order.
 func SelectEgressPolicies(
 	names []string,
-	policies []BindableEgressPolicy,
+	policies []CompiledEgressPolicy,
 ) (*extensionsv1.EgressPolicies, []string, error) {
 	if len(names) == 0 {
 		return nil, nil, nil
 	}
-	byName := make(map[string]BindableEgressPolicy, len(policies))
+	byName := make(map[string]CompiledEgressPolicy, len(policies))
 	for _, current := range policies {
 		if _, found := byName[current.Name]; found {
 			return nil, nil, fmt.Errorf("duplicate egress policy payload %q", current.Name)

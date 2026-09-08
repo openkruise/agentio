@@ -90,10 +90,8 @@ spec:
             {{- if .Values.egressGateway.sniTrafficPolicy.enabled }}
             - name: PEER_METADATA_DISCOVERY
               value: "true"
-            - name: POLICY_RUNTIME_CAPABILITIES
-              value: sni_traffic_policy
-            - name: POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD
-              value: {{ .Values.egressGateway.sniTrafficPolicy.referenceResolutionGracePeriod | quote }}
+            - name: ENABLE_POLICY_STORE
+              value: "true"
             {{- end }}
             {{- if ne .Values.epe.mode "disabled" }}
             - name: AGENTIO_EPE_ADDRESS

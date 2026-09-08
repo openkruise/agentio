@@ -455,6 +455,10 @@ func (h *manyCollection[I, O]) onPrimaryInputEvent(items []Event[I]) {
 			ev.New = nil
 		} else {
 			ev.New = iObj
+			// A queued delete may refer to a previous incarnation of this key.
+			if ev.Event == controllers.EventDelete {
+				ev.Event = controllers.EventUpdate
+			}
 		}
 		items[idx] = ev
 	}
@@ -521,6 +525,8 @@ func (h *manyCollection[I, O]) handleChangedPrimaryInputEvents(items []Event[I])
 		} else {
 			ctx := pendingDepStateUpdates[iKey]
 			results := recomputedResults[idx]
+			// Discard retains output, but must still watch newly missing dependencies.
+			h.dependencyState.update(iKey, ctx.d)
 			if ctx.discardUpdate {
 				// Called when the collection explicitly calls DiscardResult() on the context.
 				// This is typically used when we want to retain the last-correct state.
@@ -532,7 +538,6 @@ func (h *manyCollection[I, O]) handleChangedPrimaryInputEvents(items []Event[I])
 				}
 				h.log.Debug("would discard result, but it is the first; including it", "input_key", iKey)
 			}
-			h.dependencyState.update(iKey, ctx.d)
 			newKeys := sets.New(maps.Keys(results)...)
 			oldKeys := h.collectionState.mappings[iKey]
 			h.collectionState.mappings[iKey] = newKeys

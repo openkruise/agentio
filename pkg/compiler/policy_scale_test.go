@@ -58,14 +58,14 @@ func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadAttachments(t *testing.T) {
 	profiles.ConditionalUpdateObject(profile)
 
 	compiled := krt.NewCollection(profiles,
-		func(_ krt.HandlerContext, profile model.SecurityProfile) *policy.BindableSNIPolicy {
+		func(_ krt.HandlerContext, profile model.SecurityProfile) *policy.CompiledSNIPolicy {
 			result, err := policy.CompileSNIProfile(profile)
 			if err != nil {
 				t.Errorf("compile SNI profile: %v", err)
 			}
 			return result
 		}, append(options, krt.WithName("test-sni-policies"))...)
-	projected := policy.NewSNIPolicyAttachmentsCollection(compiled, builder)
+	projected := policy.NewPolicyAttachmentsCollection(compiled, builder, "sni-policy-attachments")
 	sandboxes := krt.NewStaticCollection[model.Sandbox](nil, nil, options...)
 	bindings := policy.NewSandboxPolicyBindingsCollection(sandboxes, subjects, projected, builder)
 
@@ -75,21 +75,18 @@ func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadAttachments(t *testing.T) {
 			workloadAttachmentRecomputes.Add(1)
 			return &binding
 		}, append(options, krt.WithName("test-workload-attachments"))...)
-	var sniResourceRecomputes atomic.Int64
-	resources := krt.NewCollection(compiled,
-		func(_ krt.HandlerContext, compiled policy.BindableSNIPolicy) *model.Resource {
-			sniResourceRecomputes.Add(1)
-			resource, err := sniResource(compiled)
-			if err != nil {
-				t.Errorf("build SNI resource: %v", err)
-			}
-			return &resource
-		}, append(options, krt.WithName("test-sni-resources"))...)
+	inline := newSandboxSNIPolicies(bindings, compiled, func(name string) []krt.CollectionOption { return builder.WithName(name) })
+	var inlineUpdates atomic.Int64
+	resources := krt.NewCollection(inline, func(_ krt.HandlerContext, value SandboxSNIPolicy) *SandboxSNIPolicy {
+		inlineUpdates.Add(1)
+		return &value
+	}, builder.WithName("observed-inline-policies")...)
+
 	if !workloadAttachments.WaitUntilSynced(stop) || !resources.WaitUntilSynced(stop) {
 		t.Fatal("test policy graph did not sync")
 	}
 	workloadAttachmentRecomputes.Store(0)
-	sniResourceRecomputes.Store(0)
+	inlineUpdates.Store(0)
 
 	updated := profile
 	updated.Spec = agentsv1alpha1.SecurityProfileSpec{
@@ -100,14 +97,14 @@ func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadAttachments(t *testing.T) {
 		}},
 	}
 	profiles.ConditionalUpdateObject(updated)
-	eventually(t, func() bool { return sniResourceRecomputes.Load() == 1 }, "SNI resource recompiled")
+	eventually(t, func() bool { return inlineUpdates.Load() == sandboxCount }, "inline SNI payloads updated")
 	settle()
 
 	if got := workloadAttachmentRecomputes.Load(); got != 0 {
 		t.Fatalf("workload attachment recomputes = %d, want 0", got)
 	}
-	if got := sniResourceRecomputes.Load(); got != 1 {
-		t.Fatalf("SNI resource recomputes = %d, want 1", got)
+	if got := inlineUpdates.Load(); got != sandboxCount {
+		t.Fatalf("inline policy updates = %d, want %d", got, sandboxCount)
 	}
 }
 

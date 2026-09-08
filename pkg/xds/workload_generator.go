@@ -28,9 +28,9 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// SandboxPolicyResolver resolves the policy names attached to a sandbox UID.
+// SandboxPolicyResolver resolves the complete SNI payload attached to a sandbox UID.
 type SandboxPolicyResolver interface {
-	PolicyNames(string, model.PolicyKind) []string
+	SNIPolicy(string) *extensionsv1.SniTrafficPolicy
 }
 
 // WorkloadGenerator applies workload-discovery scope and on-demand projection
@@ -135,16 +135,12 @@ func (g WorkloadGenerator) projectAddresses(addresses []model.Resource) ([]model
 			continue
 		}
 		if sandboxUID := sandboxUIDForResource(addressResource); sandboxUID != "" && g.policies != nil {
-			names := g.policies.PolicyNames(sandboxUID, model.PolicyKindSNIPolicy)
-			if len(names) > 0 {
-				reference, err := anypb.New(&extensionsv1.PolicyReference{
-					TypeUrl: model.SniTrafficPolicyType, ResourceNames: names,
-				})
-				if err != nil {
-					return nil, fmt.Errorf("marshal SNI reference for workload %s: %w", addressResource.Key.Name, err)
+			if payload := g.policies.SNIPolicy(sandboxUID); payload != nil {
+				config := new(anypb.Any)
+				if err := anypb.MarshalFrom(config, payload, proto.MarshalOptions{Deterministic: true}); err != nil {
+					return nil, fmt.Errorf("marshal SNI policy for workload %s: %w", addressResource.Key.Name, err)
 				}
-				workload.Extensions = append(workload.Extensions,
-					&workloadv1.Extension{Name: "sni-traffic-policy", Config: reference})
+				workload.Extensions = append(workload.Extensions, &workloadv1.Extension{Name: "sni-traffic-policy", Config: config})
 			}
 		}
 		// Deterministic marshaling keeps the projected hash stable across

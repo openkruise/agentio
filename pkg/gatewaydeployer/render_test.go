@@ -215,11 +215,10 @@ func TestRenderIgnoresProxyImageAnnotation(t *testing.T) {
 	}
 }
 
-func TestRenderAdvertisesSNIPolicyRuntimeWhenEnabled(t *testing.T) {
+func TestRenderEnablesPolicyStoreWhenSNIEnabled(t *testing.T) {
 	overlay := mergeMaps(parityValuesOverlay(), map[string]any{
 		"agentio": map[string]any{"env": map[string]any{
-			"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY":              true,
-			"POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD": "15s",
+			"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY": true,
 		}},
 	})
 	merged := testValues(t, overlay)
@@ -239,8 +238,7 @@ func TestRenderAdvertisesSNIPolicyRuntimeWhenEnabled(t *testing.T) {
 	got := strings.Join(docs, "\n---\n")
 	for _, want := range []string{
 		"name: PEER_METADATA_DISCOVERY\n          value: \"true\"",
-		"name: POLICY_RUNTIME_CAPABILITIES\n          value: \"sni_traffic_policy\"",
-		"name: POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD\n          value: \"15s\"",
+		"name: ENABLE_POLICY_STORE\n          value: \"true\"",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered gateway does not advertise the SNI policy runtime; want %q in:\n%s", want, got)

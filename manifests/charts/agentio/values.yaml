@@ -99,7 +99,6 @@ agentiod:
       imageName: proxy-init
   gatewayDeployer:
     leaseName: agentiod-gateway-deployer-leader
-    referenceResolutionGracePeriod: 15s
   networkPolicy:
     enabled: false
   env: {}
@@ -252,7 +251,6 @@ egressGateway:
   statsEvictionInterval: ""
   sniTrafficPolicy:
     enabled: false
-    referenceResolutionGracePeriod: 15s
   env: {}
   podAnnotations: {}
   podLabels: {}

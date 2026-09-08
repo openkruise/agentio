@@ -23,9 +23,9 @@ import (
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 )
 
-func TestBindableEgressPolicies(t *testing.T) {
+func TestCompiledEgressPolicies(t *testing.T) {
 	compiled := testCompiledEgressPolicies()
-	policies, err := BindableEgressPolicies("agentio-system", compiled)
+	policies, err := CompiledEgressPolicies("agentio-system", compiled)
 	if err != nil {
 		t.Fatalf("bindable egress policies: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestBindableEgressPolicies(t *testing.T) {
 }
 
 func TestSelectEgressPoliciesPreservesBindingOrder(t *testing.T) {
-	policies, err := BindableEgressPolicies("agentio-system", testCompiledEgressPolicies())
+	policies, err := CompiledEgressPolicies("agentio-system", testCompiledEgressPolicies())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestSelectEgressPoliciesPreservesBindingOrder(t *testing.T) {
 			policies[1].Name,
 			policies[0].Name,
 		},
-		[]BindableEgressPolicy{
+		[]CompiledEgressPolicy{
 			policies[0],
 			policies[1],
 		},
@@ -89,10 +89,10 @@ func TestSelectEgressPoliciesPreservesBindingOrder(t *testing.T) {
 	}
 }
 
-func TestBindableEgressPoliciesRejectMalformedGateway(t *testing.T) {
+func TestCompiledEgressPoliciesRejectMalformedGateway(t *testing.T) {
 	for _, service := range []string{"", "egress", ".agentio-system", "egress..svc.cluster.local"} {
 		t.Run(service, func(t *testing.T) {
-			_, err := BindableEgressPolicies("agentio-system", &extensionsv1.EgressPolicies{EgressPolicies: []*extensionsv1.EgressPolicy{{
+			_, err := CompiledEgressPolicies("agentio-system", &extensionsv1.EgressPolicies{EgressPolicies: []*extensionsv1.EgressPolicy{{
 				Policy:  extensionsv1.EgressPolicyAction_GATEWAY,
 				Gateway: &extensionsv1.GatewayAddress{Service: service, Port: 15008},
 			}}})
@@ -101,7 +101,7 @@ func TestBindableEgressPoliciesRejectMalformedGateway(t *testing.T) {
 			}
 		})
 	}
-	if policies, err := BindableEgressPolicies("agentio-system", &extensionsv1.EgressPolicies{EgressPolicies: []*extensionsv1.EgressPolicy{{
+	if policies, err := CompiledEgressPolicies("agentio-system", &extensionsv1.EgressPolicies{EgressPolicies: []*extensionsv1.EgressPolicy{{
 		Policy: extensionsv1.EgressPolicyAction_DENY,
 	}}}); err != nil || len(policies) != 1 || policies[0].GatewayKey != "" {
 		t.Fatalf("DENY without gateway = %+v, err %v", policies, err)

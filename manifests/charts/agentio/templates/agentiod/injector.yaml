@@ -83,7 +83,6 @@ data:
     agentio:
       env:
         AGENTIO_ENABLE_SNI_TRAFFIC_POLICY: {{ .Values.agentiod.enableSNITrafficPolicy }}
-        POLICY_STORE_REFERENCE_RESOLUTION_GRACE_PERIOD: {{ .Values.agentiod.gatewayDeployer.referenceResolutionGracePeriod | quote }}
     pilot:
       cni:
         enabled: {{ eq .Values.profile "ambient" }}

@@ -472,59 +472,61 @@ func TestPolicyAttachmentValidation(t *testing.T) {
 }
 
 func TestPolicyAttachmentEqualityTracksOnlyReferenceFields(t *testing.T) {
-	policy := BindableSNIPolicy{
-		Name: "demo/security-profile", Namespace: "demo", Priority: 10,
-		CreationTime: time.Unix(100, 0),
-		Selector:     metav1.LabelSelector{MatchLabels: map[string]string{"app": "sandbox"}},
-		Policy: &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
-			Match: &extensionsv1.SniMatch{Sni: []string{"api.example.com"}},
-		}}},
+	policy, err := CompileSNIProfile(model.SecurityProfile{
+		Name: "security-profile", Namespace: "demo", CreationTime: time.Unix(100, 0),
+		Spec: securitySpec(nil, map[string]string{"app": "sandbox"}),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	attachment := policyAttachmentFromBindableSNIPolicy(policy)
+	attachment := policy.PolicyAttachment()
 	if attachment == nil {
 		t.Fatal("expected a policy attachment")
 	}
-
-	rulesOnly := policy
+	rulesOnly := *policy
 	rulesOnly.Policy = &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
 		Match: &extensionsv1.SniMatch{Sni: []string{"changed.example.com"}},
 	}}}
-	if other := policyAttachmentFromBindableSNIPolicy(rulesOnly); other == nil || !attachment.Equals(*other) {
+	if other := rulesOnly.PolicyAttachment(); other == nil || !attachment.Equals(*other) {
 		t.Fatal("rules-only policy changes must not change the attachment")
 	}
-
+	if policy.Equals(rulesOnly) {
+		t.Fatal("rules-only changes must change the compiled policy")
+	}
 	tests := []struct {
 		name   string
-		mutate func(*BindableSNIPolicy)
+		mutate func(*PolicyAttachment)
 	}{
-		{name: "resource name", mutate: func(p *BindableSNIPolicy) { p.Name = "demo/other" }},
-		{name: "priority", mutate: func(p *BindableSNIPolicy) { p.Priority++ }},
-		{name: "creation time", mutate: func(p *BindableSNIPolicy) { p.CreationTime = time.Unix(200, 0) }},
-		{name: "namespace", mutate: func(p *BindableSNIPolicy) { p.Namespace = "other" }},
-		{name: "sandbox UID", mutate: func(p *BindableSNIPolicy) { p.SandboxUID = "sandbox-a" }},
-		{name: "global scope", mutate: func(p *BindableSNIPolicy) { p.Global = true }},
-		{name: "selector", mutate: func(p *BindableSNIPolicy) {
-			p.Selector = metav1.LabelSelector{MatchLabels: map[string]string{"app": "other"}}
+		{"resource name", func(p *PolicyAttachment) { p.Name = "demo/other" }},
+		{"priority", func(p *PolicyAttachment) { p.Priority++ }},
+		{"creation time", func(p *PolicyAttachment) { p.CreationTime = time.Unix(200, 0) }},
+		{"namespace", func(p *PolicyAttachment) { p.Target.Namespaces = []string{"other"} }},
+		{"sandbox UID", func(p *PolicyAttachment) { p.Target.SandboxUID = "sandbox-a" }},
+		{"global scope", func(p *PolicyAttachment) { p.Target.Global = true }},
+		{"selector", func(p *PolicyAttachment) {
+			p.Target.Selector = metav1.LabelSelector{MatchLabels: map[string]string{"app": "other"}}
 			p.selector = nil
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			changed := policy
-			test.mutate(&changed)
-			if attachment.Equals(*policyAttachmentFromBindableSNIPolicy(changed)) {
-				t.Fatalf("%s change did not change the attachment", test.name)
+			changed := *policy
+			copy := *attachment
+			test.mutate(&copy)
+			changed.Attachment = &copy
+			if attachment.Equals(*changed.PolicyAttachment()) || policy.Equals(changed) {
+				t.Fatalf("%s change did not change attachment and compiled policy", test.name)
 			}
 		})
 	}
 }
 
 func TestPolicyAttachmentRejectsIncompletePolicy(t *testing.T) {
-	for _, policy := range []BindableSNIPolicy{
-		{Policy: &extensionsv1.SniTrafficPolicy{}},
-		{Name: "demo/policy"},
+	for _, policy := range []CompiledSNIPolicy{
+		{Policy: &extensionsv1.SniTrafficPolicy{}, Attachment: &PolicyAttachment{}},
+		{Name: "demo/policy", Attachment: &PolicyAttachment{}},
 	} {
-		if got := policyAttachmentFromBindableSNIPolicy(policy); got != nil {
+		if got := policy.PolicyAttachment(); got != nil {
 			t.Fatalf("incomplete policy produced attachment %+v", got)
 		}
 	}

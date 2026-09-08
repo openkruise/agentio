@@ -198,6 +198,11 @@ func (i indexCollection[K, O]) index(name string, extract func(o IndexObject[K, 
 func (i indexCollection[K, O]) GetKey(k string) *IndexObject[K, O] {
 	tk := i.fromKey(k).(K)
 	objs := i.idx.Lookup(tk)
+	// An empty index bucket is absent, matching the Collection.GetKey contract.
+	// Event consumers re-read this state to distinguish deletion from recreation.
+	if len(objs) == 0 {
+		return nil
+	}
 	return &IndexObject[K, O]{
 		Key:     tk,
 		Objects: objs,
@@ -220,7 +225,9 @@ func (i indexCollection[K, O]) dumpOutput() map[string]any {
 	res := map[string]any{}
 	for k := range keys {
 		ks := toString(k)
-		res[ks] = *i.GetKey(ks)
+		if current := i.GetKey(ks); current != nil {
+			res[ks] = *current
+		}
 	}
 	return res
 }
@@ -263,7 +270,7 @@ func (i indexCollection[K, O]) RegisterBatch(f func(o []Event[IndexObject[K, O]]
 			// However, we don't really need to: simply triggering an Add/Delete is close enough to work.
 			// Building a collection from an indexCollection only uses the events to determine the changed keys, which is
 			// available with this information.
-			if len(v.Objects) == 0 {
+			if v == nil {
 				downstream = append(downstream, Event[IndexObject[K, O]]{
 					Old:   &IndexObject[K, O]{Key: key, Objects: nil},
 					Event: controllers.EventDelete,

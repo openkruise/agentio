@@ -26,11 +26,16 @@ import (
 
 type staticWorkloadPolicies map[string][]string
 
-func (p staticWorkloadPolicies) PolicyNames(sandboxUID string, kind model.PolicyKind) []string {
-	if kind != model.PolicyKindSNIPolicy {
+func (p staticWorkloadPolicies) SNIPolicy(sandboxUID string) *extensionsv1.SniTrafficPolicy {
+	names := p[sandboxUID]
+	if len(names) == 0 {
 		return nil
 	}
-	return p[sandboxUID]
+	result := &extensionsv1.SniTrafficPolicy{}
+	for _, name := range names {
+		result.Rules = append(result.Rules, &extensionsv1.SniRule{Match: &extensionsv1.SniMatch{Sni: []string{name}}})
+	}
+	return result
 }
 
 func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.T) {
@@ -76,11 +81,11 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 	if len(workload.GetExtensions()) != 1 || workload.GetExtensions()[0].GetName() != "sni-traffic-policy" {
 		t.Fatalf("projected extensions = %+v", workload.GetExtensions())
 	}
-	reference := &extensionsv1.PolicyReference{}
+	reference := &extensionsv1.SniTrafficPolicy{}
 	if err := workload.GetExtensions()[0].GetConfig().UnmarshalTo(reference); err != nil {
 		t.Fatalf("unmarshal SNI reference: %v", err)
 	}
-	if got, want := reference.GetResourceNames(), []string{"demo/first", "demo/second"}; !reflect.DeepEqual(got, want) {
+	if got, want := []string{reference.Rules[0].Match.Sni[0], reference.Rules[1].Match.Sni[0]}, []string{"demo/first", "demo/second"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SNI resource names = %v, want %v", got, want)
 	}
 
@@ -232,5 +237,45 @@ func TestWildcardDirectWorkloadIgnoresAddressServiceRemoval(t *testing.T) {
 	if len(delta.Resources) != 0 || len(delta.Removed) != 0 {
 		t.Fatalf("service-only Address change produced direct Workload delta: resources=%v removed=%v",
 			selectedNames(delta.Resources), delta.Removed)
+	}
+}
+
+func TestInlineSNIChangesProjectedWorkloadVersion(t *testing.T) {
+	address := selectionWorkload(t, "uid-a", "demo", "node-a", "", "")
+	facts := address.Facts
+	wf := *facts.Workload
+	wf.SandboxUID = "sandbox"
+	facts.Workload = &wf
+	var err error
+	address, err = model.NewResource(address.Key, address.XDSName, address.Value, address.Aliases, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies := staticWorkloadPolicies{"sandbox": {"before.example"}}
+	generator := NewWorkloadGenerator(policies)
+	request := GenerationRequest{Scope: model.ClientScope{Class: model.ClientEgressGateway}, TypeURL: model.WorkloadType,
+		Subscription: SubscriptionView{wildcard: true}, Snapshot: selectionSnapshot(t, []model.Resource{address}), Full: true}
+	initial, err := generator.Generate(context.Background(), request)
+	if err != nil || len(initial.Resources) != 1 {
+		t.Fatalf("initial = %v, %v", initial, err)
+	}
+	request.Subscription.sent = map[string]string{initial.Resources[0].XDSName: initial.Resources[0].Hash}
+	policies["sandbox"] = []string{"after.example"}
+	changed, err := generator.Generate(context.Background(), request)
+	if err != nil || len(changed.Resources) != 1 {
+		t.Fatalf("rules-only change = %v, %v", changed, err)
+	}
+	request.Subscription.sent[changed.Resources[0].XDSName] = changed.Resources[0].Hash
+	delete(policies, "sandbox")
+	removed, err := generator.Generate(context.Background(), request)
+	if err != nil || len(removed.Resources) != 1 {
+		t.Fatalf("policy removal = %v, %v", removed, err)
+	}
+	workload := &workloadv1.Workload{}
+	if err := removed.Resources[0].Value.UnmarshalTo(workload); err != nil {
+		t.Fatal(err)
+	}
+	if len(workload.Extensions) != 0 {
+		t.Fatalf("stale extensions: %v", workload.Extensions)
 	}
 }

@@ -344,7 +344,7 @@ func TestAuthorizationResourceCarriesScopeFacts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resource, err := authorizationResource(policypkg.CompiledAuthorization{
-				Source: test.source, Authorization: test.authorization,
+				Name: test.authorization.GetNamespace() + "/" + test.authorization.GetName(), Policy: test.authorization,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -356,7 +356,7 @@ func TestAuthorizationResourceCarriesScopeFacts(t *testing.T) {
 	}
 }
 
-func TestCompilerPublishesSNIProfileAndWorkloadReference(t *testing.T) {
+func TestCompilerResolvesInlineSNIProfile(t *testing.T) {
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	options := []krt.CollectionOption{krt.WithStop(stop)}
@@ -398,8 +398,8 @@ func TestCompilerPublishesSNIProfileAndWorkloadReference(t *testing.T) {
 	if _, found := snapshot.Get(model.ResourceKey{
 		TypeURL: model.SniTrafficPolicyType,
 		Name:    "demo/terminate",
-	}); !found {
-		t.Fatal("compiled SNI policy resource not found")
+	}); found {
+		t.Fatal("independent SNI resource must not be published")
 	}
 	workloadResource, _ := snapshot.Get(model.ResourceKey{
 		TypeURL: model.AddressType,
@@ -414,6 +414,9 @@ func TestCompilerPublishesSNIProfileAndWorkloadReference(t *testing.T) {
 	}
 	if _, found := snapshot.Get(model.ResourceKey{TypeURL: model.WorkloadType, Name: "cluster//Pod/demo/client"}); found {
 		t.Fatal("compiler retained a direct Workload resource")
+	}
+	if payload := compiler.SNIPolicy(workload.SandboxBindings[0].SandboxUID); payload == nil || len(payload.Rules) != 1 {
+		t.Fatalf("inline SNI payload = %v", payload)
 	}
 	binding := compiler.SandboxPolicyBindings().GetKey(workload.SandboxBindings[0].SandboxUID)
 	if binding == nil || !reflect.DeepEqual(binding.PolicyNames(policypkg.PolicyKindSNIPolicy), []string{"demo/terminate"}) {

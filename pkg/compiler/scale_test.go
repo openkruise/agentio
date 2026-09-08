@@ -49,8 +49,8 @@ func TestCompileFiveThousandSandboxes(t *testing.T) {
 	if got := len(snapshot.List(model.WorkloadAuthorizationType)); got != scalePolicies {
 		t.Fatalf("Authorization resources = %d, want %d", got, scalePolicies)
 	}
-	if got := len(snapshot.List(model.SniTrafficPolicyType)); got != scalePolicies {
-		t.Fatalf("SNI policy resources = %d, want %d", got, scalePolicies)
+	if got := len(snapshot.List(model.SniTrafficPolicyType)); got != 0 {
+		t.Fatalf("independent SNI policy resources = %d, want 0", got)
 	}
 	for _, resource := range snapshot.List(model.AddressType) {
 		if resource.Facts.Authorization != nil {

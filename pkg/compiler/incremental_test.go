@@ -1751,15 +1751,11 @@ func TestMalformedSecurityProfileUpdatePreservesLastKnownGood(t *testing.T) {
 	fixture.securityProfiles.ConditionalUpdateObject(valid)
 	waitSynced(t, fixture.compiler)
 
-	key := model.ResourceKey{
-		TypeURL: model.SniTrafficPolicyType,
-		Name:    "demo/terminate",
-	}
+	key := "demo/terminate"
 	eventually(t, func() bool {
-		_, found := currentSnapshot(t, fixture.compiler).Get(key)
-		return found
-	}, "initial SNI policy resource")
-	baseline, _ := currentSnapshot(t, fixture.compiler).Get(key)
+		return fixture.compiler.graph.policies.sniPolicies.GetKey(key) != nil
+	}, "initial SNI policy")
+	baseline := fixture.compiler.graph.policies.sniPolicies.GetKey(key)
 
 	invalid := valid
 	invalid.Spec.Rules = append([]agentsv1alpha1.SecurityRule(nil), valid.Spec.Rules...)
@@ -1772,12 +1768,9 @@ func TestMalformedSecurityProfileUpdatePreservesLastKnownGood(t *testing.T) {
 	}, "invalid update failure")
 	settle()
 
-	retained, found := currentSnapshot(t, fixture.compiler).Get(key)
-	if !found {
-		t.Fatal("invalid update removed the last-known-good SNI policy")
-	}
-	if retained.Hash != baseline.Hash {
-		t.Fatalf("invalid update replaced the last-known-good SNI policy: %s != %s", retained.Hash, baseline.Hash)
+	retained := fixture.compiler.graph.policies.sniPolicies.GetKey(key)
+	if retained == nil || !retained.Equals(*baseline) {
+		t.Fatal("invalid update replaced the last-known-good SNI policy")
 	}
 }
 
