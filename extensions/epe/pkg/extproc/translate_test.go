@@ -235,18 +235,19 @@ func TestTranslate_BodyPhaseRewriteSetsContentLength(t *testing.T) {
 	}
 }
 
-// A :path SET must force clear_route_cache even when the filter forgot the
-// flag: an earlier filter's cached route would otherwise silently win.
-func TestTranslate_PathOpForcesClearRouteCache(t *testing.T) {
-	er := &engine.RequestHeadersResult{
-		Disposition: engine.DispositionMutated,
-		HeaderOps:   []filter.HeaderOp{{Kind: filter.HeaderSet, Name: ":path", Value: "/new"}},
-		// ClearRouteCache deliberately false: the adapter must derive it.
-	}
-	resp := translateRequestHeadersResult(er, logr.Discard(), filter.Peer{})
-	common := resp[0].GetRequestHeaders().GetResponse()
-	if !common.GetClearRouteCache() {
-		t.Error("clear_route_cache not set for a :path rewrite")
+// Path rewriting must preserve the caller's explicit cache decision.
+func TestTranslate_PathOpHonorsClearRouteCache(t *testing.T) {
+	for _, clear := range []bool{false, true} {
+		er := &engine.RequestHeadersResult{
+			Disposition: engine.DispositionMutated,
+			HeaderOps:   []filter.HeaderOp{{Kind: filter.HeaderSet, Name: ":path", Value: "/new"}},
+			Route:       &filter.RouteMutation{ClearCache: clear},
+		}
+		resp := translateRequestHeadersResult(er, logr.Discard(), filter.Peer{})
+		common := resp[0].GetRequestHeaders().GetResponse()
+		if common.GetClearRouteCache() != clear {
+			t.Errorf("path rewrite did not preserve clearRouteCache=%v", clear)
+		}
 	}
 }
 

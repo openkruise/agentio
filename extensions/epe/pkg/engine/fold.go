@@ -14,10 +14,39 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 )
+
+// foldRoute preserves one upstream target and ORs cache-clear requests.
+// Conflicting targets are a contract error, not a last-writer override.
+// Copy all nested values so callers cannot mutate filter-owned data.
+func foldRoute(muts []filter.Mutation) (*filter.RouteMutation, error) {
+	var result *filter.RouteMutation
+	for _, m := range muts {
+		if m.Route == nil {
+			continue
+		}
+		if err := m.Route.Validate(); err != nil {
+			return nil, err
+		}
+		if result == nil {
+			result = &filter.RouteMutation{}
+		}
+		result.ClearCache = result.ClearCache || m.Route.ClearCache
+		if m.Route.Upstream == nil {
+			continue
+		}
+		address := *m.Route.Upstream.Address
+		if result.Upstream != nil && *result.Upstream.Address != address {
+			return nil, fmt.Errorf("conflicting upstream targets: %s and %s", result.Upstream.Address, address)
+		}
+		result.Upstream = &filter.UpstreamTarget{Address: &address}
+	}
+	return result, nil
+}
 
 // fold computes the net effect of mutations applied in execution order.
 //

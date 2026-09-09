@@ -221,9 +221,9 @@ type RequestHeadersResult struct {
 	// HeaderOps is the net-effect folded mutation set, ready for a single
 	// proto translation.
 	HeaderOps []filter.HeaderOp
-	// ClearRouteCache is true when any accumulated mutation asked for it
-	// (e.g. a :path rewrite); the adapter must set clear_route_cache.
-	ClearRouteCache bool
+	// Route is the folded request routing change. The result owns its nested
+	// values; modifying it cannot change filter data or a continuation.
+	Route *filter.RouteMutation
 	// Body: nil = unchanged; non-nil (including empty) = replace, the same
 	// sentinel as filter.Mutation.Body. The last executed action to set one
 	// wins.
@@ -243,10 +243,10 @@ func (r *RequestHeadersResult) NeedsBody() bool { return r.needsBody }
 
 // RequestBodyResult is the outcome of the body phase.
 type RequestBodyResult struct {
-	Disposition     Disposition
-	Reply           filter.Reply
-	HeaderOps       []filter.HeaderOp
-	ClearRouteCache bool
+	Disposition Disposition
+	Reply       filter.Reply
+	HeaderOps   []filter.HeaderOp
+	Route       *filter.RouteMutation
 	// Body: nil = unchanged; non-nil (including empty) = replace.
 	Body []byte
 	// ResponseScope bounds response-phase dispatch when the resumed walk
@@ -339,27 +339,30 @@ func (e *Engine) EvalRequestHeaders(ctx context.Context, st *filter.Stream, unit
 	ctx, cancel := e.withBudget(ctx)
 	defer cancel()
 	walk, err := e.walkRequest(ctx, st, units, evalCursor{}, o.body)
-	reduced := walk.result()
+	reduced, routeErr := walk.result()
+	if err == nil {
+		err = routeErr
+	}
 	res := &RequestHeadersResult{
-		Disposition:     reduced.disposition,
-		Reply:           reduced.reply,
-		HeaderOps:       reduced.headerOps,
-		ClearRouteCache: reduced.clearRouteCache,
-		Body:            reduced.body,
-		ResponseScope:   walk.scope,
-		needsBody:       walk.needsBody,
-		continuation:    walk.continuation,
+		Disposition:   reduced.disposition,
+		Reply:         reduced.reply,
+		HeaderOps:     reduced.headerOps,
+		Route:         reduced.route,
+		Body:          reduced.body,
+		ResponseScope: walk.scope,
+		needsBody:     walk.needsBody,
+		continuation:  walk.continuation,
 	}
 	return res, err
 }
 
 type actionResult struct {
-	disposition     Disposition
-	reply           filter.Reply
-	headerOps       []filter.HeaderOp
-	clearRouteCache bool
-	body            []byte
-	statusCode      *int
+	disposition Disposition
+	reply       filter.Reply
+	headerOps   []filter.HeaderOp
+	route       *filter.RouteMutation
+	body        []byte
+	statusCode  *int
 }
 
 // actionWalk reduces phase-independent Action semantics. Phase walkers select
@@ -407,16 +410,19 @@ func (w *actionWalk) resolved() Disposition {
 	return w.disposition
 }
 
-func (w *actionWalk) result() actionResult {
-	headerOps, clearRouteCache, body, statusCode := foldPending(w.pending)
-	return actionResult{
-		disposition:     w.resolved(),
-		reply:           w.reply,
-		headerOps:       headerOps,
-		clearRouteCache: clearRouteCache,
-		body:            body,
-		statusCode:      statusCode,
+func (w *actionWalk) result() (actionResult, error) {
+	headerOps, route, body, statusCode, err := foldPending(w.pending)
+	if err != nil {
+		return actionResult{disposition: DispositionError}, err
 	}
+	return actionResult{
+		disposition: w.resolved(),
+		reply:       w.reply,
+		headerOps:   headerOps,
+		route:       route,
+		body:        body,
+		statusCode:  statusCode,
+	}, nil
 }
 
 // halted reports whether the walk stopped. These three dispositions are the
@@ -505,6 +511,9 @@ func (e *Engine) walkRequest(ctx context.Context, st *filter.Stream, units []Uni
 		}
 		if act.Kind() == filter.KindNeedBody {
 			walk.pending = append(walk.pending, act.Mutations()...)
+			if _, err := foldRoute(walk.pending); err != nil {
+				return walk, err
+			}
 			walk.record(p, filter.ActionNeedBody)
 			if body == nil {
 				walk.needsBody = true
@@ -608,11 +617,14 @@ func (e *Engine) EvalRequestBody(ctx context.Context, st *filter.Stream, prior *
 		walk.scope = remaining.scope
 		err = walkErr
 	}
-	reduced := walk.result()
+	reduced, routeErr := walk.result()
+	if err == nil {
+		err = routeErr
+	}
 	res.Disposition = reduced.disposition
 	res.Reply = reduced.reply
 	res.HeaderOps = reduced.headerOps
-	res.ClearRouteCache = reduced.clearRouteCache
+	res.Route = reduced.route
 	res.Body = reduced.body
 	res.ResponseScope = walk.scope
 	return res, err
@@ -641,7 +653,10 @@ func (e *Engine) EvalResponseHeaders(ctx context.Context, st *filter.Stream, uni
 	ctx, cancel := e.withBudget(ctx)
 	defer cancel()
 	walk, err := e.walkResponse(ctx, st, units, evalCursor{}, scope, o.body)
-	reduced := walk.result()
+	reduced, routeErr := walk.result()
+	if err == nil {
+		err = routeErr
+	}
 	res.Disposition = reduced.disposition
 	res.Reply = reduced.reply
 	res.HeaderOps = reduced.headerOps
@@ -739,7 +754,10 @@ func (e *Engine) EvalResponseBody(ctx context.Context, st *filter.Stream, prior 
 		walk.adopt(remaining.actionWalk)
 		err = walkErr
 	}
-	reduced := walk.result()
+	reduced, routeErr := walk.result()
+	if err == nil {
+		err = routeErr
+	}
 	res.Disposition = reduced.disposition
 	res.Reply = reduced.reply
 	res.HeaderOps = reduced.headerOps
@@ -808,6 +826,13 @@ func validateAction(reg filter.Registration, phase filter.Phase, act filter.Acti
 		return fmt.Errorf("filter %q returned unknown action kind %d", reg.Name, act.Kind())
 	}
 	for _, m := range act.Mutations() {
+		if err := m.Route.Validate(); err != nil {
+			return fmt.Errorf("filter %q returned invalid route mutation: %w", reg.Name, err)
+		}
+		// Target selection belongs to request headers, before forwarding.
+		if m.Route != nil && m.Route.Upstream != nil && phase != filter.PhaseRequestHeaders {
+			return fmt.Errorf("filter %q returned an upstream target outside request headers", reg.Name)
+		}
 		for _, op := range m.HeaderOps {
 			if strings.EqualFold(op.Name, ":status") {
 				return fmt.Errorf("filter %q returned :status as a header mutation; use Mutation.StatusCode", reg.Name)
@@ -819,7 +844,7 @@ func validateAction(reg filter.Registration, phase filter.Phase, act filter.Acti
 				return fmt.Errorf("filter %q returned a response status mutation from a request phase", reg.Name)
 			}
 		case filter.PhaseResponseHeaders, filter.PhaseResponseBody:
-			if m.ClearRouteCache {
+			if m.Route != nil && m.Route.ClearCache {
 				return fmt.Errorf("filter %q asked to clear the route cache from a response phase; routing is already resolved", reg.Name)
 			}
 			if m.StatusCode != nil && (*m.StatusCode < 200 || *m.StatusCode > 599) {
@@ -841,17 +866,12 @@ func (e *Engine) validateUnits(units []Unit) error {
 }
 
 // foldPending computes the net effect of one walk's accumulated mutations.
-func foldPending(pending []filter.Mutation) (ops []filter.HeaderOp, clearRouteCache bool, body []byte, statusCode *int) {
-	return fold(pending), anyClearRouteCache(pending), lastBodyMutation(pending), lastStatusMutation(pending)
-}
-
-func anyClearRouteCache(muts []filter.Mutation) bool {
-	for _, m := range muts {
-		if m.ClearRouteCache {
-			return true
-		}
+func foldPending(pending []filter.Mutation) (ops []filter.HeaderOp, route *filter.RouteMutation, body []byte, statusCode *int, err error) {
+	route, err = foldRoute(pending)
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
-	return false
+	return fold(pending), route, lastBodyMutation(pending), lastStatusMutation(pending), nil
 }
 
 // lastBodyMutation returns the last non-nil body replacement in execution

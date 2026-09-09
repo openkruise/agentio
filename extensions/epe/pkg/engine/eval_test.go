@@ -1347,7 +1347,7 @@ func TestEvalResponseHeaders_RejectsUnsupportedActions(t *testing.T) {
 		{name: "needbody", act: filter.NeedBody(), wantMsg: "response-body support"},
 		{
 			name:    "continue carrying clear-route-cache",
-			act:     filter.Continue(filter.Mutation{ClearRouteCache: true}),
+			act:     filter.Continue(filter.Mutation{Route: &filter.RouteMutation{ClearCache: true}}),
 			wantMsg: "route cache",
 		},
 	} {

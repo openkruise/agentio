@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dns
+package controller
 
 import (
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"

@@ -95,7 +95,7 @@ func snapshotFromStream(st *filter.Stream) *sign.RequestSnapshot {
 }
 
 // buildMutations converts a resign result into plain mutations. A :path
-// rewrite goes through SetPath so ClearRouteCache is forced.
+// rewrite updates the signature while preserving the selected route.
 func buildMutations(res *sign.ResignResult) []filter.Mutation {
 	var m filter.Mutation
 	for _, h := range res.SetHeaders {
@@ -106,7 +106,7 @@ func buildMutations(res *sign.ResignResult) []filter.Mutation {
 	}
 	muts := []filter.Mutation{m}
 	if res.NewPath != nil {
-		muts = append(muts, filter.SetPath(*res.NewPath))
+		muts = append(muts, filter.SetPath(*res.NewPath, false))
 	}
 	return muts
 }

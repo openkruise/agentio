@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dns
+package controller
 
 import (
 	"context"
+	"github.com/openkruise/agentio/pkg/dns"
 	"net/netip"
 	"testing"
 	"time"
@@ -36,8 +37,8 @@ func TestReferencesRetainSharedHostnameUntilLastOwnerIsDeleted(t *testing.T) {
 	policies := krt.NewStaticCollection[model.TrafficPolicy](nil, nil, options...)
 	configurations := krt.NewStaticCollection[model.AgentioConfiguration](nil, nil, options...)
 	references := NewReferences(policies, configurations, options...)
-	resolver, err := New(ctx, Options{RefreshInterval: time.Hour}, func(context.Context, string) (LookupResult, error) {
-		return LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}, nil
+	resolver, err := New(ctx, Options{RefreshInterval: time.Hour}, func(context.Context, string) (dns.LookupResult, error) {
+		return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}, nil
 	}, options...)
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +79,8 @@ func TestTrackUnregisterStopsEvents(t *testing.T) {
 	ctx := t.Context()
 	options := []krt.CollectionOption{krt.WithStop(ctx.Done())}
 	references := krt.NewStaticCollection[Reference](nil, nil, options...)
-	resolver, err := New(ctx, Options{RefreshInterval: time.Hour}, func(context.Context, string) (LookupResult, error) {
-		return LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}, nil
+	resolver, err := New(ctx, Options{RefreshInterval: time.Hour}, func(context.Context, string) (dns.LookupResult, error) {
+		return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}, nil
 	}, options...)
 	if err != nil {
 		t.Fatal(err)

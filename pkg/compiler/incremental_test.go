@@ -34,7 +34,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
-	resolverdns "github.com/openkruise/agentio/pkg/dns"
+	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"

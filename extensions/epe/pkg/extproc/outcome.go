@@ -37,7 +37,7 @@ const (
 	// singletons, a bare ack, a trailers ack, or a response whose only content
 	// is a ModeOverride.
 	effectNone messageEffect = iota
-	// effectMutated carries a header, body, or status change.
+	// effectMutated carries a header, body, status, or upstream target change.
 	effectMutated
 	// effectBlocked is an ImmediateResponse: the message never goes anywhere.
 	effectBlocked
@@ -53,17 +53,21 @@ func (e *messageEffect) observe(other messageEffect) {
 // classifyResponse reports what resp tells Envoy to do.
 //
 // ModeOverride is deliberately not consulted: asking for a body changes no
-// message. ClearRouteCache is likewise not consulted — the empty-mutation
-// guards in translate.go (:49, :71, :94, :114) make a response carrying only a
-// route-cache flag unreachable, so it would be a judgement about an
-// impossible message.
+// message. ClearRouteCache alone is also not a message modification. An
+// explicit upstream in request metadata counts as a target change sent to Envoy.
 func classifyResponse(resp *extProcPb.ProcessingResponse) messageEffect {
 	switch r := resp.GetResponse().(type) {
 	case *extProcPb.ProcessingResponse_ImmediateResponse:
 		return effectBlocked
 	case *extProcPb.ProcessingResponse_RequestHeaders:
+		if responseUpstream(resp) != nil {
+			return effectMutated
+		}
 		return commonEffect(r.RequestHeaders.GetResponse())
 	case *extProcPb.ProcessingResponse_RequestBody:
+		if responseUpstream(resp) != nil {
+			return effectMutated
+		}
 		return commonEffect(r.RequestBody.GetResponse())
 	case *extProcPb.ProcessingResponse_ResponseHeaders:
 		return commonEffect(r.ResponseHeaders.GetResponse())

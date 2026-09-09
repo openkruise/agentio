@@ -426,7 +426,7 @@ func TestEvalRejectsPhaseIncompatibleMutations(t *testing.T) {
 			name: "response headers clear route cache",
 			want: "route cache",
 			run: func(t *testing.T) error {
-				regs := responseActionRegs(t, filter.Continue(filter.Mutation{ClearRouteCache: true}), responseBodyPhases)
+				regs := responseActionRegs(t, filter.Continue(filter.Mutation{Route: &filter.RouteMutation{ClearCache: true}}), responseBodyPhases)
 				_, err := NewEngine(regs, 0).EvalResponseHeaders(context.Background(), &filter.Stream{}, unitsFor([][]string{{"cfg"}}), ResponseScope{})
 				return err
 			},

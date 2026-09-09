@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dns
+package controller
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openkruise/agentio/pkg/dns"
 	"github.com/openkruise/agentio/pkg/krt"
 	"istio.io/istio/pkg/util/sets"
 )
@@ -55,7 +56,7 @@ type Options struct {
 	DNSServers      []string
 }
 
-type Lookup func(context.Context, string) (LookupResult, error)
+type Lookup func(context.Context, string) (dns.LookupResult, error)
 
 // Result is the cached DNS answer published into the krt graph, keyed by hostname.
 type Result struct {
@@ -107,11 +108,7 @@ func New(ctx context.Context, options Options, lookup Lookup, collectionOptions 
 		options.MaxConcurrent = 32
 	}
 	if lookup == nil {
-		servers := append([]string(nil), options.DNSServers...)
-		if len(servers) == 0 {
-			servers = systemDNSServers()
-		}
-		lookup = newProtocolLookup(servers, options.LookupTimeout)
+		lookup = newProtocolLookup(options.DNSServers, options.LookupTimeout)
 	}
 	resolver := &Resolver{
 		ctx:     ctx,
@@ -267,4 +264,11 @@ func normalizeAddresses(addresses []netip.Addr) []netip.Addr {
 	}
 	slices.SortFunc(result, func(a, b netip.Addr) int { return a.Compare(b) })
 	return result
+}
+
+func newProtocolLookup(servers []string, timeout time.Duration) Lookup {
+	transport := dns.NewTransport(servers, timeout)
+	return func(ctx context.Context, host string) (dns.LookupResult, error) {
+		return transport.Lookup(ctx, host, dns.DualStack)
+	}
 }

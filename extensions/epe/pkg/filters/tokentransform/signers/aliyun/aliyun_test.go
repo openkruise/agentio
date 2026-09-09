@@ -90,9 +90,12 @@ func TestSignV1RPCPostRewritesPathWithSignature(t *testing.T) {
 		t.Fatalf("muts = %+v, want header ops + path rewrite", muts)
 	}
 	pathMut := muts[len(muts)-1]
-	if !pathMut.ClearRouteCache || len(pathMut.HeaderOps) != 1 ||
+	if pathMut.Route != nil && pathMut.Route.ClearCache {
+		t.Fatal("signing must not clear the route cache")
+	}
+	if len(pathMut.HeaderOps) != 1 ||
 		pathMut.HeaderOps[0].Name != ":path" || !strings.Contains(pathMut.HeaderOps[0].Value, "Signature=") {
-		t.Fatalf("path mutation = %+v, want :path set with Signature and ClearRouteCache", pathMut)
+		t.Fatalf("path mutation = %+v, want :path set with Signature", pathMut)
 	}
 }
 

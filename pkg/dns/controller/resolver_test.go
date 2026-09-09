@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dns
+package controller
 
 import (
 	"context"
@@ -27,15 +27,17 @@ import (
 	"istio.io/istio/pkg/util/sets"
 
 	"github.com/openkruise/agentio/pkg/krt"
+
+	"github.com/openkruise/agentio/pkg/dns"
 )
 
 func TestResolverRefreshesWithoutBlockingCompile(t *testing.T) {
 	ctx := t.Context()
 	var calls atomic.Int32
 	resolver, err := New(ctx, Options{RefreshInterval: 20 * time.Millisecond, LookupTimeout: time.Second, MaxConcurrent: 2},
-		func(context.Context, string) (LookupResult, error) {
+		func(context.Context, string) (dns.LookupResult, error) {
 			calls.Add(1)
-			return LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.9")}}, nil
+			return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.9")}}, nil
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +100,8 @@ func TestResolverDropsUnreferencedColdEntryAfterLookupFailure(t *testing.T) {
 	resolver := &Resolver{
 		ctx:     t.Context(),
 		options: Options{RefreshInterval: time.Hour, LookupTimeout: time.Second},
-		lookup: func(context.Context, string) (LookupResult, error) {
-			return LookupResult{}, fmt.Errorf("DNS unavailable")
+		lookup: func(context.Context, string) (dns.LookupResult, error) {
+			return dns.LookupResult{}, fmt.Errorf("DNS unavailable")
 		},
 		entries: map[string]*entry{host: item},
 		results: krt.NewStaticCollection[Result](nil, nil),
@@ -224,14 +226,14 @@ func TestResolverSchedulesFromAnswerTTLAndPreservesOnFailure(t *testing.T) {
 	ctx := t.Context()
 	var phase atomic.Int32
 	resolver, err := New(ctx, Options{RefreshInterval: time.Hour, LookupTimeout: time.Second, MaxConcurrent: 1},
-		func(context.Context, string) (LookupResult, error) {
+		func(context.Context, string) (dns.LookupResult, error) {
 			if phase.Load() == 0 {
-				return LookupResult{
+				return dns.LookupResult{
 					Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.20")},
 					TTL:       30 * time.Second,
 				}, nil
 			}
-			return LookupResult{}, fmt.Errorf("temporary DNS failure")
+			return dns.LookupResult{}, fmt.Errorf("temporary DNS failure")
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -301,9 +303,9 @@ func TestResolverWakesForAnswerTTLBeforeFallbackInterval(t *testing.T) {
 	ctx := t.Context()
 	var calls atomic.Int32
 	resolver, err := New(ctx, Options{RefreshInterval: time.Hour, LookupTimeout: time.Second, MaxConcurrent: 1},
-		func(context.Context, string) (LookupResult, error) {
+		func(context.Context, string) (dns.LookupResult, error) {
 			call := calls.Add(1)
-			return LookupResult{
+			return dns.LookupResult{
 				Addresses: []netip.Addr{netip.AddrFrom4([4]byte{192, 0, 2, byte(call)})},
 				TTL:       10 * time.Second,
 			}, nil

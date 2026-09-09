@@ -32,8 +32,9 @@ import (
 
 // routeAffectingHeaders force clear_route_cache: a rewrite of any of these
 // silently misses routing when an earlier filter cached the route.
+// Path rewrites are excluded: their cache behavior is explicitly selected
+// through Route.ClearCache, including when SetPath is used.
 var routeAffectingHeaders = map[string]bool{
-	":path":      true,
 	":authority": true,
 	":method":    true,
 	":scheme":    true,
@@ -46,21 +47,22 @@ func translateRequestHeadersResult(reqHeadersRes *engine.RequestHeadersResult, l
 	if reqHeadersRes.Disposition == engine.DispositionBlocked {
 		return []*extProcPb.ProcessingResponse{immediateFromReply(reqHeadersRes.Reply)}
 	}
-	if len(reqHeadersRes.HeaderOps) == 0 && reqHeadersRes.Body == nil {
+	clearCache := reqHeadersRes.Route != nil && reqHeadersRes.Route.ClearCache
+	if len(reqHeadersRes.HeaderOps) == 0 && reqHeadersRes.Body == nil && !clearCache {
 		if reqHeadersRes.Disposition == engine.DispositionPassthrough {
 			loggerD.Info("no filter produced mutations; passthrough", "pod", peer.Pod.String())
 		}
-		return defaultPassThrough
+		return []*extProcPb.ProcessingResponse{applyRouteMutation(defaultPassThrough[0], reqHeadersRes.Route)}
 	}
 	common := commonResponse(reqHeadersRes.HeaderOps, reqHeadersRes.Body, nil,
-		reqHeadersRes.ClearRouteCache, true, true)
-	return []*extProcPb.ProcessingResponse{{
+		clearCache, true, true)
+	return []*extProcPb.ProcessingResponse{applyRouteMutation(&extProcPb.ProcessingResponse{
 		Response: &extProcPb.ProcessingResponse_RequestHeaders{
 			RequestHeaders: &extProcPb.HeadersResponse{
 				Response: common,
 			},
 		},
-	}}
+	}, reqHeadersRes.Route)}
 }
 
 // translateRequestBodyResult maps a RequestBodyResult to the body-phase response list.
@@ -68,18 +70,19 @@ func translateRequestBodyResult(reqBodyRes *engine.RequestBodyResult) []*extProc
 	if reqBodyRes.Disposition == engine.DispositionBlocked {
 		return []*extProcPb.ProcessingResponse{immediateFromReply(reqBodyRes.Reply)}
 	}
-	if len(reqBodyRes.HeaderOps) == 0 && reqBodyRes.Body == nil {
-		return defaultPassThroughBody
+	clearCache := reqBodyRes.Route != nil && reqBodyRes.Route.ClearCache
+	if len(reqBodyRes.HeaderOps) == 0 && reqBodyRes.Body == nil && !clearCache {
+		return []*extProcPb.ProcessingResponse{applyRouteMutation(defaultPassThroughBody[0], reqBodyRes.Route)}
 	}
 	common := commonResponse(reqBodyRes.HeaderOps, reqBodyRes.Body, nil,
-		reqBodyRes.ClearRouteCache, false, true)
-	return []*extProcPb.ProcessingResponse{{
+		clearCache, false, true)
+	return []*extProcPb.ProcessingResponse{applyRouteMutation(&extProcPb.ProcessingResponse{
 		Response: &extProcPb.ProcessingResponse_RequestBody{
 			RequestBody: &extProcPb.BodyResponse{
 				Response: common,
 			},
 		},
-	}}
+	}, reqBodyRes.Route)}
 }
 
 // translateResponseHeadersResult emits a blocking reply, response mutations,

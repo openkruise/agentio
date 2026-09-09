@@ -13,17 +13,47 @@
 // limitations under the License.
 package filter
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
-// :path rewrites silently miss routing unless the route cache is cleared;
-// the helper must force it so no filter can forget.
-func TestSetPathSetsClearRouteCache(t *testing.T) {
-	m := SetPath("/new")
-	if !m.ClearRouteCache {
-		t.Error("SetPath must set ClearRouteCache")
+func TestMutationEqualComparesRouteValues(t *testing.T) {
+	address := netip.MustParseAddrPort("192.0.2.1:443")
+	same := address
+	different := netip.MustParseAddrPort("192.0.2.2:443")
+	mutation := func(a *netip.AddrPort) Mutation {
+		return Mutation{Route: &RouteMutation{Upstream: &UpstreamTarget{Address: a}}}
 	}
-	if len(m.HeaderOps) != 1 || m.HeaderOps[0].Kind != HeaderSet || m.HeaderOps[0].Name != ":path" || m.HeaderOps[0].Value != "/new" {
-		t.Errorf("SetPath ops = %+v", m.HeaderOps)
+	if !mutation(&address).equal(mutation(&same)) {
+		t.Fatal("equal addresses at different pointers must compare equal")
+	}
+	if mutation(&address).equal(mutation(&different)) || mutation(&address).equal(mutation(nil)) {
+		t.Fatal("different or missing addresses must not compare equal")
+	}
+	if mutation(&address).equal(Mutation{}) {
+		t.Fatal("a target mutation must not equal an absent route")
+	}
+	if (Mutation{Route: &RouteMutation{ClearCache: true}}).equal(Mutation{Route: &RouteMutation{}}) {
+		t.Fatal("clearing the route cache must affect mutation equality")
+	}
+	if err := mutation(nil).Route.Validate(); err == nil {
+		t.Fatal("an empty upstream target must be rejected")
+	}
+	if err := mutation(&address).Route.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetPathHonorsClearCache(t *testing.T) {
+	for _, clear := range []bool{false, true} {
+		m := SetPath("/new", clear)
+		if m.Route == nil || m.Route.ClearCache != clear {
+			t.Errorf("SetPath must preserve clearCache=%v", clear)
+		}
+		if len(m.HeaderOps) != 1 || m.HeaderOps[0].Kind != HeaderSet || m.HeaderOps[0].Name != ":path" || m.HeaderOps[0].Value != "/new" {
+			t.Errorf("SetPath ops = %+v", m.HeaderOps)
+		}
 	}
 }
 
@@ -37,7 +67,7 @@ func TestHeaderHelpers(t *testing.T) {
 	if op := RemoveHeader("a").HeaderOps[0]; op != (HeaderOp{Kind: HeaderRemove, Name: "a"}) {
 		t.Errorf("RemoveHeader op = %+v", op)
 	}
-	if SetHeader("a", "1").ClearRouteCache {
+	if m := SetHeader("a", "1"); m.Route != nil && m.Route.ClearCache {
 		t.Error("plain SetHeader must not clear the route cache")
 	}
 }

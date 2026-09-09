@@ -29,6 +29,24 @@ type LookupResult struct {
 	TTL       time.Duration
 }
 
+// Transport performs DNS protocol queries without caching. It does not consult
+// hosts files or search domains.
+type Transport struct {
+	servers []string
+	timeout time.Duration
+}
+
+// NewTransport uses resolv.conf nameservers when servers is empty.
+func NewTransport(servers []string, timeout time.Duration) *Transport {
+	if len(servers) == 0 {
+		servers = systemDNSServers()
+	}
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	return &Transport{servers: append([]string(nil), servers...), timeout: timeout}
+}
+
 func systemDNSServers() []string {
 	configuration, err := mdns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil || len(configuration.Servers) == 0 {
@@ -45,21 +63,33 @@ func systemDNSServers() []string {
 	return servers
 }
 
-func newProtocolLookup(servers []string, timeout time.Duration) Lookup {
-	return func(ctx context.Context, host string) (LookupResult, error) {
-		result := LookupResult{}
-		for _, queryType := range []uint16{mdns.TypeA, mdns.TypeAAAA} {
-			addresses, ttl, err := queryServers(ctx, servers, timeout, host, queryType)
-			if err != nil {
-				return LookupResult{}, err
-			}
-			result.Addresses = append(result.Addresses, addresses...)
-			if ttl > 0 && (result.TTL == 0 || ttl < result.TTL) {
-				result.TTL = ttl
-			}
-		}
-		return result, nil
+// Lookup returns addresses in DNS response order and their minimum TTL.
+func (t *Transport) Lookup(ctx context.Context, host string, family Family) (LookupResult, error) {
+	var types []uint16
+	switch family {
+	case IPv4Only:
+		types = []uint16{mdns.TypeA}
+	case IPv6Only:
+		types = []uint16{mdns.TypeAAAA}
+	case DualStack:
+		types = []uint16{mdns.TypeA, mdns.TypeAAAA}
+	default:
+		return LookupResult{}, ErrInvalidFamily
 	}
+	result := LookupResult{}
+	ttlSet := false
+	for _, queryType := range types {
+		addresses, ttl, err := queryServers(ctx, t.servers, t.timeout, host, queryType)
+		if err != nil {
+			return LookupResult{}, err
+		}
+		result.Addresses = append(result.Addresses, addresses...)
+		if !ttlSet || ttl < result.TTL {
+			result.TTL = ttl
+		}
+		ttlSet = true
+	}
+	return result, nil
 }
 
 func queryServers(
@@ -78,6 +108,10 @@ func queryServers(
 	var lastErr error
 	for _, server := range servers {
 		response, _, err := client.ExchangeContext(ctx, request, server)
+		if err == nil && response.Truncated {
+			tcp := &mdns.Client{Net: "tcp", Timeout: timeout}
+			response, _, err = tcp.ExchangeContext(ctx, request, server)
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -91,9 +125,20 @@ func queryServers(
 		}
 		addresses := make([]netip.Addr, 0, len(response.Answer))
 		var ttl time.Duration
+		ttlSet := false
+		includeTTL := func(seconds uint32) {
+			value := time.Duration(seconds) * time.Second
+			if !ttlSet || value < ttl {
+				ttl = value
+			}
+			ttlSet = true
+		}
 		for _, answer := range response.Answer {
 			var address netip.Addr
 			switch record := answer.(type) {
+			case *mdns.CNAME:
+				includeTTL(record.Hdr.Ttl)
+				continue
 			case *mdns.A:
 				if queryType != mdns.TypeA {
 					continue
@@ -111,10 +156,7 @@ func queryServers(
 				continue
 			}
 			addresses = append(addresses, address.Unmap())
-			recordTTL := time.Duration(answer.Header().Ttl) * time.Second
-			if ttl == 0 || recordTTL < ttl {
-				ttl = recordTTL
-			}
+			includeTTL(answer.Header().Ttl)
 		}
 		if len(addresses) == 0 {
 			ttl = negativeTTL(response)

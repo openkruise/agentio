@@ -47,15 +47,12 @@ type Mutation struct {
 	// StatusCode is a response-only status replacement. nil leaves the
 	// upstream status unchanged.
 	StatusCode *int
-	// ClearRouteCache must be set when :path/:authority/:method/:scheme/
-	// host change, or an earlier filter's cached route silently wins. The
-	// helpers below set it for you; the adapter also forces it for those
-	// keys.
-	ClearRouteCache bool
+	// Route is request-only. nil leaves routing unchanged.
+	Route *RouteMutation
 }
 
 func (m Mutation) equal(o Mutation) bool {
-	return m.ClearRouteCache == o.ClearRouteCache &&
+	return m.Route.equal(o.Route) &&
 		equalIntPointer(m.StatusCode, o.StatusCode) &&
 		slices.Equal(m.Body, o.Body) &&
 		slices.Equal(m.HeaderOps, o.HeaderOps)
@@ -83,13 +80,12 @@ func RemoveHeader(name string) Mutation {
 	return Mutation{HeaderOps: []HeaderOp{{Kind: HeaderRemove, Name: name}}}
 }
 
-// SetPath rewrites :path. :path SET is allowed by Envoy's default mutation
-// rules (unlike :method/:authority/:scheme/host); route-affecting, so
-// ClearRouteCache is forced here rather than left to each filter.
-func SetPath(path string) Mutation {
+// SetPath rewrites :path. The caller explicitly chooses whether Envoy should
+// re-evaluate the route; changing the path alone does not clear its cache.
+func SetPath(path string, clearCache bool) Mutation {
 	return Mutation{
-		HeaderOps:       []HeaderOp{{Kind: HeaderSet, Name: ":path", Value: path}},
-		ClearRouteCache: true,
+		HeaderOps: []HeaderOp{{Kind: HeaderSet, Name: ":path", Value: path}},
+		Route:     &RouteMutation{ClearCache: clearCache},
 	}
 }
 

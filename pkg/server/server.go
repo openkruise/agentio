@@ -31,7 +31,7 @@ import (
 	securityapi "istio.io/api/security/v1alpha1"
 
 	"github.com/openkruise/agentio/pkg/compiler"
-	resolverdns "github.com/openkruise/agentio/pkg/dns"
+	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/gatewaydeployer"
 	"github.com/openkruise/agentio/pkg/krt"
