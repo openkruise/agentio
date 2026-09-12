@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"istio.io/api/annotation"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/log"
 )
@@ -77,7 +79,7 @@ func PodPartiallyEnrolled(pod *corev1.Pod) bool {
 }
 
 func podHasSidecar(podAnnotations map[string]string) bool {
-	if _, f := podAnnotations[annotation.SidecarStatus.Name]; f {
+	if _, f := agentio.Annotation(podAnnotations, annotation.SidecarStatus.Name); f {
 		return true
 	}
 	return false

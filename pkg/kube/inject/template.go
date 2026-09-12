@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/util/protomarshal"
@@ -48,6 +50,7 @@ func createInjectionFuncmap() template.FuncMap {
 		"excludeInterfaces":   excludeInterfaces,
 		"applicationPorts":    applicationPorts,
 		"annotation":          getAnnotation,
+		"agentioTraffic":      agentioTraffic,
 		"valueOrDefault":      valueOrDefault,
 		"toJSON":              toJSON,
 		"fromJSON":            fromJSON,
@@ -465,4 +468,11 @@ func omitNilInternal(v any) (any, bool) {
 	default:
 		return v, false
 	}
+}
+
+// agentioTraffic provides aliases only in the template input. It does
+// not add compatibility annotations to the user's Pod.
+func agentioTraffic(meta metav1.ObjectMeta) metav1.ObjectMeta {
+	meta.Annotations = agentio.NormalizeAnnotations(meta.Annotations)
+	return meta
 }

@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +28,7 @@ import (
 	meshconfig "istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/pilot/pkg/util/network"
 	"istio.io/istio/pkg/bootstrap"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/config/validation/agent"
 	"istio.io/istio/pkg/env"
@@ -157,7 +159,7 @@ func applyAnnotations(config *meshconfig.ProxyConfig, annos map[string]string) *
 	if v, f := annos[annotation.SidecarDiscoveryAddress.Name]; f {
 		config.DiscoveryAddress = v
 	}
-	if v, f := annos[annotation.SidecarStatusPort.Name]; f {
+	if v, f := agentio.Annotation(annos, annotation.SidecarStatusPort.Name); f {
 		p, err := strconv.Atoi(v)
 		if err != nil {
 			log.Errorf("Invalid annotation %v=%v: %v", annotation.SidecarStatusPort.Name, v, err)

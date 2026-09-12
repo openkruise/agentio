@@ -170,3 +170,37 @@ func TestAgentioWaypointPolicyStore(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentioWaypointCredentialMounts(t *testing.T) {
+	deployment := renderAgentioWaypointDeployment(t, true, false)
+	spec := deployment.Spec.Template.Spec
+	proxy := spec.Containers[0]
+	envs := map[string]string{}
+	for _, env := range proxy.Env {
+		envs[env.Name] = env.Value
+	}
+	if envs["JWT_PATH"] != "/var/run/secrets/tokens/agentio-token" || envs["CA_ROOT_CA"] != "/var/run/secrets/agentio/root-cert.pem" || envs["XDS_ROOT_CA"] != envs["CA_ROOT_CA"] {
+		t.Fatalf("credential env = %v", envs)
+	}
+	volumes := map[string]corev1.Volume{}
+	for _, volume := range spec.Volumes {
+		volumes[volume.Name] = volume
+	}
+	mounts := map[string]string{}
+	for _, mount := range proxy.VolumeMounts {
+		if _, ok := volumes[mount.Name]; !ok {
+			t.Fatalf("missing volume %q", mount.Name)
+		}
+		mounts[mount.Name] = mount.MountPath
+	}
+	token := volumes["agentio-token"].Projected
+	if token == nil || len(token.Sources) != 1 || token.Sources[0].ServiceAccountToken == nil {
+		t.Fatal("missing projected token")
+	}
+	if mounts["agentio-token"]+"/"+token.Sources[0].ServiceAccountToken.Path != envs["JWT_PATH"] {
+		t.Fatal("JWT path does not match projected token")
+	}
+	if volumes["agentio-ca-certs"].ConfigMap == nil || mounts["agentio-ca-certs"]+"/root-cert.pem" != envs["CA_ROOT_CA"] {
+		t.Fatal("CA path does not match ConfigMap mount")
+	}
+}

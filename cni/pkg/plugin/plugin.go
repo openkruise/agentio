@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,6 +41,7 @@ import (
 	"istio.io/api/label"
 	"istio.io/istio/cni/pkg/constants"
 	"istio.io/istio/cni/pkg/util"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/file"
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/util/sets"
@@ -312,9 +314,9 @@ func doAddRun(args *skel.CmdArgs, conf *Config, kClient kubernetes.Interface, ru
 		return k8sErr
 	}
 
-	// Check if istio-init container is present; in that case exclude pod
-	if pi.Containers.Contains(ISTIOINIT) {
-		log.Infof("excluded due to being already injected with istio-init container")
+	// Pods with a traffic init container program their own rules.
+	if pi.Containers.Contains(ISTIOINIT) || pi.Containers.Contains("agentio-init") {
+		log.Infof("excluded due to being already injected with a traffic init container")
 		return nil
 	}
 
@@ -350,7 +352,7 @@ func doAddRun(args *skel.CmdArgs, conf *Config, kClient kubernetes.Interface, ru
 		}
 	}
 
-	if _, ok := pi.Annotations[sidecarStatusKey]; !ok {
+	if _, ok := agentio.Annotation(pi.Annotations, sidecarStatusKey); !ok {
 		log.Infof("excluded due to not containing sidecar annotation")
 		return nil
 	}

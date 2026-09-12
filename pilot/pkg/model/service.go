@@ -46,6 +46,7 @@ import (
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	"istio.io/istio/pkg/cluster"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/labels"
@@ -810,7 +811,8 @@ func GetTrafficDistribution(specValue *string, annotations map[string]string) Tr
 	}
 	// The TrafficDistribution field is quite new, so we allow a legacy annotation option as well
 	// This also has some custom types
-	trafficDistributionAnnotationValue := strings.ToLower(annotations[annotation.NetworkingTrafficDistribution.Name])
+	trafficDistributionAnnotationValue, _ := agentio.Annotation(annotations, annotation.NetworkingTrafficDistribution.Name)
+	trafficDistributionAnnotationValue = strings.ToLower(trafficDistributionAnnotationValue)
 	switch trafficDistributionAnnotationValue {
 	case strings.ToLower(corev1.ServiceTrafficDistributionPreferClose), strings.ToLower(corev1.ServiceTrafficDistributionPreferSameZone):
 		return TrafficDistributionPreferSameZone

@@ -44,6 +44,8 @@ var (
 	// Provider for XDS auth, e.g., gcp. By default, it is empty, meaning no auth provider.
 	xdsAuthProvider = env.Register("XDS_AUTH_PROVIDER", "", "Provider for XDS auth")
 
+	jwtPathEnv = env.Register("JWT_PATH", constants.ThirdPartyJwtPath,
+		"Path to the projected service-account JWT used to authenticate with the CA and XDS server.")
 	jwtPolicy = env.Register("JWT_POLICY", jwt.PolicyThirdParty,
 		"The JWT validation policy.")
 	// ProvCert is the environment controlling the use of pre-provisioned certs, for VMs.

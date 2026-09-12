@@ -34,6 +34,8 @@ spec:
         - --keepaliveMaxServerConnectionAge
         - 30m
         env:
+        - name: JWT_PATH
+          value: /var/run/secrets/tokens/agentio-token
         - name: REVISION
           value: default
         - name: PILOT_CERT_PROVIDER
@@ -178,7 +180,7 @@ spec:
           runAsNonRoot: true
         volumeMounts:
         - mountPath: /var/run/secrets/tokens
-          name: istio-token
+          name: agentio-token
           readOnly: true
         - mountPath: /var/run/secrets/istio-dns
           name: local-certs
@@ -199,13 +201,13 @@ spec:
       - emptyDir:
           medium: Memory
         name: local-certs
-      - name: istio-token
+      - name: agentio-token
         projected:
           sources:
           - serviceAccountToken:
               audience: istio-ca
               expirationSeconds: 43200
-              path: istio-token
+              path: agentio-token
 ---
 apiVersion: v1
 kind: Service

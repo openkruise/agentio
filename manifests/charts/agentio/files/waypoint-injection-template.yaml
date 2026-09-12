@@ -136,6 +136,12 @@ spec:
               fieldPath: spec.nodeName
         - name: PILOT_CERT_PROVIDER
           value: {{ .Values.global.pilotCertProvider }}
+        - name: JWT_PATH
+          value: /var/run/secrets/tokens/agentio-token
+        - name: CA_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
+        - name: XDS_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
         - name: CA_ADDR
         {{- if .Values.global.caAddress }}
           value: {{ .Values.global.caAddress }}
@@ -263,27 +269,27 @@ spec:
         volumeMounts:
         - mountPath: /var/run/secrets/workload-spiffe-uds
           name: workload-socket
-        - mountPath: /var/run/secrets/istio
-          name: istiod-ca-cert
+        - mountPath: /var/run/secrets/agentio
+          name: agentio-ca-certs
         - mountPath: /var/lib/istio/data
-          name: istio-data
+          name: agentio-data
         - mountPath: /etc/istio/proxy
-          name: istio-envoy
+          name: agentio-envoy
         - mountPath: /var/run/secrets/tokens
-          name: istio-token
+          name: agentio-token
         - mountPath: /etc/istio/pod
-          name: istio-podinfo
+          name: agentio-podinfo
       volumes:
       - emptyDir: {}
         name: workload-socket
       - emptyDir:
           medium: Memory
-        name: istio-envoy
+        name: agentio-envoy
       - emptyDir:
           medium: Memory
         name: go-proxy-envoy
       - emptyDir: {}
-        name: istio-data
+        name: agentio-data
       - emptyDir: {}
         name: go-proxy-data
       - downwardAPI:
@@ -294,15 +300,15 @@ spec:
           - fieldRef:
               fieldPath: metadata.annotations
             path: annotations
-        name: istio-podinfo
-      - name: istio-token
+        name: agentio-podinfo
+      - name: agentio-token
         projected:
           sources:
           - serviceAccountToken:
               audience: istio-ca
               expirationSeconds: 43200
-              path: istio-token
-      - name: istiod-ca-cert
+              path: agentio-token
+      - name: agentio-ca-certs
       {{- if eq (.Values.pilot.env).ENABLE_CLUSTER_TRUST_BUNDLE_API true }}
         projected:
           sources:
@@ -325,7 +331,7 @@ kind: Service
 metadata:
   annotations:
     {{ toJsonMap
-      (strdict "networking.istio.io/traffic-distribution" "PreferClose")
+      (strdict "networking.agentio.kruise.io/traffic-distribution" "PreferClose")
       (omit .InfrastructureAnnotations
         "kubectl.kubernetes.io/last-applied-configuration"
         "gateway.istio.io/name-override"

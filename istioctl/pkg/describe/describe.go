@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -59,6 +60,7 @@ import (
 	pilotcontroller "istio.io/istio/pilot/pkg/serviceregistry/kube/controller"
 	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/agentio"
 	analyzerutil "istio.io/istio/pkg/config/analysis/analyzers/util"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
@@ -203,7 +205,7 @@ func GetRevisionFromPodAnnotation(anno klabels.Set) string {
 	if v, ok := anno[label.IoIstioRev.Name]; ok {
 		return v
 	}
-	statusString := anno.Get(apiannotation.SidecarStatus.Name)
+	statusString, _ := agentio.Annotation(anno, apiannotation.SidecarStatus.Name)
 	var injectionStatus inject.SidecarInjectionStatus
 	if err := json.Unmarshal([]byte(statusString), &injectionStatus); err != nil {
 		return ""

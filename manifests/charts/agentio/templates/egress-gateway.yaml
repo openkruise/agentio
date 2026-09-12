@@ -37,10 +37,10 @@ spec:
         prometheus.io/port: "15020"
         prometheus.io/scrape: "true"
         {{- with ($gw.statsFlushInterval | default $.Values.egressGateway.statsFlushInterval) }}
-        sidecar.istio.io/statsFlushInterval: {{ . | quote }}
+        sidecar.agentio.kruise.io/stats-flush-interval: {{ . | quote }}
         {{- end }}
         {{- with ($gw.statsEvictionInterval | default $.Values.egressGateway.statsEvictionInterval) }}
-        sidecar.istio.io/statsEvictionInterval: {{ . | quote }}
+        sidecar.agentio.kruise.io/stats-eviction-interval: {{ . | quote }}
         {{- end }}
       labels:
         gateway.networking.k8s.io/gateway-name: {{ $gw.name }}
@@ -76,6 +76,12 @@ spec:
               fieldPath: spec.nodeName
         - name: PILOT_CERT_PROVIDER
           value: istiod
+        - name: JWT_PATH
+          value: /var/run/secrets/tokens/agentio-token
+        - name: CA_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
+        - name: XDS_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
         - name: CA_ADDR
           value: {{ include "agentio.controller.name" $ }}.{{ include "agentio.namespace" $ }}.svc:15012
         - name: POD_NAME
@@ -210,14 +216,14 @@ spec:
         volumeMounts:
         - mountPath: /var/run/secrets/workload-spiffe-uds
           name: workload-socket
-        - mountPath: /var/run/secrets/istio
-          name: istiod-ca-cert
+        - mountPath: /var/run/secrets/agentio
+          name: agentio-ca-certs
         - mountPath: /var/lib/istio/data
-          name: istio-data
+          name: agentio-data
         - mountPath: /etc/istio/proxy
-          name: istio-envoy
+          name: agentio-envoy
         - mountPath: /var/run/secrets/tokens
-          name: istio-token
+          name: agentio-token
         - mountPath: /etc/istio/pod
           name: egress-podinfo
       dnsPolicy: ClusterFirst
@@ -244,12 +250,12 @@ spec:
         name: workload-socket
       - emptyDir:
           medium: Memory
-        name: istio-envoy
+        name: agentio-envoy
       - emptyDir:
           medium: Memory
         name: go-proxy-envoy
       - emptyDir: {}
-        name: istio-data
+        name: agentio-data
       - emptyDir: {}
         name: go-proxy-data
       - downwardAPI:
@@ -264,18 +270,18 @@ spec:
               fieldPath: metadata.annotations
             path: annotations
         name: egress-podinfo
-      - name: istio-token
+      - name: agentio-token
         projected:
           defaultMode: 420
           sources:
           - serviceAccountToken:
               audience: istio-ca
               expirationSeconds: 43200
-              path: istio-token
+              path: agentio-token
       - configMap:
           defaultMode: 420
           name: {{ include "agentio.caCertConfigMap" $ }}
-        name: istiod-ca-cert
+        name: agentio-ca-certs
 ---
 apiVersion: v1
 kind: ServiceAccount

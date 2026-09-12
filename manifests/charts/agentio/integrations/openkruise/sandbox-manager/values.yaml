@@ -150,7 +150,7 @@ agentio:
       targetCPUUtilizationPercentage: 80
     pdbMinAvailable: 1
     terminationGracePeriodSeconds: 30
-    # -- Optional Envoy stats flush/eviction intervals (empty = Istio defaults).
+    # -- Optional Envoy stats flush/eviction intervals (empty = proxy defaults).
     statsFlushInterval: ""
     statsEvictionInterval: ""
     # -- Extra env injected into every gateway proxy container.

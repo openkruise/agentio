@@ -129,6 +129,53 @@ $ export AGENTIO_WORKLOAD_LABEL=curl
 $ export AGENTIO_WORKLOAD_CONTAINER=curl
 ```
 
+## Configure traffic capture
+
+Agentio injects `agentio-init` to configure traffic capture, or
+`agentio-validation` when CNI configures the rules. New OpenKruise Agents
+traffic-proxy injection configurations also use `agentio-init`.
+
+Set traffic annotations on the workload's Pod template before creating Pods:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        traffic.sidecar.agentio.kruise.io/exclude-outbound-ports: "8080,8443"
+```
+
+The annotation names follow the Agentio subdomain and kebab-case convention.
+All keys in the following table use the `traffic.sidecar.agentio.kruise.io/`
+prefix. Their legacy aliases use `traffic.sidecar.istio.io/`.
+
+| Agentio suffix | Legacy suffix |
+| --- | --- |
+| `include-outbound-ip-ranges` | `includeOutboundIPRanges` |
+| `exclude-outbound-ip-ranges` | `excludeOutboundIPRanges` |
+| `include-inbound-ports` | `includeInboundPorts` |
+| `exclude-inbound-ports` | `excludeInboundPorts` |
+| `include-outbound-ports` | `includeOutboundPorts` |
+| `exclude-outbound-ports` | `excludeOutboundPorts` |
+| `exclude-interfaces` | `excludeInterfaces` |
+| `kubevirt-interfaces` | `kubevirtInterfaces` |
+
+Use `agentio.kruise.io/reroute-virtual-interfaces` for virtual interfaces;
+`istio.io/reroute-virtual-interfaces` remains its legacy alias. Prefer this
+setting over the deprecated `kubevirt-interfaces` setting.
+
+Legacy keys remain supported. When both aliases are present, the Agentio key
+wins, including an explicitly empty value. Value formats and traffic capture
+semantics remain the same. Admission injection and Agentio CNI use the same
+precedence rules. Deploy matching control-plane, proxy-init, gateway/proxy, and (when enabled)
+CNI images alongside this chart. The proxy-init image must support the
+`agentio-iptables` command alias. Gateway/proxy images must support `JWT_PATH`
+to read the projected `agentio-token` file. Existing Pods retain
+their current containers and rules until recreated.
+
+See [Chart naming compatibility](../reference/chart-naming-compatibility.md) for
+additional metadata mappings and the remaining data-plane compatibility names.
+
 ## Route traffic through an egress gateway
 
 Follow [Route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md). You can create the gateway with either the Gateway API or the Agentio Helm chart.

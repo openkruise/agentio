@@ -83,7 +83,7 @@ proxy:
 sniTrafficPolicy:
   enabled: false
 
-# -- Lightweight image used only by the istio-init/istio-validation containers
+# -- Lightweight image used only by the agentio-init/agentio-validation containers
 # to configure pod iptables. It contains pilot-agent and iptables/nftables, but
 # does not contain Envoy.
 proxyInit:
@@ -190,7 +190,7 @@ egressGateway:
     targetCPUUtilizationPercentage: 80
   pdbMinAvailable: 1
   terminationGracePeriodSeconds: 30
-  # -- Optional Envoy stats flush/eviction intervals (empty = Istio defaults).
+  # -- Optional Envoy stats flush/eviction intervals (empty = proxy defaults).
   statsFlushInterval: ""
   statsEvictionInterval: ""
   # -- Extra env injected into every gateway proxy container.
@@ -271,8 +271,8 @@ ambient:
       repairPods: true
       labelPods: false
       deletePods: false
-      initContainerName: "istio-validation"
-      brokenPodLabelKey: "cni.istio.io/uninitialized"
+      initContainerName: "agentio-validation"
+      brokenPodLabelKey: "cni.agentio.kruise.io/uninitialized"
       brokenPodLabelValue: "true"
     resources:
       requests:

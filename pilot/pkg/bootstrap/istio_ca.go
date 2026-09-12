@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -76,6 +77,9 @@ type caOptions struct {
 //   K8S root.
 
 var (
+	jwtTokenFile = env.Register("JWT_PATH", securityModel.ThirdPartyJwtPath,
+		"Path to the projected service-account JWT used to discover the CA token issuer and audience.")
+
 	// LocalCertDir replaces the "cert-chain", "signing-cert" and "signing-key" flags in citadel - Istio installer is
 	// requires a secret named "cacerts" with specific files inside.
 	LocalCertDir = env.Register("ROOT_CA_DIR", "./etc/cacerts",
@@ -155,7 +159,7 @@ func (s *Server) RunCA(grpc *grpc.Server) {
 	iss := trustedIssuer.Get()
 	aud := audience.Get()
 
-	token, err := os.ReadFile(securityModel.ThirdPartyJwtPath)
+	token, err := os.ReadFile(jwtTokenFile.Get())
 	if err == nil {
 		tok, err := detectAuthEnv(string(token))
 		if err != nil {

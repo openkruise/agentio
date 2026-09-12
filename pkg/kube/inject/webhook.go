@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,6 +52,7 @@ import (
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/cluster"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/kube"
@@ -517,7 +519,7 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 		}
 	}
 	parsedInjectedStatus := ParsedContainers{}
-	status, alreadyInjected := originalPod.Annotations[annotation.SidecarStatus.Name]
+	status, alreadyInjected := agentio.Annotation(originalPod.Annotations, annotation.SidecarStatus.Name)
 	if alreadyInjected {
 		parsedInjectedStatus = parseStatus(status)
 	}
@@ -603,9 +605,9 @@ func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, prox
 		return
 	}
 
-	// Locate the istio-init or istio-validation container
+	// Locate the traffic init or validation container
 	var initContainer *corev1.Container
-	for _, name := range []string{InitContainerName, ValidationContainerName} {
+	for _, name := range []string{AgentioInitContainerName, InitContainerName, AgentioValidationContainerName, ValidationContainerName} {
 		if container := FindContainer(name, finalPod.Spec.InitContainers); container != nil {
 			initContainer = container
 			break
@@ -613,7 +615,7 @@ func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, prox
 	}
 	if initContainer == nil {
 		// should not happen
-		log.Warn("Could not find either istio-init or istio-validation container")
+		log.Warn("Could not find a traffic init or validation container")
 		return
 	}
 
@@ -621,7 +623,7 @@ func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, prox
 	tproxy := false
 	if proxyConfig.InterceptionMode == meshconfig.ProxyConfig_TPROXY {
 		tproxy = true
-	} else if mode, found := finalPod.Annotations[annotation.SidecarInterceptionMode.Name]; found && mode == "TPROXY" {
+	} else if mode, found := agentio.Annotation(finalPod.Annotations, annotation.SidecarInterceptionMode.Name); found && mode == "TPROXY" {
 		tproxy = true
 	}
 
@@ -637,7 +639,7 @@ func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, prox
 	}
 
 	// Make sure the validation container runs with the same uid/gid as the proxy (init container is untouched, it must run with 0)
-	if !tproxy && initContainer.Name == ValidationContainerName {
+	if !tproxy && (initContainer.Name == ValidationContainerName || initContainer.Name == AgentioValidationContainerName) {
 		if initContainer.SecurityContext == nil {
 			initContainer.SecurityContext = &corev1.SecurityContext{}
 		}
@@ -769,7 +771,14 @@ func applyMetadata(pod *corev1.Pod, injectedPodData corev1.Pod, req InjectionPar
 		pod.Labels[label.TopologyNetwork.Name] = nw
 	}
 	// Add all additional injected annotations. These are overridden if needed
-	pod.Annotations[annotation.SidecarStatus.Name] = getInjectionStatus(injectedPodData.Spec, req.revision)
+	statusKey := annotation.SidecarStatus.Name
+	if injectedPodData.Labels["networking.agents.kruise.io/proxy-type"] == "ztunnel" ||
+		hasContainer(injectedPodData.Spec.InitContainers, AgentioInitContainerName) ||
+		hasContainer(injectedPodData.Spec.InitContainers, AgentioValidationContainerName) {
+		statusKey = agentio.SidecarStatus
+		delete(pod.Annotations, annotation.SidecarStatus.Name)
+	}
+	pod.Annotations[statusKey] = getInjectionStatus(injectedPodData.Spec, req.revision)
 
 	// Deprecated; should be set directly in the template instead
 	for k, v := range req.injectedAnnotations {
@@ -809,14 +818,18 @@ func reorderPod(pod *corev1.Pod, req InjectionParameters) error {
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, EnableCoreDumpName, MoveFirst)
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, ProxyContainerName, MoveFirst)
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, ValidationContainerName, MoveFirst)
+		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, AgentioValidationContainerName, MoveFirst)
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, InitContainerName, MoveFirst)
+		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, AgentioInitContainerName, MoveFirst)
 	} else {
 		// Else, we want iptables setup last so we do not blackhole init containers
 		// This is istio-validation => rest => istio-init (note: only one of istio-init or istio-validation should be present)
 		// Validation container must be first to block any user containers
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, ValidationContainerName, MoveFirst)
+		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, AgentioValidationContainerName, MoveFirst)
 		// Init container must be last to allow any traffic to pass before iptables is setup
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, InitContainerName, MoveLast)
+		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, AgentioInitContainerName, MoveLast)
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, EnableCoreDumpName, MoveLast)
 	}
 
@@ -834,7 +847,7 @@ func applyRewrite(pod *corev1.Pod, req InjectionParameters) error {
 	if rewrite {
 		if prober := DumpAppProbers(pod, req.meshConfig.GetDefaultConfig().GetStatusPort()); prober != "" {
 			// If sidecar.istio.io/status is not present then append instead of merge.
-			_, previouslyInjected := pod.Annotations[annotation.SidecarStatus.Name]
+			_, previouslyInjected := agentio.Annotation(pod.Annotations, annotation.SidecarStatus.Name)
 			sidecar.Env = mergeOrAppendProbers(previouslyInjected, sidecar.Env, prober)
 		}
 		patchRewriteProbe(pod.Annotations, pod, req.meshConfig.GetDefaultConfig().GetStatusPort())
@@ -1222,7 +1235,7 @@ func isSidecarUserMatchingAppUser(pod *corev1.Pod) bool {
 			if containers[i].SecurityContext != nil && containers[i].SecurityContext.RunAsUser != nil {
 				sideCarUser = *containers[i].SecurityContext.RunAsUser
 			}
-		} else if containers[i].Name != ValidationContainerName && containers[i].Name != InitContainerName {
+		} else if containers[i].Name != AgentioValidationContainerName && containers[i].Name != ValidationContainerName && containers[i].Name != InitContainerName && containers[i].Name != AgentioInitContainerName {
 			if containers[i].SecurityContext != nil && containers[i].SecurityContext.RunAsUser != nil {
 				appUser = *containers[i].SecurityContext.RunAsUser
 			}

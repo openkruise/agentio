@@ -8,6 +8,7 @@ metadata:
   namespace: {{ include "agentio.namespace" . }}
 data:
   CURRENT_AGENT_VERSION: {{ .Values.ambient.cni.image.tag | quote }}
+  CNI_AGENT_RUN_DIR: "/var/run/agentio-cni"
   AMBIENT_ENABLED: "true"
   AMBIENT_DNS_CAPTURE: {{ .Values.ambient.cni.dnsCapture | quote }}
   AMBIENT_IPV6: {{ .Values.ambient.cni.ipv6 | quote }}

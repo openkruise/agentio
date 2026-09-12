@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -90,6 +91,7 @@ import (
 	istiofake "istio.io/client-go/pkg/clientset/versioned/fake"
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/schema/collections"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/kube/informerfactory"
@@ -1167,7 +1169,7 @@ func revisionOfPod(pod *v1.Pod) string {
 		return revision
 	}
 	// For pods injected.
-	statusAnno, ok := pod.GetAnnotations()[annotation.SidecarStatus.Name]
+	statusAnno, ok := agentio.Annotation(pod.GetAnnotations(), annotation.SidecarStatus.Name)
 	if !ok {
 		return ""
 	}
