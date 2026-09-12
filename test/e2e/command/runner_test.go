@@ -15,6 +15,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,23 @@ import (
 
 	"github.com/openkruise/agentio/test/e2e/artifacts"
 )
+
+func TestLiveOutputIsNotTruncatedWithArtifactCapture(t *testing.T) {
+	var output bytes.Buffer
+	value := strings.Repeat("complete-stream-", 40)
+	req := helperRequest("print", value)
+	req.Stdout = &output
+	result, err := (Runner{MaxOutputBytes: 16}).Run(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(output.String()) != value {
+		t.Fatal("live output was truncated")
+	}
+	if len(result.Stdout) >= len(value) {
+		t.Fatal("artifact capture is no longer bounded")
+	}
+}
 
 func TestRunnerRedactsCommandAndOutput(t *testing.T) {
 	store := newStore(t)
@@ -120,7 +138,10 @@ func TestCommandHelperProcess(t *testing.T) {
 		fmt.Print(args[1])
 	case "exit":
 		fmt.Fprint(os.Stderr, args[2])
-		code, _ := strconv.Atoi(args[1])
+		code, err := strconv.Atoi(args[1])
+		if err != nil {
+			os.Exit(94)
+		}
 		os.Exit(code)
 	case "spawn-child":
 		child := exec.Command("sleep", "30")
@@ -130,7 +151,9 @@ func TestCommandHelperProcess(t *testing.T) {
 		if err := os.WriteFile(args[1], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
 			os.Exit(92)
 		}
-		_ = child.Wait()
+		if err := child.Wait(); err != nil {
+			os.Exit(95)
+		}
 	default:
 		os.Exit(93)
 	}

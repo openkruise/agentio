@@ -1,64 +1,442 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["profile", "global", "agentiod", "cni", "ztunnel", "egressGateway", "epe"],
+  "required": [
+    "profile",
+    "global",
+    "agentiod",
+    "cni",
+    "ztunnel",
+    "egressGateway",
+    "epe"
+  ],
   "properties": {
-    "profile": {"type": "string", "enum": ["ambient", "sidecar"]},
+    "profile": {
+      "type": "string",
+      "enum": [
+        "ambient",
+        "sidecar"
+      ]
+    },
     "agentiod": {
       "type": "object",
       "properties": {
-        "replicaCount": {"type": "integer", "minimum": 1},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
         "logging": {
           "type": "object",
-          "required": ["level", "format"],
+          "required": [
+            "level",
+            "format"
+          ],
           "properties": {
-            "level": {"type": "string", "enum": ["debug", "info", "warn", "error", "none"]},
-            "format": {"type": "string", "enum": ["text", "json"]}
+            "level": {
+              "type": "string",
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error",
+                "none"
+              ]
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "text",
+                "json"
+              ]
+            }
           }
         },
         "keepalive": {
           "type": "object",
-          "required": ["maxServerConnectionAge"],
+          "required": [
+            "maxServerConnectionAge"
+          ],
           "properties": {
-            "maxServerConnectionAge": {"type": "string", "minLength": 1}
+            "maxServerConnectionAge": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "trustPackage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": ".+@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "clientTrustBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sources": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "defaultCAs": {
+                    "const": true
+                  },
+                  "agentioMITM": {
+                    "const": true
+                  },
+                  "configMap": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "namespace",
+                      "name",
+                      "key"
+                    ],
+                    "properties": {
+                      "namespace": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "secret": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "namespace",
+                      "name",
+                      "key"
+                    ],
+                    "properties": {
+                      "namespace": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                },
+                "minProperties": 1,
+                "maxProperties": 1
+              }
+            },
+            "target": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "configMapName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "injector": {
+          "type": "object",
+          "properties": {
+            "clientTrust": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "containers": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "include": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9*\\-]+$"
+                      }
+                    },
+                    "exclude": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9*\\-]+$"
+                      }
+                    },
+                    "includeInitContainers": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "mounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "mountPath"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mountPath": {
+                        "type": "string",
+                        "pattern": "^/"
+                      },
+                      "configMap": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "items"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "items": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "key",
+                                "path"
+                              ],
+                              "additionalProperties": false,
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "mode": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 511
+                                }
+                              }
+                            }
+                          },
+                          "optional": {
+                            "const": false
+                          },
+                          "defaultMode": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 511
+                          }
+                        }
+                      },
+                      "secret": {
+                        "type": "object",
+                        "required": [
+                          "secretName",
+                          "items"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "secretName": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "items": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "key",
+                                "path"
+                              ],
+                              "additionalProperties": false,
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "mode": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 511
+                                }
+                              }
+                            }
+                          },
+                          "optional": {
+                            "const": false
+                          },
+                          "defaultMode": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 511
+                          }
+                        }
+                      }
+                    },
+                    "oneOf": [
+                      {
+                        "required": [
+                          "configMap"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "secret"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "files": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "caBundle": {
+                      "type": "string",
+                      "pattern": "^/"
+                    }
+                  }
+                },
+                "env": {
+                  "type": "array",
+                  "description": "Additional environment variable names receiving files.caBundle. AGENTIO_TRUST_BUNDLE is always injected, including with an empty list.",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[-._a-zA-Z][-._a-zA-Z0-9]*$"
+                  }
+                },
+                "envConflictPolicy": {
+                  "enum": [
+                    "Preserve",
+                    "Overwrite"
+                  ]
+                }
+              }
+            }
           }
         }
       }
     },
     "egressGateway": {
       "type": "object",
-      "required": ["mode"],
+      "required": [
+        "mode"
+      ],
       "properties": {
-        "mode": {"type": "string", "enum": ["disabled", "static", "gatewayAPI"]},
+        "mode": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "static",
+            "gatewayAPI"
+          ]
+        },
         "agentgateway": {
           "type": "object",
           "properties": {
-            "image": {"type": "string", "minLength": 1},
+            "image": {
+              "type": "string",
+              "minLength": 1
+            },
             "ca": {
               "type": "object",
-              "properties": {"enabled": {"type": "boolean"}}
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
             },
-            "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}
+            "terminationGracePeriodSeconds": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
-        "replicaCount": {"type": "integer", "minimum": 1},
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
         "service": {
           "type": "object",
-          "properties": {"type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer"]}}
+          "properties": {
+            "type": {
+              "enum": [
+                "ClusterIP",
+                "NodePort",
+                "LoadBalancer"
+              ]
+            }
+          }
         }
       }
     },
     "epe": {
       "type": "object",
-      "required": ["mode"],
+      "required": [
+        "mode"
+      ],
       "properties": {
-        "mode": {"type": "string", "enum": ["disabled", "managed", "external"]},
-        "replicaCount": {"type": "integer", "minimum": 1},
+        "mode": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "managed",
+            "external"
+          ]
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
         "external": {
           "type": "object",
           "properties": {
-            "address": {"type": "string"},
-            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+            "address": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
           }
         },
         "credentialProvider": {
@@ -66,15 +444,27 @@
           "properties": {
             "mtls": {
               "type": "object",
-              "properties": {"source": {"enum": ["files", "secret", "none"]}}
+              "properties": {
+                "source": {
+                  "enum": [
+                    "files",
+                    "secret",
+                    "none"
+                  ]
+                }
+              }
             }
           }
         },
         "auditWebhook": {
           "type": "object",
-          "required": ["insecureSkipVerify"],
+          "required": [
+            "insecureSkipVerify"
+          ],
           "properties": {
-            "insecureSkipVerify": {"type": "boolean"}
+            "insecureSkipVerify": {
+              "type": "boolean"
+            }
           }
         }
       }
@@ -83,15 +473,29 @@
   "allOf": [
     {
       "if": {
-        "properties": {"epe": {"properties": {"mode": {"const": "external"}}}}
+        "properties": {
+          "epe": {
+            "properties": {
+              "mode": {
+                "const": "external"
+              }
+            }
+          }
+        }
       },
       "then": {
         "properties": {
           "epe": {
             "properties": {
               "external": {
-                "required": ["address"],
-                "properties": {"address": {"minLength": 1}}
+                "required": [
+                  "address"
+                ],
+                "properties": {
+                  "address": {
+                    "minLength": 1
+                  }
+                }
               }
             }
           }

@@ -31,7 +31,10 @@ sidecarInjectorWebhook:
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := injectionSettingsFromValues(values, "agentiod.default.svc:15012")
+	settings, err := injectionSettingsFromValues(values, "agentiod.default.svc:15012")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if settings.Proxy.DiscoveryAddress != "agentiod.custom.svc:15012" {
 		t.Fatalf("discovery address = %q, want injector value", settings.Proxy.DiscoveryAddress)
 	}
@@ -54,7 +57,10 @@ func TestInjectionSettingsUseAgentioDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := injectionSettingsFromValues(values, "agentiod.agentio-system.svc:15012")
+	settings, err := injectionSettingsFromValues(values, "agentiod.agentio-system.svc:15012")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if settings.Proxy.DiscoveryAddress != "agentiod.agentio-system.svc:15012" ||
 		settings.StatusPort != 15020 || settings.ProxyListenPort != 15001 || settings.ProxyInboundListenPort != 15006 {
 		t.Fatalf("default settings = %+v", settings)

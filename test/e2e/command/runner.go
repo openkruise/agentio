@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 
 const defaultMaxOutputBytes = 4 << 20
 
+// Request describes an executable and optional artifact and streaming outputs.
 type Request struct {
 	Name      string
 	Args      []string
@@ -38,8 +40,13 @@ type Request struct {
 	Env       []string
 	Sensitive []string
 	Artifact  string
+	// Optional live output sinks receive the complete, unredacted stream.
+	// Artifact capture remains bounded and redacted independently.
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
+// Result holds bounded, redacted command output and completion metadata.
 type Result struct {
 	StartedAt time.Time     `json:"startedAt"`
 	Duration  time.Duration `json:"duration"`
@@ -48,12 +55,14 @@ type Result struct {
 	Stderr    string        `json:"stderr"`
 }
 
+// Runner executes commands with process-group cancellation and artifact capture.
 type Runner struct {
 	Artifacts      *artifacts.Store
 	Redactor       *Redactor
 	MaxOutputBytes int
 }
 
+// Interface abstracts command execution for components and their tests.
 type Interface interface {
 	Run(context.Context, Request) (Result, error)
 }
@@ -70,6 +79,7 @@ type commandRecord struct {
 	Error     string        `json:"error,omitempty"`
 }
 
+// Run executes a command without a shell and records its result.
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return Result{}, errors.New("command name is required")
@@ -95,14 +105,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if req.Stdout != nil {
+		cmd.Stdout = io.MultiWriter(stdout, req.Stdout)
+	}
+	if req.Stderr != nil {
+		cmd.Stderr = io.MultiWriter(stderr, req.Stderr)
+	}
 	configureProcess(cmd)
 
 	result := Result{StartedAt: time.Now().UTC(), ExitCode: -1}
 	if err := cmd.Start(); err != nil {
 		result.Duration = time.Since(result.StartedAt)
 		runErr := fmt.Errorf("start command %q: %w", req.Name, err)
-		r.record(req, result, runErr, redactor)
-		return result, runErr
+		return result, errors.Join(runErr, r.record(req, result, runErr, redactor))
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
@@ -174,15 +189,18 @@ func (r *Runner) record(req Request, result Result, runErr error, redactor *Reda
 	return nil
 }
 
+// Redactor removes configured secret values from captured output.
 type Redactor struct {
 	secrets []string
 }
 
+// NewRedactor creates a redactor for the supplied secret values.
 func NewRedactor(secrets []string) *Redactor {
 	r := &Redactor{}
 	return r.With(secrets)
 }
 
+// With returns an independent redactor including additional secret values.
 func (r *Redactor) With(secrets []string) *Redactor {
 	combined := append([]string(nil), r.secrets...)
 	for _, secret := range secrets {
@@ -193,6 +211,7 @@ func (r *Redactor) With(secrets []string) *Redactor {
 	return &Redactor{secrets: combined}
 }
 
+// Redact replaces each configured secret with a placeholder.
 func (r *Redactor) Redact(value string) string {
 	for _, secret := range r.secrets {
 		value = strings.ReplaceAll(value, secret, "<redacted>")

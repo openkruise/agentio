@@ -39,6 +39,9 @@ type Options struct {
 	TrustDomain           string
 	RootNamespace         string
 	ZTunnelServiceAccount string
+	// ScopedSecrets limits the shared Secret cache to RootNamespace.
+	// False watches Secrets in all namespaces.
+	ScopedSecrets bool
 	// AgentioConfigMaps selects the base and primary Agentio configuration
 	// ConfigMaps. Nil uses the Agentio-compatible defaults; an empty primary
 	// name explicitly disables the primary overlay.
@@ -55,9 +58,13 @@ type Registry struct {
 	options Options
 
 	// Pods supports authorization lookups by pod name and by node.
-	Pods                          krt.Collection[*corev1.Pod]
-	KubernetesServices            krt.Collection[*corev1.Service]
-	EndpointSlices                krt.Collection[*discoveryv1.EndpointSlice]
+	Pods               krt.Collection[*corev1.Pod]
+	KubernetesServices krt.Collection[*corev1.Service]
+	EndpointSlices     krt.Collection[*discoveryv1.EndpointSlice]
+	// Secrets is the shared cache for consumers that read arbitrary Secret references.
+	// Consumers wait for it separately from the compiler's registry synchronization.
+	Secrets krt.Collection[*corev1.Secret]
+
 	podsByNode                    krt.Index[string, *corev1.Pod]
 	delegationPodsByNodePrincipal krt.Index[string, *corev1.Pod]
 
@@ -127,6 +134,16 @@ func New(
 	services := krt.NewInformer[*corev1.Service](kubeClient, sourceOptions("kubernetes-services")...)
 	slices := krt.NewInformer[*discoveryv1.EndpointSlice](kubeClient, sourceOptions("endpoint-slices")...)
 	configMaps := krt.NewInformer[*corev1.ConfigMap](kubeClient, sourceOptions("config-maps")...)
+	secretNamespace := ""
+	if options.ScopedSecrets {
+		secretNamespace = options.RootNamespace
+	}
+	r.Secrets = krt.NewFilteredInformer[*corev1.Secret](
+		kubeClient,
+		kclient.Filter{Namespace: secretNamespace},
+		krt.WithName("secrets"),
+		krt.WithStop(stop),
+	)
 	trafficPolicyObjects := newTrafficPoliciesCollection(
 		kubeClient,
 		stop,

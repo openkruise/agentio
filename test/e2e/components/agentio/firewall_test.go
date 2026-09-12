@@ -42,6 +42,21 @@ func TestVerifyFirewallBackendFindsSidecarInEnrolledNamespace(t *testing.T) {
 	}
 }
 
+func TestVerifyFirewallBackendFindsNativeSidecar(t *testing.T) {
+	pod := firewallPod("sandbox", "native", "agentio-proxy", "iptables")
+	pod.Spec.InitContainers = pod.Spec.Containers
+	pod.Spec.Containers = []corev1.Container{{Name: "application"}}
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sandbox", Labels: map[string]string{DataplaneModeLabel: ProfileSidecar}}}, pod,
+	)
+	if err := verifyFirewallBackend(context.Background(), client, Config{Profile: ProfileSidecar, FirewallBackend: "iptables"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFirewallBackend(context.Background(), client, Config{Profile: ProfileSidecar, FirewallBackend: "auto"}); err == nil {
+		t.Fatal("accepted native sidecar with the wrong backend")
+	}
+}
+
 func TestVerifyFirewallBackendFindsAmbientZtunnel(t *testing.T) {
 	pod := firewallPod("agentio-system", "ztunnel-worker", "ztunnel", "auto")
 	pod.Labels = map[string]string{"app.kubernetes.io/name": "ztunnel"}

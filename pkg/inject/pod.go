@@ -23,6 +23,8 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -91,41 +93,60 @@ func getInjectionStatus(podSpec corev1.PodSpec) string {
 	return string(statusAnnotationValue)
 }
 
+// InjectionResult contains the admission patch and its diagnostics.
+type InjectionResult struct {
+	Patch    []byte
+	Warnings []string
+}
+
+func isClientTrustExcludedContainer(name string) bool {
+	return isProxyContainerName(name) || name == InitContainerName || name == ValidationContainerName || name == "istio-init" || name == "istio-validation"
+}
+
 // injectPod is the core of the injection logic. This takes a pod and injection
 // template, as well as some inputs to the injection template, and produces a
 // JSON patch.
-func injectPod(req InjectionParameters) ([]byte, error) {
+func injectPod(req InjectionParameters) (InjectionResult, error) {
 	checkPreconditions(req)
 
 	// The patch will be built relative to the initial pod, capture its current state
 	originalPodSpec, err := json.Marshal(req.pod)
 	if err != nil {
-		return nil, err
+		return InjectionResult{}, err
 	}
 
 	// Run the injection template, giving us a partial pod spec
 	mergedPod, injectedPodData, err := RunTemplate(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run injection template: %w", err)
+		return InjectionResult{}, fmt.Errorf("failed to run injection template: %w", err)
 	}
 
 	mergedPod, err = reapplyOverwrittenContainers(mergedPod, req.pod, injectedPodData, &req.settings.Proxy)
 	if err != nil {
-		return nil, fmt.Errorf("failed to re apply container: %w", err)
+		return InjectionResult{}, fmt.Errorf("failed to re apply container: %w", err)
 	}
 
 	// Apply some additional transformations to the pod
 	if err := postProcessPod(mergedPod, *injectedPodData, req); err != nil {
-		return nil, fmt.Errorf("failed to process pod: %w", err)
+		return InjectionResult{}, fmt.Errorf("failed to process pod: %w", err)
 	}
 
+	var warnings []string
+	// Only ztunnel supports client trust injection. Template aliases are already expanded.
+	if slices.Contains(selectTemplates(req), "ztunnel") {
+		var trustErr error
+		warnings, trustErr = clienttrust.Apply(req.pod, mergedPod, req.settings.ClientTrust, isClientTrustExcludedContainer)
+		if trustErr != nil {
+			return InjectionResult{}, fmt.Errorf("client trust injection: %w", trustErr)
+		}
+	}
 	patch, err := createPatch(mergedPod, originalPodSpec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create patch: %w", err)
+		return InjectionResult{}, fmt.Errorf("failed to create patch: %w", err)
 	}
 
 	log.Debug("generated admission response", "patch", string(patch))
-	return patch, nil
+	return InjectionResult{Patch: patch, Warnings: warnings}, nil
 }
 
 // reapplyOverwrittenContainers enables users to provide container level overrides for settings in the injection template

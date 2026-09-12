@@ -21,13 +21,20 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	kubetesting "k8s.io/client-go/testing"
 
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -206,8 +213,8 @@ func TestSelfSignDeletionFailsClosedBeforeRecreation(t *testing.T) {
 	if err := signer.renewSelfSignedCA(context.Background()); err == nil {
 		t.Fatal("renewSelfSignedCA succeeded after the Secret was deleted")
 	}
-	if signer.State().Get() != nil {
-		t.Fatal("deleted Secret left signer state available")
+	if signer.State().Get() != nil || signer.TrustBundles().Get() != nil {
+		t.Fatal("deleted Secret left signer state or public trust available")
 	}
 	if _, err := signer.SignDNS(context.Background(), "api.example.com", time.Hour); err == nil {
 		t.Fatal("deleted Secret left stale signing capability available")
@@ -219,6 +226,7 @@ func newInstalledMITMSigner(ca pki.SigningCA, uid types.UID, expiryMargin time.D
 		options:     MITMSignerOptions{LeafExpiryMargin: expiryMargin},
 		caSingleton: krt.NewStatic(&caState{ca: ca, secretUID: uid}, true),
 		signerState: krt.NewStatic(&SignerState{Revision: ca.Revision()}, true),
+		trustBundle: krt.NewStatic(&TrustBundle{PEM: string(ca.BundlePEM()), Revision: ca.Revision()}, true),
 	}
 }
 
@@ -242,4 +250,135 @@ func waitForMITM(t *testing.T, condition func() bool, description string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", description)
+}
+
+func TestMITMPublicTrustBundleLifecycle(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	secret := newMITMSecret(t, "agentio-system", "mitm", 24*time.Hour, time.Now())
+	client := kube.NewFakeClient(secret)
+	go client.Run(ctx.Done())
+	signer, err := NewMITMSigner(ctx, client, MITMSignerOptions{
+		Mode: MITMSignModeSecret, Namespace: secret.Namespace, SecretName: secret.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBundle := func(expected []byte) {
+		t.Helper()
+		waitForMITM(t, func() bool {
+			bundle, state := signer.TrustBundles().Get(), signer.State().Get()
+			return bundle != nil && state != nil && bundle.PEM == string(expected) && bundle.Revision == state.Revision
+		}, "matching public trust and signing revision")
+		if strings.Contains(signer.TrustBundles().Get().PEM, "PRIVATE KEY") {
+			t.Fatal("exported signing key")
+		}
+	}
+	assertBundle(secret.Data[mitmCACertKey])
+	old := signer.TrustBundles().Get()
+	staged := newMITMSecret(t, secret.Namespace, secret.Name, 24*time.Hour, time.Now())
+	secret.Data[mitmCACertKey] = append(append([]byte(nil), secret.Data[mitmCACertKey]...), staged.Data[mitmCACertKey]...)
+	if _, err := client.Kube().CoreV1().Secrets(secret.Namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assertBundle(secret.Data[mitmCACertKey])
+	if old.PEM == signer.TrustBundles().Get().PEM {
+		t.Fatal("staged roots did not change public trust")
+	}
+	if err := client.Kube().CoreV1().Secrets(secret.Namespace).Delete(ctx, secret.Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForMITM(t, func() bool { return signer.State().Get() == nil && signer.TrustBundles().Get() == nil }, "CA deletion")
+	staged.UID = "recreated-mitm"
+	if _, err := client.Kube().CoreV1().Secrets(staged.Namespace).Create(ctx, staged, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assertBundle(staged.Data[mitmCACertKey])
+	staged.Data[mitmCACertKey] = []byte("invalid")
+	if _, err := client.Kube().CoreV1().Secrets(staged.Namespace).Update(ctx, staged, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForMITM(t, func() bool { return signer.State().Get() == nil && signer.TrustBundles().Get() == nil }, "invalid CA removal")
+}
+
+func TestMITMPublicTrustRejectsStaleGeneration(t *testing.T) {
+	old, err := pki.NewSelfSignedCA("old", 24*time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := pki.NewSelfSignedCA("next", 24*time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := newInstalledMITMSigner(next, "next-uid", time.Hour)
+	if signer.acceptAvailable(caState{ca: old, secretUID: "old-uid"}) {
+		t.Fatal("accepted stale CA event")
+	}
+	if got := signer.TrustBundles().Get(); got == nil || got.PEM != string(next.BundlePEM()) {
+		t.Fatal("stale CA replaced public trust")
+	}
+	signer.setUnavailable("next-uid")
+	if signer.acceptAvailable(caState{ca: next, secretUID: "next-uid"}) || signer.TrustBundles().Get() != nil {
+		t.Fatal("deleted CA reopened public trust")
+	}
+}
+
+func TestMITMSecretInformerWaitsForReadPermission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		secret := newMITMSecret(t, "external-ca", "mitm", 24*time.Hour, time.Now())
+		client := kube.NewFakeClient(secret)
+		fake := client.Kube().(*kubefake.Clientset)
+		var readAllowed atomic.Bool
+		fake.PrependReactor("get", "secrets", func(action kubetesting.Action) (bool, runtime.Object, error) {
+			if action.GetNamespace() != secret.Namespace || action.(kubetesting.GetAction).GetName() != secret.Name {
+				return true, nil, errors.New("read escaped the named MITM Secret")
+			}
+			if !readAllowed.Load() {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, secret.Name, nil)
+			}
+			return false, nil, nil
+		})
+		signer, err := NewMITMSigner(ctx, client, MITMSignerOptions{
+			Mode: MITMSignModeSecret, Namespace: secret.Namespace, SecretName: secret.Name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.Run(ctx.Done())
+		synctest.Wait()
+		if signer.State().Get() != nil {
+			t.Fatal("MITM signer became ready before read access was granted")
+		}
+		for _, action := range fake.Actions() {
+			if action.GetResource().Resource == "secrets" && (action.GetVerb() == "list" || action.GetVerb() == "watch") {
+				t.Fatal("MITM informer started before read access was granted")
+			}
+		}
+		readAllowed.Store(true)
+		// Advance the existing 30-second delayed permission retry without wall-clock waiting.
+		time.Sleep(31 * time.Second)
+		synctest.Wait()
+		if signer.State().Get() == nil || signer.TrustBundles().Get() == nil {
+			t.Fatal("MITM signer did not become ready after read access was granted")
+		}
+		for _, action := range fake.Actions() {
+			if action.GetResource().Resource != "secrets" {
+				continue
+			}
+			var selector string
+			switch action.GetVerb() {
+			case "list":
+				selector = action.(kubetesting.ListAction).GetListRestrictions().Fields.String()
+			case "watch":
+				selector = action.(kubetesting.WatchAction).GetWatchRestrictions().Fields.String()
+			default:
+				continue
+			}
+			if action.GetNamespace() != secret.Namespace || selector != "metadata.name="+secret.Name {
+				t.Fatalf("MITM informer escaped its fixed Secret: %v", action)
+			}
+		}
+	})
 }

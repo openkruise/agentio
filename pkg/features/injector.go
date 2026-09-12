@@ -17,6 +17,19 @@ package features
 import "istio.io/istio/pkg/env"
 
 var (
+	// EnableClientTrustDistributor gates client CA distribution and injection at startup.
+	EnableClientTrustDistributor = env.Register(
+		"AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR",
+		false,
+		"Enable client CA distribution and injection with the sidecar injector.",
+	).Get()
+	// ClientTrustPackagePath points to the versioned public certificate package.
+	ClientTrustPackagePath = env.Register(
+		"AGENTIO_CLIENT_TRUST_PACKAGE_PATH",
+		"",
+		"Path to the versioned public CA trust package JSON.",
+	).Get()
+	// EnableSidecarInjector enables the Pod admission endpoint.
 	EnableSidecarInjector = env.Register(
 		"AGENTIO_ENABLE_SIDECAR_INJECTOR",
 		false,

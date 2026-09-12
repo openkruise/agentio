@@ -110,7 +110,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 4. Only main decides that the process should stop.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/*/main.go | extensions/*/cmd/*/main.go | tools/*/main.go) ;;
+      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go) ;;
       *)
         scan "${f}" 'os\.Exit\(' \
           "os.Exit belongs in main; return the error and let the entrypoint log it"

@@ -23,6 +23,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
+	"github.com/openkruise/agentio/pkg/krt"
+
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,12 +77,17 @@ type Webhook struct {
 	valuesConfig     ValuesConfig
 	discoveryAddress string
 
+	trustConfig       krt.StaticSingleton[clienttrust.Settings]
+	enableClientTrust bool
 	nodes             kclient.Reader[*corev1.Node]
 	nativeSidecarMode NativeSidecarMode
 }
 
 // WebhookParameters configures parameters for the ztunnel injection webhook.
 type WebhookParameters struct {
+	// EnableClientTrust is the process gate shared with the distributor.
+	EnableClientTrust bool
+	KrtOptions        krt.OptionsBuilder
 	// Nodes optionally provides cached Node reads for native-sidecar
 	// auto-detection. Nil disables detection: auto behaves as disabled.
 	Nodes kclient.Reader[*corev1.Node]
@@ -107,7 +115,9 @@ func NewWebhook(p WebhookParameters) (*Webhook, error) {
 		mode = NativeSidecarModeAuto
 	}
 	wh := &Webhook{
+		enableClientTrust: p.EnableClientTrust,
 		nodes:             p.Nodes,
+		trustConfig:       krt.NewStatic[clienttrust.Settings](nil, true, p.KrtOptions.WithName("Client_Trust_Config")...),
 		nativeSidecarMode: mode,
 		discoveryAddress:  p.DiscoveryAddress,
 		settings:          defaultInjectionSettings(p.DiscoveryAddress),
@@ -123,10 +133,18 @@ func (wh *Webhook) UpdateConfig(sidecarConfig *Config, valuesConfig string) erro
 	if err != nil {
 		return fmt.Errorf("failed to create new values config: %v", err)
 	}
+	settings, err := injectionSettingsFromValues(vc, wh.discoveryAddress)
+	if err != nil {
+		return fmt.Errorf("failed to create injection settings: %w", err)
+	}
+	// A ConfigMap update cannot enable injection while its distributor is disabled.
+	settings.ClientTrust.Client.Enabled = wh.enableClientTrust && settings.ClientTrust.Client.Enabled
 	wh.mu.Lock()
 	wh.config = sidecarConfig
 	wh.valuesConfig = vc
-	wh.settings = injectionSettingsFromValues(vc, wh.discoveryAddress)
+	wh.settings = settings
+	// Publish the same parsed settings for the distributor to observe.
+	wh.trustConfig.Set(&settings.ClientTrust)
 	wh.mu.Unlock()
 	return nil
 }
@@ -189,7 +207,7 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 
 	wh.mu.RUnlock()
 
-	patchBytes, err := injectPod(params)
+	result, err := injectPod(params)
 	if err != nil {
 		requestLogger.Error("pod injection failed", "error", err)
 		return toAdmissionResponse(err)
@@ -198,7 +216,8 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 	patchType := admissionv1.PatchTypeJSONPatch
 	return &admissionv1.AdmissionResponse{
 		Allowed:   true,
-		Patch:     patchBytes,
+		Warnings:  result.Warnings,
+		Patch:     result.Patch,
 		PatchType: &patchType,
 	}
 }
@@ -316,4 +335,9 @@ func parseInjectEnvs(path string) map[string]string {
 	}
 
 	return newEnvs
+}
+
+// ClientTrustConfiguration lets the distributor subscribe to validated values updates.
+func (wh *Webhook) ClientTrustConfiguration() krt.Singleton[clienttrust.Settings] {
+	return wh.trustConfig
 }

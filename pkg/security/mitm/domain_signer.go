@@ -56,7 +56,23 @@ func (s SignerState) Equals(other SignerState) bool {
 type DomainSignerSource struct {
 	Signer DomainCertificateSigner
 	State  krt.Singleton[SignerState]
+	// TrustBundle explicitly exposes public CA material for client trust distribution.
+	// Optional for signers whose trust is provided via configured CA sources instead.
+	TrustBundle krt.Singleton[TrustBundle]
 }
+
+// TrustBundle is public CA material for an accepted MITM signing generation.
+// It never contains signing keys; nil means this source is currently unavailable.
+type TrustBundle struct {
+	PEM      string
+	Revision string
+}
+
+// ResourceName identifies the public MITM trust singleton.
+func (TrustBundle) ResourceName() string { return "mitm-trust-bundle" }
+
+// Equals compares public material and its signing revision.
+func (b TrustBundle) Equals(other TrustBundle) bool { return b == other }
 
 // CertificateGeneration changes whenever cached SDS certificate visibility
 // changes and consumers need to regenerate Secret resources.

@@ -88,6 +88,7 @@ type MITMSigner struct {
 	options     MITMSignerOptions
 	caSingleton krt.Singleton[caState]
 	signerState krt.StaticSingleton[SignerState]
+	trustBundle krt.StaticSingleton[TrustBundle]
 	// unavailable is a fail-closed gate for the small interval in which a
 	// direct authoritative read has observed deletion but the KRT collection
 	// has not delivered its removal yet. Valid CA material is still installed
@@ -126,6 +127,7 @@ func NewMITMSigner(
 	}
 	signer.signerState = krt.NewStatic[SignerState](nil, true,
 		options.KrtOptions.WithName("MITM_Signer_State")...)
+	signer.trustBundle = krt.NewStatic[TrustBundle](nil, true, options.KrtOptions.WithName("MITM_Trust_Bundle")...)
 	signer.caSingleton = newDelayedCASecretSingleton(client, options)
 	signer.caSingleton.Register(func(event krt.Event[caState]) {
 		if event.New == nil {
@@ -135,9 +137,7 @@ func NewMITMSigner(
 			}
 			return
 		}
-		if !signer.acceptAvailable(event.New.secretUID, event.New.ca.Revision()) {
-			return
-		}
+		signer.acceptAvailable(*event.New)
 	})
 	if options.Mode == MITMSignModeSelfSign {
 		go signer.runSelfSignMaintenance(ctx)
@@ -187,13 +187,14 @@ func validateMITMSignerOptions(options MITMSignerOptions) error {
 	}
 }
 
-func newDelayedCASecretSingleton(client kube.Client, options MITMSignerOptions) krt.Singleton[caState] {
-	// Wait on every non-authoritative
-	// read error, not only Forbidden, so delayed RBAC and transient failures cannot
-	// be mistaken for an absent Secret.
+func newDelayedCASecretSingleton(
+	client kube.Client,
+	options MITMSignerOptions,
+) krt.Singleton[caState] {
 	callback := func() krt.Singleton[caState] {
 		return newCASecretSingleton(client, options)
 	}
+	// Retry non-authoritative read errors so delayed RBAC is not mistaken for a missing Secret.
 	waitForReadPermission := func(ctx context.Context) bool {
 		_, err := client.Kube().CoreV1().Secrets(options.Namespace).Get(ctx, options.SecretName, metav1.GetOptions{})
 		return err == nil || apierrors.IsNotFound(err)
@@ -202,7 +203,10 @@ func newDelayedCASecretSingleton(client kube.Client, options MITMSignerOptions) 
 	return krt.NewDelayedSingleton(syncer, callback, options.KrtOptions.Stop())
 }
 
-func newCASecretSingleton(client kube.Client, options MITMSignerOptions) krt.Singleton[caState] {
+func newCASecretSingleton(
+	client kube.Client,
+	options MITMSignerOptions,
+) krt.Singleton[caState] {
 	secretClient := kclient.NewFiltered[*corev1.Secret](client, kclient.Filter{
 		Namespace:     options.Namespace,
 		FieldSelector: "metadata.name=" + options.SecretName,
@@ -293,13 +297,18 @@ func (s *MITMSigner) setUnavailable(uid types.UID) {
 	changed := s.unavailable.CompareAndSwap(false, true)
 	if changed {
 		s.signerState.Set(nil)
+		s.trustBundle.Set(nil)
 	}
 	s.availabilityMu.Unlock()
 }
 
-func (s *MITMSigner) acceptAvailable(uid types.UID, revision string) bool {
+func (s *MITMSigner) acceptAvailable(state caState) bool {
+	uid, revision := state.secretUID, state.ca.Revision()
 	s.availabilityMu.Lock()
 	defer s.availabilityMu.Unlock()
+	if current := s.caSingleton.Get(); current == nil || !current.Equals(state) {
+		return false
+	}
 	if s.unavailableUID != "" && uid == s.unavailableUID {
 		return false
 	}
@@ -308,6 +317,10 @@ func (s *MITMSigner) acceptAvailable(uid types.UID, revision string) bool {
 	current := s.signerState.Get()
 	if current == nil || current.Revision != revision {
 		s.signerState.Set(&SignerState{Revision: revision})
+	}
+	bundle := TrustBundle{PEM: string(state.ca.BundlePEM()), Revision: revision}
+	if current := s.trustBundle.Get(); current == nil || !current.Equals(bundle) {
+		s.trustBundle.Set(&bundle)
 	}
 	return true
 }
@@ -386,3 +399,6 @@ func (s *MITMSigner) renewSelfSignedCA(ctx context.Context) error {
 	}
 	return nil
 }
+
+// TrustBundles exposes accepted public CA generations, including staged trust anchors.
+func (s *MITMSigner) TrustBundles() krt.Singleton[TrustBundle] { return s.trustBundle }

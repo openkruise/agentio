@@ -23,6 +23,13 @@ import (
 )
 
 var (
+	// ScopedSecrets restricts the shared Secret informer to the control-plane namespace.
+	// Dedicated named Secret informers keep their own scope.
+	ScopedSecrets = env.Register(
+		"AGENTIO_SCOPED_SECRETS",
+		true,
+		"Watch only the root namespace in the shared Secret informer. False watches all namespaces and requires cluster-wide Secret list/watch RBAC.",
+	).Get()
 	// KubernetesAPIQPS configures client-side Kubernetes API request throttling.
 	KubernetesAPIQPS = env.Register(
 		"AGENTIO_KUBERNETES_API_QPS",

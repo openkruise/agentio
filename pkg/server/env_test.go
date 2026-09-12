@@ -180,6 +180,7 @@ func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 	body := out.String()
 	for _, variable := range []string{
 		"AGENTIO_TOKEN_AUDIENCE",
+		"AGENTIO_SCOPED_SECRETS",
 		"AGENTIO_CONFIGMAP_NAME",
 		"AGENTIO_ENABLE_DEBUG_ON_HTTP",
 		"AGENTIO_PRIMARY_CONFIGMAP_NAME",
@@ -189,6 +190,7 @@ func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 		"AGENTIO_GATEWAY_CONNECT_TIMEOUT",
 		"AGENTIO_ENABLE_GATEWAY_DEPLOYER",
 		"AGENTIO_ENABLE_SIDECAR_INJECTOR",
+		"AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR",
 		"AGENTIO_MAX_REQUESTS_PER_SECOND",
 		"AGENTIO_KEEPALIVE_MAX_SERVER_CONNECTION_AGE",
 		"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY",
@@ -220,6 +222,30 @@ func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 	} {
 		if strings.Contains(body, "\n"+removed+" ") {
 			t.Errorf("removed variable %s is still present in the environment dump", removed)
+		}
+	}
+}
+
+func TestSecretNamespaceScopeFeatureFlag(t *testing.T) {
+	const variable = "AGENTIO_SCOPED_SECRETS"
+	const helper = "AGENTIO_SECRET_SCOPE_TEST_HELPER"
+	if expected := os.Getenv(helper); expected != "" {
+		if features.ScopedSecrets != (expected == "true") {
+			t.Fatalf("ScopedSecrets = %v, want %s", features.ScopedSecrets, expected)
+		}
+		return
+	}
+	for _, value := range []string{"", "true", "false"} {
+		command := exec.Command(os.Args[0], "-test.run=^TestSecretNamespaceScopeFeatureFlag$")
+		command.Env = environmentWithout(os.Environ(), variable, helper)
+		expected := "true"
+		if value != "" {
+			command.Env = append(command.Env, variable+"="+value)
+			expected = value
+		}
+		command.Env = append(command.Env, helper+"="+expected)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("flag %q failed: %v\n%s", value, err, output)
 		}
 	}
 }

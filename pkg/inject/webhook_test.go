@@ -66,7 +66,7 @@ func newTestWebhook(t *testing.T, mode NativeSidecarMode) *Webhook {
 
 func newTestWebhookWithValues(t *testing.T, mode NativeSidecarMode, config Config, values string) *Webhook {
 	t.Helper()
-	webhook, err := NewWebhook(WebhookParameters{Mux: http.NewServeMux(), NativeSidecarMode: mode})
+	webhook, err := NewWebhook(WebhookParameters{Mux: http.NewServeMux(), NativeSidecarMode: mode, EnableClientTrust: true})
 	if err != nil {
 		t.Fatal(err)
 	}

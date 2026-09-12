@@ -14,6 +14,12 @@
 
 package inject
 
+import (
+	"fmt"
+
+	"github.com/openkruise/agentio/pkg/clienttrust"
+)
+
 const (
 	defaultStatusPort        = 15020
 	defaultProxyListenPort   = 15001
@@ -45,6 +51,7 @@ type TemplateMeshConfig struct {
 // inject an in-pod ztunnel.
 type InjectionSettings struct {
 	Proxy                           ProxyConfig
+	ClientTrust                     clienttrust.Settings
 	StatusPort                      int
 	ProxyListenPort                 int
 	ProxyInboundListenPort          int
@@ -65,8 +72,16 @@ func defaultInjectionSettings(discoveryAddress string) InjectionSettings {
 	}
 }
 
-func injectionSettingsFromValues(values ValuesConfig, discoveryAddress string) InjectionSettings {
+func injectionSettingsFromValues(
+	values ValuesConfig,
+	discoveryAddress string,
+) (InjectionSettings, error) {
 	settings := defaultInjectionSettings(discoveryAddress)
+	trust, err := clienttrust.Parse(values.Map())
+	if err != nil {
+		return InjectionSettings{}, fmt.Errorf("client trust: %w", err)
+	}
+	settings.ClientTrust = trust
 	if configured := values.stringValue("global", "xdsAddress"); configured != "" {
 		settings.Proxy.DiscoveryAddress = configured
 	} else if configured := values.stringValue("global", "caAddress"); configured != "" {
@@ -80,5 +95,5 @@ func injectionSettingsFromValues(values ValuesConfig, discoveryAddress string) I
 	}
 	settings.HoldApplicationUntilProxyStarts = values.boolValue("global", "proxy", holdApplicationValuesKey)
 	settings.Proxy.ProxyMetadata = values.stringMapValue("global", "proxy", proxyMetadataValuesKey)
-	return settings
+	return settings, nil
 }

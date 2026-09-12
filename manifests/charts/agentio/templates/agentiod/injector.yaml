@@ -24,6 +24,10 @@ data:
       agentgateway: |
 {{ .Files.Get "files/agentgateway.yaml" | trim | indent 8 }}
   values: |-
+    clientTrust:
+{{ .Values.agentiod.injector.clientTrust | toYaml | indent 6 }}
+    clientTrustBundle:
+{{ .Values.agentiod.clientTrustBundle | toYaml | indent 6 }}
     global:
       agentgateway:
 {{ .Values.egressGateway.agentgateway | toYaml | indent 8 }}

@@ -34,7 +34,7 @@ The `-print-env` output is the authoritative reference. Registered settings are 
 - Kubernetes API client throttling: `AGENTIO_KUBERNETES_API_QPS` and `AGENTIO_KUBERNETES_API_BURST`;
 - workload CA and trust distribution: `AGENTIO_CA_*`, `AGENTIO_TRUST_BUNDLE_*`, and `AGENTIO_WORKLOAD_CERT_*`;
 - xDS and KRT flow control: `AGENTIO_KRT_*`, `AGENTIO_PUSH_*`, `AGENTIO_CLIENT_QUEUE_SIZE`, and `AGENTIO_MAX_REQUESTS_PER_SECOND`;
-- injection and gateway deployment: `AGENTIO_ENABLE_SIDECAR_INJECTOR`, `AGENTIO_INJECTOR_*`, `AGENTIO_NATIVE_SIDECARS`, `AGENTIO_ENABLE_GATEWAY_DEPLOYER`, and `AGENTIO_GATEWAY_LEASE_NAME`;
+- injection and gateway deployment: `AGENTIO_ENABLE_SIDECAR_INJECTOR`, `AGENTIO_INJECTOR_*`, `AGENTIO_NATIVE_SIDECARS`, `AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR`, `AGENTIO_CLIENT_TRUST_PACKAGE_PATH`, `AGENTIO_ENABLE_GATEWAY_DEPLOYER`, and `AGENTIO_GATEWAY_LEASE_NAME`;
 - networking: `AGENTIO_GATEWAY_*`, `AGENTIO_ENABLE_SNI_TRAFFIC_POLICY`, and `AGENTIO_MESH_INTERNAL_TRAFFIC_POLICY`;
 - logging and debug access: `AGENTIO_LOG_*` and `AGENTIO_ENABLE_DEBUG_ON_HTTP`.
 
@@ -62,7 +62,9 @@ $ agentiod -print-env -print-env-format=markdown
 | <code>AGENTIO_CA_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often the elected leader checks CA expiry. |
 | <code>AGENTIO_CA_SECRET_NAME</code> | String | <code>agentio-ca-secret</code> | Secret holding the workload root CA. |
 | <code>AGENTIO_CLIENT_QUEUE_SIZE</code> | Integer | <code>100</code> | Maximum requests queued per xDS client before the stream is considered stuck. |
+| <code>AGENTIO_CLIENT_TRUST_PACKAGE_PATH</code> | String | empty | Path to the versioned public CA trust package JSON. |
 | <code>AGENTIO_CONFIGMAP_NAME</code> | String | <code>agentio-config</code> | ConfigMap name of Agentio configuration. |
+| <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection with the sidecar injector. |
 | <code>AGENTIO_ENABLE_DEBUG_ON_HTTP</code> | Boolean | <code>true</code> | Enable authenticated debug handlers on the monitoring HTTP listener. |
 | <code>AGENTIO_ENABLE_GATEWAY_DEPLOYER</code> | Boolean | <code>false</code> | If true, run the Agentio Gateway API deployment controller that provisions egress gateway Deployments. |
 | <code>AGENTIO_ENABLE_SIDECAR_INJECTOR</code> | Boolean | <code>false</code> | If true, serve the Agentio ztunnel injection webhook at the Istio-compatible /inject endpoint. |
@@ -100,6 +102,7 @@ $ agentiod -print-env -print-env-format=markdown
 | <code>AGENTIO_PUSH_DEBOUNCE</code> | Duration | <code>100ms</code> | Quiet period before compiled dirty resources are merged and published. |
 | <code>AGENTIO_PUSH_DEBOUNCE_MAX</code> | Duration | <code>10s</code> | Upper bound on the push quiet period. |
 | <code>AGENTIO_SANDBOX_MODE</code> | Boolean | <code>false</code> | Publish explicit Sandbox resources and let runtime providers classify Sandbox hosts for exclusive Sandbox policies. |
+| <code>AGENTIO_SCOPED_SECRETS</code> | Boolean | <code>true</code> | Watch only the root namespace in the shared Secret informer. False watches all namespaces and requires cluster-wide Secret list/watch RBAC. |
 | <code>AGENTIO_SERVICE_NAME</code> | String | <code>agentiod</code> | Kubernetes service name placed in the xDS server certificate. |
 | <code>AGENTIO_TOKEN_AUDIENCE</code> | String | <code>agentio-ca</code> | Audience a client token must carry to be accepted. |
 | <code>AGENTIO_TRUSTED_NODE_ACCOUNTS</code> | String | empty | If set, the list of service accounts that are allowed to use node authentication for CSRs. Node authentication allows an identity to create CSRs on behalf of other identities, but only if there is a pod running on the same node with that identity. This is intended for use with node proxies. |
@@ -126,6 +129,26 @@ agentiod:
 These settings configure client-side throttling, not the Kubernetes API server's limits or a single aggregate budget shared by all clientsets and replicas. Higher settings allow more API traffic; choose values appropriate for the API server's capacity.
 
 `AGENTIO_MAX_REQUESTS_PER_SECOND` separately limits **new xDS streams** before authentication. Its unchanged default is `min(15 + 5 * GOMAXPROCS, 100)`, with a burst of 1 and up to 1 second of waiting before rejection. An explicit positive value overrides that default; zero selects the automatic default. This limit does not throttle ACKs on established streams or server-initiated configuration pushes, and increasing it does not fix slow-client push accumulation.
+
+## Shared Secret informer
+
+`AGENTIO_SCOPED_SECRETS` defaults to `true`. The registry initializes one shared Secret informer in the root namespace, started with the server’s Kubernetes client. Set the flag to `false` to watch all namespaces; cluster-wide Secret list/watch RBAC must be supplied separately. The scope is selected from this flag at startup, without RBAC probing. Fixed-name informers such as the MITM CA informer retain their configured namespace and name.
+
+```yaml
+agentiod:
+  env:
+    AGENTIO_SCOPED_SECRETS: "false"
+```
+
+## Client CA distribution and injection
+
+`AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR` defaults to `false`. The Helm chart derives
+it from `agentiod.injector.clientTrust.enabled` in the sidecar profile; use that
+single chart value to enable or disable the feature. When disabled, agentiod does
+not construct the distributor or allow CA injection, even with a Pod opt-in.
+The chart also omits the public CA package init container. Secret CA sources
+reuse existing system-namespace RBAC; the chart grants no additional source permissions.
+Disabling retains existing bundle ConfigMaps but stops updating them.
 
 ## On-demand TLS certificates
 

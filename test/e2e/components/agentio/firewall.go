@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,7 +84,7 @@ func verifyFirewallBackend(ctx context.Context, client kubernetes.Interface, con
 func verifyPodFirewallBackend(pods []corev1.Pod, containerName, want string) (int, error) {
 	verified := 0
 	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
+		for _, container := range slices.Concat(pod.Spec.Containers, pod.Spec.InitContainers) {
 			if container.Name != containerName {
 				continue
 			}

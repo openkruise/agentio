@@ -324,15 +324,15 @@ func selectTemplates(params InjectionParameters) []string {
 			name := strings.TrimSpace(tmplName)
 			names = append(names, name)
 		}
-		return resolveAliases(params, names)
+		return resolveAliases(params.aliases, names)
 	}
-	return resolveAliases(params, params.defaultTemplate)
+	return resolveAliases(params.aliases, params.defaultTemplate)
 }
 
-func resolveAliases(params InjectionParameters, names []string) []string {
+func resolveAliases(aliases map[string][]string, names []string) []string {
 	ret := []string{}
 	for _, name := range names {
-		if al, f := params.aliases[name]; f {
+		if al, f := aliases[name]; f {
 			ret = append(ret, al...)
 		} else {
 			ret = append(ret, name)

@@ -32,14 +32,20 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/ca"
+	"github.com/openkruise/agentio/pkg/security/mitm"
 )
 
 // Deliberately uses the legacy proxy name to exercise old injector ConfigMaps end to end.
@@ -87,6 +93,15 @@ func (nilAuthenticator) Authenticate(context.Context) (model.PeerIdentity, error
 // Authority (self-generated CA), the ConfigMap watcher, the caBundle patcher,
 // and the HTTPS listener, driven by a real TLS-verified HTTP client.
 func TestSidecarInjectorEndToEnd(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("client-trust-%v", enabled), func(t *testing.T) {
+			testSidecarInjectorEndToEnd(t, enabled)
+		})
+	}
+}
+
+func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
+	t.Helper()
 	const namespace = "agentio-system"
 	const configMapName = "agentio-sidecar-injector"
 	const webhookConfigName = "agentio-sidecar-injector-agentio-system"
@@ -94,9 +109,9 @@ func TestSidecarInjectorEndToEnd(t *testing.T) {
 	injectorConfigMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace},
 		Data: map[string]string{
-			"config": "policy: enabled\ndefaultTemplates: [sidecar]\ntemplates:\n  sidecar: |\n" +
+			"config": "policy: enabled\ndefaultTemplates: [sidecar]\naliases:\n  sidecar: [ztunnel]\ntemplates:\n  ztunnel: |\n" +
 				indentTemplate(integrationInjectorTemplate, "    "),
-			"values": integrationValues,
+			"values": integrationValues + "\nclientTrust: {enabled: true}\nclientTrustBundle:\n  sources:\n  - agentioMITM: true\n",
 		},
 	}
 	mutatingWebhook := &admissionregistrationv1.MutatingWebhookConfiguration{
@@ -105,7 +120,7 @@ func TestSidecarInjectorEndToEnd(t *testing.T) {
 			{Name: "rev.namespace.sidecar-injector.istio.io"},
 		},
 	}
-	client := kube.NewFakeClient(injectorConfigMap, mutatingWebhook)
+	client := kube.NewFakeClient(injectorConfigMap, mutatingWebhook, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "demo"}})
 	coreClient := client.Kube()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -131,7 +146,13 @@ func TestSidecarInjectorEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	secretInformer := kclient.NewFiltered[*corev1.Secret](client, kclient.Filter{Namespace: namespace})
+	secretCollection := krt.WrapClient(secretInformer, krt.WithStop(ctx.Done()))
+	secretInformer.Start(ctx.Done())
 	serve, err := setupSidecarInjector(ctx, client, authority, SidecarInjectorOptions{
+		EnableClientTrust: enableClientTrust,
+		Secrets:           secretCollection,
+		MITMTrustBundle:   krt.NewStatic(&mitm.TrustBundle{PEM: string(authority.RootPEM())}, true),
 		Address:           address,
 		Namespace:         namespace,
 		ConfigMapName:     configMapName,
@@ -185,6 +206,25 @@ func TestSidecarInjectorEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(patchedJSON, injected); err != nil {
 		t.Fatal(err)
 	}
+	if got := injected.Labels[clienttrust.ManagedLabel] == "true"; got != enableClientTrust {
+		t.Fatalf("client trust injected=%v, process gate=%v", got, enableClientTrust)
+	}
+	if enableClientTrust {
+		waitFor(t, func() bool {
+			cm, err := coreClient.CoreV1().ConfigMaps("demo").Get(ctx, "agentio-client-ca", metav1.GetOptions{})
+			return err == nil && cm.Data["ca-bundle.pem"] == string(authority.RootPEM())
+		}, func() string { return "enabled client trust distributor to publish its bundle" })
+	} else {
+		for _, action := range coreClient.(*kubefake.Clientset).Actions() {
+			if action.GetResource().Resource == "namespaces" && (action.GetVerb() == "list" || action.GetVerb() == "watch") {
+				t.Fatalf("disabled distributor started a namespace informer: %v", action)
+			}
+		}
+		if _, err := coreClient.CoordinationV1().Leases(namespace).Get(ctx, "agentiod-client-trust-leader", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("disabled distributor participated in leader election: %v", err)
+		}
+	}
+
 	sidecar := findContainer(injected.Spec.Containers, "agentio-proxy")
 	if sidecar == nil {
 		t.Fatalf("injected pod missing agentio-proxy: %+v", injected.Spec.Containers)

@@ -161,6 +161,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		TrustDomain:           options.TrustDomain,
 		RootNamespace:         options.RootNamespace,
 		ZTunnelServiceAccount: ztunnelAccount,
+		ScopedSecrets:         features.ScopedSecrets,
 		AgentioConfigMaps: &kubernetesregistry.AgentioConfigMapOptions{
 			BaseName:    features.AgentioConfigMapName,
 			PrimaryName: features.PrimaryAgentioConfigMapName,
@@ -270,7 +271,11 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		if err != nil {
 			return err
 		}
-		domainSigner = mitm.DomainSignerSource{Signer: builtInSigner, State: builtInSigner.State()}
+		domainSigner = mitm.DomainSignerSource{
+			Signer:      builtInSigner,
+			State:       builtInSigner.State(),
+			TrustBundle: builtInSigner.TrustBundles(),
+		}
 	} else {
 		domainSigner = *composition.domainSigner
 	}
@@ -364,11 +369,15 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	var injectorServe func() error
 	if features.EnableSidecarInjector {
 		injectorOptions := SidecarInjectorOptions{
-			Namespace:         options.RootNamespace,
-			ConfigMapName:     features.InjectorConfigMapName,
-			WebhookConfigName: features.InjectionWebhookConfigName,
-			NativeSidecarMode: features.NativeSidecarMode,
-			DiscoveryAddress:  fmt.Sprintf("%s.%s.svc.%s:15012", features.ServiceName, options.RootNamespace, options.ClusterDomain),
+			EnableClientTrust:      features.EnableClientTrustDistributor,
+			Secrets:                registry.Secrets,
+			MITMTrustBundle:        domainSigner.TrustBundle,
+			ClientTrustPackagePath: features.ClientTrustPackagePath,
+			Namespace:              options.RootNamespace,
+			ConfigMapName:          features.InjectorConfigMapName,
+			WebhookConfigName:      features.InjectionWebhookConfigName,
+			NativeSidecarMode:      features.NativeSidecarMode,
+			DiscoveryAddress:       fmt.Sprintf("%s.%s.svc.%s:15012", features.ServiceName, options.RootNamespace, options.ClusterDomain),
 		}
 		serve, err := setupSidecarInjector(ctx, kubeClient, authority, injectorOptions)
 		if err != nil {

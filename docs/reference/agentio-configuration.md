@@ -246,7 +246,7 @@ Configure all three parts of the trust boundary:
 
 1. Add each inspected hostname to the `tlsTermination.includeHosts` of the `egressGateways` entry whose `name` and `namespace` match the gateway ServiceAccount.
 2. Configure the MITM signing CA. For production, select `SECRET` mode and provide a Secret containing `ca.crt` and `ca.key`; the default `SELF_SIGN` mode maintains a control-plane-managed CA in a Secret.
-3. Distribute that same `ca.crt` to each calling workload and configure its HTTP/TLS client or operating-system trust store to trust it. Agentio mounts CA material into its own data-plane components, but does not automatically add the TLS-termination CA to an application's trust store. Do not disable certificate verification as a production workaround.
+3. Configure calling workloads to trust the MITM CA. In sidecar mode, set `agentiod.injector.clientTrust.enabled: true` to combine and distribute public CAs with the MITM trust bundle and inject Python/Node.js/curl trust environment variables into newly created business containers. This master switch defaults to disabled and is independent of Gateway TLS termination and SNI traffic policy configuration. See [client CA trust](../tasks/configure-client-ca-trust.md) for container selection, overrides, custom sources and the rollout required for existing Pods. Other clients and ambient workloads need their own trust configuration. Do not disable certificate verification as a production workaround.
 
 For example, after creating `agentio-mitm-ca` in `agentio-system` from an operator-managed CA, these values enable inspection of two hosts:
 

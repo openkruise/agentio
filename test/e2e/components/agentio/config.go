@@ -51,6 +51,7 @@ type Config struct {
 	ForwardProxyImage   string `yaml:"forward-proxy-image" json:"forwardProxyImage"`
 	Reuse               bool   `yaml:"reuse" json:"reuse"`
 	EnableFirewallRules bool   `yaml:"enable-firewall-rules" json:"enableFirewallRules"`
+	EnableClientTrust   bool   `yaml:"enable-client-trust" json:"enableClientTrust"`
 	FirewallBackend     string `yaml:"firewall-backend" json:"firewallBackend"`
 }
 

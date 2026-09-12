@@ -23,13 +23,14 @@ test.integration.agentio.kube:
 	done
 	E2E_FRAMEWORK_SMOKE=1 go -C test/e2e test ./suites/framework -run '^TestFrameworkSmoke$$' -v -count=1
 
-AGENTIO_E2E_SUITES ?= ./suites/...
+AGENTIO_E2E_ARGS ?=
 
 test.integration.agentio.product:
-	@for tool in docker kind kubectl helm; do \
-		command -v $$tool >/dev/null || { echo "required integration test tool '$$tool' is unavailable" >&2; exit 1; }; \
-	done
-	AGENTIO_E2E=1 go -C test/e2e test -p 1 $(AGENTIO_E2E_SUITES) -v -count=1
+	go -C test/e2e run ./cmd/product-e2e run $(AGENTIO_E2E_ARGS)
+
+.PHONY: test.integration.agentio.plan
+test.integration.agentio.plan:
+	go -C test/e2e run ./cmd/product-e2e plan $(AGENTIO_E2E_ARGS)
 
 # The control plane runs a goroutine per collection, per handler registration and
 # per xDS stream, so the race detector is part of the normal gate rather than an

@@ -83,7 +83,44 @@ agentiod:
     values: {}
     sourcesName: agentio-config-sources
     sources: ""
+  # Upstream trust-manager Debian package, 20250419~deb12u1.1. Pin updates by digest.
+  # Prepared automatically when client trust is enabled and sources include defaultCAs.
+  trustPackage:
+    image: "quay.io/jetstack/trust-pkg-debian-bookworm@sha256:36d3128ce4661ee863bfe0dac12826b092c14eb0a88f8242e60a1fad4c806acd"
+  clientTrustBundle:
+    # Store CA sources in the Agentio system namespace with the default RBAC.
+    # References require namespace/name/key; sources do not grant additional Secret permissions.
+    sources:
+      - defaultCAs: true
+      - agentioMITM: true
+    target:
+      configMapName: agentio-client-ca
+      key: ca-bundle.pem
   injector:
+    clientTrust:
+      # Master switch for client CA distribution and injection.
+      # The public CA package init is included when sources select defaultCAs.
+      # Pod annotations can opt out, but cannot enable this feature when disabled here.
+      # Independent of Gateway TLS termination and SNI traffic policy configuration.
+      enabled: false
+      containers:
+        include: []
+        exclude: []
+        includeInitContainers: false
+      # Omit mounts/files to use the automatically distributed bundle.
+      # Custom mounts require explicit items and files.caBundle.
+      # AGENTIO_TRUST_BUNDLE is always injected with the CA bundle path.
+      # These additional names receive the same path; use [] to omit them.
+      env:
+        # Python ssl / HTTPX and clients using OpenSSL default trust paths.
+        - SSL_CERT_FILE
+        # Python Requests.
+        - REQUESTS_CA_BUNDLE
+        # Node.js: adds trust alongside built-in public roots.
+        - NODE_EXTRA_CA_CERTS
+        # curl.
+        - CURL_CA_BUNDLE
+      envConflictPolicy: Preserve
     configMapName: agentio-sidecar-injector
     webhookName: ""
     nativeSidecars: auto

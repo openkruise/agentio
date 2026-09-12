@@ -22,5 +22,11 @@
     "name": "GATEWAY_IMAGE",
     "repository": "docker.io/openkruise/proxyv2",
     "digest": "sha256:850848747fa0481a31b0f01d33c7202305a9c2df50d745bdaa2684bb635de098"
+  },
+  {
+    "_comment": "Public CA package from trust-manager, Debian Bookworm ca-certificates 20250419~deb12u1.1.",
+    "name": "TRUST_PACKAGE_IMAGE",
+    "repository": "quay.io/jetstack/trust-pkg-debian-bookworm",
+    "digest": "sha256:36d3128ce4661ee863bfe0dac12826b092c14eb0a88f8242e60a1fad4c806acd"
   }
 ]

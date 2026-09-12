@@ -60,6 +60,7 @@ func chartValues(config Config) ([]byte, error) {
 			"meshInternalTrafficPolicy": "PASSTHROUGH",
 			"enableSNITrafficPolicy":    true,
 			"injector": map[string]any{
+				"clientTrust":    map[string]any{"enabled": config.EnableClientTrust},
 				"nativeSidecars": false,
 				"ztunnel": map[string]any{
 					"image":               config.ZtunnelImage,
