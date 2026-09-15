@@ -188,12 +188,29 @@ func TestSandboxInlinePrioritySNIOrderAndUnavailableView(t *testing.T) {
 		return a != nil && len(a.TrafficPolicies) == 2 && len(a.Extensions) == 2 && b != nil && len(b.TrafficPolicies) == 1
 	}, "inline global/local policies and explicit SNI order")
 	a := manifestAt(t, fixture.compiler, "a")
-	if a.TrafficPolicies[0].Name != "trafficpolicy/tenant/local" || a.TrafficPolicies[1].Name != "globaltrafficpolicy/baseline" {
+	if a.TrafficPolicies[0].Name != "globaltrafficpolicy/baseline" || a.TrafficPolicies[1].Name != "trafficpolicy/tenant/local" {
 		t.Fatalf("traffic priority order: %v", a.TrafficPolicies)
 	}
 	if sniAt(a, 0).Rules[0].Match.Sni[0] != "second.example" || sniAt(a, 1).Rules[0].Match.Sni[0] != "first.example" {
 		t.Fatal("SNI explicit order was not preserved")
 	}
+	local.Spec.Priority = 0
+	fixture.trafficPolicies.ConditionalUpdateObject(local)
+	eventually(t, func() bool {
+		a := manifestAt(t, fixture.compiler, "a")
+		return a != nil && len(a.TrafficPolicies) == 2 &&
+			a.TrafficPolicies[0].Name == "trafficpolicy/tenant/local" && a.TrafficPolicies[0].Priority == 0 &&
+			a.TrafficPolicies[1].Name == "globaltrafficpolicy/baseline"
+	}, "lower numeric priority moves the local policy ahead of the global policy")
+	local.Spec.Priority = global.Spec.Priority
+	fixture.trafficPolicies.ConditionalUpdateObject(local)
+	eventually(t, func() bool {
+		a := manifestAt(t, fixture.compiler, "a")
+		return a != nil && len(a.TrafficPolicies) == 2 &&
+			a.TrafficPolicies[0].Name == "globaltrafficpolicy/baseline" &&
+			a.TrafficPolicies[1].Name == "trafficpolicy/tenant/local" &&
+			a.TrafficPolicies[1].Priority == global.Spec.Priority
+	}, "equal numeric priorities use stable policy-name ordering")
 	second.Spec = *second.Spec.DeepCopy()
 	second.Spec.Rules[0].Match[0].Domains = []string{"updated.example"}
 	fixture.securityProfiles.ConditionalUpdateObject(second)

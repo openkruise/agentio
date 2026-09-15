@@ -99,12 +99,12 @@ func loadSandboxPolicyBodies(ctx krt.HandlerContext, bindings *policy.Bindings, 
 		}
 		payload.TrafficPolicies = append(payload.TrafficPolicies, proto.Clone(compiled.Policy).(*securityv1.TrafficPolicy))
 	}
-	// Native TrafficPolicy uses higher numeric priority first. Resolve ties
+	// Native TrafficPolicy uses lower numeric priority first. Resolve ties
 	// by stable identity so attachment insertion order cannot change a decision.
 	sort.Slice(payload.TrafficPolicies, func(i, j int) bool {
 		left, right := payload.TrafficPolicies[i], payload.TrafficPolicies[j]
 		if left.Priority != right.Priority {
-			return left.Priority > right.Priority
+			return left.Priority < right.Priority
 		}
 		return left.Name < right.Name
 	})

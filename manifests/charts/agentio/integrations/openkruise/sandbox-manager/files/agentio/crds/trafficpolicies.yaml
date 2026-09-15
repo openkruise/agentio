@@ -468,7 +468,7 @@ spec:
                 default: 1000
                 description: |-
                   Priority determines the evaluation order when multiple TrafficPolicies
-                  match the same pod. Higher values are evaluated first. When two
+                  match the same pod. Lower values are evaluated first. When two
                   policies share the same priority, the result is implementation-defined.
                 format: int32
                 minimum: 0

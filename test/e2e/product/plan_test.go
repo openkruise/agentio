@@ -80,11 +80,12 @@ func TestRequiredCoverage(t *testing.T) {
 		t.Fatalf("invocations=%d, want 11", invocations)
 	}
 	for test, want := range map[string]int{
-		"trafficpolicy/TestControlPlaneConfigDebug":      1,
-		"trafficpolicy/TestSandboxTrafficPolicyProtocol": 4,
-		"epe/TestEPEServiceAccountCanWatchItsInputs":     1,
-		"epe/TestPodIdentityReachesEPE":                  2,
-		"clienttrust/TestClientTrustHTTPS":               1,
+		"trafficpolicy/TestControlPlaneConfigDebug":        1,
+		"trafficpolicy/TestSandboxTrafficPolicyProtocol":   4,
+		"trafficpolicy/TestTrafficPolicyLowerPriorityWins": 4,
+		"epe/TestEPEServiceAccountCanWatchItsInputs":       1,
+		"epe/TestPodIdentityReachesEPE":                    2,
+		"clienttrust/TestClientTrustHTTPS":                 1,
 	} {
 		if counts[test] != want {
 			t.Errorf("%s scheduled %d times, want %d", test, counts[test], want)

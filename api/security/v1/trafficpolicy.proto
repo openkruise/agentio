@@ -27,7 +27,7 @@ message TrafficPolicy {
   // Source namespace; required for NAMESPACE scope.
   // Empty for a cluster-scoped GlobalTrafficPolicy.
   string namespace = 2;
-  // Nonnegative; higher values are evaluated first, following the source API.
+  // Nonnegative; lower values are evaluated first.
   // The compiler materializes the source default (1000).
   int32 priority = 3;
   // Absent = direction not configured; present with no rules = no rule matches.
