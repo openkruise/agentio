@@ -195,7 +195,7 @@ type TrafficPolicy struct {
 	// Source namespace; required for NAMESPACE scope.
 	// Empty for a cluster-scoped GlobalTrafficPolicy.
 	Namespace string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// Nonnegative; higher values are evaluated first, following the source API.
+	// Nonnegative; lower values are evaluated first.
 	// The compiler materializes the source default (1000).
 	Priority int32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
 	// Absent = direction not configured; present with no rules = no rule matches.

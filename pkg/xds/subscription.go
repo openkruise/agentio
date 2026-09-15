@@ -140,7 +140,7 @@ func applySubscription(watch *watchState, request *discoveryv3.DeltaDiscoveryReq
 
 func implicitWildcardTypeURL(typeURL string) bool {
 	switch typeURL {
-	case model.SecretType, model.EndpointType, model.RouteType, model.ExtensionConfigurationType, model.SandboxType:
+	case model.SecretType, model.EndpointType, model.RouteType, model.ExtensionConfigurationType:
 		return false
 	default:
 		return true

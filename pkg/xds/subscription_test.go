@@ -48,6 +48,8 @@ func TestApplySubscriptionTypeAwareImplicitWildcard(t *testing.T) {
 		wildcard bool
 	}{
 		{name: "CDS", typeURL: model.ClusterType, wildcard: true},
+		{name: "Address", typeURL: model.AddressType, wildcard: true},
+		{name: "Sandbox", typeURL: model.SandboxType, wildcard: true},
 		{name: "RDS", typeURL: model.RouteType, wildcard: false},
 	}
 	for _, test := range tests {
@@ -60,6 +62,12 @@ func TestApplySubscriptionTypeAwareImplicitWildcard(t *testing.T) {
 			if !changed || !watch.started || watch.wildcard != test.wildcard {
 				t.Fatalf("subscription = changed:%t started:%t wildcard:%t, want wildcard:%t",
 					changed, watch.started, watch.wildcard, test.wildcard)
+			}
+			changed, err = applySubscription(watch, &discoveryv3.DeltaDiscoveryRequest{
+				TypeUrl: test.typeURL, ResponseNonce: "ack",
+			})
+			if err != nil || changed || watch.wildcard != test.wildcard {
+				t.Fatalf("empty ACK changed subscription: changed:%t wildcard:%t err:%v", changed, watch.wildcard, err)
 			}
 		})
 	}

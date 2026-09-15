@@ -154,10 +154,12 @@ func TestSandboxWatchStartsEmptyAndUnsubscribeStopsDelivery(t *testing.T) {
 	server := newTestServer(t, scope, []model.Resource{a}, nil)
 	stream := newFakeStream(ctx, 8)
 	done := server.start(stream)
-	stream.send(nodeRequest(model.SandboxType))
+	request := nodeRequest(model.SandboxType, "*")
+	request.ResourceNamesUnsubscribe = []string{"*"}
+	stream.send(request)
 	first := stream.awaitResponses(t, model.SandboxType, 1)[0]
 	if len(first.Resources) != 0 {
-		t.Fatal("empty Sandbox subscription must not become wildcard")
+		t.Fatal("simultaneous wildcard subscribe/unsubscribe must start an empty watch")
 	}
 	stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SandboxType, ResourceNamesSubscribe: []string{"a"}})
 	stream.awaitResponses(t, model.SandboxType, 2)
@@ -175,6 +177,62 @@ func TestSandboxWatchStartsEmptyAndUnsubscribeStopsDelivery(t *testing.T) {
 	}
 	if err := server.finish(t, stream, done); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSandboxImplicitWildcardDelivery(t *testing.T) {
+	for _, mode := range []string{"existing", "warm pool", "reconnect"} {
+		t.Run(mode, func(t *testing.T) {
+			worker := workerResource(t, "pod-1")
+			a := sandboxResourceWithAttester(t, "a", "worker")
+			outside := sandboxResourceWithAttester(t, "outside", "another-worker")
+			resources := []model.Resource{worker, outside}
+			if mode != "warm pool" {
+				resources = append(resources, a)
+			}
+			server := newTestServer(t, workerScope(worker), resources, nil)
+			stream := newFakeStream(t.Context(), 8)
+			done := server.start(stream)
+			request := nodeRequest(model.SandboxType)
+			if mode == "reconnect" {
+				request.InitialResourceVersions = map[string]string{"a": a.Hash, "gone": "old-version"}
+			}
+			stream.send(request)
+			first := stream.awaitResponses(t, model.SandboxType, 1)[0]
+			var wantResources, wantRemoved []string
+			if mode == "existing" {
+				wantResources = []string{"a"}
+			}
+			if mode == "reconnect" {
+				wantRemoved = []string{"gone"}
+			}
+			if !slices.Equal(resourceNames(first), wantResources) || !slices.Equal(first.RemovedResources, wantRemoved) {
+				t.Fatalf("initial response = %v, want resources %v, removed %v", first, wantResources, wantRemoved)
+			}
+			stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SandboxType, ResponseNonce: first.Nonce})
+
+			// New bindings and policy updates must arrive without another subscription,
+			// including when the first response was empty or came from a reconnect.
+			changed := sandboxResourceWithAttester(t, "a", "worker", &securityv1.TrafficPolicy{Name: "p", Priority: 2})
+			b := sandboxResourceWithAttester(t, "b", "worker")
+			server.resources.publish(selectionSnapshot(t, []model.Resource{worker, changed, b, outside}))
+			updated := stream.awaitResponses(t, model.SandboxType, 2)[1]
+			if !slices.Equal(resourceNames(updated), []string{"a", "b"}) || len(updated.RemovedResources) != 0 {
+				t.Fatalf("incremental response = %v, want only a and b", updated)
+			}
+			if updated.Resources[0].Version == a.Hash {
+				t.Fatal("policy update delivered the old Sandbox version")
+			}
+			stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SandboxType, ResponseNonce: updated.Nonce})
+			server.resources.publish(selectionSnapshot(t, []model.Resource{worker, b, outside}))
+			removed := stream.awaitResponses(t, model.SandboxType, 3)[2]
+			if len(removed.Resources) != 0 || !slices.Equal(removed.RemovedResources, []string{"a"}) {
+				t.Fatalf("deletion response = %v, want only a removed", removed)
+			}
+			if err := server.finish(t, stream, done); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
