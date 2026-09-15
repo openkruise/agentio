@@ -15,12 +15,14 @@
 package kruise
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -232,48 +234,36 @@ func TestKruiseSandboxProducesPodAttesterBinding(t *testing.T) {
 	if !workload.Ready || !workload.SandboxManaged || !OwnsPod(pod) {
 		t.Fatalf("Workload ready = %v, OwnsPod = %v", workload.Ready, OwnsPod(pod))
 	}
-}
 
-func TestKruiseRuntimeActivationFailsClosed(t *testing.T) {
-	base := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:  "demo",
-			Name:       "sandbox",
-			UID:        types.UID("sandbox-uid"),
-			Generation: 2,
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			ObservedGeneration: 2,
-			Phase:              agentsv1alpha1.SandboxRunning,
-		},
-	}
-	stale := base.DeepCopy()
-	stale.Status.ObservedGeneration = 1
-	initializing := base.DeepCopy()
-	initializing.Status.Conditions = []metav1.Condition{
-		{
-			Type:   string(agentsv1alpha1.RuntimeInitialized),
-			Status: metav1.ConditionFalse,
-		},
-	}
-	terminated := base.DeepCopy()
-	terminated.Status.Phase = agentsv1alpha1.SandboxFailed
-
+	// Phase and generation observations may lag the running Pod. Its attester
+	// must remain available throughout Pending transitions and timeout updates.
 	for _, test := range []struct {
-		name    string
-		sandbox *agentsv1alpha1.Sandbox
-		want    bool
+		name       string
+		phase      agentsv1alpha1.SandboxPhase
+		state      model.SandboxState
+		generation int64
+		observed   int64
 	}{
-		{name: "running", sandbox: base, want: true},
-		{name: "stale observation", sandbox: stale},
-		{name: "runtime initializing", sandbox: initializing},
-		{name: "terminated", sandbox: terminated},
+		{"pending", agentsv1alpha1.SandboxPending, model.SandboxStatePending, 3, 3},
+		{"running", agentsv1alpha1.SandboxRunning, model.SandboxStateRunning, 3, 3},
+		{"timeout extended", agentsv1alpha1.SandboxRunning, model.SandboxStateRunning, 4, 3},
+		{"timeout observed", agentsv1alpha1.SandboxRunning, model.SandboxStateRunning, 4, 4},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := hasServingRuntime(test.sandbox); got != test.want {
-				t.Fatalf("hasServingRuntime() = %v, want %v", got, test.want)
-			}
+		changed := sandbox.DeepCopy()
+		changed.Status.Phase = test.phase
+		changed.Generation = test.generation
+		changed.Status.ObservedGeneration = test.observed
+		// Wait for this specific projection, not the preceding same-phase result.
+		changed.Labels["test-step"] = test.name
+		sandboxObjects.UpdateObject(changed)
+		err := wait.PollUntilContextTimeout(t.Context(), time.Millisecond, time.Second, true, func(context.Context) (bool, error) {
+			current := sandboxes.GetKey("delivery-uid")
+			return current != nil && current.Labels["test-step"] == test.name && current.State == test.state && current.Attester != nil &&
+				current.Attester.WorkloadUID == workload.UID, nil
 		})
+		if err != nil {
+			t.Fatalf("%s did not retain the Pod binding: Sandbox = %+v, error = %v", test.name, sandboxes.GetKey("delivery-uid"), err)
+		}
 	}
 }
 

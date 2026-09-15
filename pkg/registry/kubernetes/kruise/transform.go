@@ -137,7 +137,7 @@ func newSandboxes(
 				podLabels = pod.Labels
 			}
 			var attester *model.Attester
-			if pod != nil && pod.DeletionTimestamp == nil && podsource.IsEligible(pod) && hasServingRuntime(sandbox) {
+			if pod != nil && pod.DeletionTimestamp == nil && podsource.IsEligible(pod) {
 				attester = &model.Attester{WorkloadUID: podsource.WorkloadUID(clusterID, pod)}
 			}
 			return &model.Sandbox{
@@ -158,20 +158,6 @@ func isPolicySubject(sandbox *agentsv1alpha1.Sandbox) bool {
 		return true
 	}
 	return sandbox.Labels[agentsv1alpha1.LabelSandboxIsClaimed] == agentsv1alpha1.True
-}
-
-// hasServingRuntime reports Running phase with RuntimeInitialized (when present) True.
-func hasServingRuntime(sandbox *agentsv1alpha1.Sandbox) bool {
-	if sandbox == nil || sandbox.Generation != sandbox.Status.ObservedGeneration ||
-		sandbox.Status.Phase != agentsv1alpha1.SandboxRunning {
-		return false
-	}
-	for _, condition := range sandbox.Status.Conditions {
-		if condition.Type == string(agentsv1alpha1.RuntimeInitialized) {
-			return condition.Status == metav1.ConditionTrue
-		}
-	}
-	return true
 }
 
 func runtimeState(sandbox *agentsv1alpha1.Sandbox) model.SandboxState {
