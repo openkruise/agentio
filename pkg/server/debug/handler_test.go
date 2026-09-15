@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -367,8 +368,7 @@ func TestConfigDebugHandlerHEADMatchesGETWithoutBody(t *testing.T) {
 
 func TestConfigDebugHandlerAuditLogsDoNotExposeCredentials(t *testing.T) {
 	fixture := newConfigDebugFixture(t, nil, true)
-	var logs bytes.Buffer
-	captureLogs(t, &logs)
+	logs := captureLogs(t)
 	handler := NewHandler(fixture.sources, fixture.compiler,
 		&configDebugTestAuthenticator{err: errors.New("TokenReview detail must stay private")}, "agentio-system")
 	request := httptest.NewRequest(http.MethodGet, Path, nil)
@@ -414,8 +414,7 @@ func TestConfigDebugHandlerLogsConversionFailureWithoutLeakingDetailsToClient(t 
 			}},
 		}},
 	}}, krt.WithStop(stop))
-	var logs bytes.Buffer
-	captureLogs(t, &logs)
+	logs := captureLogs(t)
 	handler := NewHandler(fixture.sources, fixture.compiler,
 		&configDebugTestAuthenticator{err: errors.New("must not authenticate loopback")}, "agentio-system")
 	response := serveConfigDebugRequest(handler, http.MethodGet, Path, "127.0.0.1:41000")
@@ -433,11 +432,31 @@ func TestConfigDebugHandlerLogsConversionFailureWithoutLeakingDetailsToClient(t 
 	}
 }
 
-func captureLogs(t *testing.T, output *bytes.Buffer) {
+// capturedLogs also receives background collection logs while tests read it.
+type capturedLogs struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (c *capturedLogs) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buffer.Write(p)
+}
+
+func (c *capturedLogs) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buffer.String()
+}
+
+func captureLogs(t *testing.T) *capturedLogs {
 	t.Helper()
+	output := &capturedLogs{}
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(output, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
+	return output
 }
 
 type configDebugTestAuthenticator struct {
