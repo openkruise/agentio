@@ -16,6 +16,7 @@ package xds
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -108,8 +109,15 @@ func TestSandboxPriorityEndToEnd(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
 	discoveryv3.RegisterAggregatedDiscoveryServiceServer(grpcServer, server)
-	go func() { _ = grpcServer.Serve(listener) }()
-	t.Cleanup(func() { grpcServer.Stop(); _ = listener.Close() })
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- grpcServer.Serve(listener) }()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		// Serve closes the listener before returning, including when Stop wins startup.
+		if err := <-serveDone; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			t.Errorf("serve Delta ADS: %v", err)
+		}
+	})
 	conn, err := grpc.NewClient("passthrough:///priority-e2e",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
@@ -118,7 +126,11 @@ func TestSandboxPriorityEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close Delta ADS connection: %v", err)
+		}
+	})
 
 	// Create the larger value first: creation/arrival order must not win.
 	local, err := client.AgentsAPI().AgentsV1alpha1().TrafficPolicies("demo").Create(ctx,
