@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,6 +47,7 @@ import (
 	opconfig "istio.io/istio/operator/pkg/apis"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/mesh"
 	common_features "istio.io/istio/pkg/features"
 	"istio.io/istio/pkg/kube"
@@ -84,6 +86,12 @@ const (
 
 	// InitContainerName is the name of the init container that deploys iptables
 	InitContainerName = "istio-init"
+
+	// AgentioInitContainerName is the traffic initialization container in Agentio templates.
+	AgentioInitContainerName = "agentio-init"
+
+	// AgentioValidationContainerName validates Agentio CNI traffic setup.
+	AgentioValidationContainerName = "agentio-validation"
 
 	// EnableCoreDumpName is the name of the init container that allows core dumps
 	EnableCoreDumpName = "enable-core-dump"
@@ -431,7 +439,7 @@ func RunTemplate(params InjectionParameters) (mergedPod *corev1.Pod, templatePod
 	metadata := &params.pod.ObjectMeta
 	meshConfig := params.meshConfig
 
-	if err := validateAnnotations(metadata.GetAnnotations()); err != nil {
+	if err := validateAnnotations(agentio.NormalizeAnnotations(metadata.GetAnnotations())); err != nil {
 		log.Errorf("Injection failed due to invalid annotations: %v", err)
 		return nil, nil, err
 	}
@@ -574,6 +582,7 @@ func stripPod(req InjectionParameters) *corev1.Pod {
 		}
 	}
 	delete(pod.Annotations, annotation.SidecarStatus.Name)
+	delete(pod.Annotations, agentio.SidecarStatus)
 
 	return pod
 }
@@ -581,7 +590,7 @@ func stripPod(req InjectionParameters) *corev1.Pod {
 func injectionStatus(pod *corev1.Pod) *SidecarInjectionStatus {
 	var statusBytes []byte
 	if pod.ObjectMeta.Annotations != nil {
-		if value, ok := pod.ObjectMeta.Annotations[annotation.SidecarStatus.Name]; ok {
+		if value, ok := agentio.Annotation(pod.ObjectMeta.Annotations, annotation.SidecarStatus.Name); ok {
 			statusBytes = []byte(value)
 		}
 	}

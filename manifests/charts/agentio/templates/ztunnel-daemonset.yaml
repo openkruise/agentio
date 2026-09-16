@@ -67,6 +67,12 @@ spec:
         - proxy
         - ztunnel
         env:
+        - name: AUTH_TOKEN
+          value: /var/run/secrets/tokens/agentio-token
+        - name: CA_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
+        - name: XDS_ROOT_CA
+          value: /var/run/secrets/agentio/root-cert.pem
         - name: CA_ADDRESS
           value: {{ include "agentio.controller.name" . }}.{{ include "agentio.namespace" . }}.svc.cluster.local:15012
         - name: XDS_ADDRESS
@@ -121,23 +127,23 @@ spec:
           value: {{ $val | quote }}
         {{- end }}
         volumeMounts:
-        - mountPath: /var/run/secrets/istio
-          name: istiod-ca-cert
+        - mountPath: /var/run/secrets/agentio
+          name: agentio-ca-certs
         - mountPath: /var/run/secrets/tokens
-          name: istio-token
+          name: agentio-token
         - mountPath: /var/run/ztunnel
           name: cni-ztunnel-sock-dir
         - mountPath: /tmp
           name: tmp
       volumes:
-      - name: istio-token
+      - name: agentio-token
         projected:
           sources:
           - serviceAccountToken:
-              path: istio-token
+              path: agentio-token
               expirationSeconds: 43200
               audience: istio-ca
-      - name: istiod-ca-cert
+      - name: agentio-ca-certs
         {{- if .Values.global.enableClusterTrustBundle }}
         projected:
           sources:

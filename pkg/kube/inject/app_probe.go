@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,6 +26,7 @@ import (
 
 	"istio.io/api/annotation"
 	"istio.io/istio/pilot/cmd/pilot-agent/status"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/slices"
 )
@@ -246,7 +248,7 @@ func allContainers(pod *corev1.Pod) []corev1.Container {
 // patchRewriteProbe generates the patch for webhook.
 func patchRewriteProbe(annotations map[string]string, pod *corev1.Pod, defaultPort int32) {
 	statusPort := int(defaultPort)
-	if v, f := annotations[annotation.SidecarStatusPort.Name]; f {
+	if v, f := agentio.Annotation(annotations, annotation.SidecarStatusPort.Name); f {
 		p, err := strconv.Atoi(v)
 		if err != nil {
 			log.Errorf("Invalid annotation %v=%v: %v", annotation.SidecarStatusPort.Name, v, err)

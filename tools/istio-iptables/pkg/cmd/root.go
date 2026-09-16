@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,7 +48,7 @@ func bindCmdlineFlags(cfg *config.Config, cmd *cobra.Command) {
 		&cfg.InboundCapturePort)
 
 	flag.BindEnv(fs, constants.InboundTunnelPort, "e",
-		"Specify the istio tunnel port for inbound tcp traffic.",
+		"Specify the proxy tunnel port for inbound tcp traffic.",
 		&cfg.InboundTunnelPort)
 
 	flag.BindEnv(fs, constants.ProxyUID, "u",
@@ -158,9 +159,10 @@ func bindCmdlineFlags(cfg *config.Config, cmd *cobra.Command) {
 func GetCommand(logOpts *log.Options) *cobra.Command {
 	cfg := config.DefaultConfig()
 	cmd := &cobra.Command{
-		Use:   "istio-iptables",
-		Short: "Set up iptables rules for Istio Sidecar",
-		Long:  "istio-iptables is responsible for setting up port forwarding for Istio Sidecar.",
+		Use:     "istio-iptables",
+		Aliases: []string{"agentio-iptables"},
+		Short:   "Set up iptables rules for a sidecar proxy",
+		Long:    "Set up sidecar port forwarding with agentio-iptables (alias: istio-iptables).",
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if err := log.Configure(logOpts); err != nil {
 				return err

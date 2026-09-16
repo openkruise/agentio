@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,6 +26,7 @@ import (
 
 	"istio.io/istio/cni/pkg/config"
 	"istio.io/istio/cni/pkg/plugin"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/kclient"
@@ -201,7 +203,11 @@ func (c *Controller) matchesFilter(pod *corev1.Pod) bool {
 	// Only check pods that have the sidecar annotation; the rest can be
 	// ignored.
 	if c.cfg.SidecarAnnotation != "" {
-		if _, ok := pod.ObjectMeta.Annotations[c.cfg.SidecarAnnotation]; !ok {
+		key := c.cfg.SidecarAnnotation
+		if key == agentio.SidecarStatus {
+			key = "sidecar.istio.io/status"
+		}
+		if _, ok := agentio.Annotation(pod.ObjectMeta.Annotations, key); !ok {
 			return false
 		}
 	}
@@ -211,7 +217,12 @@ func (c *Controller) matchesFilter(pod *corev1.Pod) bool {
 	for _, container := range pod.Status.InitContainerStatuses {
 		// Skip the container if the InitContainerName is not a match and our
 		// InitContainerName filter is non-empty.
-		if c.cfg.InitContainerName != "" && container.Name != c.cfg.InitContainerName {
+		matchesName := container.Name == c.cfg.InitContainerName
+		if c.cfg.InitContainerName == "agentio-validation" && container.Name == "istio-validation" {
+			// Continue repairing Pods created before the Agentio chart upgrade.
+			matchesName = true
+		}
+		if c.cfg.InitContainerName != "" && !matchesName {
 			continue
 		}
 

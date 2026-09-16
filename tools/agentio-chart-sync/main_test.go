@@ -754,10 +754,10 @@ func TestPreparedSandboxControllerBundleCreatesConsumableTrafficProxyConfig(t *t
 		t.Fatalf("proxy-type label = %q, want ztunnel", config.Labels["networking.agents.kruise.io/proxy-type"])
 	}
 	if len(config.InitContainers) != 2 {
-		t.Fatalf("injected init container count = %d, want istio-init and traffic-proxy", len(config.InitContainers))
+		t.Fatalf("injected init container count = %d, want agentio-init and traffic-proxy", len(config.InitContainers))
 	}
-	if got := config.InitContainers[0]; got.Name != "istio-init" || got.Image != "docker.io/openkruise/proxy-init:latest" {
-		t.Fatalf("first init container = %s (%s), want istio-init (docker.io/openkruise/proxy-init:latest)", got.Name, got.Image)
+	if got := config.InitContainers[0]; got.Name != "agentio-init" || got.Image != "docker.io/openkruise/proxy-init:latest" {
+		t.Fatalf("first init container = %s (%s), want agentio-init (docker.io/openkruise/proxy-init:latest)", got.Name, got.Image)
 	}
 	proxy := config.InitContainers[1]
 	if proxy.Name != "traffic-proxy" || proxy.Image != "docker.io/openkruise/ztunnel:latest" {
@@ -772,6 +772,7 @@ func TestPreparedSandboxControllerBundleCreatesConsumableTrafficProxyConfig(t *t
 	if got := envValue(proxy.Env, "CA_ADDRESS"); got != "agentiod.agentio-system.svc.cluster.local:15012" {
 		t.Fatalf("CA_ADDRESS = %q, want cross-namespace Agentio address", got)
 	}
+	assertCredentialMounts(t, corev1.PodSpec{InitContainers: config.InitContainers, Volumes: config.Volumes}, "AUTH_TOKEN")
 	if !hasConfigMapVolume(config.Volumes, "agentio-ca-certs") {
 		t.Fatalf("traffic-proxy volumes do not mount the namespace-local agentio-ca-certs ConfigMap: %#v", config.Volumes)
 	}

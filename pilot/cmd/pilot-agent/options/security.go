@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,7 +22,6 @@ import (
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/pilot/pkg/features"
-	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/jwt"
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/security"
@@ -76,14 +76,12 @@ func NewSecurityOptions(proxyConfig *meshconfig.ProxyConfig, stsPort int, tokenM
 func SetupSecurityOptions(proxyConfig *meshconfig.ProxyConfig, secOpt *security.Options, jwtPolicy,
 	credFetcherTypeEnv, credIdentityProvider string,
 ) (*security.Options, error) {
-	jwtPath := constants.ThirdPartyJwtPath
+	jwtPath := jwtPathEnv.Get()
 	switch jwtPolicy {
 	case jwt.PolicyThirdParty:
 		log.Info("JWT policy is third-party-jwt")
-		jwtPath = constants.ThirdPartyJwtPath
 	case jwt.PolicyFirstParty:
 		log.Warnf("Using deprecated JWT policy 'first-party-jwt'; treating as 'third-party-jwt'")
-		jwtPath = constants.ThirdPartyJwtPath
 	default:
 		log.Info("Using existing certs")
 	}

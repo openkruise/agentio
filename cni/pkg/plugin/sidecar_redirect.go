@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +23,7 @@ import (
 	"strings"
 
 	"istio.io/api/annotation"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/tools/istio-iptables/pkg/cmd"
 )
@@ -197,7 +199,7 @@ func getAnnotationOrDefault(name string, annotations map[string]string) (isFound
 		return false, "", fmt.Errorf("no registered annotation with name=%s", name)
 	}
 	// use annotation value if present
-	if val, found := annotations[annotationRegistry[name].key]; found {
+	if val, found := agentio.Annotation(annotations, annotationRegistry[name].key); found {
 		if err := annotationRegistry[name].validator(val); err != nil {
 			return true, annotationRegistry[name].defaultVal, err
 		}

@@ -37,6 +37,7 @@ import (
 	"istio.io/istio/pilot/pkg/util/network"
 	"istio.io/istio/pkg/bootstrap/option"
 	"istio.io/istio/pkg/bootstrap/platform"
+	"istio.io/istio/pkg/config/agentio"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/env"
 	common_features "istio.io/istio/pkg/features"
@@ -321,7 +322,7 @@ func getStatsOptions(meta *model.BootstrapNodeMetadata) []option.Instance {
 	}
 
 	statsFlushInterval := 5 * time.Second // Default value is 5s.
-	if v, exits := meta.Annotations[annotation.SidecarStatsFlushInterval.Name]; exits {
+	if v, exits := agentio.Annotation(meta.Annotations, annotation.SidecarStatsFlushInterval.Name); exits {
 		d, err := time.ParseDuration(v)
 		if err == nil {
 			statsFlushInterval = d
@@ -331,7 +332,7 @@ func getStatsOptions(meta *model.BootstrapNodeMetadata) []option.Instance {
 		}
 	}
 
-	if eviction, exits := meta.Annotations[annotation.SidecarStatsEvictionInterval.Name]; exits {
+	if eviction, exits := agentio.Annotation(meta.Annotations, annotation.SidecarStatsEvictionInterval.Name); exits {
 		statsEvictionInterval, err := time.ParseDuration(eviction)
 		if err != nil {
 			log.Warnf("Failed to parse stats eviction interval %v: %v", eviction, err)

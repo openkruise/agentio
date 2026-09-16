@@ -77,7 +77,7 @@ spec:
         - name: REPAIR_RUN_AS_DAEMON
           value: "true"
         - name: REPAIR_SIDECAR_ANNOTATION
-          value: "sidecar.istio.io/status"
+          value: "sidecar.agentio.kruise.io/status"
         {{- if not .Values.ambient.cni.shareHostNetworkNamespace }}
         - name: ALLOW_SWITCH_TO_HOST_NS
           value: "true"
@@ -113,7 +113,7 @@ spec:
           readOnly: true
         - mountPath: /host/etc/cni/net.d
           name: cni-net-dir
-        - mountPath: /var/run/istio-cni
+        - mountPath: /var/run/agentio-cni
           name: cni-socket-dir
         - mountPath: /host/var/run/netns
           mountPropagation: HostToContainer
@@ -141,7 +141,7 @@ spec:
           path: {{ .Values.ambient.cni.cniConfDir }}
       - name: cni-socket-dir
         hostPath:
-          path: /var/run/istio-cni
+          path: /var/run/agentio-cni
       - name: cni-netns-dir
         hostPath:
           path: {{ .Values.ambient.cni.cniNetnsDir }}
