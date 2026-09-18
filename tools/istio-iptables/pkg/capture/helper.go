@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,9 +42,9 @@ func Flatten(lists ...[]string) []string {
 
 // VerifyIptablesState function verifies the current iptables state against the expected state.
 // The current state is considered equal to the expected state if the following three conditions are met:
-//   - Every ISTIO_* chain in the expected state must also exist in the current state.
-//   - Every ISTIO_* chain must have the same number of elements in both the current and expected state.
-//   - Every rule in the expected state (whether it is in an ISTIO or non-ISTIO chain) must also exist in the current state.
+//   - Every managed chain in the expected state must also exist in the current state.
+//   - Every managed chain must have the same number of elements in both the current and expected state.
+//   - Every rule in the expected state (whether it is in a managed or unmanaged chain) must also exist in the current state.
 //     The verification is performed by using "iptables -C" on the rule produced by our iptables builder. No comparison of the parsed rules is done.
 //
 // Note: The order of the rules is not checked and is not used to determine the equivalence of the two states.
@@ -117,7 +118,7 @@ func VerifyIptablesState(
 					}
 					for chain, rules := range chains {
 						currentRules, ok := currentState[table][chain]
-						if !ok || (strings.HasPrefix(chain, "ISTIO_") && len(rules) != len(currentRules)) {
+						if !ok || (constants.IsManagedChain(chain) && len(rules) != len(currentRules)) {
 							deltaFound = true
 							log.Debugf("[%s] Mismatching number of rules in chain %s (table: %s) between current and expected state", ipCfg.versionName, chain, table)
 							break
@@ -127,7 +128,7 @@ func VerifyIptablesState(
 				if !deltaFound {
 					for table, chains := range currentState {
 						for chain := range chains {
-							if strings.HasPrefix(chain, "ISTIO_") {
+							if constants.IsManagedChain(chain) {
 								_, ok := expectedState[table][chain]
 								if !ok {
 									deltaFound = true
@@ -177,18 +178,17 @@ func VerifyIptablesState(
 	return globalResidueExists, globalDeltaExists
 }
 
-// HasIstioLeftovers checks the given iptables state for any chains or rules related to Istio.
-// It scans the provided map of tables, chains, and rules to identify any chains that start with the "ISTIO_" prefix,
-// as well as any rules that involve Istio-specific jumps.
+// HasIstioLeftovers checks the given iptables state for chains and rules owned by the init container.
+// It includes ISTIO_* chains, the Agentio UDP output chain, and jumps to these chains.
 // The function returns a map where the keys are the tables, and the values are structs containing the leftover
-// "ISTIO_" chains and jump rules for each table. Only tables with Istio-related leftovers are included in the result.
+// managed chains and jump rules for each table. Only tables with managed leftovers are included in the result.
 func HasIstioLeftovers(state map[string]map[string][]string) map[string]struct{ Chains, Rules []string } {
 	output := make(map[string]struct{ Chains, Rules []string })
 	for table, chains := range state {
 		istioChains := []string{}
 		istioJumps := []string{}
 		for chain, rules := range chains {
-			if strings.HasPrefix(chain, "ISTIO_") {
+			if constants.IsManagedChain(chain) {
 				istioChains = append(istioChains, chain)
 			}
 			for _, rule := range rules {
@@ -207,7 +207,7 @@ func HasIstioLeftovers(state map[string]map[string][]string) map[string]struct{ 
 	return output
 }
 
-// isIstioJump checks if the given rule is a jump to an Istio chain
+// isIstioJump checks if the given rule is a jump to a managed chain
 func isIstioJump(rule string) bool {
 	// Split the rule into fields
 	fields := strings.Fields(rule)
@@ -217,8 +217,8 @@ func isIstioJump(rule string) bool {
 			// Check if there's a next field (the target)
 			if i+1 < len(fields) {
 				target := strings.Trim(fields[i+1], "'\"")
-				// Check if the target starts with ISTIO_
-				return strings.HasPrefix(target, "ISTIO_")
+				// Check if the target is owned by the init container
+				return constants.IsManagedChain(target)
 			}
 		}
 	}

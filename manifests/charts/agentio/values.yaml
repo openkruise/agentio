@@ -37,6 +37,14 @@ sidecarInjector:
   ztunnel:
     # -- Firewall implementation used by injected per-pod ztunnels: auto or iptables.
     firewallBackend: auto
+    udpProxy:
+      # -- Opt in to outbound UDP capture in injected sidecars. Requires a
+      # CONNECT-UDP-capable ztunnel and gateway. Does not enable ambient UDP.
+      enabled: false
+      # -- Packet mark and routing table reserved inside the source Pod netns.
+      # Keep captureMark distinct from ztunnel PACKET_MARK (1337) and TCP marks.
+      captureMark: 1339
+      routeTable: 134
 
 agentiod:
   replicas: 1

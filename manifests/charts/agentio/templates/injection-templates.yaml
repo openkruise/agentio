@@ -26,7 +26,8 @@ data:
         "proxy_ztunnel": {
           "image": "{{ include "agentio.ztunnelImage" . }}",
           "enableFirewallRules": {{ .Values.global.enableFirewallRules | default false }},
-          "firewallBackend": "{{ .Values.sidecarInjector.ztunnel.firewallBackend | default "auto" }}"
+          "firewallBackend": "{{ .Values.sidecarInjector.ztunnel.firewallBackend | default "auto" }}",
+          "udpProxy": {{ .Values.sidecarInjector.ztunnel.udpProxy | toJson }}
         },
         "caAddress": "{{ include "agentio.controller.name" . }}.{{ include "agentio.namespace" . }}.svc.cluster.local:15012",
         "xdsAddress": "{{ include "agentio.controller.name" . }}.{{ include "agentio.namespace" . }}.svc.cluster.local:15012",

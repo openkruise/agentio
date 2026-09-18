@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -443,6 +444,9 @@ func (cfg *IptablesConfigurator) Run() error {
 		// prevent intercept traffic from app ==> app by pod ip
 		cfg.ruleBuilder.InsertRule(constants.ISTIOINBOUND, "mangle", 3,
 			"-p", "tcp", "-i", "lo", "-m", "mark", "!", "--mark", constants.OutboundMark, "-j", "RETURN")
+	}
+	if cfg.cfg.EnableUDPTProxy {
+		cfg.setupOutboundUDPTProxy(ipv4RangesInclude, ipv6RangesInclude, ipv4RangesExclude, ipv6RangesExclude)
 	}
 	return cfg.executeCommands(&cfg.iptV, &cfg.ipt6V)
 }

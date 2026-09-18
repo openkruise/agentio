@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +36,10 @@ import (
 func DefaultConfig() *Config {
 	return &Config{
 		ProxyPort:               "15001",
+		UDPProxyPort:            "15002",
+		UDPTProxyMark:           "1339",
+		UDPTProxyRouteTable:     "134",
+		UDPProxyMark:            "1337",
 		InboundCapturePort:      "15006",
 		InboundTunnelPort:       "15008",
 		InboundTProxyMark:       "1337",
@@ -50,6 +55,11 @@ func DefaultConfig() *Config {
 // Command line options
 // nolint: maligned
 type Config struct {
+	EnableUDPTProxy          bool          `json:"ENABLE_UDP_TPROXY"`
+	UDPProxyPort             string        `json:"UDP_PROXY_PORT"`
+	UDPTProxyMark            string        `json:"UDP_TPROXY_MARK"`
+	UDPTProxyRouteTable      string        `json:"UDP_TPROXY_ROUTE_TABLE"`
+	UDPProxyMark             string        `json:"UDP_PROXY_MARK"`
 	ProxyPort                string        `json:"PROXY_PORT"`
 	InboundCapturePort       string        `json:"INBOUND_CAPTURE_PORT"`
 	InboundTunnelPort        string        `json:"INBOUND_TUNNEL_PORT"`
@@ -111,6 +121,11 @@ func (c *Config) String() string {
 func (c *Config) Print() {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("PROXY_PORT=%s\n", c.ProxyPort))
+	b.WriteString(fmt.Sprintf("ENABLE_UDP_TPROXY=%t\n", c.EnableUDPTProxy))
+	if c.EnableUDPTProxy {
+		b.WriteString(fmt.Sprintf("UDP_PROXY_PORT=%s\nUDP_PROXY_MARK=%s\nUDP_TPROXY_MARK=%s\nUDP_TPROXY_ROUTE_TABLE=%s\n",
+			c.UDPProxyPort, c.UDPProxyMark, c.UDPTProxyMark, c.UDPTProxyRouteTable))
+	}
 	b.WriteString(fmt.Sprintf("PROXY_INBOUND_CAPTURE_PORT=%s\n", c.InboundCapturePort))
 	b.WriteString(fmt.Sprintf("PROXY_TUNNEL_PORT=%s\n", c.InboundTunnelPort))
 	b.WriteString(fmt.Sprintf("PROXY_UID=%s\n", c.ProxyUID))
@@ -150,6 +165,10 @@ func (c *Config) Print() {
 }
 
 func (c *Config) Validate() error {
+	if err := c.validateUDPTProxy(); err != nil {
+		return err
+	}
+
 	if err := ValidateOwnerGroups(c.OwnerGroupsInclude, c.OwnerGroupsExclude); err != nil {
 		return err
 	}

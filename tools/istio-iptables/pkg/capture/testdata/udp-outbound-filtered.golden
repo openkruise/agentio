@@ -1,0 +1,47 @@
+* mangle
+-N ISTIO_UDP_TPROXY
+-N AGENTIO_UDP_OUTPUT
+-A PREROUTING -i lo -p udp -m mark --mark 1339 -j ISTIO_UDP_TPROXY
+-A ISTIO_UDP_TPROXY -p udp -j TPROXY --tproxy-mark 1339/0xffffffff --on-port 15002
+-A OUTPUT -p udp -j AGENTIO_UDP_OUTPUT
+-A AGENTIO_UDP_OUTPUT -o lo -j RETURN
+-A AGENTIO_UDP_OUTPUT -m addrtype --dst-type LOCAL,BROADCAST,MULTICAST -j RETURN
+-A AGENTIO_UDP_OUTPUT -m conntrack --ctdir REPLY -j RETURN
+-A AGENTIO_UDP_OUTPUT -m mark --mark 1337 -j RETURN
+-A AGENTIO_UDP_OUTPUT -m owner --uid-owner 1337 -j RETURN
+-A AGENTIO_UDP_OUTPUT -m owner --gid-owner 1337 -j RETURN
+-A AGENTIO_UDP_OUTPUT -o eth1 -j RETURN
+-A AGENTIO_UDP_OUTPUT -m owner ! --gid-owner 1000 -m owner ! --gid-owner 1001 -j RETURN
+-A AGENTIO_UDP_OUTPUT -p udp --dport 123 -j RETURN
+-A AGENTIO_UDP_OUTPUT -d 10.1.0.0/16 -j RETURN
+-A AGENTIO_UDP_OUTPUT -p udp --dport 19090 -j MARK --set-mark 1339
+-A AGENTIO_UDP_OUTPUT -d 10.0.0.0/8 -j MARK --set-mark 1339
+COMMIT
+* nat
+-N ISTIO_INBOUND
+-N ISTIO_REDIRECT
+-N ISTIO_IN_REDIRECT
+-N ISTIO_OUTPUT
+-A PREROUTING -i eth1 -j RETURN
+-A OUTPUT -o eth1 -j RETURN
+-A ISTIO_INBOUND -p tcp --dport 15008 -j RETURN
+-A ISTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
+-A ISTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+-A PREROUTING -p tcp -j ISTIO_INBOUND
+-A ISTIO_INBOUND -p tcp -j ISTIO_IN_REDIRECT
+-A OUTPUT -j ISTIO_OUTPUT
+-A ISTIO_OUTPUT -p tcp --dport 123 -j RETURN
+-A ISTIO_OUTPUT -p udp --dport 123 -j RETURN
+-A ISTIO_OUTPUT -o lo -s 127.0.0.6/32 -j RETURN
+-A ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --uid-owner 1337 -j ISTIO_IN_REDIRECT
+-A ISTIO_OUTPUT -o lo -m owner ! --uid-owner 1337 -j RETURN
+-A ISTIO_OUTPUT -m owner --uid-owner 1337 -j RETURN
+-A ISTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 1337 -j ISTIO_IN_REDIRECT
+-A ISTIO_OUTPUT -o lo -m owner ! --gid-owner 1337 -j RETURN
+-A ISTIO_OUTPUT -m owner --gid-owner 1337 -j RETURN
+-A ISTIO_OUTPUT -m owner ! --gid-owner 1000 -m owner ! --gid-owner 1001 -j RETURN
+-A ISTIO_OUTPUT -d 127.0.0.1/32 -j RETURN
+-A ISTIO_OUTPUT -d 10.1.0.0/16 -j RETURN
+-A ISTIO_OUTPUT -p tcp --dport 19090 -j ISTIO_REDIRECT
+-A ISTIO_OUTPUT -d 10.0.0.0/8 -j ISTIO_REDIRECT
+COMMIT

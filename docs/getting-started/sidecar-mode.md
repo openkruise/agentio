@@ -153,3 +153,50 @@ Uninstalling Agentio is a separate operation because the chart owns the Agentio 
 - [Ambient mode](ambient-mode.md)
 - [OpenKruise Agents integration](../integrations/openkruise-agents.md)
 - [Agentio Helm values](../../manifests/charts/agentio/values.yaml)
+
+## Opt in to outbound UDP capture
+
+For a deployment with a CONNECT-UDP-capable ztunnel and egress gateway, enable
+UDP on injected sidecars:
+
+```yaml
+sidecarInjector:
+  ztunnel:
+    udpProxy:
+      enabled: true
+      captureMark: 1339
+      routeTable: 134
+```
+
+Apply these values with `helm upgrade`, then recreate the application Pods.
+Existing Pods are not reinjected. Use a `proxy-init` image built from this change;
+the official image already includes `pilot-agent istio-iptables`, so no custom
+entrypoint is needed. The ztunnel image must support `ENABLE_UDP_PROXY=true` and
+listen for transparent UDP on port 15002. Configure a CONNECT-UDP-capable egress
+gateway and its egress policy separately; this switch only enables source Pod
+capture, not gateway UDP support.
+
+The injector enables ztunnel UDP and grants it `NET_ADMIN` even when
+`global.enableFirewallRules=false`. The init container marks outbound UDP with
+`captureMark` and installs a policy rule and local route in `routeTable`, all
+inside the source Pod's network namespace. The rerouted packets reach port
+15002 through TPROXY with their original destination intact. TCP continues to
+use REDIRECT, including inbound TCP capture.
+
+Reserve a distinct capture mark and routing table. The default capture mark
+1339 differs from ztunnel's socket `PACKET_MARK=1337` and the TCP interception
+marks 1337/1338. These marks are local to the source Pod and are independent of
+any tenant socket marks configured on the gateway. Conflicting proxy metadata
+for `ENABLE_UDP_PROXY` or `PACKET_MARK` is rejected during injection.
+
+UDP capture honors the existing outbound IP range, port, owner-group and
+interface exclusions. Included outbound ports and IP ranges form a union, as
+for TCP. UDP DNS on destination port 53 follows the same capture rules. Local,
+broadcast, multicast, proxy-generated traffic, and replies to inbound UDP
+requests are excluded. Inbound UDP is not intercepted. Every outbound datagram
+is captured, including subsequent datagrams in an established session.
+
+This option supports the init-container iptables path, including the
+iptables-nft frontend. The native nftables init backend, CNI-managed capture and interception
+mode `NONE` are not supported by this option. It does not enable UDP on ambient
+ztunnel DaemonSets, even when sidecar and ambient modes coexist.

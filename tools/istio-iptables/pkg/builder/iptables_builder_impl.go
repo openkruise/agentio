@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -73,8 +74,8 @@ func (rb *IptablesRuleBuilder) insertInternal(ipt *[]Rule, chain string, table s
 		params: append([]string{"-I", chain, fmt.Sprint(position)}, rules...),
 	})
 	idx := indexOf("-j", params)
-	if idx < 0 && !strings.HasPrefix(chain, "ISTIO_") {
-		log.Warnf("Inserting non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(params, " "))
+	if idx < 0 && !constants.IsManagedChain(chain) {
+		log.Warnf("Inserting non-jump rule in unmanaged chain (rule: %s) \n", strings.Join(params, " "))
 	}
 	return rb
 }
@@ -101,8 +102,8 @@ func indexOf(element string, data []string) int {
 
 func (rb *IptablesRuleBuilder) appendInternal(ipt *[]Rule, chain string, table string, params ...string) *IptablesRuleBuilder {
 	idx := indexOf("-j", params)
-	if idx < 0 && !strings.HasPrefix(chain, "ISTIO_") {
-		log.Warnf("Appending non-jump rule in non-Istio chain (rule: %s) \n", strings.Join(params, " "))
+	if idx < 0 && !constants.IsManagedChain(chain) {
+		log.Warnf("Appending non-jump rule in unmanaged chain (rule: %s) \n", strings.Join(params, " "))
 	}
 	rules := params
 	*ipt = append(*ipt, Rule{
@@ -340,12 +341,12 @@ func (rb *IptablesRuleBuilder) GetStateFromSave(data string) map[string]map[stri
 			continue
 		}
 
-		// Found chain, setup an empty list for the chain if it is an ISTIO one
+		// Found chain, setup an empty list for an Istio or Agentio UDP chain
 		if strings.HasPrefix(line, ":") {
-			if !strings.HasPrefix(line, ":ISTIO") {
+			chain := strings.Split(line, " ")[0][1:]
+			if !strings.HasPrefix(chain, "ISTIO") && chain != constants.AgentioUDPOutput {
 				continue
 			}
-			chain := strings.Split(line, " ")[0][1:]
 			_, ok := result[table][chain]
 			if !ok {
 				result[table][chain] = []string{}
@@ -362,7 +363,7 @@ func (rb *IptablesRuleBuilder) GetStateFromSave(data string) map[string]map[stri
 				ruleChain = strings.Trim(rule[i+1], "'\"")
 			} else if (item == "--new" || item == "-N") && i+1 < len(rule) {
 				target := strings.Trim(rule[i+1], "'\"")
-				if strings.HasPrefix(target, "ISTIO") {
+				if strings.HasPrefix(target, "ISTIO") || target == constants.AgentioUDPOutput {
 					ruleChain = target
 				}
 			}

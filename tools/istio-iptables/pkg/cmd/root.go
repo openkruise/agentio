@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -145,6 +146,12 @@ func bindCmdlineFlags(cfg *config.Config, cmd *cobra.Command) {
 	// Consider removing it after several releases with no reported issues.
 	flag.BindEnv(fs, constants.ForceApply, "", "Apply iptables changes even if they appear to already be in place.",
 		&cfg.ForceApply)
+
+	flag.BindEnv(fs, "enable-udp-tproxy", "", "Capture outbound UDP with TPROXY independently of TCP interception.", &cfg.EnableUDPTProxy)
+	flag.BindEnv(fs, "udp-proxy-port", "", "Outbound transparent UDP listener port.", &cfg.UDPProxyPort)
+	flag.BindEnv(fs, "udp-tproxy-mark", "", "Packet mark reserved for routing captured UDP to loopback.", &cfg.UDPTProxyMark)
+	flag.BindEnv(fs, "udp-tproxy-route-table", "", "Policy routing table reserved for captured UDP.", &cfg.UDPTProxyRouteTable)
+	flag.BindEnv(fs, "udp-proxy-mark", "", "SO_MARK used by the UDP proxy; must differ from the capture mark.", &cfg.UDPProxyMark)
 
 	// This mode is an alternative for iptables. It uses nftables rules for traffic redirection.
 	flag.BindEnv(fs, constants.NativeNftables, "", "Use native nftables instead of iptables rules.",

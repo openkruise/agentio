@@ -1,4 +1,5 @@
 // Copyright Istio Authors
+// Modifications Copyright 2026 The Kruise Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"istio.io/istio/pkg/log"
+	"istio.io/istio/tools/istio-iptables/pkg/constants"
 )
 
 // CheckRules generates a set of iptables rules that are used to verify the existence of the input rules.
@@ -59,7 +61,7 @@ func CheckRules(rules []Rule) []Rule {
 // UndoRules generates the minimal set of rules that are necessary to undo the changes made by the input rules.
 // The function transforms -A/--append and -I/--insert flags into -D/--delete flags while preserving the
 // structure of other parameters.
-// Non-jump rules in ISTIO_* chains are skipped as these chains will be flushed, but jump rules are retained to ensure proper reversal.
+// Non-jump rules in managed chains are skipped as these chains will be flushed, but jump rules are retained to ensure proper reversal.
 // Note: This function does not support converting rules with -D/--delete flags back to -A/-I flags.
 func UndoRules(rules []Rule) []Rule {
 	output := make([]Rule, 0)
@@ -85,10 +87,10 @@ func UndoRules(rules []Rule) []Rule {
 			}
 
 			if ((element == "-A" || element == "--append") || (element == "-I" || element == "--insert")) &&
-				i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
-				// Ignore every non-jump rule in ISTIO_* chains as we will flush the chain anyway
+				i < len(r.params)-1 && constants.IsManagedChain(r.params[i+1]) {
+				// Ignore every non-jump rule in managed chains as we will flush the chain anyway
 				skip = true
-			} else if (element == "-j" || element == "--jump") && i < len(r.params)-1 && strings.HasPrefix(r.params[i+1], "ISTIO_") {
+			} else if (element == "-j" || element == "--jump") && i < len(r.params)-1 && constants.IsManagedChain(r.params[i+1]) {
 				// Override previous skip if this is a jump-rule
 				skip = false
 			}
@@ -110,7 +112,7 @@ func UndoRules(rules []Rule) []Rule {
 // BuildCleanupFromState generates a set of iptables commands to clean up unexpected leftover rules and chains.
 // The function takes the current state of iptables, represented by a map of table names to their associated chains and rules.
 // It first transforms the provided rules into corresponding undo rules.
-// It then appends flush and delete commands for each ISTIO_* chain.
+// It then appends flush and delete commands for each managed chain.
 // This function is used to clean up any leftover state that does not match the iptables configuration.
 func BuildCleanupFromState(tableState map[string]struct{ Chains, Rules []string }) [][]string {
 	output := make([][]string, 0)
@@ -138,7 +140,7 @@ func BuildCleanupFromState(tableState map[string]struct{ Chains, Rules []string 
 
 	for table, content := range tableState {
 		for _, chain := range content.Chains {
-			if strings.HasPrefix(chain, "ISTIO_") {
+			if constants.IsManagedChain(chain) {
 				output = append(output, []string{"-t", table, "-F", chain}, []string{"-t", table, "-X", chain})
 			}
 		}

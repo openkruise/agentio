@@ -1,7 +1,20 @@
-# ztunnel does not support TPROXY
+# TCP interception remains REDIRECT; outbound UDP uses a separate TPROXY path.
 {{- $interception := (annotation .ObjectMeta `sidecar.istio.io/interceptionMode` .ProxyConfig.InterceptionMode) -}}
 {{- if eq $interception "TPROXY" -}}
   {{- $interception = "REDIRECT" -}}
+{{- end -}}
+
+{{- $udp := .Values.global.proxy_ztunnel.udpProxy | default dict -}}
+{{- $udpEnabled := $udp.enabled | default false -}}
+{{- if $udpEnabled -}}
+  {{- if or .Values.pilot.cni.enabled .Values.global.nativeNftables (eq $interception "NONE") -}}
+    {{- fail "UDP proxy requires init-container iptables capture with TCP REDIRECT" -}}
+  {{- end -}}
+  {{- range $key, $expected := dict "ENABLE_UDP_PROXY" "true" "PACKET_MARK" "1337" -}}
+    {{- if and (isset $.ProxyConfig.ProxyMetadata $key) (ne (index $.ProxyConfig.ProxyMetadata $key) $expected) -}}
+      {{- fail (printf "UDP proxy requires proxyMetadata %s=%s" $key $expected) -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 
 {{- define "resources"  }}
@@ -134,6 +147,13 @@ spec:
     - "-c"
     - "{{ index .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeInterfaces` }}"
     {{ end -}}
+    {{ if $udpEnabled -}}
+    - "--enable-udp-tproxy"
+    - "--udp-proxy-port=15002"
+    - "--udp-proxy-mark=1337"
+    - "--udp-tproxy-mark={{ $udp.captureMark }}"
+    - "--udp-tproxy-route-table={{ $udp.routeTable }}"
+    {{ end -}}
     - "--log_output_level={{ annotation .ObjectMeta `sidecar.istio.io/agentLogLevel` .Values.global.logging.level }}"
     {{ if .Values.global.logAsJson -}}
     - "--log_as_json"
@@ -210,12 +230,12 @@ spec:
       capabilities:
         drop:
         - ALL
-{{- if .Values.global.proxy_ztunnel.enableFirewallRules }}
+{{- if or .Values.global.proxy_ztunnel.enableFirewallRules $udpEnabled }}
         add:
         - NET_ADMIN
 {{- end }}
       readOnlyRootFilesystem: true
-      runAsUser: {{ if .Values.global.proxy_ztunnel.enableFirewallRules }}0{{ else }}{{ .ProxyUID | default "1337" }}{{ end }}
+      runAsUser: {{ if or .Values.global.proxy_ztunnel.enableFirewallRules $udpEnabled }}0{{ else }}{{ .ProxyUID | default "1337" }}{{ end }}
       runAsGroup: {{ .ProxyGID | default "1337" }}
       runAsNonRoot: false
 {{- if .Values.global.seLinuxOptions }}
@@ -230,6 +250,12 @@ spec:
     - proxy
     - ztunnel
     env:
+{{- if $udpEnabled }}
+    - name: ENABLE_UDP_PROXY
+      value: "true"
+    - name: PACKET_MARK
+      value: "1337"
+{{- end }}
     - name: ENABLE_SANDBOX_MANAGER
       value: "true"
 {{- if .Values.global.proxy_ztunnel.enableFirewallRules }}
@@ -303,8 +329,10 @@ spec:
     {{- end }}
     {{- if .ProxyConfig.ProxyMetadata }}
     {{- range $key, $value := .ProxyConfig.ProxyMetadata }}
+    {{- if not (and $udpEnabled (or (eq $key "ENABLE_UDP_PROXY") (eq $key "PACKET_MARK"))) }}
     - name: {{ $key }}
       value: "{{ $value }}"
+    {{- end }}
     {{- end }}
     {{- end }}
     {{- if .Values.global.proxy.lifecycle }}
