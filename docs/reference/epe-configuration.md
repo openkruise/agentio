@@ -27,9 +27,10 @@ The Egress Policy Enforcer (EPE) is deployed by the Agentio chart as `agentio-ep
 | `epe.podDisruptionBudget.enabled`, `.minAvailable` | `true`, `1` | Controls the PodDisruptionBudget and its minimum available Pods. |
 | `epe.nodeSelector`, `.tolerations`, `.affinity` | empty | Pod placement settings. |
 | `epe.messageTimeout` | `5s` | Value used for generated `sandboxExtProc.messageTimeout`. |
+| `epe.sandboxPolicyWait` | `200ms` | Rendered as EPE `-sandbox-policy-wait`: how long a request from a known Sandbox is held while its first policy version converges. Keep it below `epe.messageTimeout` and the plugin budget (EPE validates the latter at startup). |
 | `epe.auditWebhook.insecureSkipVerify` | `false` | Sets the EPE audit-webhook TLS verification flag. Keep `false` in production. |
 
-The chart supplies the three listener ports and `epe.auditWebhook.insecureSkipVerify` as container arguments. Use `epe.env` only for EPE environment variables. Other Go flags such as `--enable-pprof` or `--tls-cert-path` remain binary-only unless you add container arguments through an authorized deployment customization.
+The chart supplies the three listener ports, `epe.sandboxPolicyWait`, and `epe.auditWebhook.insecureSkipVerify` as container arguments. Use `epe.env` only for EPE environment variables. Other Go flags such as `--enable-pprof` or `--tls-cert-path` remain binary-only unless you add container arguments through an authorized deployment customization.
 
 ## Rendered Kubernetes behavior
 
@@ -85,6 +86,7 @@ The generated `5s` message timeout must remain above EPE's default `--plugin-bud
 | `--pprof-addr` | `:6060` | pprof listener address when enabled. |
 | `--observe-responses` | `false` | Requests response headers through ext_proc so audit can record upstream status. |
 | `--plugin-budget` | `4.5s` | Per-evaluation-phase limit; `0` disables it. Keep it below Envoy's ext_proc message timeout. |
+| `--sandbox-policy-wait` | `200ms` | Bounded hold for a request from a Sandbox whose first policy version is still converging; `0` fails closed immediately. Must stay below `--plugin-budget` (checked at startup). |
 | `--kubeconfig` | empty | Kubeconfig path; empty selects in-cluster configuration. |
 | `--v` | `2` | Log verbosity unless `--zap-log-level` is supplied. |
 | `--audit-log-buffer-size` | `4096` | Access-log queue capacity; full queues drop entries. |
@@ -93,6 +95,8 @@ The generated `5s` message timeout must remain above EPE's default `--plugin-bud
 | `--audit-webhook-insecure-skip-verify` | `false` | Skips TLS certificate verification for every HTTPS audit webhook when explicitly enabled. |
 
 The binary also accepts controller-runtime Zap flags, including `--zap-log-level` and `--zap-stacktrace-level`. The metrics and health listeners bind all interfaces because they are constructed from their port numbers. The chart exposes both through its headless Service. The admin listener is loopback-only by default and is not in that Service. pprof binds all interfaces by default when enabled; only enable it with an intentionally restricted bind address and network exposure.
+
+`--sandbox-policy-wait` is the one flag that takes a position on data-plane convergence. EPE holds a request from a Sandbox the store knows while that Sandbox's policy is still `Unknown`, and releases it the moment the store publishes a usable state; a request that outlasts the window is refused with `503 epe_policy_not_ready`. The window is a courtesy, not a convergence bound: convergence is watch latency plus the collection debounce plus compilation, and watch latency has no upper bound. Size the window for availability and never derive it from `AGENTIO_KRT_DEBOUNCE`, which only coalesces events the informer already holds — no arithmetic over the debounce bounds convergence. Keep it below `--plugin-budget`: EPE validates that at startup because the budget would otherwise cancel the request context first and turn the intended 503 into a gRPC error. A Sandbox the store has not observed is an ordinary caller and is never held.
 
 ## TLS for ext_proc
 

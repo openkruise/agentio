@@ -14,9 +14,12 @@
 package profilestore
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -187,6 +190,301 @@ func TestStoreInlineBatchReusesLabelIndex(t *testing.T) {
 // ones: the point is that no rebuild happened.
 func sameIndexMap(a, b map[string]profileIndex) bool {
 	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
+
+// sandboxPod is the caller identity a wait is keyed on: namespace and name
+// only. The gate deliberately ignores propagated labels — the pod's claimed
+// label is frozen at creation and never flips — so tests set up store state
+// through seedUnknownSandbox, not labels.
+func sandboxPod(name string) inputs.Pod {
+	return inputs.Pod{Name: name, Namespace: "sandboxes"}
+}
+
+// seedUnknownSandbox installs the state an unclaimed pooled Sandbox has in the
+// store: present (so the gate applies), Unknown (so a request must wait).
+func seedUnknownSandbox(t *testing.T, s *store, name string) {
+	t.Helper()
+	s.applyBatch([]krt.Event[securityprofile.Profile]{
+		{Event: controllers.EventAdd, New: sandboxStateProfile(name, "1", securityprofile.SandboxPolicyUnknown)},
+	})
+}
+
+func sandboxStateProfile(name, version string, state securityprofile.SandboxPolicyState) *securityprofile.Profile {
+	return securityprofile.NewSandboxStateProfile(&metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: "sandboxes", ResourceVersion: version,
+	}}, state)
+}
+
+func waitForWaiters(t *testing.T, s *store, total int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		got := s.waiters
+		s.mu.Unlock()
+		if got == total {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("waiters never reached %d", total)
+}
+
+func TestAwaitSnapshotWakesWithAtomicReadyProfile(t *testing.T) {
+	s := NewStore(WithWaitLimits(4, 2))
+	pod := inputs.Pod{Name: "sbx-1", Namespace: "sandboxes"}
+	unknown := sandboxStateProfile("sbx-1", "1", securityprofile.SandboxPolicyUnknown)
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: unknown}})
+	result := make(chan securityprofile.PolicySnapshot, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		snapshot, err := s.AwaitSnapshot(context.Background(), pod, time.Second)
+		result <- snapshot
+		errCh <- err
+	}()
+	waitForWaiters(t, s, 1)
+
+	inline := inlineProfile("sbx-1", "sandboxes", "2")
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventUpdate, Old: unknown, New: inline}})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("AwaitSnapshot: %v", err)
+	}
+	snapshot := <-result
+	if !snapshot.SandboxExists {
+		t.Fatal("ready snapshot does not report the Sandbox as existing")
+	}
+	if snapshot.SandboxState != securityprofile.SandboxPolicyReady {
+		t.Fatalf("state = %v, want Ready", snapshot.SandboxState)
+	}
+	if len(snapshot.Profiles) != 1 || snapshot.Profiles[0].Meta.Version != "2" {
+		t.Fatalf("profiles = %+v, want ready version 2 from the same snapshot", snapshot.Profiles)
+	}
+	waitForWaiters(t, s, 0)
+}
+
+func TestAwaitSnapshotExistingUnknownSandboxWithoutPropagatedIdentityWaits(t *testing.T) {
+	s := NewStore()
+	pod := inputs.Pod{Name: "sbx-1", Namespace: "sandboxes"}
+	unknown := sandboxStateProfile("sbx-1", "1", securityprofile.SandboxPolicyUnknown)
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: unknown}})
+
+	result := make(chan securityprofile.PolicySnapshot, 1)
+	go func() {
+		snapshot, _ := s.AwaitSnapshot(context.Background(), pod, 25*time.Millisecond)
+		result <- snapshot
+	}()
+	waitForWaiters(t, s, 1)
+	snapshot := <-result
+	if !snapshot.SandboxExists {
+		t.Fatal("timeout snapshot does not report the Sandbox as existing")
+	}
+	if snapshot.SandboxState != securityprofile.SandboxPolicyUnknown {
+		t.Fatalf("state = %v, want Unknown", snapshot.SandboxState)
+	}
+	waitForWaiters(t, s, 0)
+}
+
+func TestAwaitSnapshotOrdinaryPodReturnsImmediately(t *testing.T) {
+	s := NewStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	snapshot, err := s.AwaitSnapshot(ctx, inputs.Pod{
+		Name: "pod-1", Namespace: "default",
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("AwaitSnapshot: %v", err)
+	}
+	if snapshot.SandboxExists {
+		t.Fatal("ordinary Pod was reported as a Sandbox")
+	}
+	waitForWaiters(t, s, 0)
+}
+
+// A delete while a request waits is a resolution, not a countdown: the store
+// stops knowing the caller, the request becomes an ordinary-Pod pass-through,
+// and the waiter must return on that publish instead of holding until the
+// deadline.
+func TestAwaitSnapshotDeleteReleasesWaiterOnPublish(t *testing.T) {
+	s := NewStore()
+	unknown := sandboxStateProfile("sbx-1", "1", securityprofile.SandboxPolicyUnknown)
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: unknown}})
+
+	result := make(chan securityprofile.PolicySnapshot, 1)
+	go func() {
+		snapshot, _ := s.AwaitSnapshot(context.Background(), sandboxPod("sbx-1"), time.Hour)
+		result <- snapshot
+	}()
+	waitForWaiters(t, s, 1)
+
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventDelete, Old: unknown}})
+
+	select {
+	case snapshot := <-result:
+		if snapshot.SandboxExists {
+			t.Fatal("deleted Sandbox still reported as existing")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter held until the deadline after the Sandbox was deleted")
+	}
+	waitForWaiters(t, s, 0)
+}
+
+// The waiter path is entered only for a Sandbox the store has observed. A
+// claimed label on a pod the store does not know must not schedule a waiter:
+// the label is propagation-controlled metadata whose pod-side copy is frozen
+// at creation, so a stale value must never be able to withhold traffic.
+func TestAwaitSnapshotClaimedLabelWithoutStoreEntryDoesNotWait(t *testing.T) {
+	s := NewStore(WithWaitLimits(4, 2))
+	pod := inputs.Pod{Name: "sbx-1", Namespace: "sandboxes", Labels: map[string]string{
+		v1alpha1.LabelSandboxIsClaimed: v1alpha1.True,
+	}}
+
+	done := make(chan securityprofile.PolicySnapshot, 1)
+	go func() {
+		snapshot, _ := s.AwaitSnapshot(context.Background(), pod, time.Hour)
+		done <- snapshot
+	}()
+	select {
+	case snapshot := <-done:
+		if snapshot.SandboxExists {
+			t.Fatal("store reported an existence it never observed")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("AwaitSnapshot waited on a propagated label instead of the store")
+	}
+	waitForWaiters(t, s, 0)
+}
+
+func TestAwaitSnapshotTimeoutAndCancellationReleaseSlots(t *testing.T) {
+	s := NewStore(WithWaitLimits(1, 1))
+	seedUnknownSandbox(t, s, "sbx-1")
+	pod := sandboxPod("sbx-1")
+
+	snapshot, err := s.AwaitSnapshot(context.Background(), pod, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("timeout: %v", err)
+	}
+	if snapshot.SandboxState != securityprofile.SandboxPolicyUnknown {
+		t.Fatalf("timeout state = %v, want Unknown", snapshot.SandboxState)
+	}
+	waitForWaiters(t, s, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.AwaitSnapshot(ctx, pod, time.Second)
+		done <- err
+	}()
+	waitForWaiters(t, s, 1)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel error = %v, want context.Canceled", err)
+	}
+	waitForWaiters(t, s, 0)
+}
+
+func TestAwaitSnapshotTimeoutReturnsLatestSnapshot(t *testing.T) {
+	s := NewStore()
+	seedUnknownSandbox(t, s, "sbx-1")
+	// The administrator profile below selects by label, so the pod carries it
+	// for the selector to match; the readiness gate itself is keyed on the
+	// store, never on labels.
+	pod := sandboxPod("sbx-1")
+	pod.Labels = map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.True}
+	result := make(chan securityprofile.PolicySnapshot, 1)
+	go func() {
+		snapshot, _ := s.AwaitSnapshot(context.Background(), pod, 50*time.Millisecond)
+		result <- snapshot
+	}()
+	waitForWaiters(t, s, 1)
+
+	profileObj := newTestProfile("admin", "sandboxes", map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.True})
+	profile, err := securityprofile.NewProfile(profileObj, &profileObj.Spec)
+	if err != nil {
+		t.Fatalf("NewProfile: %v", err)
+	}
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: profile}})
+
+	snapshot := <-result
+	if len(snapshot.Profiles) != 1 || snapshot.Profiles[0].Meta.Name != "admin" {
+		t.Fatalf("profiles = %+v, want latest administrator profile", snapshot.Profiles)
+	}
+}
+
+func TestAwaitSnapshotEnforcesWaitLimits(t *testing.T) {
+	t.Run("per Sandbox", func(t *testing.T) {
+		s := NewStore(WithWaitLimits(2, 1))
+		seedUnknownSandbox(t, s, "sbx-1")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.AwaitSnapshot(ctx, sandboxPod("sbx-1"), time.Second)
+			done <- err
+		}()
+		waitForWaiters(t, s, 1)
+
+		_, overloadErr := s.AwaitSnapshot(context.Background(), sandboxPod("sbx-1"), time.Second)
+		cancel()
+		waitErr := <-done
+		waitForWaiters(t, s, 0)
+		if !errors.Is(overloadErr, ErrSandboxPolicyWaitOverloaded) {
+			t.Fatalf("error = %v, want overload", overloadErr)
+		}
+		if !errors.Is(waitErr, context.Canceled) {
+			t.Fatalf("waiter error = %v, want context.Canceled", waitErr)
+		}
+	})
+
+	t.Run("global", func(t *testing.T) {
+		s := NewStore(WithWaitLimits(1, 1))
+		seedUnknownSandbox(t, s, "sbx-1")
+		seedUnknownSandbox(t, s, "sbx-2")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.AwaitSnapshot(ctx, sandboxPod("sbx-1"), time.Second)
+			done <- err
+		}()
+		waitForWaiters(t, s, 1)
+
+		_, overloadErr := s.AwaitSnapshot(context.Background(), sandboxPod("sbx-2"), time.Second)
+		cancel()
+		waitErr := <-done
+		waitForWaiters(t, s, 0)
+		if !errors.Is(overloadErr, ErrSandboxPolicyWaitOverloaded) {
+			t.Fatalf("error = %v, want overload", overloadErr)
+		}
+		if !errors.Is(waitErr, context.Canceled) {
+			t.Fatalf("waiter error = %v, want context.Canceled", waitErr)
+		}
+	})
+}
+
+func TestSandboxStateInvalidAndDeleteArePublished(t *testing.T) {
+	s := NewStore()
+	pod := sandboxPod("sbx-1")
+	invalid := securityprofile.InvalidSandboxProfile(&metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
+		Name: "sbx-1", Namespace: "sandboxes", ResourceVersion: "1",
+	}}, errors.New("invalid rules"))
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: invalid}})
+
+	snapshot, err := s.AwaitSnapshot(context.Background(), pod, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.SandboxState != securityprofile.SandboxPolicyInvalid {
+		t.Fatalf("state = %v, want Invalid", snapshot.SandboxState)
+	}
+
+	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventDelete, Old: invalid}})
+	snapshot, err = s.AwaitSnapshot(context.Background(), pod, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.SandboxState != securityprofile.SandboxPolicyUnknown {
+		t.Fatalf("state after delete = %v, want Unknown", snapshot.SandboxState)
+	}
 }
 
 // TestInlineProfileInvalidVersionUsesLastKnownGood pins the inline half of

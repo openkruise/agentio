@@ -24,6 +24,7 @@ package securityprofile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,11 +35,52 @@ import (
 
 // AnnotationSecurityRules is the Sandbox annotation that carries the
 // normalized rule chain: a JSON array of v1alpha1.SecurityRule.
-//
-// The literal mirrors the Sandbox Manager's annotation key. It stays a local
-// constant because the agents-api module does not export it yet; switch to
-// v1alpha1.AnnotationSecurityRules once it lands upstream.
-const AnnotationSecurityRules = "agents.kruise.io/security-rules"
+const AnnotationSecurityRules = v1alpha1.AnnotationSecurityRules
+
+type SandboxPolicyState uint8
+
+const (
+	SandboxPolicyUnknown SandboxPolicyState = iota
+	SandboxPolicyReady
+	SandboxPolicyReadyEmpty
+	SandboxPolicyInvalid
+)
+
+func (state SandboxPolicyState) String() string {
+	switch state {
+	case SandboxPolicyReady:
+		return "ready"
+	case SandboxPolicyReadyEmpty:
+		return "ready_empty"
+	case SandboxPolicyInvalid:
+		return "invalid"
+	default:
+		return "unknown"
+	}
+}
+
+var ErrSandboxPolicyWaitOverloaded = errors.New("sandbox policy wait overloaded")
+
+type PolicySnapshot struct {
+	Profiles       []*Profile
+	SandboxExists  bool
+	SandboxState   SandboxPolicyState
+	SandboxVersion string
+}
+
+func NewSandboxStateProfile(sandbox metav1.Object, state SandboxPolicyState) *Profile {
+	return &Profile{
+		Meta: Meta{
+			Name:              sandbox.GetName(),
+			Namespace:         sandbox.GetNamespace(),
+			CreationTimestamp: sandbox.GetCreationTimestamp(),
+			Version:           sandbox.GetResourceVersion(),
+			Match:             MatchPod,
+		},
+		Selector:     labels.Nothing(),
+		SandboxState: state,
+	}
+}
 
 // NewSandboxProfile compiles the rule chain of one Sandbox into a
 // Profile. It reads only object metadata, so callers can feed it
@@ -82,8 +124,9 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 			Version:           sandbox.GetResourceVersion(),
 			Match:             MatchPod,
 		},
-		Selector: labels.Nothing(),
-		Rules:    rules,
+		Selector:     labels.Nothing(),
+		Rules:        rules,
+		SandboxState: SandboxPolicyReady,
 	}, nil
 }
 
@@ -108,6 +151,7 @@ func InvalidSandboxProfile(sandbox metav1.Object, err error) *Profile {
 		},
 		Selector:     labels.Nothing(),
 		CompileError: message,
+		SandboxState: SandboxPolicyInvalid,
 	}
 }
 

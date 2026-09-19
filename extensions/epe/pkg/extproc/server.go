@@ -35,9 +35,10 @@ import (
 // Server implements the Envoy external processing server.
 // https://www.envoyproxy.io/docs/envoy/latest/api-v3/service/ext_proc/v3/external_processor.proto
 type Server struct {
-	resolve engine.Resolver
-	eng     *engine.Engine
-	loggers []filter.StreamLogger
+	resolve       engine.Resolver
+	eng           *engine.Engine
+	requestBudget time.Duration
+	loggers       []filter.StreamLogger
 	// failClosedOnMissingIdentity denies requests when the source pod
 	// identity is absent from filter_state; the default passes them through.
 	failClosedOnMissingIdentity bool
@@ -74,6 +75,7 @@ func NewServer(deps ServerDeps) *Server {
 	return &Server{
 		resolve:                     deps.Resolve,
 		eng:                         engine.NewEngine(deps.Registrations, deps.PluginBudget),
+		requestBudget:               deps.PluginBudget,
 		loggers:                     loggers,
 		failClosedOnMissingIdentity: deps.FailClosedOnMissingIdentity,
 	}

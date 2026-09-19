@@ -33,6 +33,9 @@ import (
 // map to reach the one component that reads it.
 type Resolution struct {
 	Units []Unit
+	// Failure is a terminal policy-resolution response sent as an ext_proc
+	// ImmediateResponse before any engine evaluation.
+	Failure *filter.Reply
 	// StreamLogger, when non-nil, is invoked once at stream end under the
 	// same contract as the statically registered loggers: exactly once, at
 	// true stream end including abnormal termination, and it must not block.

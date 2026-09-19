@@ -21,6 +21,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // benchSink defeats dead-code elimination.
@@ -107,7 +108,7 @@ func newBenchmarkStore(profiles []*securityprofile.Profile) *store {
 		installed.put(keyFor(profile.Meta), profile)
 	}
 	store := NewStore()
-	store.snapshot.Store(buildSnapshot(installed))
+	store.snapshot.Store(buildSnapshot(installed, map[types.NamespacedName]sandboxPolicy{}))
 	return store
 }
 

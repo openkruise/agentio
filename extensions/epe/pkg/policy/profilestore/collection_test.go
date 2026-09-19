@@ -28,6 +28,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/tokentransform"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -247,6 +248,25 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 // cannot reproduce the real 404-retry hang of a non-delayed informer; it
 // pins the delayed-informer wiring (CRD-absent sync plus an empty result
 // set) so the intent documented here stays visible.
+func TestCompileSandboxProfileDistinguishesPrewarmFromClaimedEmpty(t *testing.T) {
+	sandbox := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
+		Name: "sbx-1", Namespace: "sandboxes", ResourceVersion: "1",
+	}}
+
+	prewarm := compileSandboxProfile(sandbox, nil)
+	if prewarm.SandboxState != securityprofile.SandboxPolicyUnknown {
+		t.Fatalf("prewarm state = %v, want Unknown", prewarm.SandboxState)
+	}
+
+	claimed := sandbox.DeepCopy()
+	claimed.ResourceVersion = "2"
+	claimed.Labels = map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.True}
+	empty := compileSandboxProfile(claimed, nil)
+	if empty.SandboxState != securityprofile.SandboxPolicyReadyEmpty {
+		t.Fatalf("claimed empty state = %v, want ReadyEmpty", empty.SandboxState)
+	}
+}
+
 func TestProfileCollection_SyncsWithoutSandboxCRD(t *testing.T) {
 	c := newProfileTestClient()
 	// Deliberately no Sandbox CRD.

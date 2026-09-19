@@ -43,6 +43,7 @@ spec:
             - -grpc-port={{ .Values.epe.service.grpcPort }}
             - -grpc-health-port={{ .Values.epe.service.healthPort }}
             - -metrics-port={{ .Values.epe.service.metricsPort }}
+            - -sandbox-policy-wait={{ .Values.epe.sandboxPolicyWait }}
             - -audit-webhook-insecure-skip-verify={{ .Values.epe.auditWebhook.insecureSkipVerify }}
           env:
             - name: IDENTITY_PROVIDER_URL

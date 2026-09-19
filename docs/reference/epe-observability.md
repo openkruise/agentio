@@ -48,6 +48,7 @@ $ curl --fail --silent http://127.0.0.1:9090/metrics | grep '^epe_'
 | `epe_profile_stale` | Gauge; `scope` | How many policy sources in that scope had their newest version rejected while an earlier version remains active. |
 | `epe_profile_unenforced` | Gauge; `scope` | How many policy sources in that scope have no installed version at all, so none of their rules are enforced. For `pod`, that Sandbox's own rules are absent while administrator profiles still apply. |
 | `epe_profile_inputs_unavailable` | Gauge; `scope` | How many installed profiles in that scope have unresolved declared inputs (for example a missing ConfigMap). Their rules stay enforced; inputs-dependent evaluations fail per the consuming action's failure policy. |
+| `epe_sandbox_policy_wait_total` | Counter; `outcome` (`ready`, `timeout`, `overloaded`) | Bounded policy-readiness waits on the request path. `ready` means the policy became observable inside the configured `--sandbox-policy-wait` window; `timeout` means the request was refused with `503 epe_policy_not_ready`; `overloaded` means the waiter limits were full and the request was refused without waiting. |
 | `epe_audit_eval_dropped_total` | Counter; `reason` (`when_eval`, `no_sink`) | Audit events dropped before a sink. |
 | `epe_audit_log_dropped_total` | Counter | Access-log entries dropped because their in-memory queue was full. |
 | `epe_audit_webhook_dispatched_total` | Counter; `result` (`success`, `http_error`, `transport_error`, `timeout`) | Post-render audit webhook delivery outcomes. |
@@ -73,6 +74,8 @@ The `scope` label separates who has to act: `namespaced` and `global` are operat
 High or growing `epe_audit_log_dropped_total` indicates saturation of the single-worker access log queue. `epe_audit_webhook_dropped_total` with `buffer_full` indicates webhook admission saturation; `draining`, `stopped`, and `shutdown_timeout` identify shutdown loss. `http_error`, `transport_error`, and `timeout` in dispatched webhooks distinguish receiver responses from network/TLS/request construction failures and deadline expiry. EPE does not retry webhooks, so these counters represent lost audit records rather than delayed retries.
 
 Use plugin duration and outcome series together. A growing `error` outcome or durations approaching the configured per-phase plugin budget can explain request blocks or failures. The default EPE plugin budget is 4.5 seconds while the chart's ext_proc message timeout is 5 seconds; changes to either setting can shift the failure boundary. Metrics do not expose queue depth, individual profile compile errors, or audit webhook response bodies.
+
+`epe_sandbox_policy_wait_total` shows whether `--sandbox-policy-wait` is sized right for the cluster. A rising `timeout` share means requests are routinely arriving before the policy has converged and are being refused; a non-zero `overloaded` means the waiter limits (1024 in flight, 64 per Sandbox) are saturated and callers are refused without waiting. Both are tuning signals, not policy verdicts — the verdicts live in the audit stream.
 
 ## Logs and audit output
 

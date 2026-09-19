@@ -377,11 +377,21 @@ func TestManagedEPE(t *testing.T) {
 		"- -grpc-port=9002",
 		"- -grpc-health-port=9003",
 		"- -metrics-port=9090",
+		"- -sandbox-policy-wait=200ms",
 		"- -audit-webhook-insecure-skip-verify=false",
 		"livenessProbe:",
 		"readinessProbe:",
 		"name: credential-provider-mtls",
 	)
+}
+
+func TestManagedEPESandboxPolicyWaitIsConfigurable(t *testing.T) {
+	manifest := renderAgentio(t,
+		"--set", "epe.mode=managed",
+		"--set", "epe.sandboxPolicyWait=500ms",
+	)
+	requireContains(t, manifest, "- -sandbox-policy-wait=500ms")
+	requireNotContains(t, manifest, "- -sandbox-policy-wait=200ms")
 }
 
 func TestManagedEPECanExplicitlySkipAuditWebhookTLSVerification(t *testing.T) {

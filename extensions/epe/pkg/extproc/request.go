@@ -61,6 +61,11 @@ const (
 // ordered units, and runs the ordered engine. All observations land in
 // state.stream.Info; the stream loggers consume it once at stream end.
 func (s *Server) HandleRequestHeaders(ctx context.Context, headers *extProcPb.HttpHeaders, attrs map[string]*structpb.Struct, state *streamState) ([]*extProcPb.ProcessingResponse, error) {
+	if s.requestBudget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.requestBudget)
+		defer cancel()
+	}
 	// Tag every log line in this request's ext-proc path with the request
 	// ID, and propagate it through ctx so downstream filters inherit it.
 	requestID := extractRequestID(headers)
@@ -121,6 +126,11 @@ func (s *Server) HandleRequestHeaders(ctx context.Context, headers *extProcPb.Ht
 	}
 	if err != nil {
 		return nil, err
+	}
+	if res.Failure != nil {
+		st.Info.Error = res.Failure.Details
+		state.armFinalization(engine.DispositionBlocked)
+		return []*extProcPb.ProcessingResponse{immediateFromReply(*res.Failure)}, nil
 	}
 
 	// Single VERBOSE summary line per request — pod identity, request

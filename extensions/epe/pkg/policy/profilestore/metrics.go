@@ -82,10 +82,30 @@ var (
 		},
 		[]string{"scope"},
 	)
+
+	// sandboxPolicyWaitsTotal counts how each bounded policy wait ended. The
+	// wait is a courtesy window over data-plane convergence, not a bound on
+	// it: a rising timeout share means the window is too short for this
+	// cluster's watch latency, and overloaded means the waiter limits are
+	// saturated and traffic is being refused without waiting at all.
+	sandboxPolicyWaitsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "epe_sandbox_policy_wait_total",
+			Help: "Policy-readiness waits by outcome: ready (the policy became observable in time), timeout (still unknown at the deadline), overloaded (refused because the waiter limits were full).",
+		},
+		[]string{"outcome"},
+	)
+)
+
+// Bounded label values for sandboxPolicyWaitsTotal.
+const (
+	waitOutcomeReady      = "ready"
+	waitOutcomeTimeout    = "timeout"
+	waitOutcomeOverloaded = "overloaded"
 )
 
 func init() {
-	metrics.Registry.MustRegister(profileCompileFailuresTotal, profileStale, profileUnenforced, profileInputsUnavailable)
+	metrics.Registry.MustRegister(profileCompileFailuresTotal, profileStale, profileUnenforced, profileInputsUnavailable, sandboxPolicyWaitsTotal)
 }
 
 // profileScope maps a profile's namespace onto the bounded scope label.

@@ -152,26 +152,18 @@ func globalSecurityProfileRegistration(client kube.Client) kube.InformerRegistra
 	}
 }
 
-// newSandboxCollection watches Sandbox metadata and compiles the objects
-// carrying the agents.kruise.io/security-rules annotation into per-Sandbox
-// per-Pod rule profiles. The informer is metadata-only (PartialObjectMetadata):
-// the compiler never reads spec or status, and a Sandbox carries a full pod
-// template that would otherwise be transferred and cached for every Sandbox
-// in the cluster. It is also delayed, like the profile informers: the Sandbox
-// CRD may not exist in the cluster, and a non-delayed informer would retry
-// the 404 list forever, never sync, and wedge startup behind
-// WaitUntilSynced. Objects without the annotation emit nil and contribute no
-// rules.
+// newSandboxCollection watches Sandbox metadata and publishes one state-bearing
+// item per Sandbox. The informer is metadata-only (PartialObjectMetadata): the
+// compiler never reads spec or status, and a Sandbox carries a full pod template
+// that would otherwise be transferred and cached for every Sandbox in the
+// cluster. It is also delayed, like the profile informers: the Sandbox CRD may
+// not exist in the cluster, and a non-delayed informer would retry the 404 list
+// forever, never sync, and wedge startup behind WaitUntilSynced.
 //
-// Rule payloads are projected against regs here as they are for CRD profiles,
-// so the request path compiles nothing. Failure semantics are also the CRD
-// profile's: a version that fails to compile or project becomes an
-// identity-bearing invalid item, so the store keeps serving the last known
-// good version of that Sandbox's rules when one exists and installs nothing
-// otherwise. The rules are authored at Sandbox creation, so a rejected first
-// version not taking effect is the expected authoring feedback — surfaced by
-// the stale/unenforced metrics under scope=pod rather than by a partially enforced
-// chain. An empty annotation stays a legitimate removal (nil item).
+// Claimed Sandboxes publish Ready, ReadyEmpty, or Invalid after compiling and
+// projecting rule payloads. Unclaimed Sandboxes publish Unknown. This keeps
+// readiness and the effective rule chain in one immutable store snapshot, while
+// ensuring the request path compiles nothing.
 func newSandboxCollection(client kube.Client, regs []filter.Registration, opts krt.OptionsBuilder, log logr.Logger) krt.Collection[securityprofile.Profile] {
 	sandboxResource := client.Metadata().Resource(sandboxGVR)
 	sandboxInf := kclient.NewDelayedInformerFor[*metav1.PartialObjectMetadata](client,
@@ -189,21 +181,29 @@ func newSandboxCollection(client kube.Client, regs []filter.Registration, opts k
 	sandboxes := krt.WrapClient(sandboxInf, opts.WithName("Sandboxes")...)
 
 	return krt.NewCollection(sandboxes, func(_ krt.HandlerContext, o *metav1.PartialObjectMetadata) *securityprofile.Profile {
-		if o.GetAnnotations()[securityprofile.AnnotationSecurityRules] == "" {
-			return nil
-		}
-		p, err := securityprofile.NewSandboxProfile(o)
-		if err == nil {
-			err = p.Project(regs)
-		}
-		if err != nil {
-			// Whether an older version is still being served is the store's
-			// knowledge; applyBatch logs and meters that.
-			log.Error(err, "sandbox security rules failed to compile", "sandbox", o.Namespace+"/"+o.Name)
-			return securityprofile.InvalidSandboxProfile(o, err)
+		p := compileSandboxProfile(o, regs)
+		if p.CompileError != "" {
+			log.Error(nil, "sandbox security rules failed to compile", "sandbox", o.Namespace+"/"+o.Name, "error", p.CompileError)
 		}
 		return p
 	}, opts.WithName("CompiledSandboxProfiles")...)
+}
+
+func compileSandboxProfile(o *metav1.PartialObjectMetadata, regs []filter.Registration) *securityprofile.Profile {
+	if o.GetLabels()[agentsv1alpha1.LabelSandboxIsClaimed] != agentsv1alpha1.True {
+		return securityprofile.NewSandboxStateProfile(o, securityprofile.SandboxPolicyUnknown)
+	}
+	if o.GetAnnotations()[securityprofile.AnnotationSecurityRules] == "" {
+		return securityprofile.NewSandboxStateProfile(o, securityprofile.SandboxPolicyReadyEmpty)
+	}
+	p, err := securityprofile.NewSandboxProfile(o)
+	if err == nil {
+		err = p.Project(regs)
+	}
+	if err != nil {
+		return securityprofile.InvalidSandboxProfile(o, err)
+	}
+	return p
 }
 
 func compileProfile(

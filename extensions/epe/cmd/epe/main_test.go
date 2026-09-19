@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuditWebhookVerifiesTLSByDefault(t *testing.T) {
@@ -59,5 +60,47 @@ func TestPrintEnvironmentExitsBeforeStartup(t *testing.T) {
 		if format == "markdown" && strings.Contains(string(output), "AGENTIO_CA_SECRET_NAME") {
 			t.Fatal("EPE table includes unrelated control-plane settings")
 		}
+	}
+}
+
+// The bounded wait is an independent knob, not a derivative of the collection
+// debounce: the debounce bounds coalescing of events the informer already
+// holds and never watch latency, so no arithmetic over it can bound
+// convergence. What the wait must respect is the enclosing request budget,
+// whose expiry would surface as a gRPC error instead of the intended 503.
+func TestSandboxPolicyWaitFlagDefaultsBelowPluginBudget(t *testing.T) {
+	configured := flag.Lookup("sandbox-policy-wait")
+	if configured == nil {
+		t.Fatal("sandbox policy wait flag is not registered")
+	}
+	if configured.DefValue != "200ms" {
+		t.Fatalf("sandbox policy wait default = %q, want 200ms", configured.DefValue)
+	}
+	if err := validateSandboxPolicyWait(200*time.Millisecond, 4500*time.Millisecond); err != nil {
+		t.Fatalf("default wait must pass validation: %v", err)
+	}
+}
+
+func TestValidateSandboxPolicyWait(t *testing.T) {
+	tests := []struct {
+		name    string
+		wait    time.Duration
+		budget  time.Duration
+		wantErr bool
+	}{
+		{name: "default wait under the default budget", wait: 200 * time.Millisecond, budget: 4500 * time.Millisecond},
+		{name: "zero disables the wait", wait: 0, budget: 4500 * time.Millisecond},
+		{name: "negative wait", wait: -time.Millisecond, budget: 4500 * time.Millisecond, wantErr: true},
+		{name: "wait equal to the budget", wait: 4500 * time.Millisecond, budget: 4500 * time.Millisecond, wantErr: true},
+		{name: "wait above the budget", wait: 5 * time.Second, budget: 4500 * time.Millisecond, wantErr: true},
+		{name: "disabled budget accepts any wait", wait: 10 * time.Second, budget: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSandboxPolicyWait(tc.wait, tc.budget)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("validateSandboxPolicyWait(%v, %v) error = %v, wantErr %v", tc.wait, tc.budget, err, tc.wantErr)
+			}
+		})
 	}
 }

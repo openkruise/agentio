@@ -352,6 +352,13 @@ epe:
     address: ""
     port: 9002
   messageTimeout: 5s
+  # sandboxPolicyWait bounds how long EPE holds a request from a Sandbox whose
+  # first policy version is still converging; a request that outlasts the wait
+  # is refused with 503 epe_policy_not_ready. It is a courtesy window, not a
+  # convergence bound, and is independent of AGENTIO_KRT_DEBOUNCE: configure it
+  # for availability, keep it below epe.messageTimeout, and keep it below the
+  # plugin budget (default 4.5s), which EPE validates at startup.
+  sandboxPolicyWait: 200ms
   credentialProvider:
     url: ""
     mtls:

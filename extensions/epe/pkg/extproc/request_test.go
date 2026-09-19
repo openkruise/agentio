@@ -314,6 +314,35 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 	}
 }
 
+func TestHandleRequestHeaders_ReadinessFailureReturnsImmediate503(t *testing.T) {
+	s := NewServer(ServerDeps{
+		Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
+			return engine.Resolution{Failure: &filter.Reply{
+				Status:  503,
+				Details: "epe_policy_not_ready",
+			}}, nil
+		},
+	})
+	state := newStreamState()
+
+	responses, err := s.HandleRequestHeaders(context.Background(),
+		makeRequestHeaders("api.example.com", "/x", "GET"),
+		makeAttrsWithLabels("default", "pod", testLabelsB64), state)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
+	}
+	if len(responses) != 1 {
+		t.Fatalf("responses = %d, want one", len(responses))
+	}
+	immediate := responses[0].GetImmediateResponse()
+	if immediate == nil || immediate.GetStatus().GetCode() != 503 || immediate.GetDetails() != "epe_policy_not_ready" {
+		t.Fatalf("response = %+v, want 503/epe_policy_not_ready ImmediateResponse", responses[0])
+	}
+	if state.lifecycle != lifecycleFinalizePending {
+		t.Fatalf("lifecycle = %v, want finalize pending", state.lifecycle)
+	}
+}
+
 func TestHandleRequestHeaders_ValidatesSubscriptionsBeforeEvaluation(t *testing.T) {
 	probe := &requestHeadersProbe{}
 	reg := filter.Registration{

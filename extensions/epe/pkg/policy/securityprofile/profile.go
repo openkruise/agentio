@@ -372,10 +372,11 @@ func (m MatchMode) String() string {
 // GlobalSecurityProfile with its label selector, rule regexps, and audit
 // entries compiled once at write time.
 type Profile struct {
-	Meta     Meta
-	Selector labels.Selector
-	Rules    []Rule         // parallel to the source Spec.Rules
-	Audits   []*audit.Audit // spec-level compiled audit entries
+	Meta         Meta
+	Selector     labels.Selector
+	Rules        []Rule         // parallel to the source Spec.Rules
+	Audits       []*audit.Audit // spec-level compiled audit entries
+	SandboxState SandboxPolicyState
 	// Projections holds each rule's per-filter configuration, parallel to
 	// Rules, built once by Project when the collection item is compiled. It
 	// lives on the profile so the compiled objects a rule needs share the

@@ -69,6 +69,9 @@ var (
 	pluginBudget = flag.Duration(
 		"plugin-budget", 4500*time.Millisecond,
 		"Maximum duration of one evaluation phase (one ext_proc message), shared by every filter invocation in that phase; 0 disables. Must stay below Envoy's ext_proc message_timeout (shipped default 5s) so the plugin is cancelled before Envoy gives up. Lower it only with the failure-mode change in mind: a fetch that exceeds the budget becomes a fetch error, which the rule's failStrategy (CRD default Block) turns into a 403.")
+	sandboxPolicyWait = flag.Duration(
+		"sandbox-policy-wait", securityprofile.DefaultSandboxPolicyWait,
+		"Maximum time a request from a Sandbox the store knows is held while its policy converges; 0 fails closed immediately. A courtesy window, not a convergence bound: watch latency has no upper bound, and a request that outlasts the wait is refused with 503 epe_policy_not_ready. Configure independently of AGENTIO_KRT_DEBOUNCE — the debounce coalesces events the informer already holds, so no arithmetic over it bounds convergence — and keep it below --plugin-budget, whose cancellation would surface as a gRPC error instead of the intended 503.")
 	kubeconfig  = flag.String("kubeconfig", "", "Path to a kubeconfig; empty means in-cluster config")
 	enablePprof = flag.Bool("enable-pprof", false, "Enable pprof profiling endpoint")
 	pprofAddr   = flag.String("pprof-addr", ":6060", "The address the pprof server binds to")
@@ -141,6 +144,11 @@ func run() error {
 		flags[f.Name] = f.Value.String()
 	})
 	setupLog.Info("parsed flags", "flags", flags)
+
+	if err := validateSandboxPolicyWait(*sandboxPolicyWait, *pluginBudget); err != nil {
+		setupLog.Error(err, "invalid sandbox policy wait")
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -240,9 +248,10 @@ func run() error {
 		SecureServing:               servingTLS.Secure,
 		CertProvider:                servingTLS.Provider,
 		TLSOptions:                  servingTLS.Options,
-		Resolve:                     securityprofile.NewResolver(store, registrations, auditRouter),
-		AuditLogger:                 auditLogger,
-		Registrations:               registrations,
+		Resolve: securityprofile.NewResolver(store, registrations, auditRouter,
+			securityprofile.WithSandboxPolicyWait(*sandboxPolicyWait)),
+		AuditLogger:   auditLogger,
+		Registrations: registrations,
 	}, ctrllog.Log.WithName("ext-proc")))
 
 	// Start pprof server if enabled.
@@ -272,6 +281,21 @@ func run() error {
 		return err
 	}
 	setupLog.Info("EPE terminated")
+	return nil
+}
+
+// validateSandboxPolicyWait keeps the bounded wait inside the request budget.
+// The wait runs under the request-headers context, so a wait at or above the
+// budget would be cancelled by the budget first and surface as a gRPC error
+// instead of the 503 the wait is designed to produce. A zero budget disables
+// the bound and therefore accepts any wait.
+func validateSandboxPolicyWait(wait, budget time.Duration) error {
+	if wait < 0 {
+		return fmt.Errorf("sandbox policy wait must not be negative: %v", wait)
+	}
+	if budget > 0 && wait >= budget {
+		return fmt.Errorf("sandbox policy wait %v must stay below the plugin budget %v", wait, budget)
+	}
 	return nil
 }
 

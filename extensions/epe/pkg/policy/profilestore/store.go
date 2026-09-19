@@ -22,9 +22,11 @@
 package profilestore
 
 import (
+	"context"
 	"maps"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
@@ -38,8 +40,21 @@ import (
 )
 
 const (
-	GlobalProfileNamespace = ""
+	GlobalProfileNamespace      = ""
+	defaultGlobalSandboxWaiters = 1024
+	defaultPerSandboxWaiters    = 64
 )
+
+var ErrSandboxPolicyWaitOverloaded = securityprofile.ErrSandboxPolicyWaitOverloaded
+
+type StoreOption func(*store)
+
+func WithWaitLimits(global, perSandbox int) StoreOption {
+	return func(s *store) {
+		s.maxWaiters = global
+		s.maxWaitersPerSandbox = perSandbox
+	}
+}
 
 // Store is a thread-safe in-memory store for SecurityProfiles and
 // GlobalSecurityProfiles. It maintains a simple profile index and performs
@@ -67,6 +82,8 @@ type Store interface {
 	// administrator profiles. A zero pod.Name skips the identity lookup
 	// (admin and debug paths that match by labels only).
 	ProfilesFor(pod inputs.Pod) []*securityprofile.Profile
+
+	AwaitSnapshot(ctx context.Context, pod inputs.Pod, wait time.Duration) (securityprofile.PolicySnapshot, error)
 }
 
 // profileKey identifies one installed profile. The match mode belongs in the
@@ -171,29 +188,50 @@ func (set installedSet) len() int { return len(set.selector) + len(set.pod) }
 // selectorIndex is immutable once built and may be shared with the preceding
 // snapshot when a batch changed no selector profile: nothing may mutate a
 // profileIndex after buildSnapshot returns it.
+type sandboxPolicy struct {
+	state   securityprofile.SandboxPolicyState
+	version string
+}
+
 type profileSnapshot struct {
-	installed     installedSet
-	selectorIndex map[string]profileIndex
+	installed       installedSet
+	selectorIndex   map[string]profileIndex
+	sandboxPolicies map[types.NamespacedName]sandboxPolicy
 }
 
 func newEmptySnapshot() *profileSnapshot {
 	return &profileSnapshot{
-		installed:     newInstalledSet(0, 0),
-		selectorIndex: make(map[string]profileIndex),
+		installed:       newInstalledSet(0, 0),
+		selectorIndex:   make(map[string]profileIndex),
+		sandboxPolicies: make(map[types.NamespacedName]sandboxPolicy),
 	}
 }
 
 // NewStore creates a new in-memory configuration store. Wire it to a
 // compiled-profile collection with RegisterCollection.
-func NewStore() *store {
-	s := &store{degraded: newDegradedSets()}
+func NewStore(options ...StoreOption) *store {
+	s := &store{
+		degraded:             newDegradedSets(),
+		maxWaiters:           defaultGlobalSandboxWaiters,
+		maxWaitersPerSandbox: defaultPerSandboxWaiters,
+		waitersBySandbox:     make(map[types.NamespacedName]int),
+		notifiers:            make(map[types.NamespacedName]chan struct{}),
+	}
+	for _, option := range options {
+		option(s)
+	}
 	s.snapshot.Store(newEmptySnapshot())
 	return s
 }
 
 type store struct {
-	snapshot atomic.Pointer[profileSnapshot]
-	mu       sync.Mutex // protects write path only
+	snapshot             atomic.Pointer[profileSnapshot]
+	mu                   sync.Mutex
+	maxWaiters           int
+	maxWaitersPerSandbox int
+	waiters              int
+	waitersBySandbox     map[types.NamespacedName]int
+	notifiers            map[types.NamespacedName]chan struct{}
 	// degraded is write-path state, guarded by mu: which sources are currently
 	// stale, unenforced, or serving unresolved inputs. The gauges publish counts
 	// from it, so the metric surface stays three series per gauge no matter how
@@ -227,37 +265,38 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 
 	old := s.snapshot.Load()
 	installed := old.installed.clone()
-	// Only selector profiles feed the label index, so a batch that touched
-	// nothing but per-Sandbox profiles can carry the previous index forward
-	// instead of rebuilding an identical one. Sandbox churn is the
-	// high-frequency event source, and the rebuild is the expensive part of a
-	// write.
+	sandboxPolicies := maps.Clone(old.sandboxPolicies)
 	selectorsChanged := false
+	touchedSandboxes := make(map[types.NamespacedName]struct{})
 
 	for _, ev := range events {
 		if ev.Event == controllers.EventDelete {
 			key := keyFor(ev.Latest().Meta)
-			// A deleted source leaves no degraded state behind.
 			s.degraded.removed(key)
 			if installed.remove(key) {
 				selectorsChanged = selectorsChanged || key.match == securityprofile.MatchSelector
+			}
+			if key.match == securityprofile.MatchPod {
+				delete(sandboxPolicies, key.name2())
+				touchedSandboxes[key.name2()] = struct{}{}
 			}
 			continue
 		}
 		sp := ev.New
 		key := keyFor(sp.Meta)
-		// One last-known-good contract for every source: an invalid version
-		// leaves the prior effective one installed, and a first version that
-		// never compiled installs nothing.
+		if key.match == securityprofile.MatchPod {
+			sandboxPolicies[key.name2()] = sandboxPolicy{state: sp.SandboxState, version: sp.Meta.Version}
+			touchedSandboxes[key.name2()] = struct{}{}
+			if sp.SandboxState == securityprofile.SandboxPolicyUnknown || sp.SandboxState == securityprofile.SandboxPolicyReadyEmpty {
+				s.degraded.removed(key)
+				installed.remove(key)
+				continue
+			}
+		}
 		if sp.CompileError != "" {
 			profileCompileFailuresTotal.WithLabelValues(key.scope()).Inc()
 			_, wasInstalled := installed.get(key)
 			s.degraded.rejected(key, wasInstalled)
-			// The two outcomes differ in severity and get separate gauges.
-			// Stale means an older version is still enforcing; unenforced means
-			// nothing of this policy is in effect at all — for a selector
-			// profile the Pods it targets are unprotected, for a per-Sandbox
-			// one that Sandbox has none of its own rules.
 			if wasInstalled {
 				log.Error(nil, "policy version rejected; retaining last-known-good version",
 					"profile", sp.ResourceName(), "scope", key.scope(), "error", sp.CompileError)
@@ -269,10 +308,6 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 			continue
 		}
 		s.degraded.installed(key, sp.InputsError != "")
-		// A profile with unavailable inputs installs anyway: its rules enforce
-		// and only inputs-dependent evaluations fail, resolved through the
-		// consuming action's failure policy. The gauge and log are the
-		// operator's signal that a referenced ConfigMap needs attention.
 		if sp.InputsError != "" {
 			log.Error(nil, "profile installed with unavailable inputs; rules enforce but "+
 				"inputs-dependent evaluations fail per each action's failure strategy",
@@ -282,11 +317,19 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 		selectorsChanged = selectorsChanged || key.match == securityprofile.MatchSelector
 	}
 
+	var next *profileSnapshot
 	if selectorsChanged {
-		s.snapshot.Store(buildSnapshot(installed))
-		return
+		next = buildSnapshot(installed, sandboxPolicies)
+	} else {
+		next = reuseSnapshot(old, installed, sandboxPolicies)
 	}
-	s.snapshot.Store(reuseSnapshot(old, installed))
+	s.snapshot.Store(next)
+	for key := range touchedSandboxes {
+		policy := next.sandboxPolicies[key]
+		log.Info("sandbox policy state published",
+			"sandbox", key.String(), "state", policy.state.String(), "resourceVersion", policy.version)
+		s.notifySandboxLocked(key)
+	}
 }
 
 // --- Read path (lock-free) ---
@@ -304,20 +347,132 @@ func (s *store) List() []*securityprofile.Profile {
 }
 
 func (s *store) ProfilesFor(pod inputs.Pod) []*securityprofile.Profile {
-	snap := s.snapshot.Load()
+	return profilesFromSnapshot(s.snapshot.Load(), pod)
+}
 
+func profilesFromSnapshot(snap *profileSnapshot, pod inputs.Pod) []*securityprofile.Profile {
 	ls := labels.Set(pod.Labels)
 	matched := snap.selectorIndex[GlobalProfileNamespace].appendMatches(ls, nil)
 	if pod.Namespace != GlobalProfileNamespace {
 		matched = snap.selectorIndex[pod.Namespace].appendMatches(ls, matched)
 	}
-	// Candidate iteration crosses the fallback list and Pod label buckets, whose
-	// order is not the policy evaluation order. Restore the shared precedence
-	// contract after the global and namespaced matches have been merged.
 	if len(matched) > 1 {
 		securityprofile.SortProfiles(matched)
 	}
 	return appendPodProfile(matched, snap, pod)
+}
+
+func policySnapshot(snap *profileSnapshot, pod inputs.Pod) securityprofile.PolicySnapshot {
+	policy, exists := snap.sandboxPolicies[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]
+	return securityprofile.PolicySnapshot{
+		Profiles:       profilesFromSnapshot(snap, pod),
+		SandboxExists:  exists,
+		SandboxState:   policy.state,
+		SandboxVersion: policy.version,
+	}
+}
+
+// AwaitSnapshot reads the current policy snapshot and, when the store knows
+// the caller as a Sandbox whose policy is still Unknown, holds the request
+// until a later publish resolves it or the bounded wait expires. The wait is
+// keyed on the store and nothing else: propagated identity is not consulted
+// (ztunnel never emits sandbox.id, and the pod's claimed label is frozen at
+// creation), so a caller the store has not observed is an ordinary Pod and
+// returns immediately.
+//
+// wait is a courtesy window, not a convergence bound: watch latency has no
+// upper bound, so a request that arrives while convergence is slower than
+// wait fails closed with an Unknown snapshot, and the resolver turns that
+// into a 503. Callers size the window for availability and configure it
+// independently of the collection debounce.
+func (s *store) AwaitSnapshot(ctx context.Context, pod inputs.Pod, wait time.Duration) (securityprofile.PolicySnapshot, error) {
+	key := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+
+	s.mu.Lock()
+	current := policySnapshot(s.snapshot.Load(), pod)
+	if !current.SandboxExists || current.SandboxState != securityprofile.SandboxPolicyUnknown || wait <= 0 {
+		s.mu.Unlock()
+		return current, nil
+	}
+	if s.waiters >= s.maxWaiters || s.waitersBySandbox[key] >= s.maxWaitersPerSandbox {
+		s.mu.Unlock()
+		sandboxPolicyWaitsTotal.WithLabelValues(waitOutcomeOverloaded).Inc()
+		return current, ErrSandboxPolicyWaitOverloaded
+	}
+	s.waiters++
+	s.waitersBySandbox[key]++
+	updates := s.notifierLocked(key)
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.waiters--
+		s.waitersBySandbox[key]--
+		if s.waitersBySandbox[key] == 0 {
+			delete(s.waitersBySandbox, key)
+			if s.notifiers[key] == updates {
+				delete(s.notifiers, key)
+			}
+		}
+		s.mu.Unlock()
+	}()
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return securityprofile.PolicySnapshot{}, ctx.Err()
+		case <-timer.C:
+			s.mu.Lock()
+			current = policySnapshot(s.snapshot.Load(), pod)
+			s.mu.Unlock()
+			outcome := waitOutcomeTimeout
+			if current.SandboxState != securityprofile.SandboxPolicyUnknown {
+				outcome = waitOutcomeReady
+			}
+			sandboxPolicyWaitsTotal.WithLabelValues(outcome).Inc()
+			return current, nil
+		case <-updates:
+			s.mu.Lock()
+			current = policySnapshot(s.snapshot.Load(), pod)
+			if !current.SandboxExists {
+				// The Sandbox left the store while the request waited — a
+				// delete is a resolution, not a countdown: the caller is an
+				// ordinary Pod now and the request must proceed instead of
+				// being held to the deadline. Not counted as a wait outcome:
+				// nothing about policy convergence was learned.
+				s.mu.Unlock()
+				return current, nil
+			}
+			if current.SandboxState != securityprofile.SandboxPolicyUnknown {
+				s.mu.Unlock()
+				sandboxPolicyWaitsTotal.WithLabelValues(waitOutcomeReady).Inc()
+				return current, nil
+			}
+			// The publish did not resolve this Sandbox (its version moved but
+			// stayed Unknown, or the notification belonged to another batch);
+			// re-arm on the current notifier and keep waiting.
+			updates = s.notifierLocked(key)
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *store) notifierLocked(key types.NamespacedName) chan struct{} {
+	updates := s.notifiers[key]
+	if updates == nil {
+		updates = make(chan struct{})
+		s.notifiers[key] = updates
+	}
+	return updates
+}
+
+func (s *store) notifySandboxLocked(key types.NamespacedName) {
+	if updates := s.notifiers[key]; updates != nil {
+		close(updates)
+		delete(s.notifiers, key)
+	}
 }
 
 // appendPodProfile adds the pod's own profile after the selector-matched
@@ -339,15 +494,15 @@ func appendPodProfile(matched []*securityprofile.Profile, snap *profileSnapshot,
 // one. It exists so buildSnapshot stays the only place that decides what a
 // snapshot is made of: a field added there must be handled here too, and a
 // compiler error is easier to notice than a silently zero field.
-func reuseSnapshot(old *profileSnapshot, installed installedSet) *profileSnapshot {
-	return &profileSnapshot{installed: installed, selectorIndex: old.selectorIndex}
+func reuseSnapshot(old *profileSnapshot, installed installedSet, sandboxPolicies map[types.NamespacedName]sandboxPolicy) *profileSnapshot {
+	return &profileSnapshot{installed: installed, selectorIndex: old.selectorIndex, sandboxPolicies: sandboxPolicies}
 }
 
 // buildSnapshot takes ownership of installed and derives the label index from
 // its selector half. Pod-matched profiles are not in it: they are found by
 // identity, and letting them into the label index is exactly the confusion the
 // two lookups exist to prevent.
-func buildSnapshot(installed installedSet) *profileSnapshot {
+func buildSnapshot(installed installedSet, sandboxPolicies map[types.NamespacedName]sandboxPolicy) *profileSnapshot {
 	profilesByNamespace := make(map[string][]*securityprofile.Profile)
 	for nn, sp := range installed.selector {
 		profilesByNamespace[nn.Namespace] = append(profilesByNamespace[nn.Namespace], sp)
@@ -359,5 +514,5 @@ func buildSnapshot(installed installedSet) *profileSnapshot {
 		selectorIndex[namespace] = buildProfileIndex(profiles)
 	}
 
-	return &profileSnapshot{installed: installed, selectorIndex: selectorIndex}
+	return &profileSnapshot{installed: installed, selectorIndex: selectorIndex, sandboxPolicies: sandboxPolicies}
 }
