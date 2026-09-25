@@ -13,7 +13,18 @@
 // limitations under the License.
 package filter
 
-import "github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
+import (
+	"net/netip"
+
+	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
+)
+
+// Destination is the actual forwarding target supplied by the caller.
+// Callers must authorize a changed target again before forwarding.
+type Destination struct {
+	IP   netip.Addr
+	Port uint16
+}
 
 // Body is the complete buffered view of one direction's body; both
 // OnRequestBody and OnResponseBody receive it.
@@ -30,9 +41,11 @@ type Body struct {
 // Stream is the per-request view handed to every filter. Filters must treat
 // its fields as read-only.
 type Stream struct {
-	Peer      Peer
-	Request   httpreq.HTTPRequest
-	RequestID string
+	// Destination is caller-supplied; filters must not infer it from HTTP headers.
+	Destination Destination
+	Peer        Peer
+	Request     httpreq.HTTPRequest
+	RequestID   string
 	// Response is populated from OnResponseHeaders onward.
 	Response httpreq.HTTPResponse
 	// Info accumulates per-stream observations; the engine writes it, the
