@@ -74,6 +74,9 @@ func (g Gateway) ValidateForUse() error {
 	if service := g.Config.GetExtProc().GetService(); service != "" && strings.TrimSpace(service) == "" {
 		return fmt.Errorf("gateway %s has a whitespace-only ext_proc service", g.ResourceName())
 	}
+	if err := ValidateExtProcTLS(g.Config.GetExtProc().GetTls()); err != nil {
+		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
+	}
 	if err := ValidateUpstreamTLS(g.Config.GetUpstreamTls()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}

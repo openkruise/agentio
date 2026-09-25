@@ -179,6 +179,31 @@ agentio:
       address: ""
       port: 9002
     messageTimeout: 5s
+    tls:
+      # Enable workload mTLS between the gateway and EPE.
+      enabled: false
+      # Managed EPE only. Enabling TLS is sufficient to request and renew certificates
+      # from this chart's Agentiod; certificateSource can be omitted or left as {}.
+      # The CA address follows Agentiod's Service name, namespace and global.clusterDomain.
+      # The chart mounts roots from agentiod.ca.trustBundleConfigMapName and projects
+      # an EPE ServiceAccount token using agentiod.tokenAudience.
+      # Select at most one of ca or file. Configure custom mounts below.
+      certificateSource: {}
+      # certificateSource:
+      #   ca:
+      #     address: ca.example:15012
+      #     tokenFile: /custom/token
+      #     caCertificateFile: /custom/root.pem
+      # Set only the CA fields you need to override; omitted fields keep these defaults.
+      # Explicit tokenFile/caCertificateFile paths disable their automatic mounts.
+      # certificateSource:
+      #   file:
+      #     certificateFile: /etc/epe/tls/tls.crt
+      #     privateKeyFile: /etc/epe/tls/tls.key
+      #     caCertificateFile: /etc/epe/trust/ca.crt
+      # EPE identities accepted by the gateway. Managed mode defaults to EPE's SA.
+      # External mode requires an explicit list.
+      peerSpiffeIDs: []
     credentialProvider:
       url: ""
       mtls:
@@ -192,6 +217,10 @@ agentio:
     auditWebhook:
       insecureSkipVerify: false
     env: {}
+    # Native Kubernetes volumes and mounts, also available when TLS is disabled.
+    # Mount certificate directories without subPath to receive projected updates.
+    extraVolumes: []
+    extraVolumeMounts: []
     resources:
       requests:
         cpu: 500m

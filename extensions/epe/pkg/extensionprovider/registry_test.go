@@ -68,7 +68,7 @@ defaultProviders: {credentialProvider: a}
 `, a, b)
 }
 
-// token fetches through either the live registry or an acquired snapshot.
+// token fetches a credential through the registry.
 func token(t testing.TB, r tokentransform.CredentialSource, ctx context.Context, provider string) string {
 	t.Helper()
 	c, err := r.Fetch(
@@ -124,9 +124,7 @@ func TestRegistryRoutesAndIsolatesRevisions(t *testing.T) {
 	r := &Registry{}
 	defer r.Close()
 	apply(t, r, credentialConfig(a.URL, b.URL))
-	pinned, release := r.acquire()
-	defer release()
-	if token(t, pinned, t.Context(), "a") != "A" ||
+	if token(t, r, t.Context(), "a") != "A" ||
 		token(t, r, t.Context(), "b") != "B" ||
 		token(t, r, t.Context(), "") != "A" {
 		t.Fatal("wrong provider")
@@ -135,8 +133,8 @@ func TestRegistryRoutesAndIsolatesRevisions(t *testing.T) {
 		t.Fatal("provider caches not reused")
 	}
 	apply(t, r, credentialConfig(b.URL, b.URL))
-	if token(t, r, t.Context(), "a") != "B" || token(t, pinned, t.Context(), "a") != "A" {
-		t.Fatal("in-flight call saw the new revision")
+	if token(t, r, t.Context(), "a") != "B" {
+		t.Fatal("updated provider used the old revision")
 	}
 	if token(t, r, t.Context(), "b") != "B" || callsB.Load() != 2 {
 		t.Fatal("unchanged provider lost cache")
@@ -163,8 +161,77 @@ func TestRegistryRoutesAndIsolatesRevisions(t *testing.T) {
 	); err == nil {
 		t.Fatal("deleted provider was served")
 	}
-	if token(t, pinned, t.Context(), "a") != "A" {
-		t.Fatal("in-flight call did not retain its revision")
+}
+
+func TestRegistryCredentialFetchAcrossUpdates(t *testing.T) {
+	started, finish := make(chan struct{}), make(chan struct{})
+	var newCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		value := "new"
+		if req.URL.Path == "/old" {
+			close(started)
+			select {
+			case <-finish:
+			case <-req.Context().Done():
+				return
+			}
+			value = "old"
+		} else {
+			newCalls.Add(1)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"apiKey": value}); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	finishRequest := sync.OnceFunc(func() { close(finish) })
+	t.Cleanup(finishRequest)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	r := &Registry{}
+	t.Cleanup(r.Close)
+	configure := func(path string) {
+		apply(t, r, fmt.Sprintf(`extensionProviders:
+- name: a
+  credentialProvider: {url: %q, timeout: 5s}
+`, server.URL+path))
+	}
+	configure("/old")
+	type result struct {
+		credential tokentransform.Credential
+		err        error
+	}
+	done := make(chan result, 1)
+	go func() {
+		credential, err := r.Fetch(ctx, tokentransform.Ref{
+			Kind:            tokentransform.CredentialKindToken,
+			Provider:        "a",
+			Name:            "remote",
+			SandboxClientID: "sandbox",
+			AccessToken:     "access",
+		})
+		done <- result{credential: credential, err: err}
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("old provider request did not start")
+	}
+	configure("/new")
+	if got := token(t, r, ctx, "a"); got != "new" {
+		t.Fatalf("updated provider returned %q", got)
+	}
+	finishRequest()
+	select {
+	case got := <-done:
+		if got.err != nil || got.credential.Token != "old" {
+			t.Fatalf("in-flight request changed across update: %+v, %v", got.credential, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("old provider request did not finish")
+	}
+	if got := token(t, r, ctx, "a"); got != "new" || newCalls.Load() != 1 {
+		t.Fatalf("old response changed the new cache: token=%q, calls=%d", got, newCalls.Load())
 	}
 }
 
@@ -346,9 +413,7 @@ func TestRegistryDefaultIsAnOrdinaryProvider(t *testing.T) {
 	if err := r.Apply(cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	pinned, release := r.acquire()
-	defer release()
-	first := pinned.providers["default"]
+	first := r.current.providers["default"]
 	if err := r.Apply(cfg, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -360,9 +425,6 @@ func TestRegistryDefaultIsAnOrdinaryProvider(t *testing.T) {
 	}
 	if len(r.current.providers) != 0 || r.current.defaultCredential != "" {
 		t.Fatal("empty configuration retained a special default")
-	}
-	if pinned.providers["default"] != first {
-		t.Fatal("in-flight call lost its instance")
 	}
 	r.Close()
 	if err := r.Apply(cfg, nil); err == nil {
@@ -662,11 +724,11 @@ func TestRegistryOptionalMaterialDoesNotDisableVerification(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := defaultConfig(server.URL)
-			cfg.ExtensionProviders[0].GetCredentialProvider().Tls = &configv1.ProviderTLS{
-				CaSource: &configv1.ProviderTLS_CaSecretRef{
+			cfg.ExtensionProviders[0].GetCredentialProvider().Tls = &configv1.ClientTLS{
+				CaSource: &configv1.ClientTLS_CaSecretRef{
 					CaSecretRef: &configv1.TargetReference{Name: "missing"},
 				},
-				ClientCertificateSource: &configv1.ProviderTLS_ClientCertificateSecretRef{
+				ClientCertificateSource: &configv1.ClientTLS_ClientCertificateSecretRef{
 					ClientCertificateSecretRef: &configv1.TargetReference{Name: "missing"},
 				},
 				Optional:           tt.optional,

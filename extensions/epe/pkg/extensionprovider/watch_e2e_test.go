@@ -196,9 +196,7 @@ defaultProviders: {credentialProvider: a}
 			t.Fatal("changing only the default rebuilt an unchanged provider/cache")
 		}
 	})
-	step("endpoint_update_and_in_flight_call", func(t *testing.T) {
-		pinned, release := r.acquire()
-		defer release()
+	step("endpoint_update_preserves_other_providers", func(t *testing.T) {
 		beforeA, beforeB := liveProvider(r, "a"), liveProvider(r, "b")
 		base = strings.Replace(base, a.Server.URL, b.Server.URL, 1)
 		base = strings.Replace(base, "/one", "/two", 1)
@@ -206,9 +204,6 @@ defaultProviders: {credentialProvider: a}
 		waitProviderChange(t, r, "a", beforeA)
 		checkToken(t, "", "B")
 		checkCallout(t, r, ctx, "/two")
-		if got := token(t, pinned, ctx, "a"); got != "A" {
-			t.Fatalf("in-flight call changed revision: %q", got)
-		}
 		if liveProvider(r, "b") != beforeB || b.Calls.Load() != 2 {
 			t.Fatal("endpoint change reused the old cache or flushed another provider")
 		}

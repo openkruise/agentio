@@ -29,6 +29,7 @@ import (
 	rawbufferv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/raw_buffer/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpupstreamv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -239,7 +240,7 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 		protocol.CommonHttpProtocolOptions.MaxRequestsPerConnection = wrapperspb.UInt32(httpSettings.GetMaxRequestsPerConnection())
 	}
 	protocolAny := b.pack(protocol)
-	return &clusterv3.Cluster{
+	cluster := &clusterv3.Cluster{
 		Name:                 ExtProcCluster,
 		AltStatName:          delimitedStatsPrefix(ExtProcCluster),
 		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STRICT_DNS},
@@ -263,6 +264,43 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{httpProtocolOptionsType: protocolAny},
 	}
+	if provider.GetTls().GetMode() == configv1.ExtProcTLSSettings_MUTUAL {
+		secret := func(name string) *tlsv3.SdsSecretConfig {
+			return &tlsv3.SdsSecretConfig{Name: name, SdsConfig: workloadSDSConfigSource()}
+		}
+		var peers []*tlsv3.SubjectAltNameMatcher
+		for _, id := range provider.GetTls().GetPeerSpiffeIds() {
+			peers = append(peers, &tlsv3.SubjectAltNameMatcher{
+				SanType: tlsv3.SubjectAltNameMatcher_URI,
+				Matcher: &matcherv3.StringMatcher{MatchPattern: &matcherv3.StringMatcher_Exact{Exact: id}},
+			})
+		}
+		tlsConfig := b.pack(&tlsv3.UpstreamTlsContext{
+			// Do not reuse authenticated sessions across trust-bundle rotations.
+			MaxSessionKeys: wrapperspb.UInt32(0),
+			CommonTlsContext: &tlsv3.CommonTlsContext{
+				TlsParams: &tlsv3.TlsParameters{
+					TlsMinimumProtocolVersion: tlsv3.TlsParameters_TLSv1_3,
+					TlsMaximumProtocolVersion: tlsv3.TlsParameters_TLSv1_3,
+				},
+				AlpnProtocols:                  []string{"h2"},
+				TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{secret("default")},
+				ValidationContextType: &tlsv3.CommonTlsContext_CombinedValidationContext{
+					CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
+						DefaultValidationContext: &tlsv3.CertificateValidationContext{
+							MatchTypedSubjectAltNames: peers,
+						},
+						ValidationContextSdsSecretConfig: secret("ROOTCA"),
+					},
+				},
+			},
+		})
+		cluster.TransportSocket = &corev3.TransportSocket{
+			Name:       "envoy.transport_sockets.tls",
+			ConfigType: &corev3.TransportSocket_TypedConfig{TypedConfig: tlsConfig},
+		}
+	}
+	return cluster
 }
 
 func dnsCacheConfig() *dfpcommonv3.DnsCacheConfig {

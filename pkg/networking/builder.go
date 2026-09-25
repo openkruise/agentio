@@ -216,6 +216,9 @@ func resolveConfig(gateway model.Gateway, globalExtProc *configv1.ExtProcProvide
 	} else if globalExtProc.GetService() != "" {
 		result.extProc = globalExtProc
 	}
+	if err := model.ValidateExtProcTLS(result.extProc.GetTls()); err != nil {
+		return effectiveConfig{}, err
+	}
 	return result, nil
 }
 

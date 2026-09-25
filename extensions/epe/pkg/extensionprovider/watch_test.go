@@ -31,8 +31,10 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/credential/credentialtest"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/tokentransform"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
+	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
 // watch mirrors main.go: build the collection, register the registry, run the
@@ -51,7 +53,21 @@ func watch(
 	if len(defaults) != 0 {
 		cfg = defaults[0]
 	}
-	reg := registry.RegisterCollection(NewCollection(client, namespace, names, cfg, nil, stop))
+	cms := kclient.NewFiltered[*corev1.ConfigMap](client, kclient.Filter{})
+	cms.Start(stop)
+	configMaps := krt.WrapClient(cms, krt.WithStop(stop))
+	configs := config.NewCollection(
+		configMaps,
+		config.Options[*configv1.EPEConfig]{
+			Namespace: namespace,
+			Names:     names,
+			Defaults:  cfg,
+			Apply:     ApplyConfig,
+			Validate:  Validate,
+		},
+		krt.WithStop(stop),
+	)
+	reg := registry.RegisterCollection(NewCollection(client, namespace, configs.AsCollection(), configMaps, nil, stop))
 	client.Run(stop)
 	return reg
 }
@@ -265,8 +281,6 @@ func TestWatchSwitchesSecretDependencies(t *testing.T) {
 	if first == nil || first.err != nil {
 		t.Fatalf("initial provider unavailable: %+v", first)
 	}
-	pinned, release := registry.acquire()
-	defer release()
 
 	// A valid reference to a missing Secret installs an unavailable provider,
 	// then its creation must wake the dependency without another config change.
@@ -295,9 +309,6 @@ func TestWatchSwitchesSecretDependencies(t *testing.T) {
 		}
 		return nil
 	})
-	if got := pinned.providers["a"]; got != first {
-		t.Fatal("Secret update changed an in-flight snapshot")
-	}
 
 	// The owner closes the registry after stopping the watch. Queued events cannot reopen it.
 	for i := range 10 {
@@ -313,9 +324,6 @@ func TestWatchSwitchesSecretDependencies(t *testing.T) {
 		defer registry.mu.Unlock()
 		if len(registry.current.providers) != 0 {
 			return fmt.Errorf("registry still owns providers after shutdown")
-		}
-		if first.refs != 1 {
-			return fmt.Errorf("in-flight call reference count = %d, want 1", first.refs)
 		}
 		return nil
 	})
@@ -340,20 +348,20 @@ func TestWatchCertificateSources(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			cert, key := certstest.SelfSigned(t, 7001)
 			ca := certstest.New(t).CAPEM()
-			tlsConfig := &configv1.ProviderTLS{}
+			tlsConfig := &configv1.ClientTLS{}
 			client := kube.NewFakeClient()
 			var rotate func()
 			switch source {
 			case "files":
 				dir := t.TempDir()
-				tlsConfig.CaSource = &configv1.ProviderTLS_CaCertificateFile{
+				tlsConfig.CaSource = &configv1.ClientTLS_CaCertificateFile{
 					CaCertificateFile: filepath.Join(dir, "ca.crt"),
 				}
 				files := &configv1.ProviderClientCertificateFiles{
 					CertificateFile: filepath.Join(dir, "client.crt"),
 					PrivateKeyFile:  filepath.Join(dir, "client.key"),
 				}
-				tlsConfig.ClientCertificateSource = &configv1.ProviderTLS_ClientCertificateFiles{
+				tlsConfig.ClientCertificateSource = &configv1.ClientTLS_ClientCertificateFiles{
 					ClientCertificateFiles: files,
 				}
 				write := func(path string, data []byte) {
@@ -367,10 +375,10 @@ func TestWatchCertificateSources(t *testing.T) {
 				write(files.PrivateKeyFile, key)
 				rotate = func() { write(tlsConfig.GetCaCertificateFile(), []byte("revoked")) }
 			case "secret":
-				tlsConfig.CaSource = &configv1.ProviderTLS_CaSecretRef{
+				tlsConfig.CaSource = &configv1.ClientTLS_CaSecretRef{
 					CaSecretRef: &configv1.TargetReference{Name: "client", Namespace: "other"},
 				}
-				tlsConfig.ClientCertificateSource = &configv1.ProviderTLS_ClientCertificateSecretRef{
+				tlsConfig.ClientCertificateSource = &configv1.ClientTLS_ClientCertificateSecretRef{
 					ClientCertificateSecretRef: &configv1.TargetReference{
 						Name:      "client",
 						Namespace: "other",

@@ -37,6 +37,36 @@
 {{- end -}}
 
 {{- define "agentio.validate" -}}
+{{- if .Values.epe.tls.enabled -}}
+{{- if eq .Values.epe.mode "managed" -}}
+{{- $certificateSource := .Values.epe.tls.certificateSource | default dict -}}
+{{- if and (hasKey $certificateSource "ca") (hasKey $certificateSource "file") -}}
+{{- fail "epe.tls.certificateSource.ca and file are mutually exclusive" -}}
+{{- end -}}
+{{- range $kind, $settings := $certificateSource -}}
+{{- if not (has $kind (list "ca" "file")) -}}
+{{- fail "epe.tls.certificateSource must select ca or file" -}}
+{{- end -}}
+{{- if eq $kind "ca" -}}
+{{- range $field, $value := $settings -}}
+{{- if empty $value -}}
+{{- fail (printf "epe.tls.certificateSource.ca.%s must not be empty when specified" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $kind "file" -}}
+{{- range $field := list "certificateFile" "privateKeyFile" "caCertificateFile" -}}
+{{- if empty (index $settings $field) -}}
+{{- fail (printf "epe.tls.certificateSource.file.%s is required" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .Values.epe.mode "external") (empty .Values.epe.tls.peerSpiffeIDs) -}}
+{{- fail "epe.tls.peerSpiffeIDs is required for external mTLS" -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq .Values.egressGateway.mode "gatewayAPI") .Values.egressGateway.gatewayAPI.create -}}
 {{- if empty .Values.egressGateway.gatewayAPI.name -}}
 {{- fail "egressGateway.gatewayAPI.name is required when mode=gatewayAPI and create=true" -}}
@@ -109,6 +139,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "agentiod.caConfigMapName" -}}
 {{- default .Values.global.caCertConfigMap .Values.agentiod.ca.configMapName -}}
+{{- end -}}
+
+{{- define "agentiod.caAddress" -}}
+{{- printf "%s.%s.svc.%s:15012" (include "agentiod.fullname" .) .Release.Namespace .Values.global.clusterDomain -}}
 {{- end -}}
 
 {{- define "agentio-cni.name" -}}{{ default "agentio-cni" .Values.cni.nameOverride | trunc 63 | trimSuffix "-" }}{{- end -}}

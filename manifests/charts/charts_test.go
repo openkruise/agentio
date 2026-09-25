@@ -655,3 +655,113 @@ func TestAgentgatewayCAInjectorValues(t *testing.T) {
 		})
 	}
 }
+
+func TestEPEWorkloadMTLS(t *testing.T) {
+	workload := renderAgentio(t, "--set", "epe.mode=managed,epe.tls.enabled=true")
+	requireContains(
+		t,
+		workload,
+		"-tls-source=ca",
+		"-ca-address=agentiod.agentio-system.svc.cluster.local:15012",
+		"-tls-spiffe-id=spiffe://cluster.local/ns/agentio-system/sa/agentio-epe",
+		"path: agentio-token",
+		"service: readiness",
+		"service: liveness",
+	)
+	if strings.Contains(workload, "/etc/epe/server-tls") {
+		t.Fatal("workload mode must not mount a serving Secret")
+	}
+
+	valuesFile := filepath.Join(t.TempDir(), "epe.yaml")
+	if err := os.WriteFile(valuesFile, []byte(`epe:
+  mode: managed
+  tls:
+    enabled: true
+    certificateSource:
+      file:
+        certificateFile: /custom/tls/cert.pem
+        privateKeyFile: /custom/tls/key.pem
+        caCertificateFile: /custom/trust/root.pem
+  extraVolumes:
+  - name: serving-cert
+    secret:
+      secretName: epe-server
+  - name: client-ca
+    configMap:
+      name: epe-client-ca
+  extraVolumeMounts:
+  - name: serving-cert
+    mountPath: /custom/tls
+    readOnly: true
+  - name: client-ca
+    mountPath: /custom/trust
+    readOnly: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := renderAgentio(t, "-f", valuesFile, "--show-only", "templates/epe/deployment.yaml")
+	requireContains(t, manifest,
+		"-tls-source=file",
+		"-tls-cert-path=/custom/tls/cert.pem",
+		"-tls-key-path=/custom/tls/key.pem",
+		"-tls-ca-path=/custom/trust/root.pem",
+		"secretName: epe-server", "name: epe-client-ca",
+		"mountPath: /custom/tls", "mountPath: /custom/trust",
+	)
+	requireNotContains(t, manifest, "workload-root", "workload-token", "-ca-address")
+
+	// User-provided mounts also serve outbound provider files with inbound TLS off.
+	plain := renderAgentio(t, "-f", valuesFile, "--set", "epe.tls.enabled=false",
+		"--show-only", "templates/epe/deployment.yaml")
+	requireContains(t, plain, "secretName: epe-server", "mountPath: /custom/trust")
+	requireNotContains(t, plain, "-tls-source=", "-tls-cert-path=", "workload-root", "workload-token")
+
+	for _, overrides := range []string{
+		"epe.tls.certificateSource.file.certificateFile=/cert.pem",
+		"epe.tls.certificateSource.ca.address=ca.example:15012,epe.tls.certificateSource.file.certificateFile=/cert.pem,epe.tls.certificateSource.file.privateKeyFile=/key.pem,epe.tls.certificateSource.file.caCertificateFile=/root.pem",
+		"epe.tls.certificateSource.ca.tokenFile=relative-path",
+		"epe.tls.certificateSource.xds.address=ca.example:15012",
+	} {
+		requireRenderError(t, "/epe/tls/certificateSource", "--set", "epe.mode=managed,epe.tls.enabled=true,"+overrides)
+	}
+	requireRenderError(
+		t,
+		"epe.tls.peerSpiffeIDs is required",
+		"--set",
+		"epe.mode=external,epe.external.address=epe.other.svc,epe.tls.enabled=true",
+	)
+}
+
+func TestEPECustomCAPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides string
+		present   []string
+		absent    []string
+	}{
+		{
+			name:      "address override retains default mounts",
+			overrides: "epe.tls.certificateSource.ca.address=ca.security.svc:15012",
+			present:   []string{"-ca-address=ca.security.svc:15012", "name: workload-root", "name: workload-token"},
+		},
+		{
+			name:      "custom root retains only default token mount",
+			overrides: "epe.tls.certificateSource.ca.caCertificateFile=/custom/root.pem",
+			present:   []string{"-ca-root-path=/custom/root.pem", "name: workload-token"},
+			absent:    []string{"name: workload-root"},
+		},
+		{
+			name:      "explicit paths disable both default mounts",
+			overrides: "epe.tls.certificateSource.ca.caCertificateFile=/var/run/secrets/agentio/root-cert.pem,epe.tls.certificateSource.ca.tokenFile=/custom/token",
+			present:   []string{"-ca-root-path=/var/run/secrets/agentio/root-cert.pem", "-ca-token-path=/custom/token"},
+			absent:    []string{"name: workload-root", "name: workload-token"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := renderAgentio(t, "--set", "epe.mode=managed,epe.tls.enabled=true,"+tc.overrides,
+				"--show-only", "templates/epe/deployment.yaml")
+			requireContains(t, manifest, tc.present...)
+			requireNotContains(t, manifest, tc.absent...)
+		})
+	}
+}

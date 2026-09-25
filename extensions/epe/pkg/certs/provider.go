@@ -24,6 +24,8 @@ package certs
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
+	"time"
 )
 
 // Provider supplies certificate material and trust anchors for TLS
@@ -39,4 +41,37 @@ type Provider interface {
 	// A nil pool with a nil error means the provider has no custom CA;
 	// clients then fall back to the system certificate pool.
 	RootCAs() (*x509.CertPool, error)
+}
+
+// CheckServing checks availability for readiness and new streams on existing
+// TLS connections. Existing streams may finish after the certificate expires.
+func CheckServing(provider Provider, requireClientCA bool) error {
+	cert, err := provider.GetCertificate(nil)
+	if err != nil {
+		return err
+	}
+	if cert == nil || len(cert.Certificate) == 0 {
+		return fmt.Errorf("serving certificate is unavailable")
+	}
+	leaf := cert.Leaf
+	if leaf == nil {
+		leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return err
+		}
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return fmt.Errorf("serving certificate is outside its validity period")
+	}
+	if requireClientCA {
+		roots, err := provider.RootCAs()
+		if err != nil {
+			return err
+		}
+		if roots == nil {
+			return fmt.Errorf("client trust bundle is unavailable")
+		}
+	}
+	return nil
 }

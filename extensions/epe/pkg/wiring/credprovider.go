@@ -77,20 +77,20 @@ func DefaultEPEConfig() (*configv1.EPEConfig, error) {
 		Timeout: "10s",
 	}
 	if strings.HasPrefix(identityProviderURL, "https://") {
-		tlsConfig := &configv1.ProviderTLS{InsecureSkipVerify: insecureSkipVerify, Optional: true}
+		tlsConfig := &configv1.ClientTLS{InsecureSkipVerify: insecureSkipVerify, Optional: true}
 		switch credProviderMTLSSource {
 		case credProviderSourceNone:
 		case credProviderSourceSecret:
 			if credProviderSecretNamespace == "" || credProviderSecretName == "" {
 				return nil, fmt.Errorf("CREDENTIAL_PROVIDER_MTLS_SOURCE=secret requires a namespace and a name")
 			}
-			tlsConfig.CaSource = &configv1.ProviderTLS_CaSecretRef{
+			tlsConfig.CaSource = &configv1.ClientTLS_CaSecretRef{
 				CaSecretRef: &configv1.TargetReference{
 					Name:      credProviderSecretName,
 					Namespace: credProviderSecretNamespace,
 				},
 			}
-			tlsConfig.ClientCertificateSource = &configv1.ProviderTLS_ClientCertificateSecretRef{
+			tlsConfig.ClientCertificateSource = &configv1.ClientTLS_ClientCertificateSecretRef{
 				ClientCertificateSecretRef: &configv1.TargetReference{
 					Name:      credProviderSecretName,
 					Namespace: credProviderSecretNamespace,

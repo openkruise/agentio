@@ -36,6 +36,36 @@
 {{- end -}}
 
 {{- define "agentio.validate" -}}
+{{- if .Values.agentio.epe.tls.enabled -}}
+{{- if eq .Values.agentio.epe.mode "managed" -}}
+{{- $certificateSource := .Values.agentio.epe.tls.certificateSource | default dict -}}
+{{- if and (hasKey $certificateSource "ca") (hasKey $certificateSource "file") -}}
+{{- fail "epe.tls.certificateSource.ca and file are mutually exclusive" -}}
+{{- end -}}
+{{- range $kind, $settings := $certificateSource -}}
+{{- if not (has $kind (list "ca" "file")) -}}
+{{- fail "epe.tls.certificateSource must select ca or file" -}}
+{{- end -}}
+{{- if eq $kind "ca" -}}
+{{- range $field, $value := $settings -}}
+{{- if empty $value -}}
+{{- fail (printf "epe.tls.certificateSource.ca.%s must not be empty when specified" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $kind "file" -}}
+{{- range $field := list "certificateFile" "privateKeyFile" "caCertificateFile" -}}
+{{- if empty (index $settings $field) -}}
+{{- fail (printf "epe.tls.certificateSource.file.%s is required" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .Values.agentio.epe.mode "external") (empty .Values.agentio.epe.tls.peerSpiffeIDs) -}}
+{{- fail "epe.tls.peerSpiffeIDs is required for external mTLS" -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq .Values.agentio.egressGateway.mode "gatewayAPI") .Values.agentio.egressGateway.gatewayAPI.create -}}
 {{- if empty .Values.agentio.egressGateway.gatewayAPI.name -}}
 {{- fail "egressGateway.gatewayAPI.name is required when mode=gatewayAPI and create=true" -}}
@@ -101,6 +131,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "agentio.agentiod.caConfigMapName" -}}
 {{- default .Values.agentio.global.caCertConfigMap .Values.agentio.agentiod.ca.configMapName -}}
+{{- end -}}
+
+{{- define "agentio.agentiod.caAddress" -}}
+{{- printf "%s.%s.svc.%s:15012" (include "agentio.agentiod.fullname" .) (include "agentio.namespace" .) .Values.agentio.global.clusterDomain -}}
 {{- end -}}
 
 

@@ -16,7 +16,12 @@ syntax = "proto3";
 package agentio.config.v1;
 option go_package = "github.com/openkruise/agentio/api/config/v1;configv1";
 
-// EPEConfig is decoded from the watched ConfigMap's data.config entry.
+// EPEConfig configures EPE's outbound extension providers.
+// YAML or JSON is decoded from each watched ConfigMap's data.config entry.
+// Base and primary ConfigMaps overlay startup defaults in that order. Missing
+// ConfigMaps or blank entries leave the lower layer unchanged. Invalid updates
+// retain the last valid configuration; an invalid initial configuration uses
+// startup defaults. Valid changes take effect without restarting EPE.
 // Secret and ConfigMap references default to the configuration namespace.
 //
 // Example: register a callout service and a default credential service.
@@ -37,6 +42,7 @@ message EPEConfig {
   // Layers merge by name; a same-name entry replaces the whole provider.
   // Omitted or null lists inherit the lower layer; an explicit [] clears it.
   repeated ExtensionProvider extension_providers = 1;
+
   // Default services used when a caller does not select a provider explicitly.
   DefaultExtensionProviders default_providers = 2;
 }
@@ -77,7 +83,7 @@ message HTTPCalloutProvider {
   // deadline takes precedence; time spent queued by the caller is not included.
   string timeout = 2;
   // HTTPS transport settings. Omission uses system roots without a client certificate.
-  ProviderTLS tls = 4;
+  ClientTLS tls = 4;
 }
 
 // CredentialProvider defines the connection to a credential service.
@@ -91,11 +97,12 @@ message CredentialProvider {
   // Positive Go duration, such as "2s". Defaults to 500ms.
   string timeout = 2;
   // HTTPS transport settings. Omission uses system roots without a client certificate.
-  ProviderTLS tls = 3;
+  ClientTLS tls = 3;
 }
 
-// ProviderTLS configures HTTPS connections for either provider type. Referenced
-// Secrets, ConfigMaps, and files are watched; changes rebuild the affected provider and cache.
+// ClientTLS configures outbound HTTPS connections from EPE to either provider
+// type. It does not configure EPE's inbound ext_proc listener. Referenced Secrets,
+// ConfigMaps, and files are watched; changes rebuild the affected provider and cache.
 // CA and client identity sources are independent, so a Secret CA can be combined
 // with a file-based client certificate, or vice versa.
 // Omitting client identity configures server-only TLS; a client certificate is
@@ -126,13 +133,15 @@ message CredentialProvider {
 //     clientCertificateFiles:
 //       certificateFile: /etc/epe/certs/tls.crt
 //       privateKeyFile: /etc/epe/certs/tls.key
-message ProviderTLS {
+message ClientTLS {
   // Defaults to URL hostname. Mutually exclusive with peerSpiffeIDs.
   string server_name = 1;
   // Exact URI SAN allowlist, for example:
   //   peerSpiffeIDs: ["spiffe://cluster.local/ns/agentio-system/sa/credential-provider"]
   // Verifies the certificate chain and requires a matching SPIFFE ID instead of
   // hostname verification. Mutually exclusive with serverName and insecureSkipVerify.
+  // When empty, serverName or the URL hostname is verified unless
+  // insecureSkipVerify is enabled; an empty list does not deny all providers.
   repeated string peer_spiffe_ids = 2 [json_name = "peerSpiffeIDs"];
   // Selects at most one CA source. Omission uses system roots.
   // An explicit but unavailable source fails unless optional is true.

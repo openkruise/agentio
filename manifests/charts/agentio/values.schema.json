@@ -466,6 +466,89 @@
               "type": "boolean"
             }
           }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "peerSpiffeIDs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^spiffe://[^/]+/.+"
+              }
+            },
+            "certificateSource": {
+              "type": "object",
+              "additionalProperties": false,
+              "maxProperties": 1,
+              "properties": {
+                "ca": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "tokenFile": {
+                      "type": "string",
+                      "pattern": "^/"
+                    },
+                    "caCertificateFile": {
+                      "type": "string",
+                      "pattern": "^/"
+                    }
+                  }
+                },
+                "file": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "certificateFile",
+                    "privateKeyFile",
+                    "caCertificateFile"
+                  ],
+                  "properties": {
+                    "certificateFile": {
+                      "type": "string",
+                      "pattern": "^/"
+                    },
+                    "privateKeyFile": {
+                      "type": "string",
+                      "pattern": "^/"
+                    },
+                    "caCertificateFile": {
+                      "type": "string",
+                      "pattern": "^/"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "extraVolumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "mountPath"
+            ]
+          }
         }
       }
     }

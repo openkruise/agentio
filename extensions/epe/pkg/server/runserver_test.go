@@ -21,16 +21,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/certs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
@@ -170,68 +169,87 @@ func (p *staticProvider) RootCAs() (*x509.CertPool, error) {
 
 // TestNew_SecureServing covers the injected-provider TLS branch: the
 // server must serve the injected certificate (not self-signed) and enforce
-// the configured mTLS/SPIFFE options.
+// required client certificate verification without identity restrictions.
 func TestNew_SecureServing(t *testing.T) {
 	const envoyID = "spiffe://cluster.local/ns/default/sa/envoy"
 	const strangerID = "spiffe://cluster.local/ns/default/sa/stranger"
 
 	tests := []struct {
-		name        string
-		tlsOptions  func(t *testing.T) []certs.Option
-		clientCert  func(t *testing.T, ca *testCA) *tls.Certificate
-		expectError string
+		name              string
+		requireClientCert bool
+		clientCert        func(t *testing.T, ca *testCA) *tls.Certificate
+		expectError       bool
 	}{
 		{
-			name: "injected provider certificate is served",
-			tlsOptions: func(*testing.T) []certs.Option {
-				return nil
-			},
+			name:       "injected provider certificate is served",
 			clientCert: func(*testing.T, *testCA) *tls.Certificate { return nil },
 		},
 		{
-			name: "mTLS rejects a client without a certificate",
-			tlsOptions: func(t *testing.T) []certs.Option {
-				return []certs.Option{certs.WithClientAuth(tls.RequireAndVerifyClientCert)}
-			},
-			clientCert:  func(*testing.T, *testCA) *tls.Certificate { return nil },
-			expectError: "certificate required",
+			name:              "mTLS rejects a client without a certificate",
+			requireClientCert: true,
+			clientCert:        func(*testing.T, *testCA) *tls.Certificate { return nil },
+			expectError:       true,
 		},
 		{
-			name: "mTLS with SPIFFE allow-list accepts an allow-listed client",
-			tlsOptions: func(t *testing.T) []certs.Option {
-				list, err := certs.NewSPIFFEAllowList(envoyID)
-				if err != nil {
-					t.Fatalf("NewSPIFFEAllowList: %v", err)
-				}
-				return []certs.Option{
-					certs.WithClientAuth(tls.RequireAndVerifyClientCert),
-					certs.WithPeerVerifier(list.VerifyPeer),
-				}
-			},
+			name:              "mTLS accepts a trusted gateway",
+			requireClientCert: true,
 			clientCert: func(t *testing.T, ca *testCA) *tls.Certificate {
 				cert := ca.issueLeaf(t, 20, envoyID, x509.ExtKeyUsageClientAuth)
 				return &cert
 			},
 		},
 		{
-			name: "mTLS with SPIFFE allow-list rejects an unlisted client",
-			tlsOptions: func(t *testing.T) []certs.Option {
-				list, err := certs.NewSPIFFEAllowList(envoyID)
-				if err != nil {
-					t.Fatalf("NewSPIFFEAllowList: %v", err)
-				}
-				return []certs.Option{
-					certs.WithClientAuth(tls.RequireAndVerifyClientCert),
-					certs.WithPeerVerifier(list.VerifyPeer),
-				}
-			},
+			name:              "mTLS accepts another trusted workload",
+			requireClientCert: true,
 			clientCert: func(t *testing.T, ca *testCA) *tls.Certificate {
 				cert := ca.issueLeaf(t, 21, strangerID, x509.ExtKeyUsageClientAuth)
 				return &cert
 			},
-			// The allow-list rejection surfaces to the client as a TLS alert;
-			// the verifier's own message stays server-side.
-			expectError: "bad certificate",
+		},
+		{
+			name:              "mTLS accepts a trusted client without a SPIFFE ID",
+			requireClientCert: true,
+			clientCert: func(t *testing.T, ca *testCA) *tls.Certificate {
+				cert := ca.issueLeaf(t, 22, "", x509.ExtKeyUsageClientAuth)
+				return &cert
+			},
+		},
+		{
+			name:              "mTLS rejects an untrusted certificate with a gateway identity",
+			requireClientCert: true,
+			clientCert: func(t *testing.T, _ *testCA) *tls.Certificate {
+				cert := newTestCA(t).issueLeaf(t, 23, envoyID, x509.ExtKeyUsageClientAuth)
+				return &cert
+			},
+			expectError: true,
+		},
+		{
+			name:              "mTLS rejects a certificate restricted to server authentication",
+			requireClientCert: true,
+			clientCert: func(t *testing.T, ca *testCA) *tls.Certificate {
+				cert := ca.issueLeaf(t, 24, envoyID, x509.ExtKeyUsageServerAuth)
+				return &cert
+			},
+			expectError: true,
+		},
+		{
+			name:              "mTLS rejects an expired client certificate",
+			requireClientCert: true,
+			clientCert: func(t *testing.T, ca *testCA) *tls.Certificate {
+				cert := ca.issueLeaf(t, 25, envoyID, x509.ExtKeyUsageClientAuth)
+				leaf, err := x509.ParseCertificate(cert.Certificate[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf.NotAfter = time.Now().Add(-time.Minute)
+				der, err := x509.CreateCertificate(rand.Reader, leaf, ca.cert, leaf.PublicKey, ca.key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cert.Certificate = [][]byte{der}
+				return &cert
+			},
+			expectError: true,
 		},
 	}
 	for _, tt := range tests {
@@ -246,11 +264,11 @@ func TestNew_SecureServing(t *testing.T) {
 			// reporting a bare connection reset instead of the conflict.
 			lis := listenLocal(t)
 			rn := New(Config{
-				Listener:      lis,
-				SecureServing: true,
-				Resolve:       resolveNone,
-				CertProvider:  &staticProvider{cert: &serverCert, roots: ca.pool},
-				TLSOptions:    tt.tlsOptions(t),
+				Listener:          lis,
+				SecureServing:     true,
+				Resolve:           resolveNone,
+				CertProvider:      &staticProvider{cert: &serverCert, roots: ca.pool},
+				RequireClientCert: tt.requireClientCert,
 			}, logr.Discard())
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -273,37 +291,43 @@ func TestNew_SecureServing(t *testing.T) {
 			// No wait before dialing: the socket is already listening, so the
 			// connection sits in the accept queue until Serve picks it up.
 
-			clientCfg := &tls.Config{RootCAs: ca.pool}
+			clientCfg := &tls.Config{RootCAs: ca.pool, NextProtos: []string{"h2"}}
 			if cert := tt.clientCert(t, ca); cert != nil {
-				clientCfg.Certificates = []tls.Certificate{*cert}
+				// Always present the supplied certificate so rejection tests exercise
+				// server verification, rather than client-side issuer selection.
+				clientCfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+					return cert, nil
+				}
 			}
 			conn, err := tls.Dial("tcp", lis.Addr().String(), clientCfg)
 			if err == nil {
-				if tt.expectError != "" {
-					// In TLS 1.3 the server verifies the client certificate
-					// after the client finishes its handshake; the rejection
-					// arrives as an alert on the first read.
-					if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-						t.Fatalf("setting read deadline: %v", err)
-					}
-					_, err = conn.Read(make([]byte, 1))
-				} else {
+				// TLS 1.3 client authentication completes on the server after
+				// Dial returns. Read the HTTP/2 preface to observe acceptance or
+				// the TLS alert, including in successful cases.
+				if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+					t.Fatalf("setting read deadline: %v", err)
+				}
+				_, err = conn.Read(make([]byte, 1))
+				if err == nil {
 					state := conn.ConnectionState()
 					if len(state.PeerCertificates) == 0 {
 						t.Fatal("no peer certificates in connection state")
 					}
 					if got := state.PeerCertificates[0].SerialNumber.Int64(); got != 10 {
-						t.Errorf("peer certificate serial = %d, want 10: server must serve the injected certificate, not a self-signed one", got)
+						t.Errorf("peer certificate serial = %d, want injected certificate serial 10", got)
 					}
 				}
-				_ = conn.Close()
-			}
-			if tt.expectError != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				if closeErr := conn.Close(); closeErr != nil {
+					t.Error(closeErr)
 				}
-				if !strings.Contains(err.Error(), tt.expectError) {
-					t.Errorf("error %q does not contain %q", err.Error(), tt.expectError)
+			}
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected client certificate rejection, got nil")
+				}
+				var timeout net.Error
+				if errors.As(err, &timeout) && timeout.Timeout() {
+					t.Fatalf("timed out instead of rejecting the certificate: %v", err)
 				}
 			} else if err != nil {
 				t.Fatalf("unexpected error: %v", err)

@@ -27,10 +27,10 @@ import (
 	"github.com/openkruise/agentio/pkg/config"
 )
 
-// applyConfig merges providers by name while preserving the shared decoder's
+// ApplyConfig merges providers by name while preserving the shared decoder's
 // omission, null, and explicit-empty semantics. Same-name entries replace the
 // whole provider, so changing a type or TLS source cannot inherit stale fields.
-func applyConfig(content string, base *configv1.EPEConfig) (*configv1.EPEConfig, error) {
+func ApplyConfig(content string, base *configv1.EPEConfig) (*configv1.EPEConfig, error) {
 	next, err := config.Apply(content, base)
 	if err != nil || len(next.GetExtensionProviders()) == 0 {
 		return next, err
@@ -99,7 +99,7 @@ func duration(raw string, fallback time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-func settings(p *configv1.ExtensionProvider) (string, string, *configv1.ProviderTLS) {
+func settings(p *configv1.ExtensionProvider) (string, string, *configv1.ClientTLS) {
 	if h := p.GetHttpCallout(); h != nil {
 		return h.Url, h.Timeout, h.Tls
 	}
@@ -116,7 +116,7 @@ func resourceKey(defaultNamespace, namespace, name string) string {
 	return namespace + "/" + name
 }
 
-func certificateFiles(t *configv1.ProviderTLS) []string {
+func certificateFiles(t *configv1.ClientTLS) []string {
 	var paths []string
 	files := t.GetClientCertificateFiles()
 	for _, path := range []string{t.GetCaCertificateFile(), files.GetCertificateFile(), files.GetPrivateKeyFile()} {
@@ -127,7 +127,7 @@ func certificateFiles(t *configv1.ProviderTLS) []string {
 	return paths
 }
 
-func validateProviderTLS(name, scheme string, tlsCfg *configv1.ProviderTLS) error {
+func validateProviderTLS(name, scheme string, tlsCfg *configv1.ClientTLS) error {
 	if tlsCfg == nil {
 		return nil
 	}
@@ -145,26 +145,26 @@ func validateProviderTLS(name, scheme string, tlsCfg *configv1.ProviderTLS) erro
 		return fmt.Errorf("provider %q insecureSkipVerify and peerSpiffeIDs are mutually exclusive", name)
 	}
 	switch source := tlsCfg.GetCaSource().(type) {
-	case *configv1.ProviderTLS_CaSecretRef:
+	case *configv1.ClientTLS_CaSecretRef:
 		ref := source.CaSecretRef
 		if err := validateReference(name, "Secret", ref.GetName(), ref.GetNamespace()); err != nil {
 			return err
 		}
-	case *configv1.ProviderTLS_CaConfigMapRef:
+	case *configv1.ClientTLS_CaConfigMapRef:
 		ref := source.CaConfigMapRef
 		if err := validateReference(name, "ConfigMap", ref.GetName(), ref.GetNamespace()); err != nil {
 			return err
 		}
-	case *configv1.ProviderTLS_CaCertificateFile:
+	case *configv1.ClientTLS_CaCertificateFile:
 		if source.CaCertificateFile == "" {
 			return fmt.Errorf("provider %q requires a non-empty caCertificateFile", name)
 		}
 	}
 	switch source := tlsCfg.GetClientCertificateSource().(type) {
-	case *configv1.ProviderTLS_ClientCertificateSecretRef:
+	case *configv1.ClientTLS_ClientCertificateSecretRef:
 		ref := source.ClientCertificateSecretRef
 		return validateReference(name, "Secret", ref.GetName(), ref.GetNamespace())
-	case *configv1.ProviderTLS_ClientCertificateFiles:
+	case *configv1.ClientTLS_ClientCertificateFiles:
 		files := source.ClientCertificateFiles
 		if files.GetCertificateFile() == "" || files.GetPrivateKeyFile() == "" {
 			return fmt.Errorf(

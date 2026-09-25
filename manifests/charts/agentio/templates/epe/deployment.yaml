@@ -1,6 +1,11 @@
 {{- if eq .Values.epe.mode "managed" }}
 {{- include "agentio.validate" . }}
 {{- $source := .Values.epe.credentialProvider.mtls.source }}
+{{- $certificateSource := .Values.epe.tls.certificateSource | default dict }}
+{{- $ca := $certificateSource.ca | default dict }}
+{{- $caMode := and .Values.epe.tls.enabled (not (hasKey $certificateSource "file")) }}
+{{- $mountRoot := and $caMode (not (hasKey $ca "caCertificateFile")) }}
+{{- $mountToken := and $caMode (not (hasKey $ca "tokenFile")) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,6 +48,20 @@ spec:
             - -epe-config={{ include "epe.fullname" . }}-config
             - -epe-config-primary={{ include "epe.fullname" . }}-config-primary
             - -epe-config-namespace={{ .Release.Namespace }}
+            {{- if .Values.epe.tls.enabled }}
+            {{- if $caMode }}
+            - -tls-source=ca
+            - {{ printf "-ca-address=%s" (default (include "agentiod.caAddress" .) $ca.address) | quote }}
+            - {{ printf "-ca-token-path=%s" (default "/var/run/secrets/tokens/agentio-token" $ca.tokenFile) | quote }}
+            - {{ printf "-ca-root-path=%s" (default "/var/run/secrets/agentio/root-cert.pem" $ca.caCertificateFile) | quote }}
+            - -tls-spiffe-id={{ printf "spiffe://%s/ns/%s/sa/%s" .Values.global.trustDomain .Release.Namespace (include "epe.serviceAccountName" .) }}
+            {{- else }}
+            - -tls-source=file
+            - {{ printf "-tls-cert-path=%s" $certificateSource.file.certificateFile | quote }}
+            - {{ printf "-tls-key-path=%s" $certificateSource.file.privateKeyFile | quote }}
+            - {{ printf "-tls-ca-path=%s" $certificateSource.file.caCertificateFile | quote }}
+            {{- end }}
+            {{- end }}
             - -grpc-port={{ .Values.epe.service.grpcPort }}
             - -grpc-health-port={{ .Values.epe.service.healthPort }}
             - -metrics-port={{ .Values.epe.service.metricsPort }}
@@ -75,11 +94,11 @@ spec:
             - {name: health, containerPort: {{ .Values.epe.service.healthPort }}}
             - {name: metrics, containerPort: {{ .Values.epe.service.metricsPort }}}
           livenessProbe:
-            grpc: {port: {{ .Values.epe.service.healthPort }}}
+            grpc: {port: {{ .Values.epe.service.healthPort }}, service: liveness}
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
-            grpc: {port: {{ .Values.epe.service.healthPort }}}
+            grpc: {port: {{ .Values.epe.service.healthPort }}, service: readiness}
             initialDelaySeconds: 3
             periodSeconds: 5
           resources:
@@ -91,6 +110,45 @@ spec:
             runAsUser: 65532
             runAsGroup: 65532
             runAsNonRoot: true
+          {{- if or $mountRoot $mountToken .Values.epe.extraVolumeMounts }}
+          volumeMounts:
+            {{- if $mountRoot }}
+            - name: workload-root
+              mountPath: /var/run/secrets/agentio
+              readOnly: true
+            {{- end }}
+            {{- if $mountToken }}
+            - name: workload-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            {{- end }}
+            {{- with .Values.epe.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- if or $mountRoot $mountToken .Values.epe.extraVolumes }}
+      volumes:
+        {{- if $mountRoot }}
+        - name: workload-root
+          configMap:
+            name: {{ .Values.agentiod.ca.trustBundleConfigMapName }}
+            items:
+            - key: root-cert.pem
+              path: root-cert.pem
+        {{- end }}
+        {{- if $mountToken }}
+        - name: workload-token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: {{ .Values.agentiod.tokenAudience | quote }}
+                expirationSeconds: 3600
+                path: agentio-token
+        {{- end }}
+        {{- with .Values.epe.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.epe.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

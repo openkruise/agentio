@@ -51,7 +51,6 @@ var (
 
 type instance struct {
 	fingerprint [32]byte
-	refs        int // registry ownership plus in-flight calls; protected by Registry.mu
 	client      *http.Client
 	httpCallout *httpEndpoint
 	credential  tokentransform.CredentialSource
@@ -74,31 +73,11 @@ type Registry struct {
 	closed  bool
 }
 
-// acquire holds the current version until release is called, so an in-flight
-// call keeps its instance alive across Apply. Releasing the last reference to a
-// replaced version retires its connection pools.
-func (r *Registry) acquire() (snapshot, func()) {
-	r.mu.Lock()
-	s := r.current
-	for _, p := range s.providers {
-		p.refs++
-	}
-	r.mu.Unlock()
-	return s, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		for _, p := range s.providers {
-			r.release(p)
-		}
-	}
-}
-
-func (r *Registry) release(p *instance) {
-	p.refs--
-	if p.refs == 0 {
-		if p.client != nil {
-			p.client.CloseIdleConnections()
-		}
+// closeIdleConnections leaves active calls intact. Old instances remain alive
+// through their callers; any later idle connections expire via IdleConnTimeout.
+func (p *instance) closeIdleConnections() {
+	if p.client != nil {
+		p.client.CloseIdleConnections()
 	}
 }
 
@@ -121,8 +100,10 @@ func (r *Registry) Apply(cfg *configv1.EPEConfig, materials map[string]TLSMateri
 	installed := false
 	defer func() {
 		if !installed {
-			for _, p := range next.providers {
-				r.release(p)
+			for name, p := range next.providers {
+				if p != r.current.providers[name] {
+					p.closeIdleConnections()
+				}
 			}
 		}
 	}()
@@ -138,7 +119,6 @@ func (r *Registry) Apply(cfg *configv1.EPEConfig, materials map[string]TLSMateri
 		fingerprintData := append(raw, encoded...)
 		fingerprint := sha256.Sum256(fingerprintData)
 		if old := r.current.providers[p.Name]; old != nil && old.fingerprint == fingerprint {
-			old.refs++
 			next.providers[p.Name] = old
 			continue
 		}
@@ -147,18 +127,20 @@ func (r *Registry) Apply(cfg *configv1.EPEConfig, materials map[string]TLSMateri
 	old := r.current
 	r.current = next
 	installed = true
-	for _, p := range old.providers {
-		r.release(p)
+	for name, p := range old.providers {
+		if p != next.providers[name] {
+			p.closeIdleConnections()
+		}
 	}
 	return nil
 }
 
-// Close retires registry ownership; in-flight calls may finish normally.
+// Close removes all providers and closes idle connections; active calls may finish.
 func (r *Registry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, p := range r.current.providers {
-		r.release(p)
+		p.closeIdleConnections()
 	}
 	r.current = snapshot{}
 	r.closed = true
@@ -167,7 +149,7 @@ func (r *Registry) Close() {
 func build(p *configv1.ExtensionProvider, fingerprint [32]byte, material TLSMaterial) *instance {
 	endpoint, timeout, tlsCfg := settings(p)
 	d, err := duration(timeout, 500*time.Millisecond)
-	i := &instance{fingerprint: fingerprint, refs: 1}
+	i := &instance{fingerprint: fingerprint}
 	if err != nil {
 		i.err = err
 		return i
@@ -195,11 +177,14 @@ func build(p *configv1.ExtensionProvider, fingerprint [32]byte, material TLSMate
 	return i
 }
 
-func (s snapshot) find(name string, credentials bool) (*instance, error) {
+// find selects one immutable instance. Calls retain that instance across updates.
+func (r *Registry) find(name string, credentials bool) (*instance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if name == "" && credentials {
-		name = s.defaultCredential
+		name = r.current.defaultCredential
 	}
-	p := s.providers[name]
+	p := r.current.providers[name]
 	if p == nil {
 		return nil, fmt.Errorf("extension provider %q unavailable", name)
 	}
@@ -215,13 +200,7 @@ func (s snapshot) find(name string, credentials bool) (*instance, error) {
 // Fetch implements the token transformation's provider source. Provider selects
 // the local connection; Name remains the remote credentialProviderName.
 func (r *Registry) Fetch(ctx context.Context, ref tokentransform.Ref) (tokentransform.Credential, error) {
-	s, release := r.acquire()
-	defer release()
-	return s.Fetch(ctx, ref)
-}
-
-func (s snapshot) Fetch(ctx context.Context, ref tokentransform.Ref) (tokentransform.Credential, error) {
-	p, err := s.find(ref.Provider, true)
+	p, err := r.find(ref.Provider, true)
 	if err != nil {
 		return tokentransform.Credential{}, err
 	}

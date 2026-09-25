@@ -83,6 +83,24 @@ func canonicalTrustDomain(trustDomain string) string {
 	return strings.ReplaceAll(trustDomain, "@", ".")
 }
 
+// ParseSPIFFEID validates a peer URI without restricting it to a Kubernetes
+// ServiceAccount path. Formatting normalization is left to the caller.
+func ParseSPIFFEID(raw string) (*url.URL, error) {
+	identity, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SPIFFE ID %q: %w", raw, err)
+	}
+	if identity.Scheme != "spiffe" || identity.Hostname() == "" ||
+		identity.Host != identity.Hostname() || identity.User != nil || identity.Path == "" ||
+		identity.RawQuery != "" || identity.ForceQuery || strings.Contains(raw, "#") {
+		return nil, fmt.Errorf(
+			"invalid SPIFFE ID %q: expected spiffe://<trust-domain>/<path> without userinfo, port, query or fragment",
+			raw,
+		)
+	}
+	return identity, nil
+}
+
 // ParsePrincipal parses a canonical SPIFFE service-account URI in the given trust domain.
 func ParsePrincipal(raw, trustDomain string) (Principal, error) {
 	identity, err := url.Parse(raw)

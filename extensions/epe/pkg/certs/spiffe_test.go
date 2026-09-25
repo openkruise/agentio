@@ -20,7 +20,9 @@ import (
 	"sync"
 	"testing"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certstest"
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 // chainsFor builds the [][]*x509.Certificate shape crypto/tls hands to
@@ -89,6 +91,37 @@ func TestSPIFFEAllowListValidation(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestSPIFFEValidationAcrossTLSRoles(t *testing.T) {
+	for _, tt := range []struct {
+		id    string
+		valid bool
+	}{
+		{id: "spiffe://cluster.local/ns/system/sa/epe", valid: true},
+		{id: "spiffe://external.example/services/credential-provider", valid: true},
+		{id: "https://cluster.local/service"},
+		{id: "spiffe:///service"},
+		{id: "spiffe://cluster.local"},
+		{id: "spiffe://user@cluster.local/service"},
+		{id: "spiffe://cluster.local:443/service"},
+		{id: "spiffe://cluster.local:/service"},
+		{id: "spiffe://cluster.local/service?name=epe"},
+		{id: "spiffe://cluster.local/service?"},
+		{id: "spiffe://cluster.local/service#epe"},
+		{id: "spiffe://cluster.local/service#"},
+	} {
+		t.Run(tt.id, func(t *testing.T) {
+			_, epeErr := NewSPIFFEAllowList(tt.id)
+			gatewayErr := model.ValidateExtProcTLS(&configv1.ExtProcTLSSettings{
+				Mode:          configv1.ExtProcTLSSettings_MUTUAL,
+				PeerSpiffeIds: []string{tt.id},
+			})
+			if (epeErr == nil) != tt.valid || (gatewayErr == nil) != tt.valid {
+				t.Fatalf("valid=%v: EPE error=%v, gateway error=%v", tt.valid, epeErr, gatewayErr)
 			}
 		})
 	}

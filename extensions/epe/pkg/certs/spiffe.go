@@ -17,9 +17,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync/atomic"
+
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 // SPIFFEAllowList is an exact-match allow-list of SPIFFE IDs whose contents
@@ -66,9 +67,9 @@ func (l *SPIFFEAllowList) Set(ids ...string) error {
 // its canonical form, so configured IDs compare equal to the peer
 // certificate's uri.String() regardless of scheme case or encoding variants.
 func normalizeSPIFFEID(id string) (string, error) {
-	u, err := url.Parse(id)
-	if err != nil || u.Scheme != "spiffe" || u.Host == "" {
-		return "", fmt.Errorf("certs: invalid SPIFFE ID %q: must be a spiffe://<trust-domain>/<path> URI", id)
+	u, err := model.ParseSPIFFEID(id)
+	if err != nil {
+		return "", fmt.Errorf("certs: %w", err)
 	}
 	return u.String(), nil
 }

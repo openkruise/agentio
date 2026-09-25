@@ -93,6 +93,8 @@ func ServerTLSConfig(p Provider, opts ...Option) (*tls.Config, error) {
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: p.GetCertificate,
 		ClientAuth:     o.clientAuth,
+		// Every new connection must verify the current trust anchors.
+		SessionTicketsDisabled: o.clientAuth >= tls.VerifyClientCertIfGiven,
 	}
 	if o.peerVerifier != nil {
 		// crypto/tls populates the verified chains passed to

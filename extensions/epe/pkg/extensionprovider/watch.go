@@ -43,35 +43,17 @@ func (c Configuration) Equals(other Configuration) bool {
 		maps.EqualFunc(c.Materials, other.Materials, krt.Equal[TLSMaterial])
 }
 
-// NewCollection watches the named ConfigMaps in namespace and their referenced
-// Secrets, CA ConfigMaps, and certificate files. Defaults must be valid. ConfigMaps overlay
-// defaults in names order; an empty name disables that layer. Missing layers
-// leave the lower configuration unchanged; invalid updates retain the last good
-// configuration and its certificate dependencies. Call before client.Run.
+// NewCollection resolves provider Secrets, CA ConfigMaps, and certificate files
+// downstream of the validated EPEConfig collection. Call before client.Run.
 func NewCollection(
 	client kube.Client,
 	namespace string,
-	names []string,
-	defaults *configv1.EPEConfig,
+	configs krt.Collection[config.Config[*configv1.EPEConfig]],
+	configMaps krt.Collection[*corev1.ConfigMap],
 	debugger *krt.DebugHandler,
 	stop <-chan struct{},
 ) krt.Collection[Configuration] {
 	opts := krt.NewOptionsBuilder(stop, "epe-providers", debugger)
-
-	cms := kclient.NewFiltered[*corev1.ConfigMap](client, kclient.Filter{})
-	cms.Start(stop)
-	configMaps := krt.WrapClient(cms, opts.WithName("ConfigMaps")...)
-	configs := config.NewCollection(
-		configMaps,
-		config.Options[*configv1.EPEConfig]{
-			Namespace: namespace,
-			Names:     names,
-			Defaults:  defaults,
-			Apply:     applyConfig,
-			Validate:  Validate,
-		},
-		opts.WithName("Configuration")...).AsCollection()
-
 	secretClient := kclient.NewFiltered[*corev1.Secret](client, kclient.Filter{})
 	secretClient.Start(stop)
 	secrets := krt.WrapClient(secretClient, opts.WithName("Secrets")...)

@@ -14,10 +14,8 @@
 package main
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
@@ -31,78 +29,76 @@ type extProcTLS struct {
 	Secure bool
 	// Provider supplies the hot-rotating certificate material.
 	Provider certs.Provider
-	// Options carries the mTLS / peer-identity options for ServerTLSConfig.
-	Options []certs.Option
-	// SPIFFEAllowList is non-nil when --peer-spiffe-ids is set; its contents
-	// can be swapped at runtime via Set.
-	SPIFFEAllowList *certs.SPIFFEAllowList
+	Workload *certsource.Workload
+	// RequireClientCert accepts any client certificate verified by Provider's
+	// trust bundle. Gateway-specific identity authorization is not implemented.
+	RequireClientCert bool
 }
 
-// buildExtProcTLS validates the TLS flag combination and builds the ext-proc
-// serving material. All-empty inputs mean plaintext serving. stop bounds the
-// certificate reload machinery.
-func buildExtProcTLS(certPath, keyPath, caPath, spiffeIDs string, stop <-chan struct{}) (*extProcTLS, error) {
-	if certPath == "" && keyPath == "" && caPath == "" && spiffeIDs == "" {
-		return &extProcTLS{}, nil
-	}
-	if certPath == "" || keyPath == "" {
-		return nil, errors.New("--tls-cert-path and --tls-key-path must be set together")
-	}
-	if caPath == "" && spiffeIDs != "" {
-		return nil, errors.New("--peer-spiffe-ids requires --tls-ca-path: SPIFFE identity " +
-			"verification is only sound on CA-verified client chains")
-	}
+type extProcTLSOptions struct {
+	Source   string
+	CertPath string
+	KeyPath  string
+	CAPath   string
+	Workload certsource.WorkloadOptions
+}
 
-	result := &extProcTLS{Secure: true}
-	if caPath != "" {
-		result.Options = append(result.Options, certs.WithClientAuth(tls.RequireAndVerifyClientCert))
-	}
-	if spiffeIDs != "" {
-		ids := splitSPIFFEIDs(spiffeIDs)
-		if len(ids) == 0 {
-			return nil, errors.New("--peer-spiffe-ids contains no SPIFFE IDs")
+// buildExtProcTLS selects one explicit certificate source. CA mode starts
+// without a certificate; its runnable retries until the CA becomes available.
+func buildExtProcTLS(options extProcTLSOptions, stop <-chan struct{}) (*extProcTLS, error) {
+	result := &extProcTLS{}
+	switch options.Source {
+	case "none":
+		if options.CertPath != "" || options.KeyPath != "" || options.CAPath != "" {
+			return nil, errors.New("TLS material requires --tls-source=file or ca")
 		}
-		list, err := certs.NewSPIFFEAllowList(ids...)
+		return result, nil
+	case "ca":
+		if options.CertPath != "" || options.KeyPath != "" || options.CAPath != "" {
+			return nil, errors.New("--tls-source=ca cannot use --tls-cert-path, --tls-key-path or --tls-ca-path")
+		}
+		provider, err := certsource.NewWorkload(options.Workload)
 		if err != nil {
 			return nil, err
 		}
-		result.SPIFFEAllowList = list
-		result.Options = append(result.Options, certs.WithPeerVerifier(list.VerifyPeer))
+		result.Provider, result.Workload = provider, provider
+	case "file":
+		provider, err := options.fileProvider(stop)
+		if err != nil {
+			return nil, err
+		}
+		result.Provider = provider
+	default:
+		return nil, fmt.Errorf("--tls-source must be none, ca or file")
 	}
+	result.Secure = true
+	result.RequireClientCert = options.Source == "ca" || options.CAPath != ""
+	return result, nil
+}
 
-	provider, err := certsource.FromFiles(certPath, keyPath, caPath, stop)
+func (options extProcTLSOptions) fileProvider(stop <-chan struct{}) (certs.Provider, error) {
+	if options.CertPath == "" || options.KeyPath == "" {
+		return nil, errors.New("--tls-cert-path and --tls-key-path must be set together")
+	}
+	provider, err := certsource.FromFiles(options.CertPath, options.KeyPath, options.CAPath, stop)
 	if err != nil {
 		return nil, err
 	}
-	// Probe the CA bundle once so a missing or invalid --tls-ca-path fails at
-	// startup instead of failing every handshake at runtime.
-	//
-	// The probe checks the pool, not just the error: an unreadable or
-	// unparseable bundle resolves to nil, meaning "use the system trust store",
-	// so an error alone no longer detects it. A nil pool is still refused
-	// per-connection by ServerTLSConfig when client certificates are verified —
-	// this only moves that refusal back to startup, where it is actionable.
-	if caPath != "" {
+	if options.CAPath != "" {
 		pool, err := provider.RootCAs()
 		if err != nil {
 			return nil, err
 		}
 		if pool == nil {
-			return nil, fmt.Errorf("no usable CA certificates in %s", caPath)
+			return nil, fmt.Errorf("no usable CA certificates in %s", options.CAPath)
 		}
 	}
-	result.Provider = provider
-	return result, nil
+	return provider, nil
 }
 
-// splitSPIFFEIDs splits the comma-separated flag value, trimming whitespace
-// and dropping empty entries.
-func splitSPIFFEIDs(raw string) []string {
-	var ids []string
-	for _, part := range strings.Split(raw, ",") {
-		if id := strings.TrimSpace(part); id != "" {
-			ids = append(ids, id)
-		}
+func (s *extProcTLS) Ready() error {
+	if !s.Secure {
+		return nil
 	}
-	return ids
+	return certs.CheckServing(s.Provider, s.RequireClientCert)
 }

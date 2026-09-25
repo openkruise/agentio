@@ -52,10 +52,16 @@ func defaultAgentioConfiguration() *configv1.AgentioConfig {
 }
 
 func validateAgentioConfig(value *configv1.AgentioConfig) error {
+	if err := model.ValidateExtProcTLS(value.GetSandboxExtProc().GetTls()); err != nil {
+		return err
+	}
 	if err := normalizeEgressServiceEntries(value.GetEgressGateways()); err != nil {
 		return err
 	}
 	for i, gateway := range value.GetEgressGateways() {
+		if err := model.ValidateExtProcTLS(gateway.GetExtProc().GetTls()); err != nil {
+			return fmt.Errorf("egressGateways[%d].%w", i, err)
+		}
 		if err := model.ValidateUpstreamTLS(gateway.GetUpstreamTls()); err != nil {
 			return fmt.Errorf("egressGateways[%d].%w", i, err)
 		}

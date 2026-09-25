@@ -9,6 +9,13 @@
 {{- $request := dict "headerMode" "SEND" "attributes" (list "filter_state['sandbox.id']" "filter_state['sandbox.token']" "filter_state['sandbox.labels']" "filter_state['agentio.workload.name']" "filter_state['agentio.workload.namespace']" "filter_state['downstream_peer'].name" "filter_state['downstream_peer'].namespace" "destination.port" "source.address") -}}
 {{- $response := dict "headerMode" "SKIP" -}}
 {{- $provider := dict "service" (include "agentio.epeService" .) "port" (include "agentio.epePort" . | int) "messageTimeout" .Values.agentio.epe.messageTimeout "request" $request "response" $response -}}
+{{- if .Values.agentio.epe.tls.enabled -}}
+{{- $peers := .Values.agentio.epe.tls.peerSpiffeIDs -}}
+{{- if and (empty $peers) (eq .Values.agentio.epe.mode "managed") -}}
+{{- $peers = list (printf "spiffe://%s/ns/%s/sa/%s" .Values.agentio.global.trustDomain (include "agentio.namespace" .) (include "agentio.epe.serviceAccountName" .)) -}}
+{{- end -}}
+{{- $_ := set $provider "tls" (dict "mode" "MUTUAL" "peerSpiffeIDs" $peers) -}}
+{{- end -}}
 {{- $_ := set $defaults "sandboxExtProc" $provider -}}
 {{- end -}}
 {{/* BEGIN INTEGRATION EGRESS DEFAULT */}}

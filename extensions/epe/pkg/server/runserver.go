@@ -15,6 +15,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -22,7 +23,9 @@ import (
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs"
@@ -57,6 +60,10 @@ type Config struct {
 	SecureServing bool
 	CertProvider  certs.Provider
 	TLSOptions    []certs.Option
+	// RequireClientCert requires TLS and a client certificate verified against
+	// CertProvider's trust bundle. All verified clients are accepted; this does
+	// not distinguish gateways from other workloads issued by the same CA.
+	RequireClientCert bool
 
 	// Resolve maps request identity to the policy units the engine evaluates.
 	// Required. Policy-specific stores and binders are assembled by the caller.
@@ -79,6 +86,10 @@ func New(cfg Config, logger logr.Logger) runnable.Runnable {
 			return fmt.Errorf("ext-proc server config: Resolve is required")
 		}
 
+		if cfg.RequireClientCert && !cfg.SecureServing {
+			return fmt.Errorf("client certificate verification requires TLS")
+		}
+		interceptors := []grpc.StreamServerInterceptor{recoverStreamPanic}
 		var srv *grpc.Server
 		if cfg.SecureServing {
 			provider := cfg.CertProvider
@@ -90,17 +101,24 @@ func New(cfg Config, logger logr.Logger) runnable.Runnable {
 				}
 				provider = selfSigned
 			}
-			tlsConfig, err := certs.ServerTLSConfig(provider, cfg.TLSOptions...)
+			if cfg.RequireClientCert {
+				interceptors = append(interceptors, checkServing(provider))
+			}
+			options := append([]certs.Option(nil), cfg.TLSOptions...)
+			if cfg.RequireClientCert {
+				options = append(options, certs.WithClientAuth(tls.RequireAndVerifyClientCert))
+			}
+			tlsConfig, err := certs.ServerTLSConfig(provider, options...)
 			if err != nil {
 				logger.Error(err, "failed to build server TLS config")
 				return err
 			}
 			srv = grpc.NewServer(
 				grpc.Creds(credentials.NewTLS(tlsConfig)),
-				grpc.StreamInterceptor(recoverStreamPanic),
+				grpc.ChainStreamInterceptor(interceptors...),
 			)
 		} else {
-			srv = grpc.NewServer(grpc.StreamInterceptor(recoverStreamPanic))
+			srv = grpc.NewServer(grpc.ChainStreamInterceptor(interceptors...))
 		}
 
 		extProcPb.RegisterExternalProcessorServer(
@@ -118,4 +136,15 @@ func New(cfg Config, logger logr.Logger) runnable.Runnable {
 		return runnable.GRPCServer("ext-proc", srv, cfg.GrpcPort,
 			runnable.WithListener(cfg.Listener)).Start(ctx)
 	})
+}
+
+// checkServing rejects new streams on existing mTLS connections while serving
+// material is unavailable. Client certificates are verified at the TLS handshake.
+func checkServing(provider certs.Provider) grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := certs.CheckServing(provider, true); err != nil {
+			return status.Error(codes.Unavailable, "EPE serving certificate or trust bundle is unavailable")
+		}
+		return handler(srv, stream)
+	}
 }

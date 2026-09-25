@@ -21,6 +21,10 @@ An `httpCallout` provider owns its URL, timeout, and TLS settings. The HTTPCallo
 | `epe.mode` | `disabled` | `managed` creates the EPE ServiceAccount, cluster RBAC, headless Service, Deployment, and PodDisruptionBudget and writes `sandboxExtProc` into `agentio-config`; `external` wires the configured external address without deploying EPE. |
 | `epe.nameOverride` | `agentio-epe` | Names the Kubernetes objects and the generated ext_proc Service hostname. |
 | `epe.config` | `null` | When set, creates `<epe-name>-config` with EPEConfig in `data.config`. EPE watches this name even when the ConfigMap is absent. |
+| `epe.tls.enabled` | `false` | Enables gateway-to-EPE mTLS. Managed mode also configures the EPE listener. |
+| `epe.tls.certificateSource` | `{}` | Managed EPE certificate source: select `ca` or `file`. Omission or `{}` uses Agentiod with default token and root mounts. |
+| `epe.tls.peerSpiffeIDs` | `[]` | EPE identities accepted by the gateway. Managed mode derives EPE's ServiceAccount identity; external mode requires an explicit list. |
+| `epe.extraVolumes`, `.extraVolumeMounts` | `[]` | Native Kubernetes volumes and EPE container mounts. Also available with TLS disabled. |
 | `epe.service.grpcPort` | `9002` | Service, container, EPE `-grpc-port`, and `sandboxExtProc.port`. |
 | `epe.service.healthPort`, `.metricsPort` | `9003`, `9090` | Health-probe and Prometheus listener ports. |
 | `epe.image.repository`, `.name`, `.tag` | empty, `agentio-epe`, empty | EPE container image. Empty repository and tag values inherit `global.hub` and `global.tag`. |
@@ -41,7 +45,7 @@ An `httpCallout` provider owns its URL, timeout, and TLS settings. The HTTPCallo
 | `epe.messageTimeout` | `5s` | Value used for generated `sandboxExtProc.messageTimeout`. |
 | `epe.auditWebhook.insecureSkipVerify` | `false` | Sets the EPE audit-webhook TLS verification flag. Keep `false` in production. |
 
-The chart supplies the EPEConfig name and namespace, the three listener ports and `epe.auditWebhook.insecureSkipVerify` as container arguments. Use `epe.env` only for EPE environment variables. Other Go flags such as `--enable-pprof` or `--tls-cert-path` remain binary-only unless you add container arguments through an authorized deployment customization.
+The chart supplies the EPEConfig name and namespace, the three listener ports and `epe.auditWebhook.insecureSkipVerify` as container arguments. Use `epe.env` only for EPE environment variables. Serving TLS arguments are rendered from `epe.tls`; other Go flags such as `--enable-pprof` require deployment customization.
 
 ## Rendered Kubernetes behavior
 
@@ -113,15 +117,101 @@ Use the [runtime logging admin endpoint](epe-admin-api.md#runtime-log-level) to 
 
 ## TLS for ext_proc
 
-Without TLS flags, EPE serves plaintext ext_proc gRPC. This is the chart's default. Agentio's `ExtProcProvider` has no client-TLS fields, and the generated gateway ext_proc cluster is plaintext HTTP/2 with no TLS transport socket. Consequently, the Agentio-generated gateway cannot connect to an EPE listener after server TLS is enabled. Enabling only the EPE listener flags breaks the ext_proc connection and, with the default `failureModeAllow: false`, fails gateway requests closed. End-to-end ext_proc TLS currently requires a custom data-plane/xDS integration or a trusted intermediary that accepts the gateway's plaintext HTTP/2 connection and establishes TLS to EPE; neither is part of the chart or `AgentioConfig` surface.
+With `--tls-source=none`, EPE serves plaintext ext_proc gRPC. To enable workload mTLS, configure both the gateway client and EPE server. The gateway uses its existing local SDS `default` certificate and `ROOTCA` trust bundle, with exact URI SAN matching for the EPE identity.
+
+For the managed Helm deployment:
+
+```yaml
+epe:
+  mode: managed
+  tls:
+    enabled: true
+    certificateSource: {}
+```
+
+With an omitted or empty `certificateSource`, EPE generates a private key in memory and requests its ServiceAccount's SPIFFE certificate from Agentiod. The chart mounts a projected ServiceAccount token with Agentiod's configured audience and the existing `agentio-ca-root-cert` trust bundle (or its configured name). Each request reads the current token and opens a CA connection using the current roots and DNS verification. The private key is never uploaded or written to a Secret. Neither sandbox tokens nor SecurityProfile changes are required.
+
+Set `certificateSource.ca` to override the CA connection. It uses the Istio `CreateCertificate` API, not xDS/SDS. All three fields are optional; omit a field to retain its default. For example:
+
+```yaml
+epe:
+  mode: managed
+  tls:
+    enabled: true
+    certificateSource:
+      ca:
+        address: agentiod.security.svc:15012
+        tokenFile: /custom/token
+        caCertificateFile: /custom/root.pem
+```
+
+An explicit `tokenFile` or `caCertificateFile` disables the corresponding automatic mount, even when the path equals its default. Provide the file using `epe.extraVolumes` and `epe.extraVolumeMounts`. An address-only override retains both default mounts. In CA mode the root bundle is shared by CA-server verification and incoming client-certificate verification. The expected EPE SPIFFE ID still comes from the chart's trust domain, namespace and EPE ServiceAccount.
+
+EPE requires and verifies client certificates against its configured trust bundle, including certificate validity and client-authentication usage. It currently accepts every verified client, without a gateway SPIFFE ID allow-list. Adding a gateway requires no EPEConfig change, and mTLS works even when the EPEConfig ConfigMap is absent.
+
+**Current limitation:** CA verification does not distinguish gateways from other workloads issued by the same CA. EPE trusts the calling proxy's workload attributes when selecting SecurityProfiles and returning credential mutations. Deployments must trust all clients that can present an accepted certificate and reach EPE, or restrict EPE access to gateways through network isolation. Gateway-specific authorization is deferred.
+
+EPE renews before expiry, with roughly one third of the returned certificate's remaining lifetime left and randomized scheduling. Each renewal generates a new key. CA failures retain an unexpired certificate and trigger bounded backoff retries. Before initial issuance or after expiry, readiness is `NOT_SERVING` and new connections/streams fail closed; liveness remains `SERVING` so recovery does not require a restart. Kubernetes probes use the named `readiness` and `liveness` gRPC services. Existing streams may finish.
+
+Trust files reload independently of certificate renewal, with a 10-second polling backstop for reissuance when roots change. Missing or malformed trust material rejects new authentication; there is no system-CA fallback. Root-key replacement requires distributing overlapping old/new roots before switching issuance and removing the old root after old leaves expire.
+
+For externally managed certificates, select `certificateSource.file` and supply all three paths. File mode does not create automatic mounts or request certificates; the operator manages renewal. The serving certificate must carry EPE's SPIFFE identity and chain to the gateway's workload trust bundle. `caCertificateFile` supplies the trust bundle for verifying incoming clients and may be mounted separately:
+
+```yaml
+epe:
+  mode: managed
+  tls:
+    enabled: true
+    certificateSource:
+      file:
+        certificateFile: /etc/epe/tls/tls.crt
+        privateKeyFile: /etc/epe/tls/tls.key
+        caCertificateFile: /etc/epe/trust/ca.crt
+  extraVolumes:
+    - name: serving-certificate
+      secret:
+        secretName: epe-server-tls
+    - name: client-ca
+      configMap:
+        name: gateway-client-ca
+  extraVolumeMounts:
+    - name: serving-certificate
+      mountPath: /etc/epe/tls
+      readOnly: true
+    - name: client-ca
+      mountPath: /etc/epe/trust
+      readOnly: true
+```
+
+`ca` and `file` are mutually exclusive. Mounts use native Kubernetes volume syntax, so Secrets, ConfigMaps, projected volumes and CSI sources are supported. Mount directories without `subPath` for projected certificate updates. These are deployment settings; changing sources, paths or mounts rolls the Deployment rather than updating EPEConfig. External EPE mode only configures the gateway connection; certificate sources and mounts apply to managed EPE.
+
+The chart configures `AgentioConfig.sandboxExtProc.tls` as follows (also supported in an individual gateway's `extProc` override):
+
+```yaml
+sandboxExtProc:
+  service: agentio-epe.agentio-system.svc.cluster.local
+  port: 9002
+  tls:
+    mode: MUTUAL
+    peerSpiffeIDs:
+    - spiffe://cluster.local/ns/agentio-system/sa/agentio-epe
+```
+
+Managed mode derives the expected EPE identity from the configured trust domain, namespace and EPE ServiceAccount. Override it with `epe.tls.peerSpiffeIDs`; external mode requires this list explicitly. `MUTUAL` requires a nonempty list and uses TLS 1.3 with HTTP/2. An omitted TLS block or `DISABLE` keeps plaintext; an invalid TLS update retains the last valid AgentioConfig.
 
 | Flag | Requirement and behavior |
 | --- | --- |
-| `--tls-cert-path`, `--tls-key-path` | Must be set together. They load the serving certificate and key from PEM files and enable server TLS. The certificate/key pair hot-reloads after file events and a 10-second polling backstop. |
-| `--tls-ca-path` | Requires the serving certificate and key. It enables required, CA-verified client certificates; the CA bundle is re-read on every handshake. |
-| `--peer-spiffe-ids` | Comma-separated exact SPIFFE IDs. Requires `--tls-ca-path` and restricts verified client certificate URI SANs to the supplied IDs. |
+| `--tls-source` | `none` (default), `ca`, or `file`. CA and file settings cannot be mixed. |
+| `--ca-address` | CA `host:port`; defaults to `agentiod.agentio-system.svc:15012`. Helm uses `certificateSource.ca.address`, defaulting to the chart's Agentiod address. |
+| `--tls-spiffe-id` | Required expected ServiceAccount SPIFFE identity in CA mode. Agentiod derives the actual identity from the authenticated token. |
+| `--ca-token-path`, `--ca-root-path` | Projected token and trust bundle paths. Defaults: `/var/run/secrets/tokens/agentio-token` and `/var/run/secrets/agentio/root-cert.pem`. |
+| `--tls-cert-lifetime` | Requested lifetime, default `24h`, capped by Agentiod. Renewal follows the returned certificate's actual expiry. |
+| `--tls-cert-path`, `--tls-key-path` | Require `--tls-source=file` and must be set together. They load the serving certificate and key from PEM files and enable server TLS. Material reloads after file events and a 10-second polling backstop. |
+| `--tls-ca-path` | Requires the serving certificate and key. It enables required, CA-verified client certificates. Missing trust anchors reject new handshakes. |
 
-Invalid combinations, unreadable initial certificate/key files, or an invalid initial CA bundle fail EPE startup. A failed later certificate reload keeps the last good certificate. Neither provider TLS settings nor `epe.env` configures these flags directly.
+Client certificates are verified at TLS handshakes. Before each new mTLS ext_proc stream, including streams on existing HTTP/2 connections, EPE also checks that its serving certificate and trust material remain available. In-flight streams may finish. Certificate/trust updates affect new connections; established connections are not forcibly terminated. mTLS session resumption is disabled so new connections revalidate the current trust bundle. Enabling/disabling TLS or changing certificate paths requires restarting EPE; EPEConfig does not configure inbound TLS.
+
+Invalid TLS flag combinations, unreadable initial certificate/key files, or an invalid initial CA bundle fail EPE startup. A malformed later certificate update retains the last good certificate; deleting certificate material makes new handshakes unavailable. The serving Secret is independent of the credential-provider client Secret. Neither provider TLS settings nor `epe.env` configures these flags directly.
 
 ## Credential-provider and webhook environment variables
 

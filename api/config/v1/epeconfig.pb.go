@@ -35,7 +35,12 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// EPEConfig is decoded from the watched ConfigMap's data.config entry.
+// EPEConfig configures EPE's outbound extension providers.
+// YAML or JSON is decoded from each watched ConfigMap's data.config entry.
+// Base and primary ConfigMaps overlay startup defaults in that order. Missing
+// ConfigMaps or blank entries leave the lower layer unchanged. Invalid updates
+// retain the last valid configuration; an invalid initial configuration uses
+// startup defaults. Valid changes take effect without restarting EPE.
 // Secret and ConfigMap references default to the configuration namespace.
 //
 // Example: register a callout service and a default credential service.
@@ -267,7 +272,7 @@ type HTTPCalloutProvider struct {
 	// deadline takes precedence; time spent queued by the caller is not included.
 	Timeout string `protobuf:"bytes,2,opt,name=timeout,proto3" json:"timeout,omitempty"`
 	// HTTPS transport settings. Omission uses system roots without a client certificate.
-	Tls           *ProviderTLS `protobuf:"bytes,4,opt,name=tls,proto3" json:"tls,omitempty"`
+	Tls           *ClientTLS `protobuf:"bytes,4,opt,name=tls,proto3" json:"tls,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -316,7 +321,7 @@ func (x *HTTPCalloutProvider) GetTimeout() string {
 	return ""
 }
 
-func (x *HTTPCalloutProvider) GetTls() *ProviderTLS {
+func (x *HTTPCalloutProvider) GetTls() *ClientTLS {
 	if x != nil {
 		return x.Tls
 	}
@@ -335,7 +340,7 @@ type CredentialProvider struct {
 	// Positive Go duration, such as "2s". Defaults to 500ms.
 	Timeout string `protobuf:"bytes,2,opt,name=timeout,proto3" json:"timeout,omitempty"`
 	// HTTPS transport settings. Omission uses system roots without a client certificate.
-	Tls           *ProviderTLS `protobuf:"bytes,3,opt,name=tls,proto3" json:"tls,omitempty"`
+	Tls           *ClientTLS `protobuf:"bytes,3,opt,name=tls,proto3" json:"tls,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -384,15 +389,16 @@ func (x *CredentialProvider) GetTimeout() string {
 	return ""
 }
 
-func (x *CredentialProvider) GetTls() *ProviderTLS {
+func (x *CredentialProvider) GetTls() *ClientTLS {
 	if x != nil {
 		return x.Tls
 	}
 	return nil
 }
 
-// ProviderTLS configures HTTPS connections for either provider type. Referenced
-// Secrets, ConfigMaps, and files are watched; changes rebuild the affected provider and cache.
+// ClientTLS configures outbound HTTPS connections from EPE to either provider
+// type. It does not configure EPE's inbound ext_proc listener. Referenced Secrets,
+// ConfigMaps, and files are watched; changes rebuild the affected provider and cache.
 // CA and client identity sources are independent, so a Secret CA can be combined
 // with a file-based client certificate, or vice versa.
 // Omitting client identity configures server-only TLS; a client certificate is
@@ -423,7 +429,7 @@ func (x *CredentialProvider) GetTls() *ProviderTLS {
 //	  clientCertificateFiles:
 //	    certificateFile: /etc/epe/certs/tls.crt
 //	    privateKeyFile: /etc/epe/certs/tls.key
-type ProviderTLS struct {
+type ClientTLS struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Defaults to URL hostname. Mutually exclusive with peerSpiffeIDs.
 	ServerName string `protobuf:"bytes,1,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
@@ -433,24 +439,26 @@ type ProviderTLS struct {
 	//
 	// Verifies the certificate chain and requires a matching SPIFFE ID instead of
 	// hostname verification. Mutually exclusive with serverName and insecureSkipVerify.
+	// When empty, serverName or the URL hostname is verified unless
+	// insecureSkipVerify is enabled; an empty list does not deny all providers.
 	PeerSpiffeIds []string `protobuf:"bytes,2,rep,name=peer_spiffe_ids,json=peerSpiffeIDs,proto3" json:"peer_spiffe_ids,omitempty"`
 	// Selects at most one CA source. Omission uses system roots.
 	// An explicit but unavailable source fails unless optional is true.
 	//
 	// Types that are valid to be assigned to CaSource:
 	//
-	//	*ProviderTLS_CaSecretRef
-	//	*ProviderTLS_CaConfigMapRef
-	//	*ProviderTLS_CaCertificateFile
-	CaSource isProviderTLS_CaSource `protobuf_oneof:"ca_source"`
+	//	*ClientTLS_CaSecretRef
+	//	*ClientTLS_CaConfigMapRef
+	//	*ClientTLS_CaCertificateFile
+	CaSource isClientTLS_CaSource `protobuf_oneof:"ca_source"`
 	// Selects at most one client identity source. Omission provides no client
 	// certificate and does not require optional: true for server-only TLS.
 	//
 	// Types that are valid to be assigned to ClientCertificateSource:
 	//
-	//	*ProviderTLS_ClientCertificateSecretRef
-	//	*ProviderTLS_ClientCertificateFiles
-	ClientCertificateSource isProviderTLS_ClientCertificateSource `protobuf_oneof:"client_certificate_source"`
+	//	*ClientTLS_ClientCertificateSecretRef
+	//	*ClientTLS_ClientCertificateFiles
+	ClientCertificateSource isClientTLS_ClientCertificateSource `protobuf_oneof:"client_certificate_source"`
 	// Disables server certificate verification; cannot be combined with peer IDs.
 	InsecureSkipVerify bool `protobuf:"varint,8,opt,name=insecure_skip_verify,json=insecureSkipVerify,proto3" json:"insecure_skip_verify,omitempty"`
 	// Missing or unusable material uses system roots / no client certificate.
@@ -460,20 +468,20 @@ type ProviderTLS struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ProviderTLS) Reset() {
-	*x = ProviderTLS{}
+func (x *ClientTLS) Reset() {
+	*x = ClientTLS{}
 	mi := &file_api_config_v1_epeconfig_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ProviderTLS) String() string {
+func (x *ClientTLS) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ProviderTLS) ProtoMessage() {}
+func (*ClientTLS) ProtoMessage() {}
 
-func (x *ProviderTLS) ProtoReflect() protoreflect.Message {
+func (x *ClientTLS) ProtoReflect() protoreflect.Message {
 	mi := &file_api_config_v1_epeconfig_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -485,144 +493,144 @@ func (x *ProviderTLS) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ProviderTLS.ProtoReflect.Descriptor instead.
-func (*ProviderTLS) Descriptor() ([]byte, []int) {
+// Deprecated: Use ClientTLS.ProtoReflect.Descriptor instead.
+func (*ClientTLS) Descriptor() ([]byte, []int) {
 	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ProviderTLS) GetServerName() string {
+func (x *ClientTLS) GetServerName() string {
 	if x != nil {
 		return x.ServerName
 	}
 	return ""
 }
 
-func (x *ProviderTLS) GetPeerSpiffeIds() []string {
+func (x *ClientTLS) GetPeerSpiffeIds() []string {
 	if x != nil {
 		return x.PeerSpiffeIds
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetCaSource() isProviderTLS_CaSource {
+func (x *ClientTLS) GetCaSource() isClientTLS_CaSource {
 	if x != nil {
 		return x.CaSource
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetCaSecretRef() *TargetReference {
+func (x *ClientTLS) GetCaSecretRef() *TargetReference {
 	if x != nil {
-		if x, ok := x.CaSource.(*ProviderTLS_CaSecretRef); ok {
+		if x, ok := x.CaSource.(*ClientTLS_CaSecretRef); ok {
 			return x.CaSecretRef
 		}
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetCaConfigMapRef() *TargetReference {
+func (x *ClientTLS) GetCaConfigMapRef() *TargetReference {
 	if x != nil {
-		if x, ok := x.CaSource.(*ProviderTLS_CaConfigMapRef); ok {
+		if x, ok := x.CaSource.(*ClientTLS_CaConfigMapRef); ok {
 			return x.CaConfigMapRef
 		}
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetCaCertificateFile() string {
+func (x *ClientTLS) GetCaCertificateFile() string {
 	if x != nil {
-		if x, ok := x.CaSource.(*ProviderTLS_CaCertificateFile); ok {
+		if x, ok := x.CaSource.(*ClientTLS_CaCertificateFile); ok {
 			return x.CaCertificateFile
 		}
 	}
 	return ""
 }
 
-func (x *ProviderTLS) GetClientCertificateSource() isProviderTLS_ClientCertificateSource {
+func (x *ClientTLS) GetClientCertificateSource() isClientTLS_ClientCertificateSource {
 	if x != nil {
 		return x.ClientCertificateSource
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetClientCertificateSecretRef() *TargetReference {
+func (x *ClientTLS) GetClientCertificateSecretRef() *TargetReference {
 	if x != nil {
-		if x, ok := x.ClientCertificateSource.(*ProviderTLS_ClientCertificateSecretRef); ok {
+		if x, ok := x.ClientCertificateSource.(*ClientTLS_ClientCertificateSecretRef); ok {
 			return x.ClientCertificateSecretRef
 		}
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetClientCertificateFiles() *ProviderClientCertificateFiles {
+func (x *ClientTLS) GetClientCertificateFiles() *ProviderClientCertificateFiles {
 	if x != nil {
-		if x, ok := x.ClientCertificateSource.(*ProviderTLS_ClientCertificateFiles); ok {
+		if x, ok := x.ClientCertificateSource.(*ClientTLS_ClientCertificateFiles); ok {
 			return x.ClientCertificateFiles
 		}
 	}
 	return nil
 }
 
-func (x *ProviderTLS) GetInsecureSkipVerify() bool {
+func (x *ClientTLS) GetInsecureSkipVerify() bool {
 	if x != nil {
 		return x.InsecureSkipVerify
 	}
 	return false
 }
 
-func (x *ProviderTLS) GetOptional() bool {
+func (x *ClientTLS) GetOptional() bool {
 	if x != nil {
 		return x.Optional
 	}
 	return false
 }
 
-type isProviderTLS_CaSource interface {
-	isProviderTLS_CaSource()
+type isClientTLS_CaSource interface {
+	isClientTLS_CaSource()
 }
 
-type ProviderTLS_CaSecretRef struct {
+type ClientTLS_CaSecretRef struct {
 	// PEM CA bundle from the Secret's fixed ca.crt data key. Missing or empty
 	// ca.crt is unavailable material, handled according to optional.
 	CaSecretRef *TargetReference `protobuf:"bytes,3,opt,name=ca_secret_ref,json=caSecretRef,proto3,oneof"`
 }
 
-type ProviderTLS_CaConfigMapRef struct {
+type ClientTLS_CaConfigMapRef struct {
 	// PEM CA bundle from the ConfigMap's fixed data["ca.crt"] entry. Missing
 	// or empty ca.crt is unavailable material, handled according to optional.
 	CaConfigMapRef *TargetReference `protobuf:"bytes,4,opt,name=ca_config_map_ref,json=caConfigMapRef,proto3,oneof"`
 }
 
-type ProviderTLS_CaCertificateFile struct {
+type ClientTLS_CaCertificateFile struct {
 	// Non-empty path to a PEM CA bundle inside the EPE container.
 	CaCertificateFile string `protobuf:"bytes,5,opt,name=ca_certificate_file,json=caCertificateFile,proto3,oneof"`
 }
 
-func (*ProviderTLS_CaSecretRef) isProviderTLS_CaSource() {}
+func (*ClientTLS_CaSecretRef) isClientTLS_CaSource() {}
 
-func (*ProviderTLS_CaConfigMapRef) isProviderTLS_CaSource() {}
+func (*ClientTLS_CaConfigMapRef) isClientTLS_CaSource() {}
 
-func (*ProviderTLS_CaCertificateFile) isProviderTLS_CaSource() {}
+func (*ClientTLS_CaCertificateFile) isClientTLS_CaSource() {}
 
-type isProviderTLS_ClientCertificateSource interface {
-	isProviderTLS_ClientCertificateSource()
+type isClientTLS_ClientCertificateSource interface {
+	isClientTLS_ClientCertificateSource()
 }
 
-type ProviderTLS_ClientCertificateSecretRef struct {
+type ClientTLS_ClientCertificateSecretRef struct {
 	// Client identity from the Secret's fixed tls.crt and tls.key data keys,
 	// including for environment-derived defaults. Missing or empty entries
 	// are unavailable material, handled according to optional.
 	ClientCertificateSecretRef *TargetReference `protobuf:"bytes,6,opt,name=client_certificate_secret_ref,json=clientCertificateSecretRef,proto3,oneof"`
 }
 
-type ProviderTLS_ClientCertificateFiles struct {
+type ClientTLS_ClientCertificateFiles struct {
 	// Client certificate and private key files, configured together.
 	ClientCertificateFiles *ProviderClientCertificateFiles `protobuf:"bytes,7,opt,name=client_certificate_files,json=clientCertificateFiles,proto3,oneof"`
 }
 
-func (*ProviderTLS_ClientCertificateSecretRef) isProviderTLS_ClientCertificateSource() {}
+func (*ClientTLS_ClientCertificateSecretRef) isClientTLS_ClientCertificateSource() {}
 
-func (*ProviderTLS_ClientCertificateFiles) isProviderTLS_ClientCertificateSource() {}
+func (*ClientTLS_ClientCertificateFiles) isClientTLS_ClientCertificateSource() {}
 
 // TargetReference identifies a Kubernetes object. The referring field defines
 // the resource kind and fixed data keys to read; key names cannot be configured.
@@ -752,16 +760,16 @@ const file_api_config_v1_epeconfig_proto_rawDesc = "" +
 	"\n" +
 	"\bprovider\"L\n" +
 	"\x19DefaultExtensionProviders\x12/\n" +
-	"\x13credential_provider\x18\x01 \x01(\tR\x12credentialProvider\"s\n" +
+	"\x13credential_provider\x18\x01 \x01(\tR\x12credentialProvider\"q\n" +
 	"\x13HTTPCalloutProvider\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x18\n" +
-	"\atimeout\x18\x02 \x01(\tR\atimeout\x120\n" +
-	"\x03tls\x18\x04 \x01(\v2\x1e.agentio.config.v1.ProviderTLSR\x03tls\"r\n" +
+	"\atimeout\x18\x02 \x01(\tR\atimeout\x12.\n" +
+	"\x03tls\x18\x04 \x01(\v2\x1c.agentio.config.v1.ClientTLSR\x03tls\"p\n" +
 	"\x12CredentialProvider\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x18\n" +
-	"\atimeout\x18\x02 \x01(\tR\atimeout\x120\n" +
-	"\x03tls\x18\x03 \x01(\v2\x1e.agentio.config.v1.ProviderTLSR\x03tls\"\xf3\x04\n" +
-	"\vProviderTLS\x12\x1f\n" +
+	"\atimeout\x18\x02 \x01(\tR\atimeout\x12.\n" +
+	"\x03tls\x18\x03 \x01(\v2\x1c.agentio.config.v1.ClientTLSR\x03tls\"\xf1\x04\n" +
+	"\tClientTLS\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12&\n" +
 	"\x0fpeer_spiffe_ids\x18\x02 \x03(\tR\rpeerSpiffeIDs\x12H\n" +
@@ -800,7 +808,7 @@ var file_api_config_v1_epeconfig_proto_goTypes = []any{
 	(*DefaultExtensionProviders)(nil),      // 2: agentio.config.v1.DefaultExtensionProviders
 	(*HTTPCalloutProvider)(nil),            // 3: agentio.config.v1.HTTPCalloutProvider
 	(*CredentialProvider)(nil),             // 4: agentio.config.v1.CredentialProvider
-	(*ProviderTLS)(nil),                    // 5: agentio.config.v1.ProviderTLS
+	(*ClientTLS)(nil),                      // 5: agentio.config.v1.ClientTLS
 	(*TargetReference)(nil),                // 6: agentio.config.v1.TargetReference
 	(*ProviderClientCertificateFiles)(nil), // 7: agentio.config.v1.ProviderClientCertificateFiles
 }
@@ -809,12 +817,12 @@ var file_api_config_v1_epeconfig_proto_depIdxs = []int32{
 	2,  // 1: agentio.config.v1.EPEConfig.default_providers:type_name -> agentio.config.v1.DefaultExtensionProviders
 	3,  // 2: agentio.config.v1.ExtensionProvider.http_callout:type_name -> agentio.config.v1.HTTPCalloutProvider
 	4,  // 3: agentio.config.v1.ExtensionProvider.credential_provider:type_name -> agentio.config.v1.CredentialProvider
-	5,  // 4: agentio.config.v1.HTTPCalloutProvider.tls:type_name -> agentio.config.v1.ProviderTLS
-	5,  // 5: agentio.config.v1.CredentialProvider.tls:type_name -> agentio.config.v1.ProviderTLS
-	6,  // 6: agentio.config.v1.ProviderTLS.ca_secret_ref:type_name -> agentio.config.v1.TargetReference
-	6,  // 7: agentio.config.v1.ProviderTLS.ca_config_map_ref:type_name -> agentio.config.v1.TargetReference
-	6,  // 8: agentio.config.v1.ProviderTLS.client_certificate_secret_ref:type_name -> agentio.config.v1.TargetReference
-	7,  // 9: agentio.config.v1.ProviderTLS.client_certificate_files:type_name -> agentio.config.v1.ProviderClientCertificateFiles
+	5,  // 4: agentio.config.v1.HTTPCalloutProvider.tls:type_name -> agentio.config.v1.ClientTLS
+	5,  // 5: agentio.config.v1.CredentialProvider.tls:type_name -> agentio.config.v1.ClientTLS
+	6,  // 6: agentio.config.v1.ClientTLS.ca_secret_ref:type_name -> agentio.config.v1.TargetReference
+	6,  // 7: agentio.config.v1.ClientTLS.ca_config_map_ref:type_name -> agentio.config.v1.TargetReference
+	6,  // 8: agentio.config.v1.ClientTLS.client_certificate_secret_ref:type_name -> agentio.config.v1.TargetReference
+	7,  // 9: agentio.config.v1.ClientTLS.client_certificate_files:type_name -> agentio.config.v1.ProviderClientCertificateFiles
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -832,11 +840,11 @@ func file_api_config_v1_epeconfig_proto_init() {
 		(*ExtensionProvider_CredentialProvider)(nil),
 	}
 	file_api_config_v1_epeconfig_proto_msgTypes[5].OneofWrappers = []any{
-		(*ProviderTLS_CaSecretRef)(nil),
-		(*ProviderTLS_CaConfigMapRef)(nil),
-		(*ProviderTLS_CaCertificateFile)(nil),
-		(*ProviderTLS_ClientCertificateSecretRef)(nil),
-		(*ProviderTLS_ClientCertificateFiles)(nil),
+		(*ClientTLS_CaSecretRef)(nil),
+		(*ClientTLS_CaConfigMapRef)(nil),
+		(*ClientTLS_CaCertificateFile)(nil),
+		(*ClientTLS_ClientCertificateSecretRef)(nil),
+		(*ClientTLS_ClientCertificateFiles)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

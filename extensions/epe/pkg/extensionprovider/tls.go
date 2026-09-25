@@ -55,7 +55,7 @@ type TLSMaterial struct {
 }
 
 func resolveTLSMaterial(
-	cfg *configv1.ProviderTLS,
+	cfg *configv1.ClientTLS,
 	namespace string,
 	secret func(string) *corev1.Secret,
 	configMap func(string) *corev1.ConfigMap,
@@ -116,7 +116,7 @@ func resolveTLSMaterial(
 	return m
 }
 
-func clientTLS(endpoint string, cfg *configv1.ProviderTLS, raw TLSMaterial) (*tls.Config, error) {
+func clientTLS(endpoint string, cfg *configv1.ClientTLS, raw TLSMaterial) (*tls.Config, error) {
 	m := material{}
 	if cfg.GetCaSource() != nil {
 		pool := x509.NewCertPool()

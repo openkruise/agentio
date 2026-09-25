@@ -102,9 +102,9 @@ defaultProviders: {credentialProvider: ""}`,
 		{name: "reject unknown field", raw: "unknown: true", invalid: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyConfig(tt.raw, base)
+			got, err := ApplyConfig(tt.raw, base)
 			if (err != nil) != tt.invalid {
-				t.Fatalf("applyConfig() error = %v, want invalid=%v", err, tt.invalid)
+				t.Fatalf("ApplyConfig() error = %v, want invalid=%v", err, tt.invalid)
 			}
 			if !proto.Equal(base, original) {
 				t.Fatal("overlay mutated the lower layer")

@@ -199,6 +199,23 @@ message ExtProcProvider {
   // respond within this duration, the request is considered failed.
   // Format: golang duration string (e.g. "200ms", "1s"). Defaults to 200ms if not set.
   string message_timeout = 7;
+
+  // TLS for the gateway-to-processor connection. Omission uses plaintext.
+  ExtProcTLSSettings tls = 8;
+}
+
+// ExtProcTLSSettings configures the gateway's transport to an external processor.
+message ExtProcTLSSettings {
+  enum Mode {
+    // Use plaintext. No peer SPIFFE IDs may be configured.
+    DISABLE = 0;
+    // Use the gateway's workload certificate and trust bundle from local SDS.
+    MUTUAL = 1;
+  }
+  // Defaults to DISABLE when mode is omitted, including an empty tls object.
+  Mode mode = 1;
+  // Required for MUTUAL: exact SPIFFE URI SANs accepted on the processor.
+  repeated string peer_spiffe_ids = 2 [json_name = "peerSpiffeIDs"];
 }
 
 // ClusterSettings configures upstream cluster behavior.

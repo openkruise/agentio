@@ -14,13 +14,12 @@
 package main
 
 import (
-	"crypto/tls"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/certs"
+	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certstest"
 )
 
@@ -48,7 +47,6 @@ func writeSelfSignedPEM(t *testing.T, dir string) (certPath, keyPath, caPath str
 
 func TestBuildExtProcTLS(t *testing.T) {
 	certPath, keyPath, caPath := writeSelfSignedPEM(t, t.TempDir())
-	const spiffeID = "spiffe://cluster.local/ns/istio-system/sa/istio-ingressgateway"
 
 	garbageCA := filepath.Join(t.TempDir(), "garbage-ca.pem")
 	if err := os.WriteFile(garbageCA, []byte("not a pem"), 0o600); err != nil {
@@ -56,18 +54,24 @@ func TestBuildExtProcTLS(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		certPath        string
-		keyPath         string
-		caPath          string
-		spiffeIDs       string
-		expectError     string
-		expectSecure    bool
-		expectMTLS      bool
-		expectAllowList bool
+		name             string
+		source           string
+		certPath         string
+		keyPath          string
+		caPath           string
+		expectError      string
+		expectSecure     bool
+		expectClientCert bool
 	}{
 		{
-			name: "all empty means plaintext",
+			name:   "all empty means plaintext",
+			source: "none",
+		},
+		{
+			name:             "ca source enables required mTLS",
+			source:           "ca",
+			expectSecure:     true,
+			expectClientCert: true,
 		},
 		{
 			name:        "cert without key is rejected",
@@ -83,29 +87,6 @@ func TestBuildExtProcTLS(t *testing.T) {
 			name:        "ca without cert and key is rejected",
 			caPath:      caPath,
 			expectError: "must be set together",
-		},
-		{
-			name:        "spiffe ids without ca are rejected",
-			certPath:    certPath,
-			keyPath:     keyPath,
-			spiffeIDs:   spiffeID,
-			expectError: "requires --tls-ca-path",
-		},
-		{
-			name:        "spiffe ids trimming to empty are rejected",
-			certPath:    certPath,
-			keyPath:     keyPath,
-			caPath:      caPath,
-			spiffeIDs:   " , ,",
-			expectError: "no SPIFFE IDs",
-		},
-		{
-			name:        "invalid spiffe id is rejected",
-			certPath:    certPath,
-			keyPath:     keyPath,
-			caPath:      caPath,
-			spiffeIDs:   "https://not-spiffe",
-			expectError: "invalid SPIFFE ID",
 		},
 		{
 			name:        "missing certificate file is rejected",
@@ -137,27 +118,35 @@ func TestBuildExtProcTLS(t *testing.T) {
 			expectSecure: true,
 		},
 		{
-			name:         "ca additionally enables required mTLS",
-			certPath:     certPath,
-			keyPath:      keyPath,
-			caPath:       caPath,
-			expectSecure: true,
-			expectMTLS:   true,
-		},
-		{
-			name:            "spiffe ids additionally install the peer verifier",
-			certPath:        certPath,
-			keyPath:         keyPath,
-			caPath:          caPath,
-			spiffeIDs:       spiffeID + " , " + spiffeID,
-			expectSecure:    true,
-			expectMTLS:      true,
-			expectAllowList: true,
+			name:             "ca additionally enables required mTLS",
+			expectClientCert: true,
+			certPath:         certPath,
+			keyPath:          keyPath,
+			caPath:           caPath,
+			expectSecure:     true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := buildExtProcTLS(tt.certPath, tt.keyPath, tt.caPath, tt.spiffeIDs, t.Context().Done())
+			source := tt.source
+			if source == "" {
+				source = "file"
+			}
+			result, err := buildExtProcTLS(
+				extProcTLSOptions{
+					Source:   source,
+					CertPath: tt.certPath,
+					KeyPath:  tt.keyPath,
+					CAPath:   tt.caPath,
+					Workload: certsource.WorkloadOptions{
+						Address:   "agentiod.agentio-system.svc:15012",
+						TokenPath: filepath.Join(t.TempDir(), "token"),
+						RootPath:  caPath,
+						SPIFFEID:  "spiffe://cluster.local/ns/agentio-system/sa/agentio-epe",
+					},
+				},
+				t.Context().Done(),
+			)
 			if tt.expectError != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.expectError)
@@ -177,37 +166,18 @@ func TestBuildExtProcTLS(t *testing.T) {
 				if result.Provider != nil {
 					t.Errorf("plaintext result must have a nil Provider, got %v", result.Provider)
 				}
-				if len(result.Options) != 0 {
-					t.Errorf("plaintext result must have no Options, got %d", len(result.Options))
-				}
 				return
 			}
 			if result.Provider == nil {
 				t.Fatal("secure result must have a non-nil Provider")
 			}
-			if tt.expectAllowList {
-				if result.SPIFFEAllowList == nil {
-					t.Errorf("expected a non-nil SPIFFEAllowList")
-				}
-			} else if result.SPIFFEAllowList != nil {
-				t.Errorf("expected a nil SPIFFEAllowList, got %v", result.SPIFFEAllowList)
+			if result.RequireClientCert != tt.expectClientCert {
+				t.Errorf("RequireClientCert = %v, want %v", result.RequireClientCert, tt.expectClientCert)
+			}
+			if (result.Workload != nil) != (source == "ca") {
+				t.Errorf("certificate renewal runnable present = %v for source %q", result.Workload != nil, source)
 			}
 
-			// Assert option effects through the resulting server config.
-			cfg, err := certs.ServerTLSConfig(result.Provider, result.Options...)
-			if err != nil {
-				t.Fatalf("ServerTLSConfig: %v", err)
-			}
-			wantClientAuth := tls.NoClientCert
-			if tt.expectMTLS {
-				wantClientAuth = tls.RequireAndVerifyClientCert
-			}
-			if cfg.ClientAuth != wantClientAuth {
-				t.Errorf("ClientAuth = %v, want %v", cfg.ClientAuth, wantClientAuth)
-			}
-			if got := cfg.VerifyPeerCertificate != nil; got != tt.expectAllowList {
-				t.Errorf("VerifyPeerCertificate installed = %v, want %v", got, tt.expectAllowList)
-			}
 		})
 	}
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"sync"
 )
 
 type httpEndpoint struct {
@@ -28,46 +27,23 @@ type httpEndpoint struct {
 // Do supplies the HTTP transport for a named HTTPCallout provider. The callout
 // client handles the request and response protocol. Redirects are not followed.
 // The provider timeout covers body reads.
-// The caller must close the response body, which releases the provider version.
+// The caller must close the response body.
 func (r *Registry) Do(
 	ctx context.Context,
 	provider, method string,
 	headers http.Header,
 	body io.Reader,
 ) (*http.Response, error) {
-	s, release := r.acquire()
-	p, err := s.find(provider, false)
+	p, err := r.find(provider, false)
 	if err != nil {
-		release()
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, method, p.httpCallout.url, body)
 	if err != nil {
-		release()
 		return nil, err
 	}
 	if headers != nil {
 		req.Header = headers.Clone()
 	}
-	resp, err := p.client.Do(req)
-	if err != nil {
-		release()
-		return nil, err
-	}
-	resp.Body = &httpResponseBody{
-		ReadCloser: resp.Body,
-		release:    sync.OnceFunc(release),
-	}
-	return resp, nil
-}
-
-// httpResponseBody keeps the selected provider alive until the caller closes the body.
-type httpResponseBody struct {
-	io.ReadCloser
-	release func()
-}
-
-func (b *httpResponseBody) Close() error {
-	defer b.release()
-	return b.ReadCloser.Close()
+	return p.client.Do(req)
 }

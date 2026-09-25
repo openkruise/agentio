@@ -248,3 +248,52 @@ func TestGatewayBuildRejectsInvalidUpstreamTLS(t *testing.T) {
 		}
 	}
 }
+
+func TestExtProcWorkloadMTLS(t *testing.T) {
+	const id = "spiffe://cluster.local/ns/system/sa/epe"
+	provider := &configv1.ExtProcProvider{
+		Service: "epe.system.svc",
+		Tls:     &configv1.ExtProcTLSSettings{Mode: configv1.ExtProcTLSSettings_MUTUAL, PeerSpiffeIds: []string{id}},
+	}
+	resources, err := Build(
+		Inputs{
+			DiscoveryAddress: "agentiod.system.svc:15012",
+			TrustDomain:      "cluster.local",
+			Gateway:          testGateway(nil),
+			GlobalExtProc:    provider,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
+	cfg := &tlsv3.UpstreamTlsContext{}
+	if err := clusters[ExtProcCluster].GetTransportSocket().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+		t.Fatal(err)
+	}
+	common := cfg.GetCommonTlsContext()
+	identity := common.GetTlsCertificateSdsSecretConfigs()
+	trust := common.GetCombinedValidationContext()
+	if len(identity) != 1 || identity[0].GetName() != "default" ||
+		trust.GetValidationContextSdsSecretConfig().GetName() != "ROOTCA" {
+		t.Fatalf("unexpected SDS secrets: %v", common)
+	}
+	for _, secret := range []*tlsv3.SdsSecretConfig{identity[0], trust.GetValidationContextSdsSecretConfig()} {
+		services := secret.GetSdsConfig().GetApiConfigSource().GetGrpcServices()
+		if len(services) != 1 || services[0].GetEnvoyGrpc().GetClusterName() != "sds-grpc" {
+			t.Fatalf("unexpected SDS source: %v", secret)
+		}
+	}
+	peers := trust.GetDefaultValidationContext().GetMatchTypedSubjectAltNames()
+	if len(peers) != 1 || peers[0].GetSanType() != tlsv3.SubjectAltNameMatcher_URI ||
+		peers[0].GetMatcher().GetExact() != id {
+		t.Fatalf("unexpected peer validation: %v", peers)
+	}
+	if len(common.AlpnProtocols) != 1 || common.AlpnProtocols[0] != "h2" {
+		t.Fatal("ext_proc requires h2 ALPN")
+	}
+	provider.Tls.PeerSpiffeIds = nil
+	if _, err := Build(Inputs{Gateway: testGateway(nil), GlobalExtProc: provider}); err == nil {
+		t.Fatal("accepted mTLS without a server identity")
+	}
+}

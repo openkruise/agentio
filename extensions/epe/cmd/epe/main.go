@@ -35,14 +35,17 @@ import (
 	"google.golang.org/grpc"
 	grpchealth "google.golang.org/grpc/health"
 	healthPb "google.golang.org/grpc/health/grpc_health_v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/admin"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/sinks/webhook"
+	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
 	"github.com/openkruise/agentio/extensions/epe/pkg/extensionprovider"
 	_ "github.com/openkruise/agentio/extensions/epe/pkg/filters/httpcallout" // Register environment settings.
 	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
@@ -51,15 +54,18 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/runnable"
 	runserver "github.com/openkruise/agentio/extensions/epe/pkg/server"
 	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
+	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/envdoc"
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
 var (
 	epeConfigName = flag.String(
 		"epe-config",
 		"agentio-epe-config",
-		"Base EPEConfig ConfigMap for extension providers and default selection; absence leaves defaults unchanged",
+		"Base EPEConfig ConfigMap for extension providers; absence leaves defaults unchanged",
 	)
 	epeConfigPrimaryName = flag.String(
 		"epe-config-primary",
@@ -107,19 +113,41 @@ var (
 	failClosedOnMissingIdentity = flag.Bool("fail-closed-on-missing-identity", false,
 		"Deny requests when the source pod identity is missing from filter_state "+
 			"(e.g. a misconfigured metadata exchange); by default such requests pass through")
+	tlsSource = flag.String("tls-source", "none", "Serving certificate source: none, ca or file")
+	caAddress = flag.String(
+		"ca-address",
+		"agentiod.agentio-system.svc:15012",
+		"Certificate authority host:port implementing the Istio CreateCertificate API; requires --tls-source=ca",
+	)
+	caTokenPath = flag.String(
+		"ca-token-path",
+		"/var/run/secrets/tokens/agentio-token",
+		"ServiceAccount token file for certificate requests; requires --tls-source=ca",
+	)
+	caRootPath = flag.String(
+		"ca-root-path",
+		"/var/run/secrets/agentio/root-cert.pem",
+		"CA bundle for verifying the CA server, issued certificates and incoming clients; requires --tls-source=ca",
+	)
+	tlsSPIFFEID = flag.String(
+		"tls-spiffe-id",
+		"",
+		"Expected EPE ServiceAccount SPIFFE identity in CA mode; Agentiod derives the issued identity from the token",
+	)
+	tlsCertLifetime = flag.Duration(
+		"tls-cert-lifetime",
+		24*time.Hour,
+		"Requested certificate lifetime in CA mode; capped by Agentiod",
+	)
 	tlsCertPath = flag.String("tls-cert-path", "",
 		"Path to the ext-proc server certificate chain PEM (e.g. Istio OUTPUT_CERTS cert-chain.pem); "+
-			"requires --tls-key-path. Unset means plaintext serving")
+			"requires --tls-key-path and --tls-source=file")
 	tlsKeyPath = flag.String("tls-key-path", "",
 		"Path to the ext-proc server private key PEM (e.g. Istio OUTPUT_CERTS key.pem); "+
 			"requires --tls-cert-path")
 	tlsCAPath = flag.String("tls-ca-path", "",
 		"Path to the client CA bundle PEM (e.g. Istio OUTPUT_CERTS root-cert.pem); "+
 			"enables mTLS with required and verified client certificates")
-	peerSPIFFEIDs = flag.String("peer-spiffe-ids", "",
-		"Comma-separated exact SPIFFE ID allow-list for client identities "+
-			"(e.g. spiffe://cluster.local/ns/istio-system/sa/istio-ingressgateway); "+
-			"requires --tls-ca-path")
 
 	setupLog = ctrllog.Log.WithName("setup")
 )
@@ -173,12 +201,12 @@ func run() error {
 
 	// Initialize the process-wide Kubernetes client and CRD watcher. The same
 	// client owns core, metadata, and agents-api reads for every EPE component.
-	config, err := kube.LoadConfig(*kubeconfig)
+	kubeConfig, err := kube.LoadConfig(*kubeconfig)
 	if err != nil {
 		setupLog.Error(err, "failed to load Kubernetes configuration")
 		return err
 	}
-	client, err := kube.NewClient(config)
+	client, err := kube.NewClient(kubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create kube client")
 		return err
@@ -203,8 +231,37 @@ func run() error {
 	if *epeConfigName == "" || *epeConfigNamespace == "" {
 		return fmt.Errorf("--epe-config and --epe-config-namespace must not be empty")
 	}
+	servingTLS, err := buildExtProcTLS(extProcTLSOptions{
+		Source:   *tlsSource,
+		CertPath: *tlsCertPath,
+		KeyPath:  *tlsKeyPath,
+		CAPath:   *tlsCAPath,
+		Workload: certsource.WorkloadOptions{
+			Address:   *caAddress,
+			TokenPath: *caTokenPath,
+			RootPath:  *caRootPath,
+			SPIFFEID:  *tlsSPIFFEID,
+			Lifetime:  *tlsCertLifetime,
+		},
+	}, ctx.Done())
+	if err != nil {
+		return fmt.Errorf("invalid ext-proc TLS flags: %w", err)
+	}
+	if servingTLS.Workload != nil {
+		group.Add(servingTLS.Workload)
+	}
+	cms := kclient.NewFiltered[*corev1.ConfigMap](client, kclient.Filter{})
+	cms.Start(ctx.Done())
+	configMaps := krt.WrapClient(cms, krt.WithName("EPEConfigMaps"), krt.WithStop(ctx.Done()))
+	configs := config.NewCollection(configMaps, config.Options[*configv1.EPEConfig]{
+		Namespace: *epeConfigNamespace,
+		Names:     []string{*epeConfigName, *epeConfigPrimaryName},
+		Defaults:  defaults,
+		Apply:     extensionprovider.ApplyConfig,
+		Validate:  extensionprovider.Validate,
+	}, krt.WithName("EPEConfig"), krt.WithStop(ctx.Done())).AsCollection()
 	providerConfigs := extensionprovider.NewCollection(client, *epeConfigNamespace,
-		[]string{*epeConfigName, *epeConfigPrimaryName}, defaults, nil, ctx.Done())
+		configs, configMaps, nil, ctx.Done())
 	providerReg := providers.RegisterCollection(providerConfigs)
 	registrations, err := wiring.BuildFilters(chainDeps)
 	if err != nil {
@@ -222,14 +279,36 @@ func run() error {
 	profiles := profilestore.NewCollection(client, registrations, nil, ctx.Done())
 	profileReg := store.RegisterCollection(profiles)
 
-	// Health gRPC server. The official implementation serves Check/Watch/List;
-	// the empty service name is SERVING from construction, and the ext-proc
-	// service name is marked here.
+	// Liveness remains healthy during CA outages. Readiness follows certificate
+	// validity independently, allowing an expired identity to recover in place.
 	healthSrv := grpc.NewServer()
 	health := grpchealth.NewServer()
-	health.SetServingStatus(extProcPb.ExternalProcessor_ServiceDesc.ServiceName, healthPb.HealthCheckResponse_SERVING)
+	health.SetServingStatus("liveness", healthPb.HealthCheckResponse_SERVING)
+	updateReadiness := func() {
+		state := healthPb.HealthCheckResponse_SERVING
+		if servingTLS.Ready() != nil {
+			state = healthPb.HealthCheckResponse_NOT_SERVING
+		}
+		for _, service := range []string{"", "readiness", extProcPb.ExternalProcessor_ServiceDesc.ServiceName} {
+			health.SetServingStatus(service, state)
+		}
+	}
+	updateReadiness()
 	healthPb.RegisterHealthServer(healthSrv, health)
 	group.Add(runnable.GRPCServer("health", healthSrv, *grpcHealthPort))
+	group.Add(runnable.Func(func(ctx context.Context) error {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				health.Shutdown()
+				return nil
+			case <-ticker.C:
+				updateReadiness()
+			}
+		}
+	}))
 
 	// Admin HTTP server. It is always on; the /debug endpoints are only
 	// wired when --enable-debug is set. The agents-api clientset serves full
@@ -246,15 +325,6 @@ func run() error {
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 	group.Add(runnable.HTTPServer("metrics", metricsMux, fmt.Sprintf(":%d", *metricsPort)))
-
-	// Setup the ext-proc server config. Without --tls-* flags the listener
-	// stays plaintext, delegating transport security to the service mesh
-	// sidecar.
-	servingTLS, err := buildExtProcTLS(*tlsCertPath, *tlsKeyPath, *tlsCAPath, *peerSPIFFEIDs, ctx.Done())
-	if err != nil {
-		setupLog.Error(err, "invalid ext-proc TLS flags")
-		return err
-	}
 
 	// Wire the per-request audit logger.
 	auditLogger := accesslog.NewBufferedLogger(ctrllog.Log.WithName("audit"), *auditLogBufferSize)
@@ -278,7 +348,7 @@ func run() error {
 		FailClosedOnMissingIdentity: *failClosedOnMissingIdentity,
 		SecureServing:               servingTLS.Secure,
 		CertProvider:                servingTLS.Provider,
-		TLSOptions:                  servingTLS.Options,
+		RequireClientCert:           servingTLS.RequireClientCert,
 		Resolve:                     securityprofile.NewResolver(store, registrations, auditRouter),
 		AuditLogger:                 auditLogger,
 		Registrations:               registrations,
