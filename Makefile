@@ -10,6 +10,15 @@ build.epe:
 	mkdir -p out
 	go build -trimpath -o out/epe ./extensions/epe/cmd/epe
 
+.PHONY: build.gateway-agent test.gateway-agent
+
+build.gateway-agent:
+	mkdir -p out
+	go build -trimpath -o out/gateway-agent ./cmd/gateway-agent
+
+test.gateway-agent:
+	go test -race ./cmd/gateway-agent ./pkg/gatewayagent/...
+
 test.epe:
 	go test ./extensions/epe/...
 

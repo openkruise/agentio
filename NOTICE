@@ -22,3 +22,5 @@ licenses/ directory.
 the Istio name in this project is nominative (to describe the origin of
 the code) and does not imply endorsement or affiliation.
 ------------------------------------------------------------------------
+
+The gateway agent includes locally maintained, Apache-2.0 licensed code extracted from release-0.1 pilot-agent at 169bad3c36783711989757cd907465b8fe9cfc3a. Source paths and the extraction boundary are recorded in pkg/gatewayagent/internal/UPSTREAM.md. It has no Istio Go package dependencies. The bootstrap and ADS relay are Agentio code.

@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+# Copyright 2026 The Kruise Authors
+ARG ENVOY_IMAGE=docker.io/envoyproxy/envoy@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+ARG LEGACY_ENVOY_IMAGE=docker.io/openkruise/proxyv2@sha256:850848747fa0481a31b0f01d33c7202305a9c2df50d745bdaa2684bb635de098
+FROM golang:1.26.8 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG AGENT_VERSION=dev
+ARG AGENT_REVISION=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/openkruise/agentio/pkg/gatewayagent.Version=${AGENT_VERSION} -X github.com/openkruise/agentio/pkg/gatewayagent.Revision=${AGENT_REVISION}" -o /out/gateway-agent ./cmd/gateway-agent
+FROM ${LEGACY_ENVOY_IMAGE} AS legacy
+USER 0
+RUN rm -f /usr/local/bin/pilot-agent
+WORKDIR /
+COPY --from=builder /out/gateway-agent /usr/local/bin/gateway-agent
+COPY LICENSE NOTICE /usr/share/doc/agentio-gateway/
+USER 1337:1337
+ENTRYPOINT ["/usr/local/bin/gateway-agent"]
+CMD ["--legacy"]
+
+FROM ${ENVOY_IMAGE} AS community
+WORKDIR /
+COPY --from=builder /out/gateway-agent /usr/local/bin/gateway-agent
+COPY LICENSE NOTICE /usr/share/doc/agentio-gateway/
+USER 1337:1337
+ENTRYPOINT ["/usr/local/bin/gateway-agent"]
+CMD []

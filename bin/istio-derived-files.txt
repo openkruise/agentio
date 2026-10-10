@@ -2,6 +2,17 @@
 # Keep this list sorted. Paths are relative to the repository root.
 api/security/v1/authorization.proto
 api/workload/v1/workload.proto
+pkg/gatewayagent/agent.go
+pkg/gatewayagent/envoy_bootstrap_legacy.json.tmpl
+pkg/gatewayagent/identity.go
+pkg/gatewayagent/internal/caproto/ca.proto
+pkg/gatewayagent/internal/envoy/admin.go
+pkg/gatewayagent/internal/envoy/agent.go
+pkg/gatewayagent/internal/envoy/agent_test.go
+pkg/gatewayagent/internal/envoy/proxy.go
+pkg/gatewayagent/internal/envoy/ready.go
+pkg/gatewayagent/internal/envoy/stats.go
+pkg/gatewayagent/sds.go
 pkg/gatewaydeployer/controller.go
 pkg/gatewaydeployer/overlay.go
 pkg/gatewaydeployer/render.go

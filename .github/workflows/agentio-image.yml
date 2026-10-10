@@ -1,6 +1,6 @@
 name: agentio-image
 
-# Agentio builds agentiod, EPE, and the pinned ztunnel source. Release callers receive
+# Agentio builds agentiod, EPE, the opt-in gateway agent, and pinned ztunnel source. Callers receive
 # immutable references so the exact candidates tested by E2E can be promoted.
 on:
   push:
@@ -14,11 +14,17 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Candidate image tag; defaults to the source commit SHA
+        description: Candidate image tag (up to 121 characters); legacy gateway adds -legacy; defaults to the source commit SHA
         required: false
         default: ""
         type: string
     outputs:
+      gateway_agent_image:
+        description: Immutable opt-in community Envoy gateway image
+        value: ${{ jobs.build-images.outputs.gateway_agent_image }}
+      gateway_agent_legacy_image:
+        description: Immutable opt-in legacy Envoy gateway image
+        value: ${{ jobs.build-images.outputs.gateway_agent_legacy_image }}
       agentiod_image:
         description: Immutable agentiod image reference
         value: ${{ jobs.build-images.outputs.agentiod_image }}
@@ -55,6 +61,8 @@ jobs:
     timeout-minutes: 90
     environment: development
     outputs:
+      gateway_agent_image: ${{ steps.images.outputs.gateway_agent_image }}
+      gateway_agent_legacy_image: ${{ steps.images.outputs.gateway_agent_legacy_image }}
       agentiod_image: ${{ steps.images.outputs.agentiod_image }}
       epe_image: ${{ steps.images.outputs.epe_image }}
       ztunnel_image: ${{ steps.images.outputs.ztunnel_image }}
@@ -80,8 +88,8 @@ jobs:
           if [[ -z "$tag" ]]; then
             tag="$GITHUB_SHA"
           fi
-          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
-            echo "Invalid OCI image tag: $tag" >&2
+          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,120}$ ]]; then
+            echo "Invalid candidate tag (maximum 121 characters to allow -legacy): $tag" >&2
             exit 1
           fi
           echo "CANDIDATE_TAG=$tag" >> "$GITHUB_ENV"
@@ -100,14 +108,14 @@ jobs:
           ZTUNNEL_SOURCE_REPOSITORY: ${{ needs.build-ztunnel.outputs.source_repository }}
         run: |
           build_image() {
-            local output_name="$1" image_name="$2" dockerfile="$3" context="$4"
-            shift 4
+            local output_name="$1" image_name="$2" dockerfile="$3" context="$4" tag_suffix="$5"
+            shift 5
             local destination metadata digest
-            destination="${HUB}/${image_name}:${CANDIDATE_TAG}"
-            metadata="${RUNNER_TEMP}/${image_name}-metadata.json"
+            destination="${HUB}/${image_name}:${CANDIDATE_TAG}${tag_suffix}"
+            metadata="${RUNNER_TEMP}/${output_name}-metadata.json"
             tags=(--tag "$destination")
             if [[ -z "$INPUT_TAG" ]]; then
-              tags+=(--tag "${HUB}/${image_name}:master-dev")
+              tags+=(--tag "${HUB}/${image_name}:master-dev${tag_suffix}")
             fi
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
@@ -126,9 +134,23 @@ jobs:
             echo "${output_name}=${HUB}/${image_name}@${digest}" >> "$GITHUB_OUTPUT"
           }
 
-          build_image agentiod_image agentiod Dockerfile .
-          build_image epe_image agentio-epe extensions/epe/docker/Dockerfile .
-          build_image ztunnel_image ztunnel docker/Dockerfile.ztunnel ztunnel-context \
+          build_image gateway_agent_image agentio-gateway docker/Dockerfile.gateway . "" \
+            --build-arg "AGENT_VERSION=$CANDIDATE_TAG" \
+            --build-arg "AGENT_REVISION=$GITHUB_SHA"
+          build_image gateway_agent_legacy_image agentio-gateway docker/Dockerfile.gateway . "-legacy" \
+            --target legacy \
+            --build-arg "AGENT_VERSION=$CANDIDATE_TAG" \
+            --build-arg "AGENT_REVISION=$GITHUB_SHA"
+          build_image agentiod_image agentiod Dockerfile . ""
+          build_image epe_image agentio-epe extensions/epe/docker/Dockerfile . ""
+          build_image ztunnel_image ztunnel docker/Dockerfile.ztunnel ztunnel-context "" \
             --build-arg "ZTUNNEL_VERSION=$ZTUNNEL_SOURCE_SHA" \
             --label "org.opencontainers.image.source=https://github.com/${ZTUNNEL_SOURCE_REPOSITORY}" \
             --label "org.opencontainers.image.revision=$ZTUNNEL_SOURCE_SHA"
+      - name: Smoke-test gateway agent candidate
+        env:
+          GATEWAY_AGENT_IMAGE: ${{ steps.images.outputs.gateway_agent_image }}
+          GATEWAY_AGENT_LEGACY_IMAGE: ${{ steps.images.outputs.gateway_agent_legacy_image }}
+        run: |
+          docker run --rm "$GATEWAY_AGENT_IMAGE" version
+          docker run --rm "$GATEWAY_AGENT_LEGACY_IMAGE" version
