@@ -122,7 +122,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	eventually(t, func() bool {
 		return fixture.compiler.Failures()["SecurityProfile/"+inline.ResourceName()] != ""
 	}, "invalid SNI records a compilation failure")
-	awaitHosts("inline")
+	awaitHosts("inline", []string{"updated.example"})
 
 	inline.Spec.Rules = []agentsv1alpha1.SecurityRule{
 		{

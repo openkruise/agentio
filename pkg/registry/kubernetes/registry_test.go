@@ -17,6 +17,7 @@ package kubernetes
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
@@ -274,11 +275,14 @@ func TestRegistrySandboxOwnedSecurityProfiles(t *testing.T) {
 				Update(ctx, sandbox, metav1.UpdateOptions{}); err != nil {
 				t.Fatal(err)
 			}
+			// The expected profile is unchanged; allow the rejected update to propagate.
+			time.Sleep(200 * time.Millisecond)
 			eventually(t, func() bool {
 				current := r.Sandboxes.GetKey("kruise:sandbox-id")
-				return r.SecurityProfiles.GetKey(inlineKey) == nil && r.SecurityProfiles.GetKey(sharedKey) != nil &&
+				retained := r.SecurityProfiles.GetKey(inlineKey)
+				return retained != nil && retained.Equals(*profile) && r.SecurityProfiles.GetKey(sharedKey) != nil &&
 					current != nil
-			}, "invalid annotation removes only its own profile and preserves Sandbox identity")
+			}, "invalid annotation retains inline rules and Sandbox identity")
 		})
 	}
 }

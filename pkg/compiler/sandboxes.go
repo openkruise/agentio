@@ -20,8 +20,8 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// Invalid policies are omitted independently. Runtime metadata and other policies
-// continue to be published; failed updates do not retain an earlier policy version.
+// Runtime metadata and policies are published independently. SNI compilation
+// retains the last valid policy on failed updates, matching legacy EPE behavior.
 func newSandboxResources(
 	sandboxes krt.Collection[model.Sandbox],
 	policies policyCollections,

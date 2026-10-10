@@ -29,7 +29,7 @@ import (
 )
 
 // workloadPolicies is computed once per Workload and shared by all ADS clients.
-// System policy selection is independent of Sandbox discovery and lifecycle.
+// Shared policies and legacy inline SNI attachments use the same ordered bindings.
 type workloadPolicies struct {
 	WorkloadUID        string
 	TrafficPolicyNames []string

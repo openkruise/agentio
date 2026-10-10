@@ -46,12 +46,13 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 	sandboxes := newSandboxes(groups, pods, newPodsByUID(pods), "cluster", options...)
 	profiles := newSecurityProfiles(groups, options...)
 	for _, step := range []struct {
-		raw  string
-		host string
+		raw     string
+		host    string
+		invalid bool
 	}{
 		{},
 		{raw: `[{"name":"inline","match":[{"domains":["first.example"]}],"actions":{"block":{}}}]`, host: "first.example"},
-		{raw: `[{"name":`},
+		{raw: `[{"name":`, host: "first.example", invalid: true},
 		{raw: `[{"name":"inline","match":[{"domains":["second.example"]}],"actions":{"block":{}}}]`, host: "second.example"},
 		{},
 	} {
@@ -83,6 +84,10 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 			t.Fatal("stripped annotations alias the original object")
 		}
 		objects.UpdateObject(obj)
+		if step.invalid {
+			// Let the rejected update propagate before asserting the unchanged result.
+			time.Sleep(200 * time.Millisecond)
+		}
 		if !sandboxes.WaitUntilSynced(stop) || !profiles.WaitUntilSynced(stop) {
 			t.Fatal("Sandbox collection did not sync")
 		}

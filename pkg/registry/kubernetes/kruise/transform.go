@@ -126,15 +126,16 @@ func newSecurityProfiles(
 ) krt.Collection[model.SecurityProfile] {
 	return krt.NewCollection(
 		sandboxes,
-		func(_ krt.HandlerContext, group krt.IndexObject[string, *agentsv1alpha1.Sandbox]) *model.SecurityProfile {
+		func(ctx krt.HandlerContext, group krt.IndexObject[string, *agentsv1alpha1.Sandbox]) *model.SecurityProfile {
 			if len(group.Objects) != 1 || !isPolicySubject(group.Objects[0]) {
 				return nil
 			}
 			sandbox := group.Objects[0]
 			rules, err := sandboxSecurityRules(sandbox)
 			if err != nil {
-				log.Warn("invalid Sandbox security rules; omitting inline profile",
+				log.Warn("invalid Sandbox security rules; retaining previous inline profile",
 					"namespace", sandbox.Namespace, "sandbox", sandbox.Name, "error", err)
+				ctx.DiscardResult()
 				return nil
 			}
 			if len(rules) == 0 {

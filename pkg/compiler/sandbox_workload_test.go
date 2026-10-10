@@ -144,7 +144,10 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	}
 	security.Spec = compatibilitySecurity("*bad.example")
 	f.securityProfiles.UpdateObject(security)
-	await(a.UID, 0)
+	eventually(t, func() bool {
+		return f.compiler.Failures()["SecurityProfile/"+security.ResourceName()] != ""
+	}, "invalid SNI retains the last valid policy")
+	await(a.UID, 1)
 	if manifestAt(t, f.compiler, s.UID) == nil {
 		t.Fatal("SNI failure removed Sandbox")
 	}
@@ -276,4 +279,109 @@ func TestLegacyTrafficPolicySharedAcrossWorkloads(t *testing.T) {
 		}
 		return true
 	}, "deletion withdraws selector policy while retaining baselines")
+}
+
+func TestSandboxInlineSNIReleaseCompatibility(t *testing.T) {
+	f := newIncrementalFixture(t)
+	target := testWorkload("demo", "sandbox", "10.0.0.1")
+	target.Source = model.SourceRef{Registry: "kubernetes/cluster", Key: "pod-uid"}
+	other := testWorkload("demo", "other", "10.0.0.2")
+	other.Source = model.SourceRef{Registry: target.Source.Registry, Key: "other-uid"}
+	other.Labels = target.Labels
+	crossNamespace := testWorkload("elsewhere", target.Name, "10.0.0.3")
+	crossNamespace.Source = model.SourceRef{Registry: target.Source.Registry, Key: "cross-namespace-uid"}
+	nonPod := target
+	nonPod.UID, nonPod.Source = "external", model.SourceRef{Registry: "external", Key: "external"}
+	for _, w := range []model.Workload{target, other, crossNamespace, nonPod} {
+		f.workloads.UpdateObject(w)
+	}
+	// Inline rules must follow even the lowest-precedence shared profile.
+	maxPriority := int32(1<<31 - 1)
+	shared := model.SecurityProfile{
+		Name:      target.Name,
+		Namespace: target.Namespace,
+		Spec:      compatibilitySecurity("shared.example"),
+	}
+	shared.Spec.Priority = &maxPriority
+	f.securityProfiles.UpdateObject(shared)
+	// Deliberately bind the native Sandbox to a different host: legacy matching uses names.
+	sandbox := model.Sandbox{
+		UID:       "kruise:delivery-id",
+		Namespace: target.Namespace,
+		Attester:  &model.Attester{WorkloadUID: other.UID},
+	}
+	f.sandboxes.UpdateObject(sandbox)
+	inline := model.SecurityProfile{
+		Dedicated:  true,
+		SandboxUID: sandbox.UID,
+		Name:       target.Name,
+		Namespace:  target.Namespace,
+	}
+	check := func(host string) {
+		t.Helper()
+		eventually(t, func() bool {
+			snapshot := currentSnapshot(t, f.compiler)
+			for _, w := range []model.Workload{target, other, crossNamespace, nonPod} {
+				wire, _ := compatibilityWorkload(t, snapshot, w.UID)
+				if wire == nil {
+					return false
+				}
+				payload := new(extensionsv1.SniTrafficPolicy)
+				compatibilityExtension(t, wire, "sni-traffic-policy", payload)
+				var want []string
+				if w.Namespace == target.Namespace {
+					want = append(want, "shared.example")
+				}
+				if w.UID == target.UID && host != "" {
+					want = append(want, host)
+				}
+				var got []string
+				for _, rule := range payload.Rules {
+					if rule.Action != extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION {
+						t.Fatalf("unexpected SNI action: %v", rule.Action)
+					}
+					got = append(got, rule.GetMatch().GetSni()...)
+				}
+				if !slices.Equal(got, want) {
+					return false
+				}
+			}
+			manifest := manifestAt(t, f.compiler, sandbox.UID)
+			if manifest == nil {
+				return false
+			}
+			if host == "" {
+				return len(manifest.Extensions) == 0
+			}
+			if len(manifest.Extensions) != 1 {
+				return false
+			}
+			payload := new(extensionsv1.SniTrafficPolicy)
+			if err := manifest.Extensions[0].UnmarshalTo(payload); err != nil {
+				t.Fatal(err)
+			}
+			return len(payload.Rules) == 1 && slices.Equal(payload.Rules[0].GetMatch().GetSni(), []string{host})
+		}, "legacy Workload and native Sandbox SNI agree without leaking inline rules")
+	}
+	check("")
+	for _, host := range []string{"first.example", "updated.example"} {
+		inline.Spec = compatibilitySecurity(host)
+		f.securityProfiles.UpdateObject(inline)
+		check(host)
+	}
+	inline.Spec = compatibilitySecurity("*bad.example")
+	f.securityProfiles.UpdateObject(inline)
+	eventually(t, func() bool {
+		return f.compiler.Failures()["SecurityProfile/"+inline.ResourceName()] != ""
+	}, "invalid inline SNI was processed")
+	check("updated.example")
+	inline.Spec = compatibilitySecurity("http.example")
+	inline.Spec.Rules[0].Match[0].Schemes = []string{"http"}
+	f.securityProfiles.UpdateObject(inline)
+	check("")
+	inline.Spec = compatibilitySecurity("restored.example")
+	f.securityProfiles.UpdateObject(inline)
+	check("restored.example")
+	f.securityProfiles.DeleteObject(inline.ResourceName())
+	check("")
 }

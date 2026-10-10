@@ -192,6 +192,7 @@ func TestPolicyAttachmentEqualityTracksOnlyReferenceFields(t *testing.T) {
 		{"priority", func(p *PolicyAttachment) { p.Priority++ }},
 		{"creation time", func(p *PolicyAttachment) { p.CreationTime = time.Unix(200, 0) }},
 		{"namespace", func(p *PolicyAttachment) { p.Target.Namespaces = []string{"other"} }},
+		{"pod name", func(p *PolicyAttachment) { p.Target.PodName = "sandbox" }},
 		{"global scope", func(p *PolicyAttachment) { p.Target.Global = true }},
 		{"selector", func(p *PolicyAttachment) {
 			p.Target.Selector = metav1.LabelSelector{MatchLabels: map[string]string{"app": "other"}}

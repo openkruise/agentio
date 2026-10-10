@@ -112,9 +112,8 @@ func newPolicyCollections(
 			compiled, err := policy.CompileSNIProfile(profile)
 			if err != nil {
 				failures.record("SecurityProfile", profile.ResourceName(), err)
-				if !profile.Dedicated {
-					ctx.DiscardResult()
-				}
+				// Keep TLS termination aligned with EPE's last-known-good rules.
+				ctx.DiscardResult()
 				return nil
 			}
 			failures.clear("SecurityProfile", profile.ResourceName())

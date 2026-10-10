@@ -46,11 +46,12 @@ const (
 	PolicyKindSNIPolicy     = model.PolicyKindSNIPolicy
 )
 
-// AttachmentTarget describes selector-derived policy attachment (global, namespaces, or label selector).
+// AttachmentTarget describes shared selectors or a legacy Sandbox's same-name Pod.
 type AttachmentTarget struct {
 	Global     bool
 	Namespaces []string
 	Selector   metav1.LabelSelector
+	PodName    string
 }
 
 // PolicyAttachment is the payload-free binding projection of a typed policy.
@@ -79,6 +80,7 @@ func (p PolicyAttachment) Equals(other PolicyAttachment) bool {
 	return p.Kind == other.Kind &&
 		p.Name == other.Name &&
 		p.Target.Global == other.Target.Global &&
+		p.Target.PodName == other.Target.PodName &&
 		equalStrings(p.Target.Namespaces, other.Target.Namespaces) &&
 		apiequality.Semantic.DeepEqual(p.Target.Selector, other.Target.Selector) &&
 		p.Priority == other.Priority &&
@@ -165,6 +167,11 @@ func containsString(values []string, value string) bool {
 
 // Selects reports whether this attachment applies to the Workload.
 func (p PolicyAttachment) Selects(workload model.Workload) bool {
+	if p.Target.PodName != "" {
+		// shortcut: release compatibility assumes same-name Pods; shared hosts need Sandbox-aware consumers.
+		return strings.HasPrefix(workload.Source.Registry, "kubernetes/") &&
+			workload.Name == p.Target.PodName && containsString(p.Target.Namespaces, workload.Namespace)
+	}
 	return p.selects(workload.Namespace, workload.Labels)
 }
 
@@ -196,6 +203,10 @@ func (p PolicyAttachment) specificity() int {
 func policyAttachmentLess(left, right PolicyAttachment) bool {
 	if left.Kind != right.Kind {
 		return left.Kind < right.Kind
+	}
+	// Sandbox inline rules follow every shared profile, including MaxInt32 priority.
+	if (left.Target.PodName == "") != (right.Target.PodName == "") {
+		return left.Target.PodName == ""
 	}
 	if left.Priority != right.Priority {
 		return left.Priority < right.Priority

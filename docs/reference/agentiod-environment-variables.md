@@ -106,7 +106,7 @@ $ agentiod -print-env -print-env-format=markdown
 | <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Maximum number of client connections generating and sending pushed xDS responses concurrently. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
 | <code>AGENTIO_PUSH_DEBOUNCE</code> | Duration | <code>100ms</code> | Quiet period before compiled dirty resources are merged and published. |
 | <code>AGENTIO_PUSH_DEBOUNCE_MAX</code> | Duration | <code>10s</code> | Upper bound on the push quiet period. |
-| <code>AGENTIO_SANDBOX_MODE</code> | Boolean | <code>false</code> | Enable Sandbox discovery and xDS resources. Sandbox-owned inline policies stay on Sandboxes; shared policies always remain on Workloads. |
+| <code>AGENTIO_SANDBOX_MODE</code> | Boolean | <code>false</code> | Enable Sandbox discovery and xDS resources. Inline SNI also projects to same-name Pod Workloads for legacy compatibility; shared policies remain on Workloads. |
 | <code>AGENTIO_SANDBOX_RUNTIMES</code> | String | empty | Comma-separated Sandbox runtimes used when AGENTIO&#95;SANDBOX&#95;MODE is true. Supported: kruise. Empty enables no runtime integrations. |
 | <code>AGENTIO_SCOPED_SECRETS</code> | Boolean | <code>true</code> | Watch only the root namespace in the shared Secret informer. False watches all namespaces and requires cluster-wide Secret list/watch RBAC. |
 | <code>AGENTIO_SERVICE_NAME</code> | String | <code>agentiod</code> | Kubernetes service name placed in the xDS server certificate. |

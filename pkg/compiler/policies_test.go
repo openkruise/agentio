@@ -838,7 +838,7 @@ func TestAuthorizationResourceCarriesScopeFacts(t *testing.T) {
 	}
 }
 
-func TestCompilerKeepsSandboxSNIOutOfWorkload(t *testing.T) {
+func TestCompilerKeepsDifferentNameSandboxSNIOutOfWorkload(t *testing.T) {
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	options := []krt.CollectionOption{krt.WithStop(stop)}
@@ -849,6 +849,7 @@ func TestCompilerKeepsSandboxSNIOutOfWorkload(t *testing.T) {
 	securityProfiles := krt.NewMutableCollection[model.SecurityProfile](nil, nil, options...)
 	agentioConfig := krt.NewMutableCollection[model.AgentioConfiguration](nil, nil, options...)
 	workload := testWorkload("demo", "client", "10.1.0.2")
+	workload.Source = model.SourceRef{Registry: "kubernetes/cluster", Key: "pod-uid"}
 	workloads.ConditionalUpdateObject(workload)
 	securityProfiles.ConditionalUpdateObject(model.SecurityProfile{
 		Name:       "terminate",

@@ -22,6 +22,8 @@ This is one rule with no exceptions: every compile-time error — a bad selector
 
 Header-mutation values and API-key `value.template` values are additionally probe-rendered when the profile is compiled, including the legacy `apiKey.valueTemplate` after it is normalized to a header rule. That probe catches a reference to a field the render scope does not have. Credential-provider parameter templates and audit templates are compiled but not probe-rendered, so a bad field reference in those surfaces per request instead. The probe has no request data to work with, so it does not exercise helper behavior guarded on real request values: a guarded `fail` call and JSON extraction from a request value are accepted at compile time and evaluated for real per request.
 
+With Sandbox mode enabled, inline HTTPS matches are published both on the native Sandbox resource and in the legacy `sni-traffic-policy` extension of the Pod Workload with the same namespace and name. The legacy projection follows shared SNI rules and uses the same name-based identity as EPE. Invalid annotation or SNI updates retain the last valid SNI policy; removing the annotation or Sandbox, or changing to valid HTTP-only rules, removes the inline SNI policy. This compatibility path assumes one Sandbox per same-name Pod and does not project rules onto a differently named shared host.
+
 ## Rule structure and matching
 
 Every rule has a unique `name`, at least one `match` clause, and `actions`. The clauses in `match` are ORed. Within a clause, every populated field is ANDed:
