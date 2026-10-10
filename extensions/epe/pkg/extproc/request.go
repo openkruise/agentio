@@ -111,6 +111,7 @@ func (s *Server) HandleRequestHeaders(ctx context.Context, headers *extProcPb.Ht
 		Labels:    peer.Labels,
 	}
 	res, err := s.resolve(ctx, pod, &req)
+	st.Destination = res.Destination
 	// Installed before the error is honoured: a resolver that fails may still
 	// have matched rules worth recording, and finishStream promotes the error
 	// to the disposition the logger reports. Without this, a resolve failure

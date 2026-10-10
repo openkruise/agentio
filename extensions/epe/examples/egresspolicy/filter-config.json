@@ -1,0 +1,32 @@
+{
+  "defaultAction": "deny",
+  "denyResponse": {
+    "statusCode": 403,
+    "body": "Outbound request denied by egress policy"
+  },
+  "rules": [
+    {
+      "name": "deny-metadata",
+      "match": {
+        "cidrs": ["169.254.169.254/32", "100.100.100.200/32"]
+      },
+      "action": "deny"
+    },
+    {
+      "name": "allow-internal-https",
+      "match": {
+        "cidrs": ["10.20.0.0/16", "fd00:20::/48"],
+        "ports": [443, 8443]
+      },
+      "action": "allow"
+    },
+    {
+      "name": "allow-internal-services",
+      "match": {
+        "cidrs": ["10.30.0.0/16"],
+        "portRanges": [{ "start": 8000, "end": 8099 }]
+      },
+      "action": "allow"
+    }
+  ]
+}
