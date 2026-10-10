@@ -6,6 +6,22 @@ EPE is Agentio's Envoy external processor for applying `SecurityProfile` and `Gl
 
 The `tokenTransformation` action can fetch short-lived credentials from an external credential provider; the HTTP contract a provider must implement is documented in [docs/reference/credential-provider.md](../../docs/reference/credential-provider.md).
 
+## OAuth protocol capability
+
+`pkg/filters/oauth2` provides a policy-neutral filter for device authorization,
+token exchange, and resource credential injection. It returns public device
+session data and `unused` token placeholders to the workload, and obtains the
+real bearer token from the credential service for each resource request.
+Application compatibility fields come from optional response extensions.
+
+The filter accepts its own `Config` payload and has no dependency on the
+SecurityProfile API. Production registration and CRD-to-payload projection are
+follow-up integration work. The existing Identity device-service client supports
+device authorization, device-code polling, and refresh-token/resource reads;
+other grants receive `unsupported_grant_type` without calling a device RPC.
+The protocol layer can recognize other grants, but their execution requires a
+credential-service implementation that supports them.
+
 ## Code layout
 
 ```text
