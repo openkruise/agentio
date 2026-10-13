@@ -45,11 +45,9 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/admin"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit"
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/contentlog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/sinks/webhook"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
-	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/extensionprovider"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	_ "github.com/openkruise/agentio/extensions/epe/pkg/filters/httpcallout" // Register environment settings.
@@ -113,10 +111,8 @@ var (
 		"The address the admin HTTP server binds to (set to :15000 to listen on all interfaces)")
 	enableDebug = flag.Bool("enable-debug", true,
 		"Enable the /debug endpoints on the admin server (profile inspection and runtime log level)")
-	auditLogBufferSize = flag.Int("audit-log-buffer-size", accesslog.DefaultBufferSize,
+	auditLogBufferSize = flag.Int("audit-log-buffer-size", auditlog.DefaultBufferSize,
 		"Audit log buffered channel capacity; entries are dropped when full")
-	contentLogBufferSize = flag.Int("content-log-buffer-size", contentlog.DefaultBufferSize,
-		"Content log buffered channel capacity; records are dropped when full")
 	auditWebhookBufferSize = flag.Int("audit-webhook-buffer-size", webhook.DefaultBufferSize,
 		"Audit webhook dispatcher channel capacity; events dropped when full")
 	auditWebhookWorkers = flag.Int("audit-webhook-workers", webhook.DefaultWorkers,
@@ -401,11 +397,9 @@ func run() error {
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 	group.Add(runnable.HTTPServer("metrics", metricsMux, fmt.Sprintf(":%d", *metricsPort)))
 
-	// Wire the per-request audit logger.
-	auditLogger := accesslog.NewBufferedLogger(ctrllog.Log.WithName("audit"), *auditLogBufferSize)
+	// Wire the shared access and content audit logger.
+	auditLogger := auditlog.NewBufferedLogger(ctrllog.Log.WithName("audit"), *auditLogBufferSize)
 	group.Add(auditLogger)
-	contentLogger := contentlog.New(ctrllog.Log.WithName("contentguard"), *contentLogBufferSize)
-	group.Add(contentLogger)
 
 	// Wire the audit webhook dispatcher and sink through the Router.
 	webhookDispatcher := webhook.NewBuffered(
@@ -431,7 +425,6 @@ func run() error {
 		Resolve:                     resolve,
 		ResolveContext:              workloadpolicy.NewContextResolver(resourceStore),
 		AuditLogger:                 auditLogger,
-		StreamLoggers:               []filter.StreamLogger{contentLogger},
 		Registrations:               registrations,
 	}, ctrllog.Log.WithName("ext-proc"))
 	group.Add(runnable.Func(func(ctx context.Context) error {

@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/contentlog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 )
@@ -30,7 +30,7 @@ import (
 func TestContentLoggingWithoutAuditConfiguration(t *testing.T) {
 	for _, response := range []bool{false, true} {
 		core, logs := observer.New(zap.InfoLevel)
-		logger := contentlog.New(zapr.NewLogger(zap.New(core).Named("contentguard")), 8)
+		logger := auditlog.NewBufferedLogger(zapr.NewLogger(zap.New(core).Named("audit")), 8)
 		regs, err := filter.Build(Definition())
 		if err != nil {
 			t.Fatal(err)
@@ -79,12 +79,16 @@ func TestContentLoggingWithoutAuditConfiguration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		logger.Log(ctx, st, st.Info)
+		auditlog.NewStreamLog(logger).Log(ctx, st, st.Info)
 		drainCtx, cancel := context.WithCancel(ctx)
 		cancel()
 		if err := logger.Start(drainCtx); err != nil {
 			t.Fatal(err)
 		}
+		if count := logs.FilterField(zap.String("type", "access")).Len(); count != 1 {
+			t.Fatalf("access records=%d", count)
+		}
+		logs = logs.FilterField(zap.String("type", "content"))
 		want := 1
 		if response {
 			want = 2

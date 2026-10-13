@@ -33,7 +33,7 @@ import (
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/admin"
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
 	agentlog "github.com/openkruise/agentio/pkg/log"
 )
@@ -114,9 +114,9 @@ func TestInitLoggingBridgesBothStacksOntoZap(t *testing.T) {
 
 	t.Run("access records are not sampled", func(t *testing.T) {
 		out.Reset()
-		auditLogger := accesslog.NewBufferedLogger(ctrllog.Log.WithName("audit"), 4096)
+		auditLogger := auditlog.NewBufferedLogger(ctrllog.Log.WithName("audit"), 4096)
 		for i := range 200 {
-			auditLogger.Submit(accesslog.Entry{RequestID: fmt.Sprintf("request-%d", i), Outcome: "passthrough"})
+			auditLogger.Submit(auditlog.Entry{RequestID: fmt.Sprintf("request-%d", i), Outcome: "passthrough"})
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // Drain the queued records synchronously.

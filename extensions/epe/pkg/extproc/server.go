@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 	log "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
@@ -57,10 +57,10 @@ type ServerDeps struct {
 	AuthorizeRequest engine.RequestAuthorizer
 	// Registrations is the action order applied inside every rule.
 	Registrations []filter.Registration
-	// AuditLogger receives one accesslog Entry per stream. May be nil in
+	// AuditLogger receives an access entry and any content entries per stream. May be nil in
 	// tests; a no-op replaces it.
-	AuditLogger accesslog.Logger
-	// StreamLoggers are invoked once per stream, after the accesslog logger.
+	AuditLogger auditlog.Logger
+	// StreamLoggers are invoked once per stream, after the audit logger.
 	// Terminal results commit after a successful response send; teardown and
 	// error paths use fallback finalization.
 	StreamLoggers []filter.StreamLogger
@@ -77,7 +77,7 @@ type ServerDeps struct {
 
 // NewServer builds the ext-proc server from deps.
 func NewServer(deps ServerDeps) *Server {
-	loggers := []filter.StreamLogger{accesslog.NewStreamLog(deps.AuditLogger)}
+	loggers := []filter.StreamLogger{auditlog.NewStreamLog(deps.AuditLogger)}
 	loggers = append(loggers, deps.StreamLoggers...)
 	return &Server{
 		resolve:                     deps.Resolve,

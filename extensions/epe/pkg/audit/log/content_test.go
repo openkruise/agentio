@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package contentlog
+package auditlog
 
 import (
 	"context"
@@ -28,15 +28,17 @@ import (
 
 func TestCapturedDirectionsAndAttribution(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	logger := New(zapr.NewLogger(zap.New(core).Named("contentguard")), 8)
+	logger := NewBufferedLogger(zapr.NewLogger(zap.New(core).Named("audit")), 8)
 	first := filter.UnitID{Scope: "ns/p", Name: "first"}
 	second := filter.UnitID{Scope: "ns/p", Name: "second"}
 	info := filter.NewStreamInfo()
 	st := &filter.Stream{
-		RequestID: "id",
-		Request:   httpreq.HTTPRequest{Method: "POST", Host: "llm.example", Path: "/v1/messages"},
+		RequestContext: filter.RequestContext{
+			RequestID: "id",
+			Request:   httpreq.HTTPRequest{Method: "POST", Host: "llm.example", Path: "/v1/messages"},
+		},
 	}
-	logger.Log(context.Background(), st, info)
+	NewStreamLog(logger).Log(context.Background(), st, info)
 	info.Matched = []filter.UnitRecord{{ID: first}, {ID: second}}
 	info.RecordContent(
 		first,
@@ -44,15 +46,20 @@ func TestCapturedDirectionsAndAttribution(t *testing.T) {
 	)
 	info.RecordResponseContent(first, filter.ContentRecord{Status: "partial", Content: map[string]any{"model": "m"}})
 	info.RecordContent(second, filter.ContentRecord{Status: "invalid_json"})
-	logger.Log(context.Background(), st, info)
+	NewStreamLog(logger).Log(context.Background(), st, info)
 	info.RecordContent(first, filter.ContentRecord{Status: "incomplete"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := logger.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if logs.Len() != 3 {
+	if logs.Len() != 5 {
 		t.Fatalf("records=%d", logs.Len())
+	}
+	for _, entry := range logs.All()[:2] {
+		if fields := entry.ContextMap(); fields["type"] != "access" || fields["content"] != nil {
+			t.Fatalf("access record=%v", fields)
+		}
 	}
 	for i, want := range []struct {
 		unit      string
@@ -63,32 +70,47 @@ func TestCapturedDirectionsAndAttribution(t *testing.T) {
 		{first.String(), "response", "partial"},
 		{second.String(), "request", "invalid_json"},
 	} {
-		got := logs.All()[i]
+		got := logs.All()[i+2]
 		fields := got.ContextMap()
-		if got.LoggerName != "contentguard" || fields["requestID"] != "id" || fields["unit"] != want.unit ||
+		if got.LoggerName != "audit" || fields["type"] != "content" || fields["requestID"] != "id" ||
+			fields["unit"] != want.unit ||
 			fields["direction"] != want.direction ||
 			fields["status"] != want.status {
 			t.Fatalf("record=%+v", got)
 		}
 	}
-	fields := logs.All()[0].ContextMap()
+	fields := logs.All()[2].ContextMap()
 	if fields["content"] != "prompt" || fields["method"] != "POST" || fields["bytesSeen"] != int64(6) {
 		t.Fatalf("fields=%v", fields)
 	}
 }
 
-func TestFullQueueCountsDrops(t *testing.T) {
-	core, _ := observer.New(zap.InfoLevel)
-	logger := New(zapr.NewLogger(zap.New(core)), 1)
-	info := filter.NewStreamInfo()
-	unit := filter.UnitID{Name: "guard"}
-	info.Matched = []filter.UnitRecord{{ID: unit}}
-	info.RecordContent(unit, filter.ContentRecord{Status: "complete"})
-	counter := droppedTotal.WithLabelValues("buffer_full")
+// Access and content records compete for the same bounded queue.
+func TestSharedQueueCountsDrops(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logger := NewBufferedLogger(zapr.NewLogger(zap.New(core)), 2)
+	counter := AuditLogDroppedTotal
 	before := testutil.ToFloat64(counter)
-	logger.Log(context.Background(), &filter.Stream{}, info)
-	logger.Log(context.Background(), &filter.Stream{}, info)
-	if got := testutil.ToFloat64(counter) - before; got != 1 {
+	logger.Submit(Entry{RequestID: "accepted-access"})
+	logger.Submit(ContentEntry{RequestID: "accepted-content"})
+	logger.Submit(ContentEntry{RequestID: "dropped-content"})
+	logger.Submit(Entry{RequestID: "dropped-access"})
+	if got := testutil.ToFloat64(counter) - before; got != 2 {
 		t.Fatalf("drops=%v", got)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := logger.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	records := logs.All()
+	if len(records) != 2 {
+		t.Fatalf("records=%d", len(records))
+	}
+	for i, kind := range []string{"access", "content"} {
+		fields := records[i].ContextMap()
+		if fields["type"] != kind || fields["requestID"] != "accepted-"+kind {
+			t.Fatalf("record=%v", fields)
+		}
 	}
 }

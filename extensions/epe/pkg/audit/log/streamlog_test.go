@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package auditlog
 
 import (
 	"context"
@@ -23,7 +23,11 @@ import (
 
 type captureLogger struct{ fn func(Entry) }
 
-func (c *captureLogger) Submit(e Entry) { c.fn(e) }
+func (c *captureLogger) Submit(r Record) {
+	if e, ok := r.(Entry); ok {
+		c.fn(e)
+	}
+}
 
 // logOne runs record against a fresh StreamInfo and returns the logged entry.
 func logOne(t *testing.T, record func(*filter.StreamInfo)) Entry {
@@ -177,7 +181,7 @@ func TestStreamLogExcludesCapturedContent(t *testing.T) {
 		info.RecordResponseContent(testUnit, filter.ContentRecord{Status: "complete", Content: "response-only"})
 	})
 	logger, sink := newRecorderLogger()
-	NewBufferedLogger(logger, 1).emit(entry)
+	entry.emit(logger)
 	fields := kvMap(sink.snapshot()[0].kvs)
 	for _, key := range []string{"content", "requestContent", "responseContent"} {
 		if _, present := fields[key]; present {

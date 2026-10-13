@@ -129,13 +129,20 @@ func TestStreamLoggerObservesFinalOutcome(t *testing.T) {
 func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	accesslog := &capturedAuditLogger{}
 	policyLogger := &recordingStreamLogger{}
-	contentLogger := &recordingStreamLogger{}
-	srv := NewServer(ServerDeps{AuditLogger: accesslog, StreamLoggers: []filter.StreamLogger{contentLogger}})
+	srv := NewServer(ServerDeps{AuditLogger: accesslog})
 	state := newStreamState()
 	state.stream.Policies.StreamLogger = policyLogger
 	// A matched unit whose responses changed nothing is what "bypassed" now
 	// means, so set up that shape rather than asserting an outcome directly.
 	state.stream.Info.Matched = []filter.UnitRecord{{ID: filter.UnitID{Name: "r1"}}}
+	state.stream.Info.RecordContent(
+		filter.UnitID{Name: "r1"},
+		filter.ContentRecord{Status: "complete", Content: "request"},
+	)
+	state.stream.Info.RecordResponseContent(
+		filter.UnitID{Name: "r1"},
+		filter.ContentRecord{Status: "complete", Content: "response"},
+	)
 	state.lifecycle = lifecycleFinalizePending
 
 	srv.finishAfterSend(context.Background(), state)
@@ -148,8 +155,9 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	if got := accesslog.entries[0]; got.Outcome != "bypassed" || got.Error != "" {
 		t.Errorf("accesslog entry = %+v, want committed bypass without error", got)
 	}
-	if contentLogger.calls != 1 || contentLogger.result != "bypassed" {
-		t.Fatalf("content logger calls=%d result=%s", contentLogger.calls, contentLogger.result)
+	if len(accesslog.content) != 2 || accesslog.content[0].Direction != "request" ||
+		accesslog.content[1].Direction != "response" {
+		t.Fatalf("content entries=%+v", accesslog.content)
 	}
 	if policyLogger.calls != 1 {
 		t.Fatalf("policy logger calls = %d, want exactly 1", policyLogger.calls)
