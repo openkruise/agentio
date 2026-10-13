@@ -121,7 +121,7 @@ func newChunkHarness(t *testing.T, response bool, specs ...chunkSpec) *chunkHarn
 	}
 	return &chunkHarness{
 		e:        NewEngine(regs, 0),
-		st:       &filter.Stream{Info: filter.NewStreamInfo()},
+		st:       &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
 		units:    []Unit{{ID: filter.UnitID{Name: "test"}, Cfgs: cfgs}},
 		response: response,
 	}

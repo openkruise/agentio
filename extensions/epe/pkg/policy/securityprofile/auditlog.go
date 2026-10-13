@@ -112,10 +112,30 @@ func profileNN(p *Profile) types.NamespacedName {
 // so the nil check would create the crash it looks like it prevents. The only
 // caller already guards on u.HasAudits, which implies a resolved unit.
 func buildScope(u *unit, st *filter.Stream, result string) audit.Scope {
+	var content map[string]any
+	if r, ok := st.Info.Content(u.ID); ok {
+		content = contentFields(r)
+	}
+	if r, ok := st.Info.ResponseContent(u.ID); ok {
+		if content == nil {
+			content = make(map[string]any)
+		}
+		content["response"] = contentFields(r)
+	}
 	return audit.Scope{
 		Scope:   *u.Scope,
+		Content: content,
 		Result:  result,
 		Matched: buildMatch(u, &st.Request),
+	}
+}
+
+func contentFields(r filter.ContentRecord) map[string]any {
+	return map[string]any{
+		"status":        r.Status,
+		"bytesSeen":     r.BytesSeen,
+		"capturedBytes": r.CapturedBytes,
+		"content":       r.Content,
 	}
 }
 

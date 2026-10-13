@@ -152,7 +152,8 @@ func BenchmarkActivation(b *testing.B) {
 		b.Run("first/"+sz.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				benchSink = inputs.NewScope(req, pod, inputs.Profile{Name: "p"}, inputs.Rule{Name: "r"}, nil).Activation()
+				benchSink = inputs.NewScope(req, pod, inputs.Profile{Name: "p"}, inputs.Rule{Name: "r"}, nil).
+					Activation()
 			}
 		})
 		b.Run("memoised/"+sz.name, func(b *testing.B) {

@@ -27,7 +27,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
-	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
+	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
 type earlyResponseDeny struct {
@@ -59,7 +59,7 @@ func TestStreamedUploadEarlyResponseDeny(t *testing.T) {
 			logger := &recordingStreamLogger{}
 			s := NewServer(ServerDeps{
 				Registrations: []filter.Registration{reg},
-				Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
+				Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 					return engine.Resolution{
 						Units:        []engine.Unit{{Cfgs: []any{struct{}{}}}},
 						StreamLogger: logger,
@@ -247,7 +247,7 @@ func TestStreamedModeAndEarlyResponse(t *testing.T) {
 			s := NewServer(
 				ServerDeps{
 					Registrations: regs,
-					Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
+					Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 						return engine.Resolution{
 							Units: []engine.Unit{{ID: filter.UnitID{Name: "rule"}, Cfgs: cfgs}},
 						}, nil
@@ -362,7 +362,7 @@ func TestStreamingAuthorizesBeforeBodyAndCommitsHeaders(t *testing.T) {
 			authorized := 0
 			s := NewServer(ServerDeps{
 				Registrations: regs,
-				Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
+				Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 					return engine.Resolution{Units: []engine.Unit{{Cfgs: []any{struct{}{}, struct{}{}}}}}, nil
 				},
 				AuthorizeRequest: func(_ context.Context, st *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {

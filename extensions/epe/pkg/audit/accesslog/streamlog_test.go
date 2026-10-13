@@ -169,3 +169,19 @@ func TestStreamLog_NeedBodyIsTrackedPerRule(t *testing.T) {
 		t.Errorf("Skipped = %v, want [%s] — only the unanswered rule", got.Skipped, want)
 	}
 }
+
+func TestStreamLogExcludesCapturedContent(t *testing.T) {
+	entry := logOne(t, func(info *filter.StreamInfo) {
+		info.Matched = []filter.UnitRecord{{ID: testUnit}}
+		info.RecordContent(testUnit, filter.ContentRecord{Status: "complete", Content: "request-only"})
+		info.RecordResponseContent(testUnit, filter.ContentRecord{Status: "complete", Content: "response-only"})
+	})
+	logger, sink := newRecorderLogger()
+	NewBufferedLogger(logger, 1).emit(entry)
+	fields := kvMap(sink.snapshot()[0].kvs)
+	for _, key := range []string{"content", "requestContent", "responseContent"} {
+		if _, present := fields[key]; present {
+			t.Fatalf("access log contains %s: %v", key, fields)
+		}
+	}
+}
