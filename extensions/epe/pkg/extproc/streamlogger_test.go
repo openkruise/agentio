@@ -129,7 +129,8 @@ func TestStreamLoggerObservesFinalOutcome(t *testing.T) {
 func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	accesslog := &capturedAuditLogger{}
 	policyLogger := &recordingStreamLogger{}
-	srv := NewServer(ServerDeps{AuditLogger: accesslog})
+	contentLogger := &recordingStreamLogger{}
+	srv := NewServer(ServerDeps{AuditLogger: accesslog, StreamLoggers: []filter.StreamLogger{contentLogger}})
 	state := newStreamState()
 	state.stream.Policies.StreamLogger = policyLogger
 	// A matched unit whose responses changed nothing is what "bypassed" now
@@ -146,6 +147,9 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	}
 	if got := accesslog.entries[0]; got.Outcome != "bypassed" || got.Error != "" {
 		t.Errorf("accesslog entry = %+v, want committed bypass without error", got)
+	}
+	if contentLogger.calls != 1 || contentLogger.result != "bypassed" {
+		t.Fatalf("content logger calls=%d result=%s", contentLogger.calls, contentLogger.result)
 	}
 	if policyLogger.calls != 1 {
 		t.Fatalf("policy logger calls = %d, want exactly 1", policyLogger.calls)

@@ -21,39 +21,51 @@
 //
 // # Phase subscription and body continuation
 //
-// A filter can need a phase delivered in two ways, and the split between them
-// is deliberate, not historical. It falls out of two facts about Envoy:
+// Config declares response-header subscriptions before evaluation so the adapter
+// can open that phase on its request-header reply. Body demand remains dynamic.
+// Both directions finish headers in order, registering NeedBody callbacks for
+// the body phase. Request authorization pins the final target before body runs.
+// Header Bypass preserves registered body callbacks; Stop discards them.
+// Body Stop/Bypass skips later body callbacks, not headers that already ran.
 //
-//  1. Envoy honours mode_override only on a header-phase reply, and
-//     response_header_mode is only useful on the request-headers reply. The
-//     request-headers reply is therefore the response-headers phase's single
-//     opportunity to be opened. The response-headers reply can in turn open
-//     response_body_mode, because that future phase has not begun yet.
-//  2. Either direction's ordered walk may suspend mid-sequence waiting for its
-//     complete buffered body.
-//
-// Together these mean a phase-want discovered by *executing* a filter arrives
-// after the request-headers reply was already sent whenever an earlier rule
-// paused — reachable in the production order (bypass, block, mcpacl,
-// headermutation, tokentransform), since mcpacl pauses for the body and
-// headermutation follows it. The response-headers want therefore cannot be an
-// action; it is declared from the projected config up front
-// (filter.Registration.Subscribes), before the walk runs.
-//
-// Request and response bodies stay runtime NeedBody actions. Once a direction
-// has its body, every later NeedBody is satisfied inline with that same original
-// Body. If headers are end-of-stream, the adapter supplies an empty complete
-// Body inline and no continuation is created. This avoids speculative buffering
-// for filters whose header decision does not need the body.
-//
-// A suspended continuation owns all pending mutations. The headers reply emits
-// none of them; after the body callback and all later pairs finish, the engine
-// folds the complete direction result once. Pending mutations are never applied
-// back to Stream or to the Body passed to a later filter, so every filter sees
-// the original phase headers and bytes.
+// Complete request-body callbacks run in registration order against the original
+// request and body, with the authorized upstream target available in their view.
+// Buffered delivery holds rule mutations until body completion; the adapter may
+// publish the authorized target at headers. Streaming commits header mutations
+// before any chunk is released. Body callbacks cannot change the pinned route.
 //
 // Invocation errors are resolved through the registration's FailurePolicy.
 // FailOpen records and skips the failed invocation. FailClosed returns a local
 // 500 blocked result without an engine error. Contract and protocol faults stay
 // on the error channel for the ext_proc adapter and Envoy failure mode.
+//
+// # Incremental body consumers
+//
+// NeedBody(IncrementalBody) opts this invocation into repeated body callbacks.
+// The requirement is fixed at headers; WithRequestStreaming / WithResponseStreaming
+// request its use. BodyMode otherwise stays Buffered. All
+// registered body consumers must accept incremental input with FailClosed.
+// A pending body replacement also requires buffered delivery.
+// Request and response decisions are independent; existing filters default to
+// Buffered. An already available complete body is still evaluated inline.
+//
+// Streamed consumers prepare their instances in the header phase with NeedBody;
+// this preparation must have no external side effects. Header mutations are
+// returned immediately. The adapter then serially calls EvalRequestBodyChunk or
+// EvalResponseBodyChunk on the same stream and result, ending with Complete=true
+// (possibly empty). Every consumer sees the original chunk; the last non-nil
+// body replacement wins, as in buffered evaluation. This is not a pipeline of
+// transformed bytes or an independent release gate per consumer.
+//
+// Chunk callbacks can Continue with body mutations or Stop. Header, status,
+// routing and Bypass changes are rejected. Output always includes unchanged
+// bytes; an empty replacement withholds this call's output. Rejection cannot
+// recall bytes already forwarded by the adapter.
+// Filters retaining input must copy it and bound their storage. The engine does
+// not buffer chunks through this low-level API; audit records aggregate per consumer, and its budget
+// applies per call rather than bounding the whole stream lifetime.
+//
+// BodyStreamed is an engine contract, not an Envoy mode override. The transport
+// adapter must handle header commitment, EOS/trailers, backpressure, stream
+// deadlines, byte limits and late rejection before enabling it in production.
 package engine

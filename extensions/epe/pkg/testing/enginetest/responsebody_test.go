@@ -43,7 +43,7 @@ type scenarioResponseBodyFilter struct {
 func (f *scenarioResponseBodyFilter) OnResponseHeaders(_ context.Context, st *filter.Stream) (filter.Action, error) {
 	f.observation.statuses = append(f.observation.statuses, st.Response.Status)
 	f.observation.headers = append(f.observation.headers, st.Response.Headers["x-original"])
-	return filter.NeedBody(filter.SetHeader(f.headerName, "seen")), nil
+	return filter.NeedBody(filter.CompleteBody, filter.SetHeader(f.headerName, "seen")), nil
 }
 
 func (f *scenarioResponseBodyFilter) OnResponseBody(_ context.Context, _ *filter.Stream, body filter.Body) (filter.Action, error) {

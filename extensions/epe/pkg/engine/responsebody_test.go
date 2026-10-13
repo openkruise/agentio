@@ -90,7 +90,7 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 				pausedCounters.constructed++
 				return &observingResponseBodyFilter{
 					c: pausedCounters,
-					headerAct: filter.NeedBody(
+					headerAct: filter.NeedBody(filter.CompleteBody,
 						filter.SetHeader("x-paused-header", "1"),
 						filter.Mutation{StatusCode: testStatusCode(201)},
 					),
@@ -112,7 +112,7 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 				laterCounters.constructed++
 				return &observingResponseBodyFilter{
 					c:         laterCounters,
-					headerAct: filter.NeedBody(filter.SetHeader("x-later-header", "1")),
+					headerAct: filter.NeedBody(filter.CompleteBody, filter.SetHeader("x-later-header", "1")),
 					bodyAct: filter.Continue(
 						filter.SetHeader("x-later-body", "1"),
 						filter.Mutation{Body: []byte("final replacement"), StatusCode: testStatusCode(202)},
@@ -144,9 +144,10 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 	if !headersResult.NeedsBody() {
 		t.Fatal("response headers did not request a body")
 	}
-	if headersResult.Disposition != DispositionPassthrough || len(headersResult.HeaderOps) != 0 ||
-		headersResult.Body != nil || headersResult.StatusCode != nil {
-		t.Fatalf("suspended response headers leaked a result: %+v", headersResult)
+	if headersResult.Disposition != DispositionMutated || len(headersResult.HeaderOps) != 4 ||
+		headersResult.Body != nil || headersResult.StatusCode == nil || *headersResult.StatusCode != 201 ||
+		laterCounters.headerCalls != 1 || pausedCounters.bodyCalls != 0 || laterCounters.bodyCalls != 0 {
+		t.Fatalf("response headers did not finish before body: %+v", headersResult)
 	}
 
 	original := filter.Body{Bytes: []byte("original response"), Complete: true}
@@ -155,7 +156,7 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 		t.Fatalf("EvalResponseBody: %v", err)
 	}
 	requireDisposition(t, bodyResult.Disposition, DispositionMutated)
-	wantNames := []string{"x-before", "x-paused-header", "x-paused-body", "x-later-header", "x-later-body", "x-after"}
+	wantNames := []string{"x-before", "x-paused-header", "x-later-header", "x-after", "x-paused-body", "x-later-body"}
 	gotNames := make([]string, 0, len(bodyResult.HeaderOps))
 	for _, op := range bodyResult.HeaderOps {
 		gotNames = append(gotNames, op.Name)
@@ -192,7 +193,7 @@ func TestEvalResponseHeaders_WithAvailableResponseBodyRunsInline(t *testing.T) {
 		make: func(filter.RuleConfig[string]) filter.Filter {
 			return &observingResponseBodyFilter{
 				c:         c,
-				headerAct: filter.NeedBody(),
+				headerAct: filter.NeedBody(filter.CompleteBody),
 				bodyAct: filter.Continue(
 					filter.Mutation{Body: []byte("inline")},
 					filter.Mutation{StatusCode: testStatusCode(204)},
@@ -219,11 +220,8 @@ func TestEvalResponseHeaders_WithAvailableResponseBodyRunsInline(t *testing.T) {
 	}
 }
 
-// A request-phase bypass must keep suppressing later response pairs across the
-// body continuation, so the paused walk's scope has to survive the resume. The
-// unbounded case pins that the assertion discriminates: without the scope, the
-// later pair does run.
-func TestEvalResponseBody_ResumedWalkHonorsBoundedScope(t *testing.T) {
+// Request bypass bounds which response callbacks can be registered.
+func TestEvalResponseBody_RegistrationHonorsBoundedScope(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		bypass      bool
@@ -242,7 +240,7 @@ func TestEvalResponseBody_ResumedWalkHonorsBoundedScope(t *testing.T) {
 					make: func(filter.RuleConfig[string]) filter.Filter {
 						return &observingResponseBodyFilter{
 							c:         &counters{},
-							headerAct: filter.NeedBody(),
+							headerAct: filter.NeedBody(filter.CompleteBody),
 							bodyAct:   filter.Continue(filter.SetHeader("x-paused-body", "1")),
 						}
 					},
@@ -286,7 +284,7 @@ func TestEvalResponseBody_ResumedWalkHonorsBoundedScope(t *testing.T) {
 				t.Fatalf("EvalResponseHeaders: %v", err)
 			}
 			if !hr.NeedsBody() {
-				t.Fatal("the response walk did not pause for the body")
+				t.Fatal("the response did not register body callbacks")
 			}
 			br, err := e.EvalResponseBody(context.Background(), st, hr,
 				filter.Body{Bytes: []byte("response"), Complete: true})
@@ -297,7 +295,7 @@ func TestEvalResponseBody_ResumedWalkHonorsBoundedScope(t *testing.T) {
 				t.Fatalf("HeaderOps = %+v, want the resumed pair's single mutation", br.HeaderOps)
 			}
 			if !slices.Equal(invoked, tc.wantInvoked) {
-				t.Fatalf("invoked = %v, want %v: the resumed walk must replay the paused walk's scope",
+				t.Fatalf("invoked = %v, want %v: response registration must honor request scope",
 					invoked, tc.wantInvoked)
 			}
 		})
@@ -325,7 +323,7 @@ func TestEvalResponseBody_StopAndBypassReducePendingConsistently(t *testing.T) {
 					make: func(filter.RuleConfig[string]) filter.Filter {
 						return &observingResponseBodyFilter{
 							c:         &counters{},
-							headerAct: filter.NeedBody(filter.SetHeader("x-before", "1")),
+							headerAct: filter.NeedBody(filter.CompleteBody, filter.SetHeader("x-before", "1")),
 							bodyAct:   tc.bodyAct,
 						}
 					},
@@ -354,8 +352,8 @@ func TestEvalResponseBody_StopAndBypassReducePendingConsistently(t *testing.T) {
 			if got := len(br.HeaderOps) > 0; got != tc.wantPending {
 				t.Fatalf("pending mutation present = %v, want %v", got, tc.wantPending)
 			}
-			if laterCalls != 0 {
-				t.Fatalf("later filter constructed %d times after terminal body action", laterCalls)
+			if laterCalls != 1 {
+				t.Fatalf("later header filter constructed %d times, want once before body", laterCalls)
 			}
 		})
 	}
@@ -371,7 +369,7 @@ func TestEvalResponseBody_FailClosedSynthesizesBlocked(t *testing.T) {
 		make: func(filter.RuleConfig[string]) filter.Filter {
 			return &observingResponseBodyFilter{
 				c:         &counters{},
-				headerAct: filter.NeedBody(filter.SetHeader("x-discard", "1")),
+				headerAct: filter.NeedBody(filter.CompleteBody, filter.SetHeader("x-discard", "1")),
 				bodyAct:   filter.Continue(),
 				bodyErr:   boom,
 			}
@@ -474,7 +472,7 @@ func TestEvalRejectsPhaseIncompatibleMutations(t *testing.T) {
 			name: "response headers need body without capability",
 			want: "response-body support",
 			run: func(t *testing.T) error {
-				regs := responseActionRegs(t, filter.NeedBody(), filter.PhaseResponseHeaders)
+				regs := responseActionRegs(t, filter.NeedBody(filter.CompleteBody), filter.PhaseResponseHeaders)
 				_, err := NewEngine(
 					regs,
 					0,

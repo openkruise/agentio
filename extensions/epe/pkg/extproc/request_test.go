@@ -169,7 +169,7 @@ func (p *bodylessDeadlineProbe) OnRequestHeaders(ctx context.Context, _ *filter.
 	// Make a freshly-created body-phase budget observably later than the
 	// headers-phase budget. A shared parent deadline remains exactly equal.
 	time.Sleep(10 * time.Millisecond)
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (p *bodylessDeadlineProbe) OnRequestBody(
@@ -330,7 +330,7 @@ type connectResponseBodyProbe struct {
 }
 
 func (*connectResponseBodyProbe) OnResponseHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *testing.T) {
