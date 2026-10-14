@@ -30,7 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 	structpb "google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/extproc/attributes"
@@ -105,10 +105,14 @@ func (p *bodylessDeadlineProbe) OnRequestHeaders(ctx context.Context, _ *filter.
 	// Make a freshly-created body-phase budget observably later than the
 	// headers-phase budget. A shared parent deadline remains exactly equal.
 	time.Sleep(10 * time.Millisecond)
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
-func (p *bodylessDeadlineProbe) OnRequestBody(ctx context.Context, _ *filter.Stream, _ filter.Body) (filter.Action, error) {
+func (p *bodylessDeadlineProbe) OnRequestBody(
+	ctx context.Context,
+	_ *filter.Stream,
+	_ filter.Body,
+) (filter.Action, error) {
 	p.bodyDeadline, p.bodyHasDeadline = ctx.Deadline()
 	return filter.Continue(), nil
 }
@@ -239,7 +243,8 @@ func TestHandleRequestHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *te
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_request_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_request_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_request_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -261,7 +266,7 @@ type connectResponseBodyProbe struct {
 }
 
 func (*connectResponseBodyProbe) OnResponseHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *testing.T) {
@@ -283,7 +288,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders: %v", err)
 			}
-			if len(responses) != 1 || responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
+			if len(responses) != 1 ||
+				responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
 				t.Fatalf("request responses = %+v, want response-headers subscription", responses)
 			}
 
@@ -297,7 +303,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_response_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_response_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_response_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -515,7 +522,7 @@ func TestHandleResponseHeaders_MissingInputKeepsObligationAndAuditsError(t *test
 
 			s.finishStream(context.Background(), state, err)
 			if len(cap.entries) != 1 || cap.entries[0].Outcome != "error" {
-				t.Fatalf("accesslog = %+v, want one error entry", cap.entries)
+				t.Fatalf("auditlog = %+v, want one error entry", cap.entries)
 			}
 		})
 	}
@@ -549,25 +556,31 @@ func TestHandleResponseHeaders_FinalizedStreamAcknowledgesFirstStaticMessageWith
 		t.Fatal("already finalized stream armed another finalization")
 	}
 	if len(cap.entries) != 1 || cap.entries[0].Outcome != "blocked" {
-		t.Fatalf("accesslog = %+v, want one committed blocked entry", cap.entries)
+		t.Fatalf("auditlog = %+v, want one committed blocked entry", cap.entries)
 	}
 }
 
 // capturedAuditLogger collects every audit Entry the handler submits so
 // tests can assert on outcomes without depending on a real worker
-// goroutine. Implements accesslog.Logger.
+// goroutine. Implements auditlog.Logger.
 type capturedAuditLogger struct {
 	mu      sync.Mutex
-	entries []accesslog.Entry
+	entries []auditlog.Entry
+	content []auditlog.ContentEntry
 }
 
-func (c *capturedAuditLogger) Submit(e accesslog.Entry) {
+func (c *capturedAuditLogger) Submit(record auditlog.Record) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries = append(c.entries, e)
+	switch e := record.(type) {
+	case auditlog.Entry:
+		c.entries = append(c.entries, e)
+	case auditlog.ContentEntry:
+		c.content = append(c.content, e)
+	}
 }
 
-func (c *capturedAuditLogger) last(t *testing.T) accesslog.Entry {
+func (c *capturedAuditLogger) last(t *testing.T) auditlog.Entry {
 	t.Helper()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -577,8 +590,8 @@ func (c *capturedAuditLogger) last(t *testing.T) accesslog.Entry {
 	return c.entries[len(c.entries)-1]
 }
 
-// Compile-time check that capturedAuditLogger implements accesslog.Logger.
-var _ accesslog.Logger = (*capturedAuditLogger)(nil)
+// Compile-time check that capturedAuditLogger implements auditlog.Logger.
+var _ auditlog.Logger = (*capturedAuditLogger)(nil)
 
 // TestHandleRequestHeaders_NoPodIdentity verifies that when filter_state
 // does not carry pod identity (e.g. the upstream metadata-exchange filter
@@ -646,7 +659,13 @@ func TestTrailerPassThroughAndBodyOrderValidation(t *testing.T) {
 	srv := NewServer(ServerDeps{})
 	ctx := context.Background()
 
-	if _, err := srv.HandleRequestBody(ctx, &extProcPb.HttpBody{EndOfStream: true}, nil); status.Code(err) != codes.FailedPrecondition {
+	if _, err := srv.HandleRequestBody(
+		ctx,
+		&extProcPb.HttpBody{EndOfStream: true},
+		nil,
+	); status.Code(
+		err,
+	) != codes.FailedPrecondition {
 		t.Errorf("HandleRequestBody without state: err=%v, want FailedPrecondition", err)
 	}
 	if r, err := srv.HandleRequestTrailers(ctx, nil); err != nil || len(r) != 1 {

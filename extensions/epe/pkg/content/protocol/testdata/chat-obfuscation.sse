@@ -1,0 +1,8 @@
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}],"obfuscation":"abc123"}
+
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{"content":" world"}}],"obfuscation":"def456"}
+
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"obfuscation":"XQdNwPP14L3TH0"}
+
+data: [DONE]
+

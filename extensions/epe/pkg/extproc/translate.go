@@ -51,7 +51,7 @@ func translateRequestHeadersResult(
 	if reqHeadersRes.Disposition == engine.DispositionBlocked {
 		return []*extProcPb.ProcessingResponse{immediateFromReply(reqHeadersRes.Reply)}
 	}
-	if reqHeadersRes.NeedsBody() {
+	if reqHeadersRes.BodyMode() == filter.BodyBuffered {
 		// Keep rule mutations pending until body checks pass. Only the authorized
 		// target is published now; Envoy continues to buffer the request.
 		return []*extProcPb.ProcessingResponse{applyRouteMutation(defaultPassThrough[0], reqHeadersRes.Route)}
@@ -102,6 +102,10 @@ func translateResponseHeadersResult(respHeadersRes *engine.ResponseHeadersResult
 		// this local reply genuinely replaces them. HeaderOps are ignored: the
 		// response being mutated no longer goes downstream.
 		return []*extProcPb.ProcessingResponse{immediateFromReply(respHeadersRes.Reply)}
+	}
+	if respHeadersRes.BodyMode() == filter.BodyBuffered {
+		// Defer rule mutations until registered body checks pass.
+		return emptyResponseHeadersAck
 	}
 	if len(respHeadersRes.HeaderOps) == 0 && respHeadersRes.Body == nil && respHeadersRes.StatusCode == nil {
 		return emptyResponseHeadersAck

@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 )
 
@@ -30,7 +30,7 @@ import (
 // EPE's real output, and Verdict.outcome reads it. The probe does see
 // Info.Outcome after derivation, because finishStream derives it before running
 // the logger loop, so the few tests that assert Info.Outcome are reading the
-// same derived value the accesslog carries.
+// same derived value the auditlog carries.
 type InfoProbe struct {
 	mu      sync.Mutex
 	infos   []*filter.StreamInfo
@@ -75,27 +75,30 @@ func (p *InfoProbe) Reset() {
 	p.streams = nil
 }
 
-// CaptureAccessLogger is a synchronous accesslog.Logger that records every
+// CaptureAccessLogger is a synchronous auditlog.Logger that records every
 // submitted entry, replacing the asynchronous production BufferedLogger so
 // tests can assert entries deterministically.
 type CaptureAccessLogger struct {
 	mu      sync.Mutex
-	entries []accesslog.Entry
+	entries []auditlog.Entry
 }
 
-var _ accesslog.Logger = (*CaptureAccessLogger)(nil)
+var _ auditlog.Logger = (*CaptureAccessLogger)(nil)
 
-func (c *CaptureAccessLogger) Submit(entry accesslog.Entry) {
+// Submit retains access entries for verdict assertions; content records are ignored.
+func (c *CaptureAccessLogger) Submit(record auditlog.Record) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries = append(c.entries, entry)
+	if entry, ok := record.(auditlog.Entry); ok {
+		c.entries = append(c.entries, entry)
+	}
 }
 
 // Entries returns a snapshot of all recorded entries.
-func (c *CaptureAccessLogger) Entries() []accesslog.Entry {
+func (c *CaptureAccessLogger) Entries() []auditlog.Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]accesslog.Entry, len(c.entries))
+	out := make([]auditlog.Entry, len(c.entries))
 	copy(out, c.entries)
 	return out
 }

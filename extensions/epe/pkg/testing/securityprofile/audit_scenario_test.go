@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Full-chain audit access-log scenarios: one accesslog.Entry per request,
+// Full-chain audit access-log scenarios: one auditlog.Entry per request,
 // asserted via the harness's capturing audit logger (Verdict.AccessLog).
 package securityprofile
 
 import (
 	"testing"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/enginetest"
 )
 
@@ -27,7 +27,7 @@ import (
 // One request produces exactly one entry, and Verdict.AccessLog holds this run
 // alone — the harness resets the logger per run — so any other count is a bug
 // worth failing on rather than an index to reach past.
-func accessLogEntry(t *testing.T, v *enginetest.Verdict) accesslog.Entry {
+func accessLogEntry(t *testing.T, v *enginetest.Verdict) auditlog.Entry {
 	t.Helper()
 	if len(v.AccessLog) != 1 {
 		t.Fatalf("want exactly 1 audit entry, got %d: %+v", len(v.AccessLog), v.AccessLog)

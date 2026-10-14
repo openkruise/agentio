@@ -1,0 +1,19 @@
+{
+  "format": "openai-responses",
+  "model": "gpt-x",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_call",
+          "id": "call_1",
+          "name": "get_weather",
+          "arguments": "{\"location\": \"Par"
+        }
+      ],
+      "index": 0
+    }
+  ],
+  "status": "incomplete"
+}

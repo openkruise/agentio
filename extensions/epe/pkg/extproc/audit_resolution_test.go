@@ -24,15 +24,19 @@ import (
 
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 )
 
-// captureLogger records every submitted accesslog entry so a test can assert
+// captureLogger records every submitted auditlog entry so a test can assert
 // how many were submitted and what they say.
-type captureLogger struct{ entries []accesslog.Entry }
+type captureLogger struct{ entries []auditlog.Entry }
 
-func (c *captureLogger) Submit(e accesslog.Entry) { c.entries = append(c.entries, e) }
+func (c *captureLogger) Submit(r auditlog.Record) {
+	if e, ok := r.(auditlog.Entry); ok {
+		c.entries = append(c.entries, e)
+	}
+}
 
 // finishStream is reachable from every teardown path; exactly one entry
 // must result, or an operator counting denials double-counts them.
@@ -83,7 +87,7 @@ func TestStreamEnd_BodyPhaseDenyIsAudited(t *testing.T) {
 	s.finishStream(context.Background(), state, nil)
 
 	if len(cap.entries) != 1 {
-		t.Fatalf("want exactly 1 accesslog entry, got %d", len(cap.entries))
+		t.Fatalf("want exactly 1 auditlog entry, got %d", len(cap.entries))
 	}
 	got := cap.entries[0]
 	if got.Outcome != "blocked" {
@@ -113,7 +117,7 @@ func TestStreamEnd_BodyPhaseMutateIsAudited(t *testing.T) {
 	s.finishStream(context.Background(), state, nil)
 
 	if len(cap.entries) != 1 {
-		t.Fatalf("want exactly 1 accesslog entry, got %d", len(cap.entries))
+		t.Fatalf("want exactly 1 auditlog entry, got %d", len(cap.entries))
 	}
 	got := cap.entries[0]
 	if got.Outcome != "mutated" {
@@ -144,7 +148,7 @@ func TestStreamEnd_BodyPhaseErrorIsAudited(t *testing.T) {
 	s.finishStream(context.Background(), state, nil)
 
 	if len(cap.entries) != 1 {
-		t.Fatalf("want exactly 1 accesslog entry on the error path, got %d", len(cap.entries))
+		t.Fatalf("want exactly 1 auditlog entry on the error path, got %d", len(cap.entries))
 	}
 	got := cap.entries[0]
 	if got.Error == "" {

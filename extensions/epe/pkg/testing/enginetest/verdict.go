@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 )
 
@@ -102,7 +102,7 @@ type Verdict struct {
 	// AccessLog holds the entries the harness audit logger captured for this
 	// run alone; RunMessages resets the logger first, so earlier requests in
 	// the same test do not leak in.
-	AccessLog []accesslog.Entry
+	AccessLog []auditlog.Entry
 
 	// Raw preserves the full ordered response sequence (read-only: some
 	// responses are shared package singletons).
@@ -320,18 +320,18 @@ func (v *Verdict) RequireBlockedBody(t *testing.T, wantStatus int, wantBodyConta
 	}
 }
 
-// singleEntry returns the one accesslog entry this run produced. AccessLog holds
+// singleEntry returns the one auditlog entry this run produced. AccessLog holds
 // this run alone and one request audits exactly once, so any other count is a
 // harness or server bug rather than an index to reach past.
-func (v *Verdict) singleEntry(t *testing.T) accesslog.Entry {
+func (v *Verdict) singleEntry(t *testing.T) auditlog.Entry {
 	t.Helper()
 	if len(v.AccessLog) != 1 {
-		t.Fatalf("want exactly 1 accesslog entry, got %d: %+v", len(v.AccessLog), v.AccessLog)
+		t.Fatalf("want exactly 1 auditlog entry, got %d: %+v", len(v.AccessLog), v.AccessLog)
 	}
 	return v.AccessLog[0]
 }
 
-// outcome returns the outcome the product logged for this stream. The accesslog
+// outcome returns the outcome the product logged for this stream. The auditlog
 // is EPE's real output, so it is what assertions are worth making against.
 func (v *Verdict) outcome(t *testing.T) string {
 	t.Helper()

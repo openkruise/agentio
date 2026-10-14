@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package auditlog
 
 import (
 	"context"
@@ -132,9 +132,15 @@ func TestBufferedLogger_SubmitAndEmit(t *testing.T) {
 	logger, sink := newRecorderLogger()
 	l := NewBufferedLogger(logger, 8)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = l.Start(ctx) }()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
 
 	l.Submit(sampleEntry("a"))
 	l.Submit(Entry{
@@ -188,12 +194,12 @@ func TestBufferedLogger_RejectedAdmissionIncrementsAggregateCounter(t *testing.T
 	// Do NOT start the worker — Submit must accept exactly cap entries and
 	// drop the rest non-blocking.
 	before := counterValue(t, AuditLogDroppedTotal)
-	for i := 0; i < cap; i++ {
+	for range cap {
 		l.Submit(sampleEntry("acc"))
 	}
 	// These must drop.
 	const overflow = 3
-	for i := 0; i < overflow; i++ {
+	for range overflow {
 		l.Submit(sampleEntry("drop"))
 	}
 
@@ -218,7 +224,7 @@ func TestBufferedLogger_RejectedAdmissionIncrementsAggregateCounter(t *testing.T
 	}
 
 	// Admission after shutdown is rejected with a different queue reason,
-	// but accesslog intentionally aggregates every reason in one counter.
+	// but auditlog intentionally aggregates every reason in one counter.
 	l.Submit(sampleEntry("stopped"))
 	const wantRejected = overflow + 1
 	if got := counterValue(t, AuditLogDroppedTotal); got-before != wantRejected {
@@ -234,7 +240,7 @@ func TestBufferedLogger_ContextCancelDrainsAndExits(t *testing.T) {
 
 	// Preload entries before starting the worker; once started, the worker
 	// will consume them.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		l.Submit(sampleEntry("preload"))
 	}
 

@@ -132,6 +132,14 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	// A matched unit whose responses changed nothing is what "bypassed" now
 	// means, so set up that shape rather than asserting an outcome directly.
 	state.stream.Info.Matched = []filter.UnitRecord{{ID: filter.UnitID{Name: "r1"}}}
+	state.stream.Info.RecordContent(
+		filter.UnitID{Name: "r1"},
+		filter.ContentRecord{Status: "complete", Content: "request"},
+	)
+	state.stream.Info.RecordResponseContent(
+		filter.UnitID{Name: "r1"},
+		filter.ContentRecord{Status: "complete", Content: "response"},
+	)
 	state.lifecycle = lifecycleFinalizePending
 
 	srv.finishAfterSend(context.Background(), state)
@@ -144,6 +152,10 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	if got := accesslog.entries[0]; got.Outcome != "bypassed" || got.Error != "" {
 		t.Errorf("accesslog entry = %+v, want committed bypass without error", got)
 	}
+	if len(accesslog.content) != 2 || accesslog.content[0].Direction != "request" ||
+		accesslog.content[1].Direction != "response" {
+		t.Fatalf("content entries=%+v", accesslog.content)
+	}
 	if policyLogger.calls != 1 {
 		t.Fatalf("policy logger calls = %d, want exactly 1", policyLogger.calls)
 	}
@@ -155,9 +167,11 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 // A stream that never resolved carries no logger, and finishStream must not
 // trip over the nil.
 func TestFinishStreamWithoutResolutionDoesNotPanic(t *testing.T) {
-	srv := NewServer(ServerDeps{Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
-		return engine.Resolution{}, nil
-	}})
+	srv := NewServer(
+		ServerDeps{Resolve: func(context.Context, inputs.Pod, *httpreq.HTTPRequest) (engine.Resolution, error) {
+			return engine.Resolution{}, nil
+		}},
+	)
 
 	state := newStreamState()
 	state.markRequestSeen()

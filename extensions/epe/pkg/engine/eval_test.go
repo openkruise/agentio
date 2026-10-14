@@ -66,7 +66,7 @@ type bodyFilter struct {
 
 func (f *bodyFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	f.c.headerCalls++
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *bodyFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
@@ -655,7 +655,7 @@ func TestEvalRequestBody_FoldsAllPendingMutationsAfterResume(t *testing.T) {
 				pausedCounters.constructed++
 				return &observingBodyFilter{
 					c:         pausedCounters,
-					headerAct: filter.NeedBody(filter.SetHeader("x-paused-header", "1")),
+					headerAct: filter.NeedBody(filter.CompleteBody, filter.SetHeader("x-paused-header", "1")),
 					bodyAct: filter.Continue(
 						filter.SetHeader("x-paused-body", "1"),
 						filter.Mutation{Body: []byte("paused replacement")},
@@ -670,7 +670,7 @@ func TestEvalRequestBody_FoldsAllPendingMutationsAfterResume(t *testing.T) {
 				laterCounters.constructed++
 				return &observingBodyFilter{
 					c:         laterCounters,
-					headerAct: filter.NeedBody(filter.SetHeader("x-later-header", "1")),
+					headerAct: filter.NeedBody(filter.CompleteBody, filter.SetHeader("x-later-header", "1")),
 					bodyAct: filter.Continue(
 						filter.SetHeader("x-later-body", "1"),
 						filter.Mutation{Body: []byte("final replacement")},
@@ -759,7 +759,7 @@ func TestEvalBody_NeedRejected(t *testing.T) {
 		{
 			name: "greedy",
 			make: func(filter.RuleConfig[string]) filter.Filter {
-				return &bodyFilter{c: &counters{}, bodyAct: filter.NeedBody()}
+				return &bodyFilter{c: &counters{}, bodyAct: filter.NeedBody(filter.CompleteBody)}
 			},
 		},
 	})
@@ -868,7 +868,7 @@ type bodyErrFilter struct {
 }
 
 func (f *bodyErrFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *bodyErrFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
@@ -1438,7 +1438,7 @@ func TestEvalResponseHeaders_RejectsUnsupportedActions(t *testing.T) {
 		act     filter.Action
 		wantMsg string
 	}{
-		{name: "needbody", act: filter.NeedBody(), wantMsg: "response-body support"},
+		{name: "needbody", act: filter.NeedBody(filter.CompleteBody), wantMsg: "response-body support"},
 		{
 			name:    "continue carrying clear-route-cache",
 			act:     filter.Continue(filter.Mutation{Route: &filter.RouteMutation{ClearCache: true}}),
@@ -1778,7 +1778,7 @@ type phaseOrderFilter struct {
 
 func (f *phaseOrderFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	*f.events = append(*f.events, "headers:"+f.name)
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *phaseOrderFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

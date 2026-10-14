@@ -66,7 +66,7 @@ type fakeBodyMutationFilter struct {
 }
 
 func (f *fakeBodyMutationFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *fakeBodyMutationFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

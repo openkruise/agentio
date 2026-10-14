@@ -11,17 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// Package accesslog provides a non-blocking INFO-level audit logger for the
-// EPE data plane. Every successfully handled ext-proc
-// RequestHeaders call produces exactly one Entry summarising which
-// SecurityProfile rules fired and what the final outcome was.
-//
-// The default Logger buffers entries through an in-memory channel consumed
-// by a single worker goroutine, so request-path latency only pays for a
-// non-blocking channel send. When the buffer is full Submit drops the
-// entry and increments a Prometheus counter rather than blocking the
-// caller.
-package accesslog
+// Package auditlog emits separate access and content records through a shared
+// bounded, non-blocking INFO-level logging queue.
+package auditlog
 
 import (
 	"context"
@@ -69,11 +61,16 @@ type Entry struct {
 	Error     string
 }
 
-// Logger is the contract the request handler invokes once per request via
-// a deferred call. Implementations MUST be safe for concurrent use and
-// MUST NOT block the caller.
+// Record is an access or content log entry. Submitted records and their nested
+// values are immutable until emission completes.
+type Record interface {
+	emit(logr.Logger)
+}
+
+// Logger accepts records at stream finalization. Implementations MUST be safe
+// for concurrent use and MUST NOT block the caller.
 type Logger interface {
-	Submit(entry Entry)
+	Submit(entry Record)
 }
 
 // Nop returns a Logger whose Submit is a no-op. Used as a default when the
@@ -83,7 +80,7 @@ func Nop() Logger { return nopLogger{} }
 
 type nopLogger struct{}
 
-func (nopLogger) Submit(Entry) {}
+func (nopLogger) Submit(Record) {}
 
 // BufferedLogger is the default Logger implementation. Submit performs a
 // non-blocking channel send; a single worker goroutine started by Start
@@ -92,8 +89,7 @@ func (nopLogger) Submit(Entry) {}
 // BufferedLogger satisfies the runnable.Runnable contract so it can be
 // wired into the runnable group alongside the ext-proc server.
 type BufferedLogger struct {
-	logger logr.Logger
-	d      *audit.Dispatcher[Entry]
+	d *audit.Dispatcher[Record]
 }
 
 // NewBufferedLogger constructs a BufferedLogger backed by the given
@@ -103,11 +99,11 @@ func NewBufferedLogger(logger logr.Logger, bufferSize int) *BufferedLogger {
 	if bufferSize <= 0 {
 		bufferSize = DefaultBufferSize
 	}
-	l := &BufferedLogger{logger: logger}
+	l := &BufferedLogger{}
 	// The dispatcher flushes buffered entries on ctx cancellation without
 	// closing the channel, so a late Submit remains safe.
-	l.d = audit.NewDispatcher("accesslog", bufferSize, 1,
-		func(_ context.Context, e Entry) { l.emit(e) },
+	l.d = audit.NewDispatcher("auditlog", bufferSize, 1,
+		func(_ context.Context, e Record) { e.emit(logger) },
 		func(audit.DropReason) { AuditLogDroppedTotal.Inc() })
 	return l
 }
@@ -116,7 +112,7 @@ func NewBufferedLogger(logger logr.Logger, bufferSize int) *BufferedLogger {
 // non-blocking: when the buffer is full the entry is dropped and
 // AuditLogDroppedTotal is incremented. A nil receiver is a no-op so
 // uninitialised Loggers do not panic from inside the request path.
-func (l *BufferedLogger) Submit(entry Entry) {
+func (l *BufferedLogger) Submit(entry Record) {
 	if l == nil {
 		return
 	}
@@ -132,8 +128,9 @@ func (l *BufferedLogger) Start(ctx context.Context) error {
 // emit converts an Entry into structured key-value pairs and writes one
 // logr Info record. Error is only emitted when non-empty to keep the
 // happy-path line short.
-func (l *BufferedLogger) emit(e Entry) {
+func (e Entry) emit(logger logr.Logger) {
 	kvs := []any{
+		"type", "access",
 		"requestID", e.RequestID,
 		"pod", e.Pod.String(),
 		"method", e.Method,
@@ -147,5 +144,5 @@ func (l *BufferedLogger) emit(e Entry) {
 	if e.Error != "" {
 		kvs = append(kvs, "error", e.Error)
 	}
-	l.logger.Info("egress request handled", kvs...)
+	logger.Info("egress request handled", kvs...)
 }

@@ -62,7 +62,7 @@ type concurrentPauseFilter struct {
 }
 
 func (f *concurrentPauseFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *concurrentPauseFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

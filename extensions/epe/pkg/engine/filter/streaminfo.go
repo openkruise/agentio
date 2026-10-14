@@ -61,6 +61,7 @@ type UnitRecord struct {
 }
 
 // FilterRecord is one filter invocation as the framework observed it.
+// Incremental body callbacks aggregate duration and outcome per consumer.
 type FilterRecord struct {
 	Filter   string
 	Phase    string
@@ -71,11 +72,15 @@ type FilterRecord struct {
 	Err error
 }
 
-// StreamInfo accumulates what happened to one stream. It holds only what
-// filters cannot provide themselves; Peer/Request/Response live on Stream.
+// StreamInfo accumulates execution records and bounded content observations.
+// Peer/Request/Response live on Stream.
 type StreamInfo struct {
-	Matched []UnitRecord
-	Filters []FilterRecord
+	// content holds bounded, owned observations written by content filters.
+	// Entries are replaced, never mutated, so a sink can retain a completed record.
+	content         map[UnitID]ContentRecord
+	responseContent map[UnitID]ContentRecord
+	Matched         []UnitRecord
+	Filters         []FilterRecord
 	// Outcome is written exactly once, at stream end, by the ext_proc layer —
 	// derived from the responses it actually sent, the stream's error, and
 	// len(Matched). The engine deliberately does not accumulate it: an outcome
@@ -84,6 +89,57 @@ type StreamInfo struct {
 	Outcome Disposition
 	// Error records the failure that resolved the stream, when one did.
 	Error string
+}
+
+// ContentRecord describes content capture, independently of enforcement.
+// Content is an owned JSON-native value; complete or truncated observations may carry it.
+type ContentRecord struct {
+	Status        string `json:"status"`
+	BytesSeen     int64  `json:"bytesSeen"`
+	CapturedBytes int    `json:"capturedBytes"`
+	Content       any    `json:"content"`
+}
+
+// RecordContent replaces this unit's observation. The caller transfers ownership
+// of Content and must not modify it afterwards. Calls are serialized with the stream.
+func (i *StreamInfo) RecordContent(id UnitID, record ContentRecord) {
+	if i == nil {
+		return
+	}
+	if i.content == nil {
+		i.content = make(map[UnitID]ContentRecord)
+	}
+	i.content[id] = record
+}
+
+// Content returns a read-only observation for one matched unit.
+func (i *StreamInfo) Content(id UnitID) (ContentRecord, bool) {
+	if i == nil {
+		return ContentRecord{}, false
+	}
+	r, ok := i.content[id]
+	return r, ok
+}
+
+// RecordResponseContent replaces the response observation without overwriting
+// request content. It has the same ownership contract as RecordContent.
+func (i *StreamInfo) RecordResponseContent(id UnitID, record ContentRecord) {
+	if i == nil {
+		return
+	}
+	if i.responseContent == nil {
+		i.responseContent = make(map[UnitID]ContentRecord)
+	}
+	i.responseContent[id] = record
+}
+
+// ResponseContent returns a read-only response observation for one matched unit.
+func (i *StreamInfo) ResponseContent(id UnitID) (ContentRecord, bool) {
+	if i == nil {
+		return ContentRecord{}, false
+	}
+	r, ok := i.responseContent[id]
+	return r, ok
 }
 
 // NewStreamInfo builds an empty info for one stream.

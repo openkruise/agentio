@@ -1,0 +1,26 @@
+{
+  "format": "openai-chat-completions",
+  "model": "claude-opus-4-8",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_call",
+          "id": "toolu_empty_content",
+          "name": "Bash",
+          "arguments": {
+            "command": "pwd"
+          }
+        }
+      ],
+      "index": 0,
+      "finishReason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 8,
+    "totalTokens": 20
+  }
+}

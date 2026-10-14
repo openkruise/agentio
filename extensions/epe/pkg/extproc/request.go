@@ -44,8 +44,7 @@ const (
 	headerRequestID = "x-request-id"
 	// logKeyRequestID is the structured-log key carrying the request ID.
 	logKeyRequestID = "requestID"
-	// requestBodyMode must stay BUFFERED: STREAMED releases acknowledged chunks
-	// upstream before the verdict and prevents body-phase header mutations.
+	// Complete-body consumers retain buffered delivery and body-phase headers.
 	requestBodyMode = extProcV3.ProcessingMode_BUFFERED
 	// responseBodyMode has the same constraint in the response direction.
 	responseBodyMode = extProcV3.ProcessingMode_BUFFERED
@@ -156,7 +155,11 @@ func (s *Server) HandleRequestHeaders(
 		return nil, err
 	}
 
-	reqHeadersRes, evalErr := s.eng.EvalRequestHeaders(ctx, st, state.engineUnits())
+	var evalOpts []engine.RequestOption
+	if !headers.GetEndOfStream() {
+		evalOpts = append(evalOpts, engine.WithRequestStreaming())
+	}
+	reqHeadersRes, evalErr := s.eng.EvalRequestHeaders(ctx, st, state.engineUnits(), evalOpts...)
 	if evalErr != nil {
 		return nil, evalErr
 	}
@@ -209,6 +212,21 @@ func (s *Server) requestHeadersResponse(
 	state.responseScope = reqHeadersRes.ResponseScope
 	responses := translateRequestHeadersResult(reqHeadersRes, loggerD, state.stream.Peer)
 
+	responses = configureRequestModes(reqHeadersRes, subscriptions, state, responses)
+
+	// Finalization for terminal dispositions lives in armFinalization; the
+	// no-op it performs for a passthrough or mutated result leaves teardown to
+	// stream end, mirroring the body phase.
+	state.armFinalization(reqHeadersRes.Disposition)
+	return responses, nil
+}
+
+func configureRequestModes(
+	reqHeadersRes *engine.RequestHeadersResult,
+	subscriptions filter.Phase,
+	state *streamState,
+	responses []*extProcPb.ProcessingResponse,
+) []*extProcPb.ProcessingResponse {
 	// ModeOverride must restate both body modes because Envoy copies them
 	// unconditionally. A blocked result must not carry an override.
 	if reqHeadersRes.Disposition != engine.DispositionBlocked {
@@ -221,12 +239,20 @@ func (s *Server) requestHeadersResponse(
 			}
 			if wantBody {
 				override.RequestBodyMode = requestBodyMode
+				if reqHeadersRes.BodyMode() == filter.BodyStreamed {
+					override.RequestBodyMode = extProcV3.ProcessingMode_STREAMED
+					override.RequestTrailerMode = extProcV3.ProcessingMode_SEND
+				}
 			}
+			state.requestWireMode = override.RequestBodyMode
 			if wantResponse {
 				override.ResponseHeaderMode = extProcV3.ProcessingMode_SEND
 			}
 			resp := cloneResponse(responses[0])
 			resp.ModeOverride = override
+			if override.RequestBodyMode == extProcV3.ProcessingMode_STREAMED {
+				removeStreamingContentLength(resp.GetRequestHeaders())
+			}
 			responses = append([]*extProcPb.ProcessingResponse{resp}, responses[1:]...)
 		}
 		if wantBody {
@@ -237,11 +263,7 @@ func (s *Server) requestHeadersResponse(
 		}
 	}
 
-	// Finalization for terminal dispositions lives in armFinalization; the
-	// no-op it performs for a passthrough or mutated result leaves teardown to
-	// stream end, mirroring the body phase.
-	state.armFinalization(reqHeadersRes.Disposition)
-	return responses, nil
+	return responses
 }
 
 // HandleResponseHeaders records the upstream status into the stream and
@@ -281,7 +303,7 @@ func (s *Server) HandleResponseHeaders(
 	state.stream.Response = httpreq.HTTPResponse{Status: responseStatus, Headers: respHeaders}
 	// End-of-stream response headers are the complete bodyless response. Satisfy
 	// any NeedBody action inline because no response-body message will follow.
-	var evalOpts []engine.ResponseOption
+	evalOpts := []engine.ResponseOption{engine.WithResponseStreaming()}
 	isConnect := strings.EqualFold(state.stream.Request.Method, "CONNECT")
 	if headers.GetEndOfStream() && !isConnect {
 		evalOpts = append(evalOpts, engine.WithAvailableResponseBody(filter.Body{Complete: true}))
@@ -313,16 +335,27 @@ func (s *Server) HandleResponseHeaders(
 	responses := translateResponseHeadersResult(respHeadersRes)
 	if respHeadersRes.Disposition != engine.DispositionBlocked && respHeadersRes.NeedsBody() {
 		override := &extProcV3.ProcessingMode{
-			RequestBodyMode:  extProcV3.ProcessingMode_NONE,
+			RequestBodyMode:  state.requestWireMode,
 			ResponseBodyMode: responseBodyMode,
+		}
+		if state.requestWireMode == extProcV3.ProcessingMode_STREAMED {
+			override.RequestTrailerMode = extProcV3.ProcessingMode_SEND
+		}
+		if respHeadersRes.BodyMode() == filter.BodyStreamed {
+			override.ResponseBodyMode = extProcV3.ProcessingMode_STREAMED
+			override.ResponseTrailerMode = extProcV3.ProcessingMode_SEND
 		}
 		resp := cloneResponse(responses[0])
 		resp.ModeOverride = override
+		if override.ResponseBodyMode == extProcV3.ProcessingMode_STREAMED {
+			removeStreamingContentLength(resp.GetResponseHeaders())
+		}
 		responses = append([]*extProcPb.ProcessingResponse{resp}, responses[1:]...)
 		state.responseBodyContinuation = respHeadersRes
 		return responses, nil
 	}
 	state.lifecycle = lifecycleFinalizePending
+	state.armFinalization(respHeadersRes.Disposition)
 	return responses, nil
 }
 

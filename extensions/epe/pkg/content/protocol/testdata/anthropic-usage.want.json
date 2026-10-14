@@ -1,0 +1,19 @@
+{
+  "format": "anthropic-messages",
+  "model": "glm-5.2",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [],
+      "index": 0,
+      "finishReason": "end_turn"
+    }
+  ],
+  "usage": {
+    "inputTokens": 34347,
+    "outputTokens": 49,
+    "totalTokens": 34396,
+    "cachedInputTokens": 30464,
+    "cacheCreationInputTokens": 0
+  }
+}

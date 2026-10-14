@@ -11,21 +11,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package decoder
 
 import (
-	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
-	"github.com/prometheus/client_golang/prometheus"
+	"encoding/json"
+
+	capturestatus "github.com/openkruise/agentio/extensions/epe/pkg/content/status"
 )
 
-// AuditLogDroppedTotal counts audit log entries discarded because the
-// buffered worker's input channel was full. Operators can watch this to
-// decide whether to raise --audit-log-buffer-size.
-var AuditLogDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-	Name: "epe_audit_log_dropped_total",
-	Help: "Total number of audit log entries dropped because the in-memory buffer was full.",
-})
-
-func init() {
-	metrics.Registry.MustRegister(AuditLogDroppedTotal)
+func decodeJSON(raw []byte) (any, capturestatus.Code) {
+	var body any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, capturestatus.InvalidJSON
+	}
+	return body, capturestatus.Complete
 }

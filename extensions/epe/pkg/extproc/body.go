@@ -32,9 +32,8 @@ var defaultPassThroughBody = []*extProcPb.ProcessingResponse{
 	}},
 }
 
-// HandleRequestBody handles the complete request body delivered by Envoy
-// after the headers phase set ModeOverride to BUFFERED. It runs the body
-// callbacks registered during headers, without reauthorizing the fixed target.
+// HandleRequestBody dispatches a chunk or complete body to the callbacks
+// registered during headers, without reauthorizing the fixed target.
 func (s *Server) HandleRequestBody(
 	ctx context.Context,
 	body *extProcPb.HttpBody,
@@ -55,12 +54,14 @@ func (s *Server) HandleRequestBody(
 	loggerD.Info("running deferred body-phase filters", "bodyLen", len(body.Body))
 
 	prior := state.requestBodyContinuation
+	if prior.BodyMode() == filter.BodyStreamed {
+		return s.handleBodyChunk(ctx, body, state, false, false)
+	}
 	state.requestBodyContinuation = nil
 	reqBodyRes, err := s.eng.EvalRequestBody(ctx, state.stream, prior, filter.Body{
 		Bytes: body.Body,
-		// Deliberately not body.EndOfStream. BUFFERED — the only body mode the
-		// headers phase requests — delivers the whole body in one message, and
-		// the trailer-flush variant delivers it with EndOfStream clear. Copying
+		// Deliberately not body.EndOfStream. BUFFERED delivers the whole body
+		// in one message, including trailer flushes with EndOfStream clear. Copying
 		// the flag would tell filters that a complete body was partial.
 		Complete: true,
 	})

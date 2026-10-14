@@ -67,7 +67,7 @@ type pauseFilter struct {
 }
 
 func (f *pauseFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (f *pauseFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
@@ -147,7 +147,7 @@ func runRequestHeaders(t *testing.T, s *Server, state *streamState, endOfStream 
 	return resp
 }
 
-// A response subscription after a body-pausing rule must still open and run the
+// A response subscription after a body-consuming rule must still open and run the
 // response-header phase.
 func TestHandleRequestHeaders_SubscriptionSurvivesAnEarlierPause(t *testing.T) {
 	resp := &wantRespFilter{requestAct: filter.Continue()}
@@ -307,7 +307,7 @@ type pauseAndWantFilter struct {
 }
 
 func (pauseAndWantFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (pauseAndWantFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

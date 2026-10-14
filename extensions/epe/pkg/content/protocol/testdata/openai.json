@@ -1,0 +1,45 @@
+{
+  "format": "openai-chat-completions",
+  "model": "test-model",
+  "outputMessages": [
+    {
+      "index": 0,
+      "role": "assistant",
+      "finishReason": "tool_calls",
+      "content": [
+        {
+          "type": "text",
+          "text": "你好"
+        },
+        {
+          "type": "tool_call",
+          "id": "call_1",
+          "name": "lookup",
+          "arguments": {
+            "city": "北京"
+          }
+        },
+        {
+          "type": "tool_call",
+          "id": "call_2",
+          "name": "clock",
+          "arguments": {}
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "role": "assistant",
+      "finishReason": "stop",
+      "content": [
+        {
+          "type": "text",
+          "text": "alternative"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "totalTokens": 8
+  }
+}

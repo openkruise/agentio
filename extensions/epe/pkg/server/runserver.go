@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
@@ -76,7 +76,7 @@ type Config struct {
 	StreamLoggers []filter.StreamLogger
 	// AuditLogger is the per-request audit sink. nil is replaced with a
 	// no-op logger inside extproc.NewServer.
-	AuditLogger accesslog.Logger
+	AuditLogger auditlog.Logger
 }
 
 // New assembles the ext-proc gRPC server as a runnable: TLS setup (when

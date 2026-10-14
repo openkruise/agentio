@@ -144,7 +144,10 @@ func TestNewRequestEnvConsumerVariables(t *testing.T) {
 	if err != nil || got != "client:authorization" {
 		t.Fatalf("consumer expression = %v (%v), want client:authorization", got, err)
 	}
-	if _, err := CompileValue("token"); err == nil || !strings.Contains(err.Error(), "undeclared reference to 'token'") {
+	if _, err := CompileValue(
+		"token",
+	); err == nil ||
+		!strings.Contains(err.Error(), "undeclared reference to 'token'") {
 		t.Fatalf("CompileValue(token) error = %v, want undeclared-reference error", err)
 	}
 }

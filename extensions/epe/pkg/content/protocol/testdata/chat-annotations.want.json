@@ -1,0 +1,5 @@
+{
+  "format": "openai-chat-completions",
+  "model": "test",
+  "partial": true
+}

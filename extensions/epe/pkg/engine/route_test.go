@@ -118,7 +118,7 @@ func TestRouteMutationContinuation(t *testing.T) {
 			}
 			e, units := routeTestEngine(
 				t,
-				&routeTestFilter{headers: filter.NeedBody(target), body: filter.Continue()},
+				&routeTestFilter{headers: filter.NeedBody(filter.CompleteBody, target), body: filter.Continue()},
 				&routeTestFilter{headers: next},
 			)
 			st := &filter.Stream{}
@@ -190,7 +190,7 @@ func TestRequestBodyCannotChangeDestination(t *testing.T) {
 func TestRequestStreamViewReuse(t *testing.T) {
 	for _, routed := range []bool{false, true} {
 		t.Run(strconv.FormatBool(routed), func(t *testing.T) {
-			walk := requestWalk{actionWalk: newActionWalk(&filter.Stream{})}
+			walk := phaseWalk{actionWalk: newActionWalk(&filter.Stream{})}
 			if routed {
 				walk.pending = []filter.Mutation{routeMutation("192.0.2.1:443", false)}
 			}
@@ -214,7 +214,7 @@ func TestRequestStreamViewReuse(t *testing.T) {
 func TestRequestStreamViewSnapshots(t *testing.T) {
 	st := &filter.Stream{}
 	st.Request.Host = "original.example"
-	walk := requestWalk{actionWalk: newActionWalk(st)}
+	walk := phaseWalk{actionWalk: newActionWalk(st)}
 	first, err := walk.streamView()
 	if err != nil {
 		t.Fatal(err)

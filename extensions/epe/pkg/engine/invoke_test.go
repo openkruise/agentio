@@ -42,7 +42,7 @@ func TestInvoke_CountsByOutcome(t *testing.T) {
 			return filter.Continue(filter.SetHeader("x", "1")), nil
 		}, "mutate"},
 		{"immediate", func(context.Context) (filter.Action, error) { return filter.Stop(filter.Reply{}), nil }, "immediate"},
-		{"need-body", func(context.Context) (filter.Action, error) { return filter.NeedBody(), nil }, "record"},
+		{"need-body", func(context.Context) (filter.Action, error) { return filter.NeedBody(filter.CompleteBody), nil }, "record"},
 		{"error", func(context.Context) (filter.Action, error) { return filter.Continue(), errors.New("boom") }, "error"},
 	}
 	for _, tt := range tests {
@@ -150,7 +150,7 @@ type responseBodyPhaseProbe struct {
 }
 
 func (p responseBodyPhaseProbe) OnResponseHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (p responseBodyPhaseProbe) OnResponseBody(ctx context.Context, _ *filter.Stream, _ filter.Body) (filter.Action, error) {
@@ -159,7 +159,7 @@ func (p responseBodyPhaseProbe) OnResponseBody(ctx context.Context, _ *filter.St
 }
 
 func (p phaseProbe) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (p phaseProbe) OnRequestBody(ctx context.Context, _ *filter.Stream, _ filter.Body) (filter.Action, error) {

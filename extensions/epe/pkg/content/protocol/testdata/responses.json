@@ -1,0 +1,64 @@
+{
+  "format": "openai-responses",
+  "status": "completed",
+  "model": "test-responses",
+  "outputMessages": [
+    {
+      "index": 0,
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "你好",
+          "annotations": []
+        },
+        {
+          "type": "refusal",
+          "text": "no"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_call",
+          "id": "call_1",
+          "name": "lookup",
+          "arguments": {
+            "city": "北京"
+          }
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "role": "assistant",
+      "content": [
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "checked"
+              }
+            ],
+            "encrypted_content": "opaque"
+          }
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "inputTokens": 5,
+    "outputTokens": 3,
+    "totalTokens": 8,
+    "cachedInputTokens": 2,
+    "reasoningTokens": 1
+  }
+}

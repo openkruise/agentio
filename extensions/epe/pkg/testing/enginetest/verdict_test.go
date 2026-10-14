@@ -21,7 +21,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 )
 
 func setOpt(key, value string, action corev3.HeaderValueOption_HeaderAppendAction) *corev3.HeaderValueOption {
@@ -37,7 +37,9 @@ func TestParseVerdict_ResponseHeaderOpsArePhaseDistinct(t *testing.T) {
 		{Response: &extProcPb.ProcessingResponse_RequestHeaders{
 			RequestHeaders: &extProcPb.HeadersResponse{Response: &extProcPb.CommonResponse{
 				HeaderMutation: &extProcPb.HeaderMutation{
-					SetHeaders:    []*corev3.HeaderValueOption{setOpt("x-req", "1", corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD)},
+					SetHeaders: []*corev3.HeaderValueOption{
+						setOpt("x-req", "1", corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD),
+					},
 					RemoveHeaders: []string{"x-drop-req"},
 				},
 			}},
@@ -45,7 +47,9 @@ func TestParseVerdict_ResponseHeaderOpsArePhaseDistinct(t *testing.T) {
 		{Response: &extProcPb.ProcessingResponse_ResponseHeaders{
 			ResponseHeaders: &extProcPb.HeadersResponse{Response: &extProcPb.CommonResponse{
 				HeaderMutation: &extProcPb.HeaderMutation{
-					SetHeaders:    []*corev3.HeaderValueOption{setOpt("X-Epe", "policy", corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD)},
+					SetHeaders: []*corev3.HeaderValueOption{
+						setOpt("X-Epe", "policy", corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD),
+					},
 					RemoveHeaders: []string{"Server"},
 				},
 			}},
@@ -78,7 +82,9 @@ func TestParseVerdict_BodyMutationsAndResponseStatusKeepDirectionAndPresence(t *
 	responses := []*extProcPb.ProcessingResponse{
 		{Response: &extProcPb.ProcessingResponse_RequestBody{
 			RequestBody: &extProcPb.BodyResponse{Response: &extProcPb.CommonResponse{
-				BodyMutation: &extProcPb.BodyMutation{Mutation: &extProcPb.BodyMutation_Body{Body: []byte("request rewritten")}},
+				BodyMutation: &extProcPb.BodyMutation{
+					Mutation: &extProcPb.BodyMutation_Body{Body: []byte("request rewritten")},
+				},
 			}},
 		}},
 		{Response: &extProcPb.ProcessingResponse_ResponseBody{
@@ -96,7 +102,11 @@ func TestParseVerdict_BodyMutationsAndResponseStatusKeepDirectionAndPresence(t *
 		t.Fatalf("request body changed=%v body=%q", v.RequestBodyChanged, v.RequestBody)
 	}
 	if !v.ResponseBodyChanged || v.ResponseBody == nil || len(v.ResponseBody) != 0 {
-		t.Fatalf("response body changed=%v body=%#v, want explicit empty replacement", v.ResponseBodyChanged, v.ResponseBody)
+		t.Fatalf(
+			"response body changed=%v body=%#v, want explicit empty replacement",
+			v.ResponseBodyChanged,
+			v.ResponseBody,
+		)
 	}
 	if v.ResponseStatus == nil || *v.ResponseStatus != 202 {
 		t.Fatalf("ResponseStatus = %v, want 202", v.ResponseStatus)
@@ -107,8 +117,14 @@ func TestParseVerdict_BodyMutationsAndResponseStatusKeepDirectionAndPresence(t *
 // Direction-specific lookups do not return operations from the other direction.
 func TestVerdictLookups_DoNotCrossDirections(t *testing.T) {
 	v := &Verdict{
-		RequestHeaderOps:  []HeaderOp{{Kind: HeaderSet, Name: "x-req", Value: "1"}, {Kind: HeaderRemove, Name: "x-gone-req"}},
-		ResponseHeaderOps: []HeaderOp{{Kind: HeaderSet, Name: "x-resp", Value: "2"}, {Kind: HeaderRemove, Name: "x-gone-resp"}},
+		RequestHeaderOps: []HeaderOp{
+			{Kind: HeaderSet, Name: "x-req", Value: "1"},
+			{Kind: HeaderRemove, Name: "x-gone-req"},
+		},
+		ResponseHeaderOps: []HeaderOp{
+			{Kind: HeaderSet, Name: "x-resp", Value: "2"},
+			{Kind: HeaderRemove, Name: "x-gone-resp"},
+		},
 	}
 	if got := v.RequestHeaderValues("x-req"); !reflect.DeepEqual(got, []string{"1"}) {
 		t.Errorf("RequestHeaderValues(x-req) = %v, want [1]", got)
@@ -185,7 +201,7 @@ func TestParseVerdict_ResponseOnlyMutationDoesNotChangeRequestKind(t *testing.T)
 func TestRequireOutcome_ReadsTheAccessLogEntry(t *testing.T) {
 	v := &Verdict{
 		Kind: VerdictPassthrough,
-		AccessLog: []accesslog.Entry{{
+		AccessLog: []auditlog.Entry{{
 			Outcome: "bypassed",
 			Units:   1,
 		}},

@@ -43,7 +43,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/admin"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit"
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/sinks/webhook"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
@@ -106,7 +106,7 @@ var (
 		"The address the admin HTTP server binds to (set to :15000 to listen on all interfaces)")
 	enableDebug = flag.Bool("enable-debug", true,
 		"Enable the /debug endpoints on the admin server (profile inspection and runtime log level)")
-	auditLogBufferSize = flag.Int("audit-log-buffer-size", accesslog.DefaultBufferSize,
+	auditLogBufferSize = flag.Int("audit-log-buffer-size", auditlog.DefaultBufferSize,
 		"Audit log buffered channel capacity; entries are dropped when full")
 	auditWebhookBufferSize = flag.Int("audit-webhook-buffer-size", webhook.DefaultBufferSize,
 		"Audit webhook dispatcher channel capacity; events dropped when full")
@@ -351,8 +351,8 @@ func run() error {
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 	group.Add(runnable.HTTPServer("metrics", metricsMux, fmt.Sprintf(":%d", *metricsPort)))
 
-	// Wire the per-request audit logger.
-	auditLogger := accesslog.NewBufferedLogger(ctrllog.Log.WithName("audit"), *auditLogBufferSize)
+	// Wire the shared access and content audit logger.
+	auditLogger := auditlog.NewBufferedLogger(ctrllog.Log.WithName("audit"), *auditLogBufferSize)
 	group.Add(auditLogger)
 
 	// Wire the audit webhook dispatcher and sink through the Router.

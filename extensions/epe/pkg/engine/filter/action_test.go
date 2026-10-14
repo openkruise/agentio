@@ -48,7 +48,7 @@ func TestActionConstructorsAndKinds(t *testing.T) {
 		t.Error("Bypass must not carry a reply")
 	}
 
-	n := NeedBody(m)
+	n := NeedBody(CompleteBody, m)
 	if n.Kind() != KindNeedBody {
 		t.Errorf("NeedBody Kind = %v, want KindNeedBody", n.Kind())
 	}
@@ -80,7 +80,7 @@ func TestActionEqual(t *testing.T) {
 		{"kind mismatch", Continue(), Stop(Reply{}), false},
 		{"same stop", Stop(Reply{Status: 403}), Stop(Reply{Status: 403}), true},
 		{"different status", Stop(Reply{Status: 403}), Stop(Reply{Status: 451}), false},
-		{"same need", NeedBody(), NeedBody(), true},
+		{"same need", NeedBody(CompleteBody), NeedBody(CompleteBody), true},
 		{"same mutation status", Continue(Mutation{StatusCode: &statusAccepted}), Continue(Mutation{StatusCode: &statusAcceptedAgain}), true},
 		{"different mutation status", Continue(Mutation{StatusCode: &statusAccepted}), Continue(Mutation{StatusCode: &statusCreated}), false},
 		{"missing mutation status", Continue(Mutation{StatusCode: &statusAccepted}), Continue(Mutation{}), false},

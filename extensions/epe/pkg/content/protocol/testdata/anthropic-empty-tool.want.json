@@ -1,0 +1,24 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_call",
+          "id": "toolu_01A",
+          "name": "get_time",
+          "arguments": {}
+        }
+      ],
+      "index": 0,
+      "finishReason": "tool_use"
+    }
+  ],
+  "usage": {
+    "inputTokens": 15,
+    "outputTokens": 8,
+    "totalTokens": 23
+  }
+}

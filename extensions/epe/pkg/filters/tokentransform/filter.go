@@ -117,7 +117,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 		}
 		if needs {
 			f.pending = true
-			return filter.NeedBody(), nil
+			return filter.NeedBody(filter.CompleteBody), nil
 		}
 	}
 

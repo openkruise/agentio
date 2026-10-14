@@ -39,7 +39,8 @@ const (
 	effectNone messageEffect = iota
 	// effectMutated carries a header, body, status, or upstream target change.
 	effectMutated
-	// effectBlocked is an ImmediateResponse: the message never goes anywhere.
+	// effectBlocked is an ImmediateResponse, possibly terminating a stream
+	// after some bytes were already forwarded.
 	effectBlocked
 )
 

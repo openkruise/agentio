@@ -98,7 +98,7 @@ extensions/epe/
 │   ├── httpreq/             # Neutral HTTP request tuple.
 │   ├── audit/               # Audit routing and CEL conditions, plus the shared
 │   │   │                    # bounded async delivery primitive.
-│   │   ├── accesslog/       # Per-request audit log entries.
+│   │   ├── log/             # Separate access/content records sharing one bounded queue.
 │   │   └── sinks/webhook/   # Audit webhook rendering and delivery.
 │   ├── credential/          # Credential-provider client and token caches.
 │   ├── certs/               # Serving certificate providers and SPIFFE-aware TLS validation.

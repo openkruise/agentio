@@ -78,7 +78,7 @@ func preferenceHarness(
 type preferenceBodyCheck struct{ filter.PassThrough }
 
 func (*preferenceBodyCheck) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {
@@ -270,7 +270,7 @@ type authorityRewrite struct {
 
 func (f *authorityRewrite) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	if f.buffered {
-		return filter.NeedBody(f.mutation), nil
+		return filter.NeedBody(filter.CompleteBody, f.mutation), nil
 	}
 	return filter.Continue(f.mutation), nil
 }

@@ -25,10 +25,13 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
 )
 
-// HandleResponseBody resumes the response walk that requested Envoy's
-// complete buffered body. BUFFERED may flush from trailers with EndOfStream
-// unset, so the delivered message is complete regardless of that flag.
-func (s *Server) HandleResponseBody(ctx context.Context, body *extProcPb.HttpBody, state *streamState) ([]*extProcPb.ProcessingResponse, error) {
+// HandleResponseBody dispatches a chunk or resumes the buffered response walk.
+// BUFFERED may flush at trailers without EndOfStream; that message is complete.
+func (s *Server) HandleResponseBody(
+	ctx context.Context,
+	body *extProcPb.HttpBody,
+	state *streamState,
+) ([]*extProcPb.ProcessingResponse, error) {
 	if state == nil || state.lifecycle == lifecycleIdle || state.responseBodyContinuation == nil {
 		return nil, status.Error(codes.FailedPrecondition,
 			"received response body without an outstanding response-body obligation")
@@ -41,6 +44,9 @@ func (s *Server) HandleResponseBody(ctx context.Context, body *extProcPb.HttpBod
 	loggerD.Info("running deferred response-body filters", "bodyLen", len(body.Body))
 
 	prior := state.responseBodyContinuation
+	if prior.BodyMode() == filter.BodyStreamed {
+		return s.handleBodyChunk(ctx, body, state, true, false)
+	}
 	state.responseBodyContinuation = nil
 	result, err := s.eng.EvalResponseBody(ctx, state.stream, prior, filter.Body{
 		Bytes:    body.Body,
@@ -50,5 +56,6 @@ func (s *Server) HandleResponseBody(ctx context.Context, body *extProcPb.HttpBod
 		return nil, err
 	}
 	state.lifecycle = lifecycleFinalizePending
+	state.armFinalization(result.Disposition)
 	return translateResponseBodyResult(result), nil
 }

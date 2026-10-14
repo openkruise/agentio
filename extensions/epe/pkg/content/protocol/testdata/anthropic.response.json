@@ -1,0 +1,31 @@
+{
+  "id": "msg_test",
+  "type": "message",
+  "role": "assistant",
+  "model": "test-claude",
+  "content": [
+    {
+      "type": "text",
+      "text": "你好"
+    },
+    {
+      "type": "thinking",
+      "thinking": "reason",
+      "signature": "signature"
+    },
+    {
+      "type": "tool_use",
+      "id": "tool_1",
+      "name": "lookup",
+      "input": {
+        "city": "北京"
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 5,
+    "output_tokens": 7
+  },
+  "stop_reason": "tool_use",
+  "stop_sequence": null
+}

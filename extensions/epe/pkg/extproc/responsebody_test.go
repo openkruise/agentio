@@ -29,6 +29,7 @@ import (
 )
 
 type responseBodyProbe struct {
+	requirement filter.BodyRequirement
 	filter.PassThrough
 	headerMutations  []filter.Mutation
 	bodyAct          filter.Action
@@ -41,7 +42,7 @@ type responseBodyProbe struct {
 
 func (p *responseBodyProbe) OnResponseHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	p.headerCalls++
-	return filter.NeedBody(p.headerMutations...), nil
+	return filter.NeedBody(p.requirement, p.headerMutations...), nil
 }
 
 func (p *responseBodyProbe) OnResponseBody(_ context.Context, _ *filter.Stream, body filter.Body) (filter.Action, error) {
@@ -81,7 +82,10 @@ func pendingResponseBodyState(t *testing.T, p *responseBodyProbe, policy filter.
 }
 
 func TestHandleResponseHeaders_ArmsBufferedResponseBodyObligation(t *testing.T) {
-	p := &responseBodyProbe{headerMutations: []filter.Mutation{filter.SetHeader("x-delayed", "yes")}}
+	p := &responseBodyProbe{headerMutations: []filter.Mutation{
+		filter.SetHeader("x-delayed", "yes"),
+		{Body: []byte("pending replacement"), StatusCode: new(202)},
+	}}
 	_, state, responses := pendingResponseBodyState(t, p, filter.FailClosed)
 	if len(responses) != 1 || responses[0].GetResponseHeaders() == nil {
 		t.Fatalf("responses = %+v, want one response-headers acknowledgement", responses)
@@ -91,7 +95,11 @@ func TestHandleResponseHeaders_ArmsBufferedResponseBodyObligation(t *testing.T) 
 		t.Fatalf("response body mode = %v, want BUFFERED", mode)
 	}
 	if mutation := responses[0].GetResponseHeaders().GetResponse().GetHeaderMutation(); mutation != nil {
-		t.Fatalf("suspended headers leaked mutation: %+v", mutation)
+		t.Fatalf("buffered headers leaked mutation: %+v", mutation)
+	}
+	common := responses[0].GetResponseHeaders().GetResponse()
+	if common.GetBodyMutation() != nil || common.GetStatus() != extProcPb.CommonResponse_CONTINUE {
+		t.Fatalf("header body replacement bypassed registered body checks: %+v", common)
 	}
 	if state.responseBodyContinuation == nil || !state.awaitingInput() {
 		t.Fatal("response body obligation was not retained")

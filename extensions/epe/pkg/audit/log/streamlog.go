@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package auditlog
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 )
 
 // StreamLog adapts a Logger to the StreamLogger contract: it reduces the
-// finished stream's StreamInfo to one accesslog Entry and submits it.
+// finished stream to one access entry and separate entries for captured content.
 type StreamLog struct {
 	l Logger
 }
@@ -89,6 +89,23 @@ func (s *StreamLog) Log(_ context.Context, st *filter.Stream, info *filter.Strea
 	}
 
 	s.l.Submit(entry)
+	content := ContentEntry{
+		RequestID: st.RequestID,
+		Method:    st.Request.Method,
+		Host:      st.Request.Host,
+		Path:      st.Request.Path,
+	}
+	for _, unit := range info.Matched {
+		content.Unit = unit.ID.String()
+		if record, ok := info.Content(unit.ID); ok {
+			content.Direction, content.Record = "request", record
+			s.l.Submit(content)
+		}
+		if record, ok := info.ResponseContent(unit.ID); ok {
+			content.Direction, content.Record = "response", record
+			s.l.Submit(content)
+		}
+	}
 }
 
 // unitAction renders one recorded action as "<filter>:<kind>:<unit>". Actions

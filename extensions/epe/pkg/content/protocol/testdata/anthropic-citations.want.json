@@ -1,0 +1,40 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The sky is "
+        },
+        {
+          "type": "text",
+          "text": "blue during the day",
+          "citations": [
+            {
+              "type": "char_location",
+              "cited_text": "the sky appears blue",
+              "document_index": 0,
+              "document_title": "Sky Facts",
+              "start_char_index": 0,
+              "end_char_index": 20
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": "."
+        }
+      ],
+      "index": 0,
+      "finishReason": "end_turn"
+    }
+  ],
+  "usage": {
+    "inputTokens": 15,
+    "outputTokens": 21,
+    "totalTokens": 36
+  }
+}

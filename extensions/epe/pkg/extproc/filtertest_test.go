@@ -32,6 +32,7 @@ import (
 // bodyProbe asks for the body and records what it saw; the body-phase
 // action is configurable per test.
 type bodyProbe struct {
+	requirement filter.BodyRequirement
 	filter.PassThrough
 	bodyCalls    int
 	receivedBody []byte
@@ -40,7 +41,7 @@ type bodyProbe struct {
 }
 
 func (p *bodyProbe) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(p.requirement), nil
 }
 
 func (p *bodyProbe) OnRequestBody(_ context.Context, _ *filter.Stream, b filter.Body) (filter.Action, error) {

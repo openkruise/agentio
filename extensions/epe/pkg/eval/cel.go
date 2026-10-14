@@ -60,11 +60,14 @@ func NewRequestEnv(extra ...cel.EnvOption) (*cel.Env, error) {
 }
 
 // WhenEnv returns the shared CEL environment for audit `when` expressions.
-// It adds audit-only result to the request-time variables shared with provider
-// parameter values.
+// It adds audit-only result and content to the request-time variables shared
+// with provider parameter values.
 func WhenEnv() (*cel.Env, error) {
 	whenEnvOnce.Do(func() {
-		options := append([]cel.EnvOption{cel.Variable("result", cel.StringType)}, commonEnvOptions()...)
+		options := append([]cel.EnvOption{
+			cel.Variable("result", cel.StringType),
+			cel.Variable("content", cel.MapType(cel.StringType, cel.DynType)),
+		}, commonEnvOptions()...)
 		whenEnv, whenEnvErr = cel.NewEnv(options...)
 	})
 	return whenEnv, whenEnvErr
@@ -188,6 +191,9 @@ func ownedNative(val ref.Val) (any, error) {
 			key, err := jsonKey(k)
 			if err != nil {
 				return nil, err
+			}
+			if _, exists := out[key]; exists {
+				return nil, fmt.Errorf("duplicate JSON map key %q after CEL key conversion", key)
 			}
 			elem, found := v.Find(k)
 			if !found {

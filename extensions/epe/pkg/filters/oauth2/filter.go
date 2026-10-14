@@ -93,7 +93,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 			false,
 		)
 	}
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 // OnRequestBody decodes the standard parameters and returns a local OAuth reply.
