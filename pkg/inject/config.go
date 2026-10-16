@@ -67,9 +67,13 @@ const (
 	EnableCoreDumpName = "enable-core-dump"
 )
 
-// Agentio pod tuning annotations, replacing the sidecar.istio.io equivalents.
-// Annotations consumed by the istio-cni data plane keep their istio keys.
+// Agentio injection metadata and Pod tuning annotations.
+// Traffic annotations consumed by the pinned CNI plugin keep their Istio keys.
 const (
+	injectionStatusAnnotation   = "sidecar.agentio.kruise.io/status"
+	proxyOverridesAnnotation    = "sidecar.agentio.kruise.io/overrides"
+	prometheusMergeAnnotation   = "prometheus.agentio.kruise.io/merge-metrics"
+	networkLabel                = "agentio.kruise.io/network"
 	injectTemplatesAnnotation   = "inject.agentio.kruise.io/templates"
 	nativeSidecarAnnotation     = "sidecar.agentio.kruise.io/native-sidecar"
 	proxyImageTypeAnnotation    = "sidecar.agentio.kruise.io/proxy-image-type"

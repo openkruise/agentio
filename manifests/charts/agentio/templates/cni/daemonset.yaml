@@ -61,7 +61,7 @@ spec:
             - name: REPAIR_RUN_AS_DAEMON
               value: "true"
             - name: REPAIR_SIDECAR_ANNOTATION
-              value: sidecar.istio.io/status
+              value: sidecar.agentio.kruise.io/status
             - name: NODE_NAME
               valueFrom:
                 fieldRef:

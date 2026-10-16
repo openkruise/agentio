@@ -22,7 +22,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"istio.io/api/annotation"
 	"istio.io/istio/pkg/util/sets"
 )
 
@@ -36,11 +35,11 @@ const (
 
 func enablePrometheusMerge(configured bool, anno map[string]string) bool {
 	// If annotation is present, we look there first
-	if val, f := anno[annotation.PrometheusMergeMetrics.Name]; f {
+	if val, f := anno[prometheusMergeAnnotation]; f {
 		bval, err := strconv.ParseBool(val)
 		if err != nil {
 			// This shouldn't happen since we validate earlier in the code
-			log.Warn("invalid annotation", "annotation", annotation.PrometheusMergeMetrics.Name, "value", bval)
+			log.Warn("invalid annotation", "annotation", prometheusMergeAnnotation, "value", bval)
 		} else {
 			return bval
 		}

@@ -31,8 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
-	"istio.io/api/annotation"
-	"istio.io/api/label"
 	"istio.io/istio/pkg/util/sets"
 )
 
@@ -217,7 +215,7 @@ func extractClusterAndNetwork(params InjectionParameters) (string, string) {
 		network = params.proxyEnvs["ISTIO_META_NETWORK"]
 	}
 	// explicit label takes highest precedence
-	if n, ok := metadata.Labels[label.TopologyNetwork.Name]; ok {
+	if n, ok := metadata.Labels[networkLabel]; ok {
 		network = n
 	}
 	return cluster, network
@@ -364,7 +362,7 @@ func stripPod(req InjectionParameters) *corev1.Pod {
 			clearPrometheusAnnotations(pod)
 		}
 	}
-	delete(pod.Annotations, annotation.SidecarStatus.Name)
+	delete(pod.Annotations, injectionStatusAnnotation)
 
 	return pod
 }
@@ -372,7 +370,7 @@ func stripPod(req InjectionParameters) *corev1.Pod {
 func injectionStatus(pod *corev1.Pod) *SidecarInjectionStatus {
 	var statusBytes []byte
 	if pod.ObjectMeta.Annotations != nil {
-		if value, ok := pod.ObjectMeta.Annotations[annotation.SidecarStatus.Name]; ok {
+		if value, ok := pod.ObjectMeta.Annotations[injectionStatusAnnotation]; ok {
 			statusBytes = []byte(value)
 		}
 	}

@@ -247,14 +247,17 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	if injected.Labels["sidecar.agentio.kruise.io/injected"] != "true" {
 		t.Fatalf("template labels not applied: %v", injected.Labels)
 	}
-	if status := injected.Annotations["sidecar.istio.io/status"]; status == "" {
-		t.Fatal("injected pod missing sidecar.istio.io/status")
+	if status := injected.Annotations["sidecar.agentio.kruise.io/status"]; status == "" {
+		t.Fatal("injected pod missing sidecar.agentio.kruise.io/status")
 	}
 	if revision, found := injected.Annotations["istio.io/rev"]; found {
 		t.Fatalf("injected Pod has legacy revision annotation %q", revision)
 	}
 	statusFields := map[string]any{}
-	if err := json.Unmarshal([]byte(injected.Annotations["sidecar.istio.io/status"]), &statusFields); err != nil {
+	if err := json.Unmarshal(
+		[]byte(injected.Annotations["sidecar.agentio.kruise.io/status"]),
+		&statusFields,
+	); err != nil {
 		t.Fatalf("parse status annotation: %v", err)
 	}
 	if revision, found := statusFields["revision"]; found {

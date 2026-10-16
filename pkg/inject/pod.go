@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"istio.io/api/annotation"
-	"istio.io/api/label"
 	"istio.io/istio/pkg/slices"
 )
 
@@ -166,24 +165,22 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 ) (*corev1.Pod, error) {
 	overrides := ParsedContainers{}
 	existingOverrides := ParsedContainers{}
-	if annotationOverrides, f := originalPod.Annotations[annotation.ProxyOverrides.Name]; f {
+	if annotationOverrides, f := originalPod.Annotations[proxyOverridesAnnotation]; f {
 		if err := json.Unmarshal([]byte(annotationOverrides), &existingOverrides); err != nil {
 			return nil, err
 		}
 	}
 	parsedInjectedStatus := ParsedContainers{}
-	status, alreadyInjected := originalPod.Annotations[annotation.SidecarStatus.Name]
+	status, alreadyInjected := originalPod.Annotations[injectionStatusAnnotation]
 	if alreadyInjected {
 		parsedInjectedStatus = parseStatus(status)
 	}
 	for _, c := range templatePod.Spec.Containers {
-		// sidecarStatus annotation is added on the pod by webhook. We should use new container template
-		// instead of restoring what may be previously injected. Doing this ensures we are correctly calculating
-		// env variables like ISTIO_META_APP_CONTAINERS and ISTIO_META_POD_PORTS.
-		if match := FindContainer(c.Name, parsedInjectedStatus.Containers); match != nil {
+		// Refresh template-owned settings on reinjection, but reapply recorded user overrides.
+		match := FindContainer(c.Name, existingOverrides.Containers)
+		if match == nil && FindContainer(c.Name, parsedInjectedStatus.Containers) != nil {
 			continue
 		}
-		match := FindContainer(c.Name, existingOverrides.Containers)
 		if match == nil {
 			match = FindContainer(c.Name, originalPod.Spec.Containers)
 		}
@@ -203,10 +200,10 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 		finalPod = newMergedPod
 	}
 	for _, c := range templatePod.Spec.InitContainers {
-		if match := FindContainer(c.Name, parsedInjectedStatus.InitContainers); match != nil {
+		match := FindContainer(c.Name, existingOverrides.InitContainers)
+		if match == nil && FindContainer(c.Name, parsedInjectedStatus.InitContainers) != nil {
 			continue
 		}
-		match := FindContainer(c.Name, existingOverrides.InitContainers)
 		if match == nil {
 			match = FindContainerFromPod(c.Name, originalPod)
 		}
@@ -245,7 +242,7 @@ func recordContainerOverrides(finalPod *corev1.Pod, overrides ParsedContainers, 
 		if finalPod.Annotations == nil {
 			finalPod.Annotations = map[string]string{}
 		}
-		finalPod.Annotations[annotation.ProxyOverrides.Name] = string(js)
+		finalPod.Annotations[proxyOverridesAnnotation] = string(js)
 	}
 
 	return nil
@@ -322,7 +319,7 @@ func parseStatus(status string) ParsedContainers {
 	var unMarshalledStatus map[string]any
 	if err := json.Unmarshal([]byte(status), &unMarshalledStatus); err != nil {
 		log.Error("unmarshal sidecar status annotation",
-			"annotation", annotation.SidecarStatus.Name, "error", err)
+			"annotation", injectionStatusAnnotation, "error", err)
 		return parsedContainers
 	}
 	parser := func(key string, obj map[string]any) []corev1.Container {
@@ -352,7 +349,7 @@ func reinsertOverrides(pod *corev1.Pod) (*corev1.Pod, error) {
 	}
 
 	existingOverrides := podOverrides{}
-	if annotationOverrides, f := pod.Annotations[annotation.ProxyOverrides.Name]; f {
+	if annotationOverrides, f := pod.Annotations[proxyOverridesAnnotation]; f {
 		if err := json.Unmarshal([]byte(annotationOverrides), &existingOverrides); err != nil {
 			return nil, err
 		}
@@ -409,10 +406,15 @@ func postProcessPod(pod *corev1.Pod, injectedPod corev1.Pod, req InjectionParame
 
 func applyMetadata(pod *corev1.Pod, injectedPodData corev1.Pod, req InjectionParameters) {
 	if nw, ok := req.proxyEnvs["ISTIO_META_NETWORK"]; ok {
-		pod.Labels[label.TopologyNetwork.Name] = nw
+		pod.Labels[networkLabel] = nw
 	}
 	// Add all additional injected annotations. These are overridden if needed
-	pod.Annotations[annotation.SidecarStatus.Name] = getInjectionStatus(injectedPodData.Spec)
+	status := getInjectionStatus(injectedPodData.Spec)
+	pod.Annotations[injectionStatusAnnotation] = status
+	// The pinned CNI plugin requires this key to recognize sidecar Pods.
+	if req.valuesConfig.boolValue("pilot", "cni", "enabled") {
+		pod.Annotations[annotation.SidecarStatus.Name] = status
+	}
 
 	// Deprecated; should be set directly in the template instead
 	maps.Copy(pod.Annotations, req.injectedAnnotations)
@@ -428,8 +430,8 @@ func applyRewrite(pod *corev1.Pod, req InjectionParameters) error {
 	// We don't have to escape json encoding here when using golang libraries.
 	if rewrite {
 		if prober := DumpAppProbers(pod, int32(req.settings.StatusPort)); prober != "" {
-			// If sidecar.istio.io/status is not present then append instead of merge.
-			_, previouslyInjected := pod.Annotations[annotation.SidecarStatus.Name]
+			// Without an injection status, append probes instead of merging them.
+			_, previouslyInjected := pod.Annotations[injectionStatusAnnotation]
 			sidecar.Env = mergeOrAppendProbers(previouslyInjected, sidecar.Env, prober)
 		}
 		patchRewriteProbe(pod.Annotations, pod, int32(req.settings.StatusPort))

@@ -186,7 +186,7 @@ cni:
     labelPods: false
     deletePods: false
     initContainerName: agentio-validation
-    brokenPodLabelKey: cni.istio.io/uninitialized
+    brokenPodLabelKey: cni.agentio.kruise.io/uninitialized
     brokenPodLabelValue: "true"
   resources:
     requests:

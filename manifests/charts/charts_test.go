@@ -296,6 +296,8 @@ func TestCNIAndZtunnelOverrides(t *testing.T) {
 	requireContains(t, manifest,
 		"path: /custom/bin",
 		"path: /custom/net.d",
+		"name: REPAIR_SIDECAR_ANNOTATION\n              value: sidecar.agentio.kruise.io/status",
+		"REPAIR_BROKEN_POD_LABEL_KEY: \"cni.agentio.kruise.io/uninitialized\"",
 		"clusterTrustBundle:",
 		"agentiod.agentio-system.svc.cluster.example:15012",
 	)

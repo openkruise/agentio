@@ -221,9 +221,12 @@ func TestInjectZtunnelTemplate(t *testing.T) {
 		t.Fatalf("agentio-token volume = %+v, want projected token with audience agentio-ca", tokenVolume)
 	}
 
-	status := patched.Annotations["sidecar.istio.io/status"]
+	status := patched.Annotations["sidecar.agentio.kruise.io/status"]
 	if !strings.Contains(status, InitContainerName) || !strings.Contains(status, "agentio-proxy") {
 		t.Fatalf("status annotation %q missing injected container names", status)
+	}
+	if _, found := patched.Annotations["sidecar.istio.io/status"]; found {
+		t.Fatal("init-container injection must not emit the Istio status annotation")
 	}
 	if got, want := patched.Annotations["prometheus.io/port"], "15020"; got != want {
 		t.Fatalf("prometheus.io/port = %q, want %q", got, want)
@@ -554,6 +557,78 @@ func TestReinjectionIsIdempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("proxy count after re-injection = %d, want 1", count)
+	}
+}
+
+func TestCNIInjectionStatus(t *testing.T) {
+	webhook := newTestWebhook(t, NativeSidecarModeEnabled)
+	values, err := os.ReadFile("testdata/values.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := webhook.UpdateConfig(
+		webhook.config,
+		strings.Replace(string(values), `"enabled": false`, `"enabled": true`, 1),
+	); err != nil {
+		t.Fatal(err)
+	}
+	pod := injectTestPod(t, webhook, testPod())
+	if FindContainer(ValidationContainerName, pod.Spec.InitContainers) == nil {
+		t.Fatal("CNI injection must include the validation container")
+	}
+	status := pod.Annotations[injectionStatusAnnotation]
+	if status == "" || pod.Annotations["sidecar.istio.io/status"] != status {
+		t.Fatal("CNI injection must expose the same status to Agentio and the pinned CNI plugin")
+	}
+}
+
+func TestAgentioInjectionMetadata(t *testing.T) {
+	for _, mode := range []NativeSidecarMode{NativeSidecarModeDisabled, NativeSidecarModeEnabled} {
+		t.Run(string(mode), func(t *testing.T) {
+			webhook := newTestWebhook(t, mode)
+			pod := testPod()
+			pod.Labels[networkLabel] = "edge-network"
+			pod.Annotations = map[string]string{
+				"prometheus.io/scrape":    "true",
+				"prometheus.io/port":      "8080",
+				prometheusMergeAnnotation: "false",
+			}
+			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
+				Name:  ProxyContainerName,
+				Image: "custom-proxy:test",
+			})
+			once := injectTestPod(t, webhook, pod)
+			if once.Annotations[proxyOverridesAnnotation] == "" {
+				t.Fatal("custom proxy settings must be recorded under the Agentio override annotation")
+			}
+			twice := injectTestPod(t, webhook, once.DeepCopy())
+			for _, injected := range []*corev1.Pod{once, twice} {
+				proxy := FindSidecar(injected)
+				if proxy.Image != "custom-proxy:test" {
+					t.Fatalf("proxy override was lost: image = %q", proxy.Image)
+				}
+				env := map[string]string{}
+				for _, e := range proxy.Env {
+					env[e.Name] = e.Value
+				}
+				if got := env["ISTIO_META_NETWORK"]; got != "edge-network" {
+					t.Fatalf("proxy network = %q, want edge-network", got)
+				}
+				if injected.Annotations["prometheus.io/port"] != "8080" {
+					t.Fatal("disabled metrics merge must preserve the application's scrape port")
+				}
+				for key := range injected.Labels {
+					if strings.Contains(key, "istio.io/") {
+						t.Fatalf("unexpected Istio label %q", key)
+					}
+				}
+				for key := range injected.Annotations {
+					if strings.Contains(key, "istio.io/") {
+						t.Fatalf("unexpected Istio annotation %q", key)
+					}
+				}
+			}
+		})
 	}
 }
 

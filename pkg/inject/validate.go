@@ -34,21 +34,18 @@ type annotationValidationFunc func(value string) error
 
 // per-sidecar policy and status
 var AnnotationValidation = map[string]annotationValidationFunc{
-	annotation.SidecarInterceptionMode.Name:                   validateInterceptionMode,
-	annotation.SidecarStatusPort.Name:                         validateStatusPort,
-	annotation.SidecarStatusReadinessInitialDelaySeconds.Name: validateUInt32,
-	annotation.SidecarStatusReadinessPeriodSeconds.Name:       validateUInt32,
-	annotation.SidecarStatusReadinessFailureThreshold.Name:    validateUInt32,
-	annotation.SidecarTrafficIncludeOutboundIPRanges.Name:     ValidateIncludeIPRanges,
-	annotation.SidecarTrafficExcludeOutboundIPRanges.Name:     ValidateExcludeIPRanges,
-	annotation.SidecarTrafficIncludeInboundPorts.Name:         ValidateIncludeInboundPorts,
-	annotation.SidecarTrafficExcludeInboundPorts.Name:         ValidateExcludeInboundPorts,
-	annotation.SidecarTrafficExcludeOutboundPorts.Name:        ValidateExcludeOutboundPorts,
-	annotation.PrometheusMergeMetrics.Name:                    validateBool,
-	proxyCPUAnnotation:                           validateResourceQuantity,
-	proxyMemoryAnnotation:                        validateResourceQuantity,
-	proxyCPULimitAnnotation:                      validateResourceQuantity,
-	proxyMemoryLimitAnnotation:                   validateResourceQuantity,
+	annotation.SidecarInterceptionMode.Name:               validateInterceptionMode,
+	annotation.SidecarStatusPort.Name:                     validateStatusPort,
+	annotation.SidecarTrafficIncludeOutboundIPRanges.Name: ValidateIncludeIPRanges,
+	annotation.SidecarTrafficExcludeOutboundIPRanges.Name: ValidateExcludeIPRanges,
+	annotation.SidecarTrafficIncludeInboundPorts.Name:     ValidateIncludeInboundPorts,
+	annotation.SidecarTrafficExcludeInboundPorts.Name:     ValidateExcludeInboundPorts,
+	annotation.SidecarTrafficExcludeOutboundPorts.Name:    ValidateExcludeOutboundPorts,
+	prometheusMergeAnnotation:                             validateBool,
+	proxyCPUAnnotation:                                    validateResourceQuantity,
+	proxyMemoryAnnotation:                                 validateResourceQuantity,
+	proxyCPULimitAnnotation:                               validateResourceQuantity,
+	proxyMemoryLimitAnnotation:                            validateResourceQuantity,
 }
 
 func validateAnnotations(annotations map[string]string) (err error) {
@@ -123,12 +120,6 @@ func validateStatusPort(port string) error {
 		return fmt.Errorf("excludeInboundPorts invalid: %v", e)
 	}
 	return nil
-}
-
-// validateUInt32 validates that the given annotation value is a positive integer.
-func validateUInt32(value string) error {
-	_, err := strconv.ParseUint(value, 10, 32)
-	return err
 }
 
 // validateBool validates that the given annotation value is a boolean.
