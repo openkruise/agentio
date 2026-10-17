@@ -122,7 +122,9 @@ spec:
             - {name: agentio-envoy, mountPath: /etc/agentio/proxy}
             - {name: agentio-token, mountPath: /var/run/secrets/tokens}
             - {name: gateway-podinfo, mountPath: /etc/agentio/pod}
+      initContainers:
         - name: agentio-porter
+          restartPolicy: Always
           image: {{ include "gateway.porterImage" . | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy | quote }}
           args:

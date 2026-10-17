@@ -17,6 +17,7 @@ package xds
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -84,19 +85,71 @@ func (g WorkloadGenerator) generateDirectWorkloads(request GenerationRequest) (G
 		return delta, nil
 	}
 	if request.Full || request.Update.FullFor(model.WorkloadType) {
-		selected := make(map[string]model.Resource)
 		addresses := selectWorkloadResources(
 			request.Scope, request.Snapshot, model.AddressType, selectionNames(request.Subscription))
 		projected, err := g.projectAddresses(addresses)
 		if err != nil {
 			return GeneratedDelta{}, err
 		}
+		selected := make(map[string]model.Resource, len(projected))
 		for _, resource := range projected {
 			selected[resource.XDSName] = resource
 		}
-		return diffSelected(request.Subscription, selected), nil
+		return diffDemandWorkloads(request, selected), nil
 	}
 	return projectDelta(generateWDSIncremental(sourceRequest, true))
+}
+
+// diffDemandWorkloads also resends explicitly requested Workloads after client
+// eviction. Workload subscriptions are gateway-only; resolve names and Service
+// members through the indexes, then reuse the already selected projections.
+func diffDemandWorkloads(request GenerationRequest, selected map[string]model.Resource) GeneratedDelta {
+	if len(request.SubscribedNames) == 0 {
+		return diffSelected(request.Subscription, selected)
+	}
+	resend := sets.New[string]()
+	var missing []string
+	markRequested := func(name string) bool {
+		resource, found := selected[name]
+		if !found {
+			return false
+		}
+		if version, sent := request.Subscription.SentVersion(name); sent && version == resource.Hash {
+			resend.Insert(name)
+		}
+		return true
+	}
+	for _, name := range request.SubscribedNames {
+		if name == "*" {
+			continue
+		}
+		found := false
+		for _, address := range request.Snapshot.Lookup(model.AddressType, name) {
+			if address.IsWorkloadAddress() && markRequested(address.XDSName) {
+				found = true
+			}
+			if service := address.Facts.Service; service != nil {
+				for _, member := range request.Snapshot.ListServiceMembers(model.AddressType, service.ServiceKey) {
+					if member.IsWorkloadAddress() && markRequested(member.XDSName) {
+						found = true
+					}
+				}
+			}
+		}
+		if !found {
+			missing = append(missing, name)
+		}
+	}
+	delta := diffResourceSelection(selected, request.Subscription.SentNames(), func(name string) (string, bool) {
+		version, sent := request.Subscription.SentVersion(name)
+		return version, sent && !resend.Contains(name)
+	})
+	if len(missing) > 0 {
+		delta.Removed = append(delta.Removed, missing...)
+		slices.Sort(delta.Removed)
+		delta.Removed = slices.Compact(delta.Removed)
+	}
+	return delta
 }
 
 func (g WorkloadGenerator) projectAddresses(addresses []model.Resource) ([]model.Resource, error) {

@@ -71,6 +71,7 @@ spec:
             "gateway.agentio.kruise.io/managed" .ControllerLabel
           ) | nindent 8}}
     spec:
+      terminationGracePeriodSeconds: {{ valueOrDefault $egressGateway.terminationGracePeriodSeconds 30 }}
       {{- if $egressGateway.affinity }}
       affinity:
       {{- toYaml $egressGateway.affinity | nindent 8 }}
@@ -237,7 +238,9 @@ spec:
           name: agentio-token
         - mountPath: /etc/agentio/pod
           name: agentio-podinfo
+      initContainers:
       - name: agentio-porter
+        restartPolicy: Always
         image: {{ $porter.image | quote }}
         imagePullPolicy: {{ .Values.global.imagePullPolicy | quote }}
         args:

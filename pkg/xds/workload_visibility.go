@@ -15,6 +15,8 @@
 package xds
 
 import (
+	"slices"
+
 	"istio.io/istio/pkg/util/sets"
 
 	"github.com/openkruise/agentio/pkg/model"
@@ -105,12 +107,20 @@ func (v *addressSelection) selected(resource model.Resource) bool {
 			return false
 		}
 	}
-	if v.subscription.allows(resource) || containsSorted(v.subscription.names, resource.Key.Name) {
+	return v.selectedByNames(resource, func(name string) bool {
+		return containsSorted(v.subscription.names, name)
+	})
+}
+
+// selectedByNames shares explicit-name selection between immutable generator
+// views and the live interests used synchronously during demand reconciliation.
+func (v *addressSelection) selectedByNames(resource model.Resource, contains func(string) bool) bool {
+	if resourceNamesMatch(resource, contains) {
 		return true
 	}
 	if workload := resource.Facts.Workload; workload != nil {
 		for _, key := range workload.ServiceKeys {
-			if v.subscribesService(key) {
+			if v.subscribesService(key, contains) {
 				return true
 			}
 		}
@@ -118,16 +128,23 @@ func (v *addressSelection) selected(resource model.Resource) bool {
 	return false
 }
 
-func (v *addressSelection) subscribesService(key string) bool {
+func (v *addressSelection) subscribesService(key string, contains func(string) bool) bool {
 	if v.serviceKeys != nil {
 		return v.serviceKeys.Contains(key)
 	}
 	for _, service := range serviceResourcesForKey(v.resources, key) {
-		if v.subscription.allows(service) || containsSorted(v.subscription.names, service.Key.Name) {
+		if resourceNamesMatch(service, contains) {
 			return true
 		}
 	}
 	return false
+}
+
+func resourceNamesMatch(resource model.Resource, contains func(string) bool) bool {
+	if contains(resource.XDSName) {
+		return true
+	}
+	return slices.ContainsFunc(resource.Aliases, contains) || contains(resource.Key.Name)
 }
 
 // list enumerates candidates through indexes before applying the same predicate

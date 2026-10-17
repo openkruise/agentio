@@ -279,8 +279,9 @@ func (c *Config) applyFlags(args []string, output io.Writer, concurrency *int) e
 		if err != nil || seconds < 1 {
 			return fmt.Errorf("invalid Pod termination grace period")
 		}
-		// Leave time for child cleanup before Kubernetes SIGKILL.
-		maximum := max(0, time.Duration(seconds)*time.Second-5*time.Second)
+		// Reserve five seconds for gateway cleanup and five for the Porter
+		// native sidecar, which receives SIGTERM only after the gateway exits.
+		maximum := max(0, time.Duration(seconds)*time.Second-10*time.Second)
 		c.Proxy.TerminationDrainDuration = min(c.Proxy.TerminationDrainDuration, maximum)
 	}
 	return nil

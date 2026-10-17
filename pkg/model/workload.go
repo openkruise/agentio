@@ -102,3 +102,8 @@ func (s SourceRef) String() string {
 	}
 	return fmt.Sprintf("%d:%s%s", len(s.Registry), s.Registry, s.Key)
 }
+
+// WorkloadAlias addresses a workload by immutable registry instance identity.
+func (s SourceRef) WorkloadAlias() string {
+	return "instance/" + s.String()
+}

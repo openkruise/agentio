@@ -15,6 +15,9 @@
 package agentio
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +25,9 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
 func TestChartValuesPinSuiteImagesAndBehavior(t *testing.T) {
@@ -128,6 +134,35 @@ func TestProductionChartRendersSuiteValues(t *testing.T) {
 			t.Errorf("rendered manifest does not contain %q", expected)
 		}
 	}
+	decoder := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(manifest), 4096)
+	foundGateway := false
+	for {
+		var deployment appsv1.Deployment
+		if err := decoder.Decode(&deployment); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if deployment.Kind != "Deployment" || deployment.Name != "egress-gateway" {
+			continue
+		}
+		foundGateway = true
+		spec := deployment.Spec.Template.Spec
+		if len(spec.Containers) != 1 || spec.Containers[0].Name != "agentio-proxy" {
+			t.Fatalf("gateway app containers = %+v", spec.Containers)
+		}
+		if len(spec.InitContainers) != 1 || spec.InitContainers[0].Name != "agentio-porter" ||
+			spec.InitContainers[0].RestartPolicy == nil || *spec.InitContainers[0].RestartPolicy != corev1.ContainerRestartPolicyAlways {
+			t.Fatalf("Porter must be a native sidecar: %+v", spec.InitContainers)
+		}
+		if spec.InitContainers[0].ReadinessProbe == nil || spec.InitContainers[0].LivenessProbe == nil {
+			t.Fatal("Porter health probes must survive the move to initContainers")
+		}
+	}
+	if !foundGateway {
+		t.Fatal("gateway Deployment missing")
+	}
+
 	if strings.Contains(string(manifest), "kind: DaemonSet") {
 		t.Fatal("sidecar suite values unexpectedly rendered ambient DaemonSets")
 	}

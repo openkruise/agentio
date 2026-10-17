@@ -78,7 +78,7 @@ func (b *RequestBuilder) RequestID(id string) *RequestBuilder {
 }
 
 // Peer sets the caller pod identity and its labels, delivered as the
-// base64-encoded filter_state['sandbox.labels'] value.
+// base64-encoded filter_state['agentio.workload.labels'] value.
 func (b *RequestBuilder) Peer(namespace, name string, labels map[string]string) *RequestBuilder {
 	b.peerNamespace = namespace
 	b.peerName = name
@@ -219,7 +219,7 @@ func (b *RequestBuilder) Attrs() map[string]*structpb.Struct {
 	setString(attributes.FilterStateDownstreamPeerName, b.peerName)
 	if len(b.labels) > 0 {
 		encoded := base64.StdEncoding.EncodeToString([]byte(encodeLabelPairs(b.labels)))
-		setString(attributes.FilterStateSandboxLabels, encoded)
+		setString(attributes.FilterStateWorkloadLabels, encoded)
 	}
 	setString(attributes.FilterStateSandboxToken, b.sandboxToken)
 	setString(attributes.AttrSourceAddress, b.sourceAddress)

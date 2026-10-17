@@ -357,14 +357,14 @@ spec:
 	trafficFixture.Client.CallOrFail(t, options)
 }
 
-// TestSandboxLabelsReachEPE proves the sandbox.labels attribute contract. The
+// TestWorkloadLabelsReachEPE proves the agentio.workload.labels attribute contract. The
 // Positive calls through both matching callers are the propagation barriers
 // for the subsequent one-shot negative assertion: the shared caller proves the
 // first document is active, then the dedicated caller proves the later document
 // is active without changing the pinned document order.
-func TestSandboxLabelsReachEPE(t *testing.T) {
+func TestWorkloadLabelsReachEPE(t *testing.T) {
 	environment, scope := beginEPEDataPathScenario(t,
-		"The caller's pod labels did not reach EPE, or did not decode. Either sandbox.labels is missing "+
+		"The caller's pod labels did not reach EPE, or did not decode. Either agentio.workload.labels is missing "+
 			"from the ext_proc request_attributes or the sandbox data plane did not populate it for this workload type. EPE log")
 	selectorProbe := applyEPESelectorProbe(t, environment)
 
@@ -649,6 +649,7 @@ data:
         attributes:
         - filter_state['sandbox.id']
         - filter_state['sandbox.token']
+        - filter_state['agentio.workload.labels']
         - filter_state['sandbox.labels']
         - filter_state['agentio.workload.name']
         - filter_state['agentio.workload.namespace']

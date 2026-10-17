@@ -116,17 +116,18 @@ func (s *Server) handleRequest(
 	if !changed && request.GetResponseNonce() != "" && !explicitSecretSubscribe && !explicitDemandSubscribe {
 		return nil
 	}
-	if !initial && !watch.wildcard && len(request.GetResourceNamesUnsubscribe()) == 0 &&
+	if !initial && !watch.wildcard &&
 		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress) {
 		snapshot := s.resources.Snapshot()
-		if view, ok := demandSubscriptionView(snapshot, typeURL, request.GetResourceNamesSubscribe()); ok {
+		if view, ok := demandReconciliationView(snapshot, typeURL, scope, watch,
+			request.GetResourceNamesSubscribe(), request.GetResourceNamesUnsubscribe()); ok {
 			return s.generateAndSend(stream, connLog, watch, GenerationRequest{
 				Scope:           scope,
 				TypeURL:         typeURL,
 				Subscription:    view,
 				Snapshot:        snapshot,
 				Full:            true,
-				SubscribedNames: view.Names(),
+				SubscribedNames: append([]string(nil), request.GetResourceNamesSubscribe()...),
 			}, true)
 		}
 	}

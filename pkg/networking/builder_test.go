@@ -1033,7 +1033,7 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 	}
 }
 
-func TestWorkloadHeaderFilterState(t *testing.T) {
+func TestSandboxHeaderFilterState(t *testing.T) {
 	resources := buildCompleteGatewayGraph(t)
 	listeners := messagesOf(
 		t,
@@ -1054,8 +1054,8 @@ func TestWorkloadHeaderFilterState(t *testing.T) {
 		states = config.GetOnRequestHeaders()
 	}
 	for key, header := range map[string]string{
-		"agentio.workload.name":      "X-AGENTIO-WORKLOAD-NAME",
-		"agentio.workload.namespace": "X-AGENTIO-WORKLOAD-NAMESPACE",
+		"sandbox.id":    "X-AGENTIO-SANDBOX-ID",
+		"sandbox.token": "X-AGENTIO-SANDBOX-TOKEN",
 	} {
 		index := slices.IndexFunc(
 			states,

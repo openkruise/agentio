@@ -1,4 +1,4 @@
-.PHONY: build build.agentiod build.epe build.porter clean fmt format gen gen.crddocs gen.envdocs check.envdocs lint lint.golangci lint.logging racetest test test.epe test.integration.agentio.kube test.integration.agentio.product tidy
+.PHONY: build build.agentiod build.epe build.porter test.porter lint.porter clean fmt format gen gen.crddocs gen.envdocs check.envdocs lint lint.golangci lint.logging racetest test test.epe test.integration.agentio.kube test.integration.agentio.product tidy
 
 build: build.agentiod build.epe build.porter build.gateway-agent
 
@@ -8,7 +8,8 @@ build.agentiod:
 
 build.porter:
 	mkdir -p out
-	go build -trimpath -o out/agentio-porter ./extensions/porter/cmd/agentio-porter
+	cargo build --release --locked --manifest-path extensions/porter/Cargo.toml
+	cp extensions/porter/target/release/agentio-porter out/agentio-porter
 
 build.epe:
 	mkdir -p out
@@ -26,7 +27,10 @@ test.gateway-agent:
 test.epe:
 	go test ./extensions/epe/...
 
-test:
+test.porter:
+	cargo test --locked --manifest-path extensions/porter/Cargo.toml
+
+test: test.porter
 	go test ./...
 	go -C test/e2e test ./...
 
@@ -69,7 +73,11 @@ lint.golangci:
 lint.style:
 	go run ./tools/gostyle -base "$(GO_STYLE_BASE)"
 
-lint: lint.style
+lint.porter:
+	cargo fmt --manifest-path extensions/porter/Cargo.toml --check
+	cargo clippy --locked --manifest-path extensions/porter/Cargo.toml --all-targets -- -D warnings
+
+lint: lint.style lint.porter
 	go vet ./...
 	go -C test/e2e vet ./...
 
@@ -96,6 +104,7 @@ format: fmt
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(FMT_PATHS)
+	cargo fmt --manifest-path extensions/porter/Cargo.toml
 
 tidy:
 	go mod tidy

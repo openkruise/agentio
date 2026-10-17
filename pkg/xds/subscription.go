@@ -146,10 +146,10 @@ func newSubscriptionView(watch *watchState) SubscriptionView {
 	return SubscriptionView{wildcard: watch.wildcard, names: names, sent: sent}
 }
 
-// demandSubscriptionView reconciles only the explicitly requested canonical
-// resources. Empty sent state forces a reply even when the client has evicted a
-// previously delivered value; the stream retains all other subscriptions and
-// sent versions. Aliases and Service expansion require the complete selection.
+// demandSubscriptionView reconciles only explicitly requested resources,
+// including unique Workload aliases and missing names. Empty sent state forces
+// a reply after client eviction. Ambiguous aliases and Service expansion still
+// use the complete selection; other subscriptions retain their sent versions.
 func demandSubscriptionView(snapshot model.ResourceSet, typeURL string, names []string) (SubscriptionView, bool) {
 	if len(names) == 0 {
 		return SubscriptionView{}, false
@@ -163,13 +163,66 @@ func demandSubscriptionView(snapshot model.ResourceSet, typeURL string, names []
 		return SubscriptionView{}, false
 	}
 	for _, name := range names {
+		if name == "*" {
+			return SubscriptionView{}, false
+		}
 		resources := snapshot.Lookup(lookupType, name)
-		if len(resources) != 1 || resources[0].XDSName != name ||
-			(typeURL == model.WorkloadType && !resources[0].IsWorkloadAddress()) {
+		if len(resources) == 0 {
+			continue
+		}
+		if len(resources) != 1 ||
+			(typeURL == model.WorkloadType && !resources[0].IsWorkloadAddress()) ||
+			(typeURL != model.WorkloadType && resources[0].XDSName != name) {
 			return SubscriptionView{}, false
 		}
 	}
 	return SubscriptionView{names: sortedNames(sets.New(names...))}, true
+}
+
+// demandReconciliationView also limits cache-eviction reconciliation to the
+// affected Workloads. Remaining aliases and Service subscriptions can keep a
+// canonical resource selected after one of its names is unsubscribed.
+func demandReconciliationView(snapshot model.ResourceSet, typeURL string, scope model.ClientScope,
+	watch *watchState, subscribed, unsubscribed []string,
+) (SubscriptionView, bool) {
+	view, ok := demandSubscriptionView(snapshot, typeURL, subscribed)
+	if len(unsubscribed) == 0 {
+		return view, ok
+	}
+	if typeURL != model.WorkloadType || (len(subscribed) > 0 && !ok) {
+		return SubscriptionView{}, false
+	}
+	view.sent = make(map[string]string)
+	names := sets.New(view.names...)
+	selection := newAddressSelection(
+		scope,
+		snapshot,
+		model.AddressType,
+		SubscriptionView{},
+	)
+	for _, name := range unsubscribed {
+		if name == "*" {
+			return SubscriptionView{}, false
+		}
+		resources := snapshot.Lookup(model.AddressType, name)
+		if len(resources) != 1 || !resources[0].IsWorkloadAddress() {
+			return SubscriptionView{}, false
+		}
+		resource := resources[0]
+		// Check live interests without sorting the entire subscription cache.
+		if !selection.selectedByNames(resource, watch.names.Contains) {
+			// An alias unsubscribe must forget the canonical sent state too.
+			// Sending a removal could cancel a later demand for the same resource.
+			delete(watch.sent, resource.XDSName)
+			continue
+		}
+		if version, found := watch.sent[resource.XDSName]; found {
+			view.sent[resource.XDSName] = version
+		}
+		names.Insert(resource.XDSName)
+	}
+	view.names = sortedNames(names)
+	return view, true
 }
 
 // newIncrementalSubscriptionView copies sent versions only for affected wire

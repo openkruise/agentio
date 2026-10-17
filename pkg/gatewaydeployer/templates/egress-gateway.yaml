@@ -241,7 +241,9 @@ spec:
           name: agentio-token
         - mountPath: /etc/agentio/pod
           name: agentio-podinfo
+      initContainers:
       - name: agentio-porter
+        restartPolicy: Always
         image: {{ $porter.image | quote }}
         imagePullPolicy: {{ .Values.global.imagePullPolicy | quote }}
         args:

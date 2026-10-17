@@ -94,11 +94,16 @@ func TestGatewayDeploymentOverlayMergesContainers(t *testing.T) {
 		}
 	}
 	containers := dep.Spec.Template.Spec.Containers
-	if len(containers) != 3 ||
-		!slices.ContainsFunc(containers, func(c corev1.Container) bool { return c.Name == "agentio-porter" }) ||
+	if len(containers) != 2 ||
 		!slices.ContainsFunc(containers, func(c corev1.Container) bool { return c.Name == "helper-sidecar" }) {
 		t.Fatalf("containers: %+v", containers)
 	}
+	initContainers := dep.Spec.Template.Spec.InitContainers
+	if len(initContainers) != 1 || initContainers[0].Name != "agentio-porter" ||
+		initContainers[0].RestartPolicy == nil || *initContainers[0].RestartPolicy != corev1.ContainerRestartPolicyAlways {
+		t.Fatalf("Porter must remain a native sidecar after overlay: %+v", initContainers)
+	}
+
 	c := containers[0]
 	if c.Name != "agentio-proxy" || c.Image == "" || len(c.Args) == 0 || len(c.VolumeMounts) == 0 || len(c.Env) < 2 {
 		t.Fatalf("proxy template was replaced: %+v", c)

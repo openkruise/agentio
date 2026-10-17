@@ -86,7 +86,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   #    exempt because the ones that assert a bridge must call it.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/agentiod/logging.go | extensions/epe/cmd/epe/main.go | test/fixtures/extproc/main.go | bench/xds/load/main.go) ;;
+      cmd/agentiod/logging.go | extensions/epe/cmd/epe/main.go | test/fixtures/extproc/main.go | bench/xds/load/main.go | bench/porter/load/main.go) ;;
       *)
         scan "${f}" '(^|[^[:alnum:]_."])klog\.' \
           "klog is bridged once in the process entrypoint; use the package logger"
@@ -99,7 +99,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 3. Console output is a CLI surface, not a diagnostics channel.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/* | test/e2e/* | tools/* | bench/xds/load/* | bench/xds/run/* | pkg/server/env.go) ;;
+      cmd/* | test/e2e/* | tools/* | bench/xds/load/* | bench/xds/run/* | bench/porter/load/main.go | bench/porter/run/* | pkg/server/env.go) ;;
       *)
         scan "${f}" 'fmt\.Print|fmt\.Fprint(f|ln)?\(os\.Std(out|err)' \
           "use the package logger; fmt.Print is only for CLI surfaces and the e2e harness"
@@ -110,7 +110,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 4. Only main decides that the process should stop.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go) ;;
+      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go) ;;
       *)
         scan "${f}" 'os\.Exit\(' \
           "os.Exit belongs in main; return the error and let the entrypoint log it"

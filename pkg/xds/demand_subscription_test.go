@@ -41,6 +41,13 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 			a := addressResource(t, "a", "old")
 			b := addressResource(t, "b", "b")
 			changed := addressResource(t, "a", "new")
+			demandName := func(name string) string { return name }
+			if typeURL == model.WorkloadType {
+				a.Aliases = []string{"alias-a"}
+				b.Aliases = []string{"alias-b"}
+				changed.Aliases = []string{"alias-a"}
+				demandName = func(name string) string { return "alias-" + name }
+			}
 			var dependencies []model.Resource
 			switch typeURL {
 			case model.TrafficPolicyType:
@@ -78,17 +85,17 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 				}
 				return responses[len(responses)-1]
 			}
-			response := send(nodeRequest(typeURL, "a"))
+			response := send(nodeRequest(typeURL, demandName("a")))
 			for _, name := range []string{"b", "b"} {
 				response = send(&discoveryv3.DeltaDiscoveryRequest{
 					TypeUrl:                typeURL,
-					ResourceNamesSubscribe: []string{name},
+					ResourceNamesSubscribe: []string{demandName(name)},
 					ResponseNonce:          response.Nonce,
 				})
 				if !slices.Equal(resourceNames(response), []string{name}) || len(response.RemovedResources) != 0 {
 					t.Fatalf("demand must only resend %s: %v", name, response)
 				}
-				if !slices.Equal(recorder.last.Subscription.Names(), []string{name}) {
+				if !slices.Equal(recorder.last.Subscription.Names(), []string{demandName(name)}) {
 					t.Fatalf("demand regenerated unrelated subscriptions: %v", recorder.last.Subscription.Names())
 				}
 				if len(watches[typeURL].sent) != 2 || len(watches[typeURL].names) != 2 {
@@ -121,7 +128,7 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 			}
 			response = send(&discoveryv3.DeltaDiscoveryRequest{
 				TypeUrl:                  typeURL,
-				ResourceNamesUnsubscribe: []string{"b"},
+				ResourceNamesUnsubscribe: []string{demandName("b")},
 				ResponseNonce:            response.Nonce,
 			})
 			if len(response.RemovedResources) != 0 || len(watches[typeURL].sent) != 0 {
@@ -131,7 +138,7 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 			// Even with an unchanged version, resubscription must return b.
 			response = send(&discoveryv3.DeltaDiscoveryRequest{
 				TypeUrl:                typeURL,
-				ResourceNamesSubscribe: []string{"b"},
+				ResourceNamesSubscribe: []string{demandName("b")},
 			})
 			if !slices.Equal(resourceNames(response), []string{"b"}) || len(response.RemovedResources) != 0 {
 				t.Fatalf("resubscribe lost resource: %v", response)
@@ -139,7 +146,7 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 			// Initial versions must reconcile the whole restored subscription,
 			// including a cached resource deleted while the client was offline.
 			watches = map[string]*watchState{}
-			reconnect := nodeRequest(typeURL, "b")
+			reconnect := nodeRequest(typeURL, demandName("b"))
 			reconnect.InitialResourceVersions = map[string]string{"a": "cached-before-deletion"}
 			response = send(reconnect)
 			if !slices.Equal(response.RemovedResources, []string{"a"}) {
@@ -149,11 +156,11 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 	}
 }
 
-func TestDemandSubscriptionRequiresCanonicalResource(t *testing.T) {
+func TestDemandSubscriptionKeepsExpandedSelection(t *testing.T) {
 	workload := addressResource(t, "a", "a")
 	workload.Aliases = []string{"alias"}
 	snapshot := selectionSnapshot(t, []model.Resource{workload, selectionService(t, "service")})
-	for _, names := range [][]string{nil, {"alias"}, {"missing"}, {"a", "missing"}, {"*"}, {"service"}} {
+	for _, names := range [][]string{nil, {"*"}, {"service"}} {
 		if _, ok := demandSubscriptionView(snapshot, model.WorkloadType, names); ok {
 			t.Fatalf("%v should use complete selection", names)
 		}

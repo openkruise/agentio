@@ -94,7 +94,7 @@ func TestExtract(t *testing.T) {
 			attrFields: map[string]any{
 				FilterStateDownstreamPeerNamespace: "default",
 				FilterStateDownstreamPeerName:      "pod-a",
-				FilterStateSandboxLabels:           b64("app=sleep,tier=web"),
+				FilterStateWorkloadLabels:          b64("app=sleep,tier=web"),
 				FilterStateSandboxToken:            b64(tokenJSON),
 				AttrSourceAddress:                  "10.0.0.1:34567",
 				AttrDestinationPort:                float64(9443),
@@ -114,7 +114,7 @@ func TestExtract(t *testing.T) {
 			attrFields: map[string]any{
 				FilterStateDownstreamPeerNamespace: "default",
 				FilterStateDownstreamPeerName:      "pod-a",
-				FilterStateSandboxLabels:           b64("app=sleep,tier=web"),
+				FilterStateWorkloadLabels:          b64("app=sleep,tier=web"),
 			},
 			headers: fullHeaders,
 			wantPeer: filter.Peer{
@@ -146,11 +146,11 @@ func TestExtract(t *testing.T) {
 			wantValid: true,
 		},
 		{
-			name: "labels parsed from sandbox.labels",
+			name: "labels parsed from agentio.workload.labels",
 			attrFields: map[string]any{
 				FilterStateDownstreamPeerNamespace: "ns1",
 				FilterStateDownstreamPeerName:      "pod-b",
-				FilterStateSandboxLabels:           b64("app=sleep"),
+				FilterStateWorkloadLabels:          b64("app=sleep"),
 			},
 			headers: fullHeaders,
 			wantPeer: filter.Peer{
@@ -195,7 +195,7 @@ func TestExtract(t *testing.T) {
 			name: "missing pod name fails identity and skips further extraction",
 			attrFields: map[string]any{
 				FilterStateDownstreamPeerNamespace: "default",
-				FilterStateSandboxLabels:           b64("app=sleep"),
+				FilterStateWorkloadLabels:          b64("app=sleep"),
 				AttrSourceAddress:                  "10.0.0.2:1234",
 			},
 			headers: fullHeaders,
@@ -287,7 +287,7 @@ func TestExtractFilterStateString_NestedStructure(t *testing.T) {
 	innerMap := map[string]interface{}{
 		"filter_state['downstream_peer'].name":      "sleep-55874894df-mtqbk",
 		"filter_state['downstream_peer'].namespace": "default",
-		"filter_state['sandbox.labels']":            "YXBwPXNsZWVwLHNlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLW5hbWU9c2xlZXA=",
+		"filter_state['agentio.workload.labels']":   "YXBwPXNsZWVwLHNlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLW5hbWU9c2xlZXA=",
 	}
 	innerStruct, err := structpb.NewStruct(innerMap)
 	if err != nil {
@@ -315,7 +315,7 @@ func TestExtractFilterStateString_NestedStructure(t *testing.T) {
 		},
 		{
 			name:     "extract sandbox labels",
-			key:      FilterStateSandboxLabels,
+			key:      FilterStateWorkloadLabels,
 			expected: "YXBwPXNsZWVwLHNlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLW5hbWU9c2xlZXA=",
 		},
 	}
@@ -626,5 +626,33 @@ func TestExtractOriginalDestination(t *testing.T) {
 	)
 	if req.OriginalDestination.IsValid() {
 		t.Fatalf("HTTP header became original destination: %s", req.OriginalDestination)
+	}
+}
+
+func TestWorkloadLabelsRollingUpgrade(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+		want   map[string]string
+	}{
+		{name: "old gateway", fields: map[string]any{FilterStateSandboxLabels: b64("app=old")}, want: map[string]string{"app": "old"}},
+		{name: "new gateway", fields: map[string]any{FilterStateWorkloadLabels: b64("app=new")}, want: map[string]string{"app": "new"}},
+		{name: "new value wins", fields: map[string]any{FilterStateWorkloadLabels: b64("app=new"), FilterStateSandboxLabels: b64("app=old")}, want: map[string]string{"app": "new"}},
+		{name: "empty new value is authoritative", fields: map[string]any{FilterStateWorkloadLabels: "", FilterStateSandboxLabels: b64("app=old")}, want: map[string]string{}},
+		{name: "invalid new value does not fall back", fields: map[string]any{FilterStateWorkloadLabels: "!invalid", FilterStateSandboxLabels: b64("app=old")}, want: map[string]string{}},
+		{name: "wrapped new value", fields: map[string]any{FilterStateWorkloadLabels: map[string]any{"value": b64("app=new")}, FilterStateSandboxLabels: b64("app=old")}, want: map[string]string{"app": "new"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.fields[FilterStateWorkloadName] = "client"
+			tc.fields[FilterStateWorkloadNamespace] = "demo"
+			peer, _ := Extract(
+				t.Context(),
+				makeHTTPHeaders(map[string]string{":method": "GET", ":authority": "example.com"}),
+				makeAttrs(t, tc.fields),
+			)
+			if !reflect.DeepEqual(peer.Labels, tc.want) {
+				t.Fatalf("labels=%v want=%v", peer.Labels, tc.want)
+			}
+		})
 	}
 }

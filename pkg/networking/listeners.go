@@ -552,7 +552,11 @@ func (b *resourceBuilder) extProcFilter(provider *configv1.ExtProcProvider) (*hc
 		ReceivingNamespaces: &extprocv3.MetadataOptions_MetadataNamespaces{Untyped: []string{"agentio.route"}},
 	}
 	attributes := append([]string(nil), provider.GetRequest().GetAttributes()...)
-	for _, attribute := range []string{model.AttributeWorkloadName, model.AttributeWorkloadNamespace, "source.address", "destination.address", "destination.port"} {
+	for _, attribute := range []string{model.AttributeWorkloadName, model.AttributeWorkloadNamespace, model.AttributeWorkloadLabels, "filter_state['sandbox.labels']", "source.address", "destination.address", "destination.port"} {
+		if b.legacyGateway &&
+			(attribute == model.AttributeWorkloadLabels || attribute == "filter_state['sandbox.labels']") {
+			continue
+		}
 		found := false
 		for _, existing := range attributes {
 			found = found || existing == attribute
@@ -597,11 +601,10 @@ func (b *resourceBuilder) connectExtProcFilter() *hcmv3.HttpFilter {
 			ResponseTrailerMode: extprocv3.ProcessingMode_SKIP,
 		},
 		RequestAttributes: []string{
-			model.AttributeWorkloadName,
-			model.AttributeWorkloadNamespace,
 			model.AttributeSandboxID,
 			model.AttributePeerIP,
 			model.AttributePeerPrincipal,
+			model.AttributePeerCertificate,
 		},
 		MetadataOptions: &extprocv3.MetadataOptions{
 			ReceivingNamespaces: &extprocv3.MetadataOptions_MetadataNamespaces{
@@ -612,7 +615,7 @@ func (b *resourceBuilder) connectExtProcFilter() *hcmv3.HttpFilter {
 }
 
 // Publish Porter's resolved identity before creating any internal connection.
-// This also fills missing headers from older ztunnels, independently of SNI policy.
+// Identity comes from the certificate or peer IP, independently of SNI policy.
 func connectWorkloadFilter() *hcmv3.HttpFilter {
 	config := &setstatehttpv3.Config{}
 	for _, field := range []struct {
@@ -629,6 +632,25 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 				FormatString: formatString(
 					"%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":workload:" + field.name + ")%",
 				),
+			},
+			SharedWithUpstream: setstatecommonv3.FilterStateValue_TRANSITIVE,
+			SkipIfEmpty:        true,
+		})
+	}
+	for _, field := range []struct {
+		key      string
+		metadata string
+	}{
+		{model.FilterStateWorkloadLabels, "workload_labels"},
+		// Keep the old output while older EPE instances are still deployed.
+		{"sandbox.labels", "workload_labels"},
+		{"agentio.workload.instance", "workload_instance"},
+	} {
+		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
+			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},
+			FactoryKey: "envoy.hashable_string",
+			Value: &setstatecommonv3.FilterStateValue_FormatString{
+				FormatString: formatString("%DYNAMIC_METADATA(agentio:" + field.metadata + ")%"),
 			},
 			SharedWithUpstream: setstatecommonv3.FilterStateValue_TRANSITIVE,
 			SkipIfEmpty:        true,
@@ -818,6 +840,23 @@ func buildConnectAuthorityFilter(factory, peerPrincipal, localPrincipal string, 
 		),
 	}
 	if factory == "envoy.hashable_string" {
+		// Native gateways resolve workload identity and labels through Porter.
+		filtered := values[:0]
+		for _, state := range values {
+			switch state.GetObjectKey() {
+			case "sandbox.labels", model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace:
+				continue
+			case model.FilterStateSandboxID, "sandbox.token":
+				// Each CONNECT selects a sandbox; isolate its context in internal pools.
+				state.FactoryKey = factory
+			}
+			filtered = append(filtered, state)
+		}
+		values = filtered
+		// Read the TLS-verified peer certificate, never a CONNECT header.
+		// Only Porter needs the certificate; do not propagate it to inner streams.
+		values = append(values, value(model.FilterStatePeerCertificate, "%DOWNSTREAM_PEER_CERT%",
+			"envoy.string", setstatecommonv3.FilterStateValue_NONE))
 		// Use the physical HBONE peer, never an application-supplied forwarding header.
 		values = append(values, value(model.FilterStatePeerIP, "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%",
 			"envoy.string", setstatecommonv3.FilterStateValue_NONE))

@@ -52,7 +52,9 @@ const (
 	// what we want, so callers strip the trailing port. The egress
 	// gateway must list "source.address" in its ext_proc
 	// request_attributes for this to be populated.
-	AttrSourceAddress        = "source.address"
+	AttrSourceAddress         = "source.address"
+	FilterStateWorkloadLabels = "filter_state['agentio.workload.labels']"
+	// FilterStateSandboxLabels is the legacy label attribute used during rolling upgrades.
 	FilterStateSandboxLabels = "filter_state['sandbox.labels']"
 	FilterStateSandboxToken  = "filter_state['sandbox.token']"
 
@@ -92,7 +94,11 @@ func Extract(
 		Pod: types.NamespacedName{Namespace: podNamespace, Name: podName},
 		IP:  extractPodIP(attrs),
 	}
-	sandboxLabelsEncoded := extractFilterStateString(attrs, FilterStateSandboxLabels)
+	labelsKey := FilterStateWorkloadLabels
+	if _, present := attrs[ExtProcAttrsKey].GetFields()[labelsKey]; !present {
+		labelsKey = FilterStateSandboxLabels
+	}
+	workloadLabelsEncoded := extractFilterStateString(attrs, labelsKey)
 
 	if podNamespace == "" || podName == "" {
 		// Envoy must supply the captured workload headers or legacy peer
@@ -103,11 +109,12 @@ func Extract(
 		return peer, httpreq.HTTPRequest{}
 	}
 
-	// Pod labels come from filter_state['sandbox.labels'], a base64-encoded
+	// Workload labels use the new attribute when present, including empty values.
+	// Both attribute names carry the same base64-encoded
 	// "k1=v1,k2=v2" string.
-	podLabels := labels.ParseSandboxLabels(sandboxLabelsEncoded)
-	if sandboxLabelsEncoded != "" && len(podLabels) == 0 {
-		loggerD.Info("sandbox.labels was present but failed to decode", "encoded", sandboxLabelsEncoded)
+	podLabels := labels.ParseSandboxLabels(workloadLabelsEncoded)
+	if workloadLabelsEncoded != "" && len(podLabels) == 0 {
+		loggerD.Info("workload labels were present but failed to decode", "attribute", labelsKey)
 	}
 	// Guarded: Go builds the key-value slice at the call site, before Info can
 	// check the level and drop it, so an unguarded line costs an allocation on

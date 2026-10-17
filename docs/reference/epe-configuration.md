@@ -71,7 +71,8 @@ sandboxExtProc:
     attributes:
       - filter_state['sandbox.id']
       - filter_state['sandbox.token']
-      - filter_state['sandbox.labels']
+      - filter_state['agentio.workload.labels']
+      - filter_state['sandbox.labels'] # Compatibility with older gateways
       - filter_state['agentio.workload.name']
       - filter_state['agentio.workload.namespace']
       - filter_state['downstream_peer'].name

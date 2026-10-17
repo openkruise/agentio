@@ -181,7 +181,7 @@ func makeAttrsWithLabels(namespace, name, labelsB64 string) map[string]*structpb
 	inner, _ := structpb.NewStruct(map[string]interface{}{
 		attributes.FilterStateDownstreamPeerNamespace: namespace,
 		attributes.FilterStateDownstreamPeerName:      name,
-		attributes.FilterStateSandboxLabels:           labelsB64,
+		attributes.FilterStateWorkloadLabels:          labelsB64,
 	})
 	return map[string]*structpb.Struct{
 		attributes.ExtProcAttrsKey: inner,

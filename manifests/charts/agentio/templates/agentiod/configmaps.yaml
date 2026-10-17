@@ -4,7 +4,7 @@
 {{- $_ := set $defaults "egressGateways" (list $gateway) -}}
 {{- end -}}
 {{- if ne .Values.epe.mode "disabled" -}}
-{{- $request := dict "headerMode" "SEND" "attributes" (list "filter_state['sandbox.id']" "filter_state['sandbox.token']" "filter_state['sandbox.labels']" "filter_state['agentio.workload.name']" "filter_state['agentio.workload.namespace']" "filter_state['downstream_peer'].name" "filter_state['downstream_peer'].namespace" "destination.address" "destination.port" "source.address") -}}
+{{- $request := dict "headerMode" "SEND" "attributes" (list "filter_state['sandbox.id']" "filter_state['sandbox.token']" "filter_state['agentio.workload.labels']" "filter_state['sandbox.labels']" "filter_state['agentio.workload.name']" "filter_state['agentio.workload.namespace']" "filter_state['downstream_peer'].name" "filter_state['downstream_peer'].namespace" "destination.address" "destination.port" "source.address") -}}
 {{- $response := dict "headerMode" "SKIP" -}}
 {{- $provider := dict "service" (include "agentio.epeService" .) "port" (include "agentio.epePort" . | int) "messageTimeout" .Values.epe.messageTimeout "request" $request "response" $response -}}
 {{- if .Values.epe.tls.enabled -}}

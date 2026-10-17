@@ -346,6 +346,14 @@ jobs:
           if [[ -n "${E2E_KIND_CONFIG:-}" ]]; then
             docker network connect kind "$E2E_REGISTRY_NAME"
           fi
+      - name: Verify Porter shutdown ordering
+        if: matrix.id == 'sidecar-auto' && inputs.candidate_image_artifact != ''
+        run: |
+          mkdir -p "$E2E_ARTIFACTS_DIR"
+          bin/test_porter_shutdown.sh "$E2E_CLUSTER_NAME" \
+            "agentio-e2e.local/agentio-gateway:${GITHUB_SHA}" \
+            "agentio-e2e.local/agentio-porter:${GITHUB_SHA}" \
+            2>&1 | tee "$E2E_ARTIFACTS_DIR/porter-shutdown.log"
       - name: Run Agentio ${{ matrix.id }} product E2E
         run: make test.integration.agentio.product
       - name: Export KinD logs

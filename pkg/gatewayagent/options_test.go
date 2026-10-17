@@ -40,7 +40,7 @@ func TestRuntimeConfigPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Proxy.Concurrency != 3 || c.LogLevel != "debug" || c.Proxy.TerminationDrainDuration != 25*time.Second ||
+	if c.Proxy.Concurrency != 3 || c.LogLevel != "debug" || c.Proxy.TerminationDrainDuration != 20*time.Second ||
 		!c.ExitOnZeroActiveConnections {
 		t.Fatalf("bad effective runtime: %+v", c)
 	}
@@ -257,6 +257,36 @@ func TestRuntimeConfigFormatsAndLogDefaults(t *testing.T) {
 			}
 			if c.LogLevel != tc.level || c.ComponentLogLevel != tc.component {
 				t.Fatalf("log levels = %q, %q; want %q, %q", c.LogLevel, c.ComponentLogLevel, tc.level, tc.component)
+			}
+		})
+	}
+}
+
+func TestTerminationBudgetReservesGatewayAndPorterCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		grace string
+		drain string
+		want  time.Duration
+	}{
+		{"default pod", "30", "40s", 20 * time.Second},
+		{"longer pod", "60", "50s", 50 * time.Second},
+		{"explicit shorter drain", "30", "2s", 2 * time.Second},
+		{"cleanup only", "10", "40s", 0},
+		{"short pod", "5", "40s", 0},
+		{"outside Kubernetes", "", "40s", 40 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTIO_TERMINATION_GRACE_PERIOD_SECONDS", tc.grace)
+			c, err := LoadConfig(
+				[]string{"--termination-drain-duration=" + tc.drain, "--minimum-drain-duration=0s"},
+				io.Discard,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Proxy.TerminationDrainDuration != tc.want {
+				t.Fatalf("drain = %v, want %v", c.Proxy.TerminationDrainDuration, tc.want)
 			}
 		})
 	}

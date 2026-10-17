@@ -957,3 +957,50 @@ func TestNamedServiceSelectionAllocationBudget(t *testing.T) {
 		t.Fatalf("allocations per named Service selection = %.0f, want at most 200", allocations)
 	}
 }
+
+func TestWorkloadInstanceDemandDoesNotFollowNameReuse(t *testing.T) {
+	oldSource := model.SourceRef{Registry: "substrate/runtime-a", Key: "instance-old"}
+	old := addressResource(t, "runtime/workload", "actor", oldSource.WorkloadAlias())
+	snapshot, err := model.NewResourceSet([]model.Resource{old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription := SubscriptionView{names: []string{oldSource.WorkloadAlias()}, sent: map[string]string{}}
+	request := GenerationRequest{
+		Scope:        gatewayScope(),
+		Snapshot:     snapshot,
+		TypeURL:      model.WorkloadType,
+		Subscription: subscription,
+		Full:         true,
+	}
+	delta, err := (WorkloadGenerator{}).Generate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Resources) != 1 || !slices.Contains(delta.Resources[0].Aliases, oldSource.WorkloadAlias()) {
+		t.Fatalf("instance demand=%v", delta)
+	}
+	subscription.sent[old.XDSName] = delta.Resources[0].Hash
+	replacement := addressResource(
+		t,
+		old.Key.Name,
+		"actor",
+		(model.SourceRef{Registry: oldSource.Registry, Key: "instance-new"}).WorkloadAlias(),
+	)
+	change := model.ResourceChange{Key: old.Key, Old: &old, New: &replacement}
+	after, _, err := snapshot.Apply([]model.ResourceChange{change})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Full = false
+	request.Snapshot = after
+	request.Subscription = subscription
+	request.Update = updateBetween(snapshot, after, []model.ResourceChange{change})
+	delta, err = (WorkloadGenerator{}).Generate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Resources) != 0 || !slices.Contains(delta.Removed, old.XDSName) {
+		t.Fatalf("old identity followed name reuse: %v", delta)
+	}
+}

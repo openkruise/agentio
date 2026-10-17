@@ -802,7 +802,7 @@
                           },
                           {
                             "objectKey": "sandbox.token",
-                            "factoryKey": "envoy.string",
+                            "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
                                 "inlineString": "%REQ(X-AGENTIO-SANDBOX-TOKEN)%"
@@ -812,19 +812,8 @@
                             "sharedWithUpstream": "TRANSITIVE"
                           },
                           {
-                            "objectKey": "sandbox.labels",
-                            "factoryKey": "envoy.string",
-                            "formatString": {
-                              "textFormatSource": {
-                                "inlineString": "%REQ(X-AGENTIO-SANDBOX-LABELS)%"
-                              },
-                              "omitEmptyValues": true
-                            },
-                            "sharedWithUpstream": "TRANSITIVE"
-                          },
-                          {
                             "objectKey": "sandbox.id",
-                            "factoryKey": "envoy.string",
+                            "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
                                 "inlineString": "%REQ(X-AGENTIO-SANDBOX-ID)%"
@@ -834,26 +823,14 @@
                             "sharedWithUpstream": "TRANSITIVE"
                           },
                           {
-                            "objectKey": "agentio.workload.name",
-                            "factoryKey": "envoy.hashable_string",
+                            "objectKey": "agentio.peer.certificate",
+                            "factoryKey": "envoy.string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%REQ(X-AGENTIO-WORKLOAD-NAME)%"
+                                "inlineString": "%DOWNSTREAM_PEER_CERT%"
                               },
                               "omitEmptyValues": true
-                            },
-                            "sharedWithUpstream": "TRANSITIVE"
-                          },
-                          {
-                            "objectKey": "agentio.workload.namespace",
-                            "factoryKey": "envoy.hashable_string",
-                            "formatString": {
-                              "textFormatSource": {
-                                "inlineString": "%REQ(X-AGENTIO-WORKLOAD-NAMESPACE)%"
-                              },
-                              "omitEmptyValues": true
-                            },
-                            "sharedWithUpstream": "TRANSITIVE"
+                            }
                           },
                           {
                             "objectKey": "agentio.downstream.ip",
@@ -884,11 +861,10 @@
                           "responseTrailerMode": "SKIP"
                         },
                         "requestAttributes": [
-                          "filter_state['agentio.workload.name']",
-                          "filter_state['agentio.workload.namespace']",
                           "filter_state['sandbox.id']",
                           "filter_state['agentio.downstream.ip']",
-                          "filter_state['agentio.peer.principal']"
+                          "filter_state['agentio.peer.principal']",
+                          "filter_state['agentio.peer.certificate']"
                         ],
                         "messageTimeout": "5s",
                         "metadataOptions": {
@@ -923,6 +899,42 @@
                             "formatString": {
                               "textFormatSource": {
                                 "inlineString": "%DYNAMIC_METADATA(agentio:workload:namespace)%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "sharedWithUpstream": "TRANSITIVE",
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "agentio.workload.labels",
+                            "factoryKey": "envoy.hashable_string",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_labels)%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "sharedWithUpstream": "TRANSITIVE",
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "sandbox.labels",
+                            "factoryKey": "envoy.hashable_string",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_labels)%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "sharedWithUpstream": "TRANSITIVE",
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "agentio.workload.instance",
+                            "factoryKey": "envoy.hashable_string",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_instance)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -1147,6 +1159,8 @@
                           "request.id",
                           "filter_state['agentio.workload.name']",
                           "filter_state['agentio.workload.namespace']",
+                          "filter_state['agentio.workload.labels']",
+                          "filter_state['sandbox.labels']",
                           "source.address",
                           "destination.address",
                           "destination.port"
@@ -1848,6 +1862,8 @@
                           "request.id",
                           "filter_state['agentio.workload.name']",
                           "filter_state['agentio.workload.namespace']",
+                          "filter_state['agentio.workload.labels']",
+                          "filter_state['sandbox.labels']",
                           "source.address",
                           "destination.address",
                           "destination.port"

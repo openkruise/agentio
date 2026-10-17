@@ -102,6 +102,11 @@ jobs:
         env:
           IMAGE: ${{ env.HUB }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
         run: docker run --rm "$IMAGE" version
+      - name: Smoke-test Porter candidate
+        if: matrix.image == 'agentio-porter'
+        env:
+          IMAGE: ${{ env.HUB }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+        run: docker run --rm --read-only "$IMAGE" --version
       - name: Record native digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

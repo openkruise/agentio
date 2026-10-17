@@ -6,3 +6,4 @@ out
 ztunnel-src
 ztunnel-context
 **/*_test.go
+**/target

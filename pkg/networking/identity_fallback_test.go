@@ -87,6 +87,18 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 					peer.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_NONE {
 					t.Fatalf("unexpected source IP capture: %v", peer)
 				}
+				states := connectAuthorityStates(t, listener)
+				cert := states["agentio.peer.certificate"]
+				if cert == nil ||
+					cert.GetFormatString().GetTextFormatSource().GetInlineString() != "%DOWNSTREAM_PEER_CERT%" ||
+					cert.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_NONE {
+					t.Fatalf("certificate must come from TLS and stay on CONNECT: %v", cert)
+				}
+				for _, key := range []string{"sandbox.labels", "agentio.workload.name", "agentio.workload.namespace"} {
+					if states[key] != nil {
+						t.Fatalf("native gateway still reads workload header for %s", key)
+					}
+				}
 				if index < 1 || names[index-1] != "envoy.filters.http.ext_proc" ||
 					index >= rateLimitIndex {
 					t.Fatalf("identity must be restored after Porter and before rate limiting: %v", names)
@@ -95,17 +107,33 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				if err := hcm.HttpFilters[index-1].GetTypedConfig().UnmarshalTo(processor); err != nil {
 					t.Fatal(err)
 				}
-				for _, attr := range []string{"filter_state['agentio.downstream.ip']", "filter_state['agentio.peer.principal']"} {
+				for _, attr := range []string{"filter_state['agentio.downstream.ip']", "filter_state['agentio.peer.principal']", "filter_state['agentio.peer.certificate']"} {
 					if !slices.Contains(processor.RequestAttributes, attr) {
 						t.Fatalf("Porter missing %s", attr)
+					}
+				}
+				for _, attr := range []string{model.AttributeWorkloadName, model.AttributeWorkloadNamespace} {
+					if slices.Contains(processor.RequestAttributes, attr) {
+						t.Fatalf("Porter still requests header identity: %s", attr)
 					}
 				}
 				restored := &setstatehttpv3.Config{}
 				if err := hcm.HttpFilters[index].GetTypedConfig().UnmarshalTo(restored); err != nil {
 					t.Fatal(err)
 				}
-				if len(restored.OnRequestHeaders) != 2 {
+				if len(restored.OnRequestHeaders) != 5 {
 					t.Fatalf("identity state=%v", restored)
+				}
+				for i, key := range []string{model.FilterStateWorkloadLabels, "sandbox.labels"} {
+					state := restored.OnRequestHeaders[2+i]
+					if state.GetObjectKey() != key ||
+						state.GetFormatString().
+							GetTextFormatSource().
+							GetInlineString() !=
+							"%DYNAMIC_METADATA(agentio:workload_labels)%" ||
+						state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_TRANSITIVE {
+						t.Fatalf("new and legacy labels must share the same WDS value: %v", state)
+					}
 				}
 				for i, field := range []string{"name", "namespace"} {
 					state := restored.OnRequestHeaders[i]

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"time"
 
@@ -101,6 +100,7 @@ func (s *Subscription) Release() {
 		sub.err = ErrReleased
 		close(sub.done)
 		delete(st.names, s.name)
+		st.pending[s.name] = struct{}{}
 		delete(st.removed, s.name)
 		st.releaseResource(s.name)
 		c.wakeSubscriptions()
@@ -120,6 +120,7 @@ func (c *Client) subscribeLocked(typ, name string) (*typeState, *subscription, e
 	if sub == nil {
 		sub = &subscription{done: make(chan struct{})}
 		st.names[name] = sub
+		st.pending[name] = struct{}{}
 		delete(st.removed, name)
 		c.wakeSubscriptions()
 	}
@@ -147,9 +148,8 @@ func (st *typeState) releaseResource(name string) {
 		canonical = name
 	}
 	if alias && canonical == "" {
-		// An ambiguous alias can retain multiple canonical resources.
-		for candidate, aliases := range st.resourceAliases {
-			if slices.Contains(aliases, name) && !st.interested(candidate, aliases) {
+		for candidate := range st.sharedAliases[name] {
+			if !st.interested(candidate, st.resourceAliases[candidate]) {
 				st.removeResource(candidate)
 			}
 		}
@@ -158,25 +158,37 @@ func (st *typeState) releaseResource(name string) {
 	}
 }
 
+func (st *typeState) addResourceAliases(name string, aliases []string) {
+	st.resourceAliases[name] = append([]string(nil), aliases...)
+	for _, alias := range aliases {
+		owner, found := st.aliases[alias]
+		switch {
+		case !found:
+			st.aliases[alias] = name
+		case owner == "":
+			st.sharedAliases[alias][name] = struct{}{}
+		case owner != name:
+			st.sharedAliases[alias] = map[string]struct{}{owner: {}, name: {}}
+			st.aliases[alias] = ""
+		}
+	}
+}
+
 func (st *typeState) removeResource(name string) {
 	aliases := st.resourceAliases[name]
 	delete(st.resources, name)
 	delete(st.resourceAliases, name)
 	for _, alias := range aliases {
-		ambiguous := st.aliases[alias] == ""
-		delete(st.aliases, alias)
-		if !ambiguous {
-			continue
-		}
-		// Re-evaluate only shared aliases; ordinary canonical eviction is O(aliases).
-		for candidate, values := range st.resourceAliases {
-			if slices.Contains(values, alias) {
-				if _, found := st.aliases[alias]; found {
-					st.aliases[alias] = ""
-					break
+		if owners := st.sharedAliases[alias]; owners != nil {
+			delete(owners, name)
+			if len(owners) == 1 {
+				for owner := range owners {
+					st.aliases[alias] = owner
 				}
-				st.aliases[alias] = candidate
+				delete(st.sharedAliases, alias)
 			}
+		} else if st.aliases[alias] == name {
+			delete(st.aliases, alias)
 		}
 	}
 }
@@ -201,6 +213,7 @@ func (c *Client) deletedSubscription(st *typeState, name string) {
 	sub.err = ErrNotFound
 	close(sub.done)
 	delete(st.names, name)
+	st.pending[name] = struct{}{}
 	delete(st.removed, name)
 	c.wakeSubscriptions()
 }
@@ -288,6 +301,7 @@ func (c *Client) initialRequests(sent map[string]map[string]*subscription) []*di
 	for typ, st := range c.types {
 		req := &discovery.DeltaDiscoveryRequest{Node: c.cfg.Node, TypeUrl: typ}
 		sent[typ] = map[string]*subscription{}
+		st.pending = map[string]struct{}{}
 		for name, sub := range st.names {
 			req.ResourceNamesSubscribe = append(req.ResourceNamesSubscribe, name)
 			sent[typ][name] = sub
@@ -313,21 +327,19 @@ func (c *Client) pendingRequests(sent map[string]map[string]*subscription) []*di
 	requests := []*discovery.DeltaDiscoveryRequest{}
 	for typ, st := range c.types {
 		req := &discovery.DeltaDiscoveryRequest{TypeUrl: typ}
-		for name, sub := range st.names {
-			// A new generation supersedes a pending unsubscribe. Resubscribe
-			// explicitly: Delta xDS requires a response even if the server
-			// still considers the old generation subscribed.
-			if sent[typ][name] != sub {
+		for name := range st.pending {
+			sub := st.names[name]
+			// A new generation must resubscribe even if the previous generation's
+			// unsubscribe has not yet been sent.
+			if sub != nil && sent[typ][name] != sub {
 				req.ResourceNamesSubscribe = append(req.ResourceNamesSubscribe, name)
 				sent[typ][name] = sub
-			}
-		}
-		for name := range sent[typ] {
-			if st.names[name] == nil {
+			} else if sub == nil && sent[typ][name] != nil {
 				req.ResourceNamesUnsubscribe = append(req.ResourceNamesUnsubscribe, name)
 				delete(sent[typ], name)
 			}
 		}
+		st.pending = map[string]struct{}{}
 		if len(req.ResourceNamesSubscribe)+len(req.ResourceNamesUnsubscribe) > 0 {
 			sort.Strings(req.ResourceNamesSubscribe)
 			sort.Strings(req.ResourceNamesUnsubscribe)

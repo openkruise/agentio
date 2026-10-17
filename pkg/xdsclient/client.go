@@ -34,6 +34,7 @@ import (
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -96,6 +97,8 @@ type Snapshot struct {
 type typeState struct {
 	watch           Watch
 	names           map[string]*subscription
+	pending         map[string]struct{}
+	sharedAliases   map[string]map[string]struct{}
 	removed         map[string]bool
 	aliases         map[string]string
 	resourceAliases map[string][]string
@@ -136,6 +139,8 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Client, error) {
 		c.types[w.TypeURL] = &typeState{
 			watch:           w,
 			names:           map[string]*subscription{},
+			pending:         map[string]struct{}{},
+			sharedAliases:   map[string]map[string]struct{}{},
 			removed:         map[string]bool{},
 			aliases:         map[string]string{},
 			resourceAliases: map[string][]string{},
@@ -239,11 +244,9 @@ func (c *Client) Run(ctx context.Context) error {
 	return nil
 }
 
-type response struct {
-	value *discovery.DeltaDiscoveryResponse
-	err   error
-}
-
+// The receive loop must keep draining responses while Send is flow-controlled.
+// Only the writer calls Send. ACK state is bounded by resource type: a newer
+// applied response supersedes the older nonce, without dropping any resource delta.
 func (c *Client) runStream(parent context.Context) (bool, error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -253,59 +256,69 @@ func (c *Client) runStream(parent context.Context) (bool, error) {
 	}
 	sent := map[string]map[string]*subscription{}
 	initial := c.initialRequests(sent)
-	for _, req := range initial {
-		if err := stream.Send(req); err != nil {
-			return false, err
+	var ackMu sync.Mutex
+	acks := map[string]*discovery.DeltaDiscoveryRequest{}
+	writerDone := make(chan error, 1)
+	go func() {
+		send := func() error {
+			for _, req := range initial {
+				if err := stream.Send(req); err != nil {
+					return err
+				}
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-c.wake:
+				}
+				ackMu.Lock()
+				batch := acks
+				acks = map[string]*discovery.DeltaDiscoveryRequest{}
+				ackMu.Unlock()
+				for _, req := range c.pendingRequests(sent) {
+					if ack := batch[req.TypeUrl]; ack != nil {
+						req.ResponseNonce = ack.ResponseNonce
+						req.ErrorDetail = ack.ErrorDetail
+					}
+					batch[req.TypeUrl] = req
+				}
+				for _, req := range batch {
+					if err := stream.Send(req); err != nil {
+						return err
+					}
+				}
+			}
 		}
-	}
+		writerDone <- send()
+		cancel()
+	}()
 	c.mu.Lock()
 	c.connected = true
 	c.notifyLocked()
 	c.mu.Unlock()
-	replies := make(chan response)
-	go func() {
-		for {
-			r, err := stream.Recv()
-			select {
-			case replies <- response{r, err}:
-			case <-ctx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
 	received := false
 	for {
-		select {
-		case <-ctx.Done():
-			return received, ctx.Err()
-		case <-c.wake:
-			requests := c.pendingRequests(sent)
-			for _, req := range requests {
-				if err := stream.Send(req); err != nil {
-					return received, err
-				}
+		r, err := stream.Recv()
+		if err != nil {
+			cancel()
+			sendErr := <-writerDone
+			if sendErr != nil && status.Code(sendErr) != codes.Canceled {
+				return received, sendErr
 			}
-		case reply := <-replies:
-			if reply.err != nil {
-				return received, reply.err
-			}
-			r := reply.value
-			ack := &discovery.DeltaDiscoveryRequest{TypeUrl: r.TypeUrl, ResponseNonce: r.Nonce}
-			if err := c.apply(r); err != nil {
-				ack.ErrorDetail = &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: err.Error()}
-			} else {
-				received = true
-			}
-			if err := stream.Send(ack); err != nil {
-				return received, err
-			}
-			if ack.ErrorDetail != nil {
-				log.Warn("xDS response rejected", "type", r.TypeUrl, "error", ack.ErrorDetail.Message)
-			}
+			return received, err
 		}
+		ack := &discovery.DeltaDiscoveryRequest{TypeUrl: r.TypeUrl, ResponseNonce: r.Nonce}
+		if err := c.apply(r); err != nil {
+			ack.ErrorDetail = &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: err.Error()}
+			log.Warn("xDS response rejected", "type", r.TypeUrl, "error", ack.ErrorDetail.Message)
+		} else {
+			received = true
+		}
+		ackMu.Lock()
+		acks[r.TypeUrl] = ack
+		ackMu.Unlock()
+		c.wakeSubscriptions()
 	}
 }
 
@@ -347,60 +360,45 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 		st.resources = map[string]*Resource{}
 		st.removed = map[string]bool{}
 		st.aliases = map[string]string{}
+		st.sharedAliases = map[string]map[string]struct{}{}
 		st.resourceAliases = map[string][]string{}
 	}
-	// Workloads sharing a host-network IP can legitimately share an alias.
-	// Keep canonical resources; demanding an ambiguous alias fails closed.
-	resourceAliases := maps.Clone(st.resourceAliases)
-	for _, res := range r.Resources {
-		if st.interested(res.Name, res.Aliases) {
-			resourceAliases[res.Name] = append([]string(nil), res.Aliases...)
-		} else {
-			delete(resourceAliases, res.Name)
-		}
-	}
-	for _, name := range r.RemovedResources {
-		delete(resourceAliases, name)
-	}
-	aliases := map[string]string{}
-	for name, values := range resourceAliases {
-		for _, alias := range values {
-			if existing, ok := aliases[alias]; ok && existing != name {
-				aliases[alias] = ""
-			} else {
-				aliases[alias] = name
-			}
-		}
-	}
+	// Update only aliases touched by this delta. Shared host-network aliases
+	// retain their owners so deleting one resource can make an alias unique again.
+	touched := make(map[string]struct{}, len(removedAliases))
 	for _, alias := range removedAliases {
-		if _, exists := aliases[alias]; !exists {
-			c.deletedSubscription(st, alias)
-		}
+		touched[alias] = struct{}{}
 	}
-	for alias := range st.aliases {
-		if _, exists := aliases[alias]; !exists {
-			c.deletedSubscription(st, alias)
-		}
-	}
-	st.aliases = aliases
 	for _, res := range r.Resources {
+		for _, alias := range st.resourceAliases[res.Name] {
+			touched[alias] = struct{}{}
+		}
+		st.removeResource(res.Name)
 		if !st.interested(res.Name, res.Aliases) {
-			delete(st.resources, res.Name)
-			delete(st.resourceAliases, res.Name)
 			continue
 		}
 		st.resources[res.Name] = values[res.Name]
-		st.resourceAliases[res.Name] = append([]string(nil), res.Aliases...)
+		st.addResourceAliases(res.Name, res.Aliases)
 		for _, alias := range res.Aliases {
 			delete(st.removed, alias)
 		}
 		delete(st.removed, res.Name)
 	}
 	for _, name := range r.RemovedResources {
-		delete(st.resources, name)
-		delete(st.resourceAliases, name)
+		for _, alias := range st.resourceAliases[name] {
+			touched[alias] = struct{}{}
+		}
+		st.removeResource(name)
+	}
+	for alias := range touched {
+		if _, exists := st.aliases[alias]; !exists {
+			c.deletedSubscription(st, alias)
+		}
+	}
+	for _, name := range r.RemovedResources {
 		c.deletedSubscription(st, name)
 	}
+
 	st.synced = true
 	c.notifyLocked()
 	return nil

@@ -35,7 +35,7 @@ type Peer struct {
 	// fallback).
 	IP string
 	// Labels is the source workload's label map, parsed from
-	// filter_state['sandbox.labels']. Nil when pod identity is missing.
+	// filter_state['agentio.workload.labels'] (or legacy sandbox.labels). Nil when pod identity is missing.
 	Labels map[string]string
 	// Token is the parsed filter_state['sandbox.token'], parsed eagerly by
 	// Extract. Nil when the filter state value is absent or malformed.

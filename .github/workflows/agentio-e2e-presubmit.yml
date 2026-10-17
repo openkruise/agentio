@@ -80,6 +80,7 @@ jobs:
           docker build --file Dockerfile --tag "agentio-e2e.local/agentiod:${tag}" .
           docker build --file extensions/epe/docker/Dockerfile --tag "agentio-e2e.local/agentio-epe:${tag}" .
           docker build --file extensions/porter/docker/Dockerfile --tag "agentio-e2e.local/agentio-porter:${tag}" .
+          docker run --rm --read-only "agentio-e2e.local/agentio-porter:${tag}" --version
           docker build --file docker/Dockerfile.gateway --tag "agentio-e2e.local/agentio-gateway:${tag}" .
           docker build --file test/fixtures/extproc/Dockerfile --tag "agentio-e2e.local/ext-proc:${tag}" .
           docker build --file docker/Dockerfile.ztunnel \

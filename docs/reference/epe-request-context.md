@@ -35,7 +35,7 @@ Envoy filter-state attributes identify the caller:
 | Pod namespace | `filter_state['agentio.workload.namespace']` | string | Captured from `x-agentio-workload-namespace` on HBONE CONNECT. Missing or empty falls back to `filter_state['downstream_peer'].namespace`; empty after fallback makes the peer invalid. |
 | Pod name | `filter_state['agentio.workload.name']` | string | Captured from `x-agentio-workload-name` on HBONE CONNECT. Missing or empty falls back to `filter_state['downstream_peer'].name`; empty after fallback makes the peer invalid. |
 | Pod IP | `source.address` | string | EPE removes a valid port and surrounding IPv6 brackets. It is empty when absent; otherwise malformed input may be preserved after this syntactic stripping. |
-| Pod labels | `filter_state['sandbox.labels']` | map<string, string> | Parsed from base64 `k=v,k2=v2`; empty on absent or invalid input. |
+| Workload labels | `filter_state['agentio.workload.labels']` | map<string, string> | Parsed from base64 `k=v,k2=v2`; falls back to legacy `filter_state['sandbox.labels']` only when the new attribute is absent. A present empty or invalid new value does not fall back. |
 | Sandbox token | `filter_state['sandbox.token']` | internal object | Base64 JSON or raw JSON with `requestId`, `accessToken`, and `sandboxClientId`; nil when absent or malformed. Not expression-visible. |
 | Request ID | `x-request-id` | string | Empty when absent. Used for log correlation, not expression evaluation. |
 

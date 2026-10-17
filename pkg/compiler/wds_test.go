@@ -451,3 +451,25 @@ func TestWDSRejectsUnrepresentableIdentity(t *testing.T) {
 		t.Fatal("WDS accepted an unrepresentable principal")
 	}
 }
+
+func TestWorkloadInstanceAliasSurvivesNameReuse(t *testing.T) {
+	workload := projectionTestWorkload()
+	for _, registry := range []string{"kubernetes/cluster-a", "substrate/installation-a"} {
+		for _, uid := range []string{"instance-1", "instance-2"} {
+			workload.Source = model.SourceRef{Registry: registry, Key: uid}
+			resource, err := buildWDSAddress(wdsProjection{Workload: workload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, alias := range resource.Aliases {
+				if alias == workload.Source.WorkloadAlias() {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("missing instance alias: %v", resource.Aliases)
+			}
+		}
+	}
+}

@@ -22,9 +22,11 @@ const (
 
 // Filter-state keys shared by gateway configuration and CONNECT processing.
 const (
+	FilterStateWorkloadLabels    = "agentio.workload.labels"
 	FilterStateWorkloadName      = "agentio.workload.name"
 	FilterStateWorkloadNamespace = "agentio.workload.namespace"
 	FilterStateSandboxID         = "sandbox.id"
+	FilterStatePeerCertificate   = "agentio.peer.certificate"
 	FilterStatePeerIP            = "agentio.downstream.ip"
 	FilterStatePeerPrincipal     = "agentio.peer.principal"
 	FilterStateLocalPrincipal    = "agentio.local.principal"
@@ -35,9 +37,11 @@ const (
 // ExtProc attributes requested by Envoy and consumed by Porter.
 const (
 	ExtProcAttributesKey       = "envoy.filters.http.ext_proc"
+	AttributeWorkloadLabels    = "filter_state['" + FilterStateWorkloadLabels + "']"
 	AttributeWorkloadName      = "filter_state['" + FilterStateWorkloadName + "']"
 	AttributeWorkloadNamespace = "filter_state['" + FilterStateWorkloadNamespace + "']"
 	AttributeSandboxID         = "filter_state['" + FilterStateSandboxID + "']"
+	AttributePeerCertificate   = "filter_state['" + FilterStatePeerCertificate + "']"
 	AttributePeerIP            = "filter_state['" + FilterStatePeerIP + "']"
 	AttributePeerPrincipal     = "filter_state['" + FilterStatePeerPrincipal + "']"
 	GatewayMetadataNamespace   = "agentio"

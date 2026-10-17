@@ -99,6 +99,10 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if input.Workload.HostNetwork {
 		wireWorkload.NetworkMode = workloadv1.NetworkMode_HOST_NETWORK
 	}
+	// Discovery-only workloads without a complete instance identity have no instance alias.
+	if source := input.Workload.Source; source.Validate() == nil {
+		aliases = append(aliases, source.WorkloadAlias())
+	}
 	address := &workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: wireWorkload}}
 	if input.MetadataConfiguration != nil {
 		metadata, err := newWorkloadMetadataExtension(filteredWorkloadLabels(
