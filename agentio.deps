@@ -4,7 +4,7 @@
     "name": "ZTUNNEL_REPO_SHA",
     "repoName": "openkruise/ztunnel",
     "file": "",
-    "lastStableSHA": "cf600342e7f66d9f90013107767b68741fb80ba9"
+    "lastStableSHA": "f4e7257075c7eb4d1c45abb4b9a20e549516a6d3"
   },
   {
     "_comment": "Immutable digest of the multi-architecture proxy image.",
