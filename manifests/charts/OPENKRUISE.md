@@ -50,6 +50,10 @@ Enable Agentio in the sandbox-manager release values:
 ```yaml
 agentio:
   enabled: true
+  agentiod:
+    env:
+      AGENTIO_SANDBOX_MODE: "true"
+      AGENTIO_SANDBOX_RUNTIMES: kruise
   global:
     namespace: sandbox-system
     createNamespace: true

@@ -1,6 +1,6 @@
 # SecurityProfile reference
 
-`SecurityProfile` is a namespaced L7 egress policy for selected Pods. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Both are consumed by Egress Policy Enforcer (EPE); they are distinct from `TrafficPolicy` and `GlobalTrafficPolicy`, which control destination routing rather than request-level actions.
+`SecurityProfile` is a namespaced L7 egress policy for selected Pods. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Both are consumed by Egress Policy Enforcer (EPE); they are distinct from `TrafficPolicy` and `GlobalTrafficPolicy`, which control L3/L4 authorization. `AgentioConfig.egressPolicies` independently selects direct or gateway routing; allowing a destination does not route it through EPE.
 
 The complete field schemas for both kinds are in the [SecurityProfile API reference](security-profile-api.md). This page explains the implemented evaluation behavior instead of duplicating the field reference.
 
@@ -47,11 +47,14 @@ EPE registers actions in this fixed order within each matched rule:
 1. `bypass`
 2. `block`
 3. `mcpToolPolicy`
-4. `tokenTransformation`
+4. `headerManipulation`
+5. `tokenTransformation`
 
 `bypass` skips all remaining actions and rules across every matching profile while preserving mutations already made by earlier rules. `block` stops immediately, discards pending mutations, and returns `statusCode` (default 403) with optional `body`.
 
 `mcpToolPolicy` is a non-terminal allow/deny filter for MCP JSON-RPC `tools/call`. `defaultAction` defaults to `deny`; its ordered `rules` match method and optionally tool names. `unsupportedVersionAction` defaults to `deny`, and `denyResponse` defaults to HTTP 403. It buffers complete request bodies and only understands MCP versions currently documented in [Configure MCP access control](../tasks/configure-mcp-access-control.md).
+
+`headerManipulation` sets or removes request headers and is non-terminal. In the current EPE implementation, `set[].value` is evaluated as a Go template using the [request context](epe-request-context.md); Sandbox annotation values are escaped and remain literal. The generated API schema describes values as verbatim, so avoid template delimiters when portable literal behavior is required. Invalid templates reject the profile version; request-time rendering failures fail closed. Later token transformations win when they target the same header. See [Modify request headers](../tasks/modify-request-headers.md) for an example.
 
 `tokenTransformation` is non-terminal. It has these fields:
 

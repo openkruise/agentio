@@ -1,6 +1,6 @@
 # Get started with EPE
 
-This guide enables the Egress Policy Enforcer (EPE), applies a minimal `SecurityProfile`, and verifies that EPE blocks a gateway-routed request. It works with the workload created by any Agentio onboarding guide.
+This guide enables the Egress Policy Enforcer (EPE), applies a minimal `SecurityProfile`, and verifies that EPE blocks a gateway-routed request. The commands use the standalone chart release from the sidecar or ambient onboarding guide. For the manager-integrated release, use the [OpenKruise installation path](../integrations/openkruise-agents.md#choose-an-installation-path) and its release namespace and `agentio.*` values.
 
 ## Before you begin
 
@@ -12,6 +12,8 @@ You need:
 - An enrolled workload and an Agentio egress route that sends `www.example.com` through an egress gateway.
 
 Complete one onboarding guide, then [route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md). The onboarding guide exports `AGENTIO_DEMO_NAMESPACE`, `AGENTIO_WORKLOAD_LABEL`, and `AGENTIO_WORKLOAD_CONTAINER`, which the egress-route task consumes. Do not use the direct passthrough path for this verification: EPE is invoked only on the gateway-routed path.
+
+This example tests plaintext HTTP. HTTPS additionally needs gateway TLS termination and client CA trust; see [Inspect HTTPS traffic](../tasks/inspect-https-traffic.md). Keep the gateway and route from the preceding task.
 
 Confirm the sample workload is ready and record its Pod name:
 
@@ -115,6 +117,8 @@ blocked by the EPE demo profile
 Policy propagation can take a few seconds. Retry the request before investigating an unexpected response. A `404` or a successful upstream response instead of the configured `403` usually means that the host is not using the egress-gateway route, EPE is not ready, or the profile selector does not match the calling Pod.
 
 ## Clean up
+
+If continuing to [Configure a SecurityProfile](../tasks/configure-security-profile.md), delete only the demo profile below. Keep EPE, the gateway route, and the workload running; skip the EPE-disable command until all policy tasks are finished.
 
 Delete the profile:
 

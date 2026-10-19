@@ -9,8 +9,8 @@ Complete [Get started with EPE](../getting-started/epe.md), including the egress
 Set the namespace and calling workload label for the examples:
 
 ```console
-$ export AGENTIO_PROFILE_NAMESPACE=agentio-demo
-$ export AGENTIO_PROFILE_WORKLOAD_LABEL=curl
+$ export AGENTIO_PROFILE_NAMESPACE="${AGENTIO_DEMO_NAMESPACE:?Complete an onboarding guide first}"
+$ export AGENTIO_PROFILE_WORKLOAD_LABEL="${AGENTIO_WORKLOAD_LABEL:?Set the calling workload label}"
 ```
 
 Confirm the selected workload exists:
@@ -75,6 +75,46 @@ EOF
 
 This example intentionally uses a non-production credential. In production, restrict the selector and match conditions, store the Secret in an appropriate namespace, and decide whether the default `failStrategy: Block` is correct for credential lookup and signing failures. `Allow` and `Ignore` permit the request to continue without the transformation, which can disclose the workload's original credentials to the upstream service.
 
+## Grant access to the demonstration Secret
+
+The managed chart grants EPE Secret access only in its installation namespace. For this business-namespace Secret, grant the EPE ServiceAccount `get` on this one name. These commands discover the account used by the standard EPE Deployment; adjust the namespace and Deployment for a customized or manager-integrated installation.
+
+```console
+$ export AGENTIO_EPE_NAMESPACE=agentio-system
+$ AGENTIO_EPE_SERVICE_ACCOUNT=$(kubectl get deployment agentio-epe \
+    --namespace "$AGENTIO_EPE_NAMESPACE" \
+    --output jsonpath='{.spec.template.spec.serviceAccountName}')
+$ test -n "$AGENTIO_EPE_SERVICE_ACCOUNT"
+$ kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: epe-demo-credential-reader
+  namespace: ${AGENTIO_PROFILE_NAMESPACE}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["epe-demo-api-key"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: epe-demo-credential-reader
+  namespace: ${AGENTIO_PROFILE_NAMESPACE}
+subjects:
+- kind: ServiceAccount
+  name: ${AGENTIO_EPE_SERVICE_ACCOUNT}
+  namespace: ${AGENTIO_EPE_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: epe-demo-credential-reader
+EOF
+```
+
+A forbidden Secret read follows `failStrategy`, which defaults to `Block`. A successful block-rule test below does not exercise this permission or prove the credential transformation works.
+
 ## Add a terminal rule
 
 Apply a separate terminal rule to block a path. A block returns the configured response without forwarding upstream:
@@ -97,7 +137,7 @@ spec:
       - www.example.com
       paths:
       - type: Exact
-        value: /epe-denied
+        value: /security-profile-denied
     actions:
       block:
         statusCode: 403
@@ -111,7 +151,7 @@ Use `bypass: true` instead of `block` only when the request must skip all remain
 
 EPE evaluates lower profile priorities first, then creation time, name, and namespace. It evaluates matching rules in their manifest order, and does not stop at the first broad match. A terminal action stops all later EPE work. Set an explicit `priority` when multiple profiles can select the same workload, especially when a `GlobalSecurityProfile` and a namespaced profile overlap.
 
-Within a rule, current EPE action registration order is `bypass`, `block`, `mcpToolPolicy`, then `tokenTransformation`; YAML key order does not change it. Keep terminal actions in separate rules when you need a transformation to run before a later policy decision.
+Within a rule, current EPE action registration order is `bypass`, `block`, `mcpToolPolicy`, `headerManipulation`, then `tokenTransformation`; YAML key order does not change it. Keep terminal actions in separate rules when you need a transformation to run before a later policy decision.
 
 ## Verify the profile
 
@@ -132,13 +172,26 @@ $ AGENTIO_PROFILE_POD=$(kubectl get pod \
 
 $ kubectl exec "$AGENTIO_PROFILE_POD" \
     --namespace "$AGENTIO_PROFILE_NAMESPACE" \
-    --container curl -- \
-    curl --silent --show-error --include http://www.example.com/epe-denied
+    --container "$AGENTIO_WORKLOAD_CONTAINER" -- \
+    curl --silent --show-error --include http://www.example.com/security-profile-denied
 ```
 
 If the request reaches the upstream service, first verify that the host uses the egress gateway rather than direct passthrough, then check the EPE Deployment logs and the workload's labels. A profile resource appearing in `kubectl get` does not by itself prove that its compiled version is enforcing.
 
+### Verify the credential transformation separately
+
+`www.example.com` is suitable for the local block response above, but it does not echo request headers. To verify the non-terminal transformation, use a test HTTP endpoint you control that reports the received `Authorization` header:
+
+1. Route that endpoint's hostname through the same gateway, preserving your existing egress rules, and allow its destination in any applicable TrafficPolicy.
+2. In `inject-epe-demo-api-key`, replace `www.example.com` with that hostname and `/api/` with the endpoint's path prefix. Reapply the manifest.
+3. From the selected workload, send a request with `Authorization: Bearer original-demo-value`. Inspect the endpoint's received headers: it must see `Bearer demo-api-key` instead.
+4. Temporarily remove only `inject-epe-demo-api-key` and repeat: the endpoint must now see `Bearer original-demo-value`. This control confirms that EPE caused the change. Reapply the profile if continuing.
+
+For an HTTPS endpoint, first complete [Inspect HTTPS traffic](inspect-https-traffic.md). Use only these dummy values in echo output. A 403, an upstream success status, or a profile appearing in `kubectl get` alone is not proof of successful transformation. If the value is unchanged, check routing, TLS termination, selector and path matching; if it is blocked, inspect EPE's profile state and Secret-read errors using [Troubleshoot policy enforcement](troubleshoot-policy-enforcement.md).
+
 ## Clean up
+
+If continuing with another policy task, remove these demonstration policies and Secret, but keep EPE, the gateway, and the enrolled workload running.
 
 Remove the demonstration resources:
 
@@ -147,6 +200,9 @@ $ kubectl delete securityprofile inject-epe-demo-api-key block-epe-demo-path \
     --namespace "$AGENTIO_PROFILE_NAMESPACE"
 
 $ kubectl delete secret epe-demo-api-key \
+    --namespace "$AGENTIO_PROFILE_NAMESPACE"
+
+$ kubectl delete role,rolebinding epe-demo-credential-reader \
     --namespace "$AGENTIO_PROFILE_NAMESPACE"
 ```
 

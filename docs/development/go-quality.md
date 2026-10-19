@@ -1,6 +1,6 @@
 # Go quality checks
 
-`make lint` checks Go layout on changed lines and runs `go vet` for the main module and the e2e module. `make lint.golangci` runs the pinned golangci-lint version from the Makefile against both modules, using `.golangci.yml`. It includes error checking, exported API documentation, duplication, complexity, `modernize` suggestions, import formatting, and `golines` with a target line length of 120 columns (tabs count as four columns).
+`make lint` also runs `cargo fmt --check` and `cargo clippy` for Porter, so it requires the Rust toolchain and Clippy as well as Go. It checks Go layout on changed lines and runs `go vet` for the main module and the e2e module. `make lint.golangci` runs the pinned golangci-lint version from the Makefile against both modules, using `.golangci.yml`. It includes error checking, exported API documentation, duplication, complexity, `modernize` suggestions, import formatting, and `golines` with a target line length of 120 columns (tabs count as four columns).
 
 Generated files are excluded. Test code follows the same layout, formatting, and modernization rules, but remains exempt from documentation, duplication, and complexity checks. `modernize` checks language and standard-library improvements supported by the module's Go version; linting does not apply its fixes.
 
@@ -17,7 +17,7 @@ make lint.golangci GOLANGCI_LINT_ARGS="--new-from-rev=<base-commit>"
 
 CI uses the pull request base or the previous push commit for both incremental checks. Thus a long-lived feature branch can still report findings from earlier commits on that branch; this is not a clean baseline for the entire branch. New rules do not replace the existing full-module `go vet` gate.
 
-`make fmt` applies `goimports` and `golines` to the repository, including the e2e module, while excluding generated files. Use `FMT_PATHS` to limit formatting to selected files or directories:
+`make fmt` applies `goimports` and `golines` to the repository, including the e2e module, while excluding generated files. Use `FMT_PATHS` to limit Go formatting to selected files or directories. `make fmt` still runs `cargo fmt` for all of Porter regardless of `FMT_PATHS`:
 
 ```sh
 make fmt FMT_PATHS="pkg/policy/authorization.go tools/gostyle"

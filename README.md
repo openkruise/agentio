@@ -32,6 +32,8 @@ For a detailed comparison, see [Why not just Istio?](docs/concepts/why-not-just-
 
 Install Agentio, enroll a workload, and apply your first traffic policy with the [getting started guide](docs/getting-started.md).
 
+For deployment and protocol boundaries, see [Traffic processing](docs/concepts/traffic-processing.md). For unexpected policy results, follow [Troubleshoot policy enforcement](docs/tasks/troubleshoot-policy-enforcement.md).
+
 ## License & Attribution
 
 Agentio is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 The Kruise Authors.

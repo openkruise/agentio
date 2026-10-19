@@ -106,6 +106,13 @@ The generated `5s` message timeout must remain above EPE's default `--plugin-bud
 | `--enable-debug` | `true` | Registers the `/debug/profiles` and `/debug/logging` admin endpoints. |
 | `--enable-pprof` | `false` | Starts Go pprof on `--pprof-addr`. |
 | `--pprof-addr` | `:6060` | pprof listener address when enabled. |
+| `--fail-closed-on-missing-identity` | `false` | Return HTTP 403 when caller Pod namespace/name is missing. Always enforced when destination authorization is enabled. |
+| `--enable-egressauthz` | `false` | Authorize and pin HTTP destinations using native Workload and TrafficPolicy xDS resources; requires the deployment prerequisites below. |
+| `--xds-address` | empty | Agentiod TLS ADS `host:port`; required with destination authorization. |
+| `--xds-root-path` | empty | PEM trust bundle for ADS; required with destination authorization. |
+| `--xds-token-path` | `/var/run/secrets/kubernetes.io/serviceaccount/token` | Pod-bound token for an authorized gateway Pod; its audience must match Agentiod. |
+| `--xds-cluster-id` | `Kubernetes` | Source Pod cluster ID; must match Agentiod's `--cluster-id`. |
+| `--xds-node-id` | derived | Defaults to `waypoint~POD_IP~POD_NAME.POD_NAMESPACE~POD_NAMESPACE.svc.cluster.local`. Set the Pod metadata environment variables from the downward API. |
 | `--observe-responses` | `false` | Requests response headers through ext_proc so audit can record upstream status. |
 | `--plugin-budget` | `4.5s` | Per-evaluation-phase limit; `0` disables it. Keep it below Envoy's ext_proc message timeout. |
 | `--kubeconfig` | empty | Kubeconfig path; empty selects in-cluster configuration. |
@@ -118,6 +125,8 @@ The generated `5s` message timeout must remain above EPE's default `--plugin-bud
 The binary also accepts controller-runtime Zap flags, including `--zap-log-level` and `--zap-stacktrace-level`. The metrics and health listeners bind all interfaces because they are constructed from their port numbers. The chart exposes both through its headless Service. The admin listener is loopback-only by default and is not in that Service. pprof binds all interfaces by default when enabled; only enable it with an intentionally restricted bind address and network exposure.
 
 Use the [runtime logging admin endpoint](epe-admin-api.md#runtime-log-level) to inspect or change verbosity without restarting EPE. For example, PUT `{"output_level":"debug"}` to `/debug/logging/default` to enable EPE debug logs, then PUT `{"output_level":"info"}` to restore the default. The request format matches agentiod; EPE exposes only the process-wide `default` scope. Changes apply to one process and are lost on restart.
+
+The managed Helm Deployment does not expose arbitrary process arguments or an `enable-egressauthz` value. These flags require an operator-managed Deployment or a maintained deployment overlay. They are not environment variables. In particular, destination authorization requires an authorized gateway Pod identity, not merely the default EPE ServiceAccount. See [EPE destination authorization](../tasks/configure-epe-destination-authorization.md) before enabling it.
 
 ## TLS for ext_proc
 

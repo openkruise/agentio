@@ -60,6 +60,8 @@ $ kubectl exec "$AGENTIO_WORKLOAD_POD" \
 
 ## Apply the policy
 
+Scope exception: an empty selector on a `TrafficPolicy` in the mesh root namespace (normally `agentio-system`) creates a mesh-wide baseline. Outside that namespace it selects only local Pods. Use the workload namespace and an explicit label selector for this example; use `GlobalTrafficPolicy` when you want an explicitly cluster-scoped API.
+
 Every egress rule must declare `to`, and every ingress rule must declare `from`, including rules that only restrict ports or protocols. For an IPv4 rule covering all peers, use `cidr: 0.0.0.0/0`; use `::/0` for IPv6. Rules without the direction's peer field are skipped by the compiler and do not establish a default deny. Routing uses `GATEWAY` or `PASSTHROUGH`; express rejection with TrafficPolicy `action: reject`.
 
 Create a `TrafficPolicy` in the workload namespace. The unquoted heredoc substitutes the selected app label into the manifest:

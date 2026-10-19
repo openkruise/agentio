@@ -2,38 +2,50 @@
 
 Use this integration when OpenKruise Agents creates a workload as a `Sandbox`. The Agentio watches the `Sandbox` and its controller-owned Pod, derives a stable sandbox identity, and attaches Agentio policy to that identity.
 
-This integration changes the workload source; it is not a third Agentio data-plane profile. Install Agentio with either the ambient or sidecar profile required by your runtime distribution.
+This integration changes the workload source. Choose which release owns the control plane before configuring routes or EPE.
 
-## Before you begin
+## Choose an installation path
 
-You need:
+| Installation | Control plane | Values and subsequent commands |
+| --- | --- | --- |
+| Standalone Agentio plus an externally configured Sandbox runtime | The `agentio` release, normally in `agentio-system` | Follow [Getting started](../getting-started.md). Configure the runtime to use this control plane. Use `agentiod.*` and `epe.*` values and the standalone task commands. |
+| Manager-integrated Agentio plus sandbox-controller injection | The sandbox-manager release; Agentio resources default to `sandbox-system` | Follow [OpenKruise chart integration](../../manifests/charts/OPENKRUISE.md). Use `agentio.*` values in the manager release. Do not install or upgrade a second standalone release for these Sandboxes. |
 
-- Agentio installed by following [Getting started](../getting-started.md);
-- OpenKruise Agents and the `sandboxes.agents.kruise.io` CRD installed;
-- a runtime integration that enrolls the Sandbox Pod in the selected Agentio data plane.
+For both paths, install OpenKruise Agents and the `sandboxes.agents.kruise.io` CRD, and ensure the runtime distribution provides `traffic-proxy`.
 
-Verify the API and control plane:
+Enable Sandbox discovery in the control plane. For a manager-integrated installation, include these values in the **sandbox-manager** release:
 
-```console
-$ kubectl get crd sandboxes.agents.kruise.io
-$ kubectl rollout status deployment/agentiod --namespace agentio-system --timeout=5m
+```yaml
+agentio:
+  enabled: true
+  agentiod:
+    env:
+      AGENTIO_SANDBOX_MODE: "true"
+      AGENTIO_SANDBOX_RUNTIMES: kruise
 ```
 
-## Install the chart integration
+For standalone Agentio, omit the outer `agentio` wrapper and put the same environment entries under `agentiod.env`. Enabling Sandbox mode only on the runtime proxy does not enable discovery in Agentiod.
 
-The Agentio chart includes generated integrations for the OpenKruise
-sandbox-manager and sandbox-controller charts. Follow
-[OpenKruise chart integration](../../manifests/charts/OPENKRUISE.md) to generate or
-synchronize these bundles and configure their releases. The manager runs Agentiod;
-the controller supplies the `traffic-proxy` runtime injection configuration.
+The manager integration defaults to a static gateway, managed EPE, and a catch-all gateway route. Customize routing under `agentio.agentiod.config.values.egressPolicies` and EPE under `agentio.epe` in the manager's values file. Upgrade the existing manager release using its chart and Helm release namespace; the Agentio resource namespace (`agentio.global.namespace`) can differ from that Helm namespace. The standalone task's `helm upgrade agentio ... --namespace agentio-system` command does not update this control plane.
 
-For this installation, configure bootstrap addresses, the token audience, and the
-workload CA bundle consistently in both releases. The default workload bundle is
-`agentio-ca-root-cert`, and the token audience is `agentio-ca`.
+Configure bootstrap addresses, token audience, and workload trust consistently in the manager and controller releases using the [installation mapping](../../manifests/charts/OPENKRUISE.md#configure-the-installation). The default workload bundle is `agentio-ca-root-cert`, and the token audience is `agentio-ca`.
+
+Verify the selected installation (use `agentio-system` for the standalone defaults):
+
+```console
+$ export AGENTIO_CONTROL_PLANE_NAMESPACE=sandbox-system
+$ kubectl get crd sandboxes.agents.kruise.io
+$ kubectl rollout status deployment/agentiod \
+    --namespace "$AGENTIO_CONTROL_PLANE_NAMESPACE" --timeout=5m
+$ kubectl get deployment agentiod --namespace "$AGENTIO_CONTROL_PLANE_NAMESPACE" \
+    --output jsonpath='{.spec.template.spec.containers[?(@.name=="discovery")].env}'
+```
+
+Confirm both discovery variables appear in the Deployment. Adjust its name if you configured `fullnameOverride`.
 
 ## Understand the identity boundary
 
-Agentio treats `Sandbox` as the policy subject and its backing Pod as the network endpoint and authenticated attester. The controller accepts the binding only when the Pod UID reported by the data plane matches the identity derived from the Sandbox, and the Sandbox is running with an initialized runtime.
+Agentio treats `Sandbox` as the policy subject and its backing Pod as the network endpoint and authenticated attester. The controller binds an unambiguous Sandbox to its owned backing Pod when the Pod is not being deleted and is eligible for networking. A pooled Sandbox must be claimed. Binding is not gated on the Sandbox phase being `Running` or a runtime-initialized condition; the data plane must authenticate the bound Workload identity.
 
 For a non-pooled Sandbox, the fallback identity is `<namespace>--<name>`. When `agents.kruise.io/sandbox-id` is present, that label is the delivery identity. A pooled Sandbox is published as a policy subject only while it is claimed; ambiguous or stale bindings fail closed.
 
@@ -89,7 +101,11 @@ $ AGENTIO_WORKLOAD_POD=$(kubectl get pod --namespace "$AGENTIO_DEMO_NAMESPACE" -
 $ test -n "$AGENTIO_WORKLOAD_POD"
 ```
 
-Follow [Route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md), then [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md). Policy selectors use the Sandbox's effective labels; protected internal labels from an unrelated Pod are not allowed to replace Sandbox-owned identity.
+For standalone Agentio, follow [Route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md). For the manager integration, use the gateway route from the manager release and inspect its `agentio-config` and `agentio-config-primary` in `$AGENTIO_CONTROL_PLANE_NAMESPACE`; customize it through that release's `agentio.agentiod.config.values`, not the standalone Helm commands.
+
+Then follow [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md) using the workload variables above. Shared TrafficPolicy and SecurityProfile selectors match the backing Pod/Workload labels. Put business labels under `spec.template.metadata.labels`, as in this example; labeling only the Sandbox's top-level metadata does not select its Pod. Sandbox inline rules are a separate policy source.
+
+The managed EPE defaults are already enabled in the manager integration. When following EPE tasks, use its actual EPE namespace and ServiceAccount for logs and Secret RoleBindings, and apply Helm settings under `agentio.epe` in the manager release.
 
 ## Clean up
 

@@ -2,7 +2,7 @@
 
 This task routes outbound traffic for `www.example.com` from an enrolled workload through an Agentio egress gateway. Other outbound traffic continues directly to its destination.
 
-You can create the gateway as a static chart workload or with the Kubernetes Gateway API. Both methods support sidecar, ambient, and OpenKruise Agents onboarding paths. Choose one method, then configure the common routing policy.
+You can create the gateway as a static chart workload or with the Kubernetes Gateway API. These commands target the standalone Agentio release used by the sidecar and ambient guides. The [OpenKruise manager integration](../integrations/openkruise-agents.md#choose-an-installation-path) uses a different release, namespace, and values prefix; do not run these Helm commands against that installation. Choose one method, then configure the common routing policy.
 
 ## Protocol detection and server-first connections
 
@@ -228,6 +228,8 @@ $ kubectl exec "$AGENTIO_WORKLOAD_POD" \
 Policy and DNS changes can take a few seconds to reach the data plane. Retry the request if the first response does not contain the header.
 
 ## Clean up
+
+Skip this section while continuing to [Configure a TrafficPolicy](configure-traffic-policy.md) or [Get started with EPE](../getting-started/epe.md). Both tasks need this gateway and route. Return here after removing the sample policies.
 
 Remove the demo routing policy before you remove its gateway:
 

@@ -4,7 +4,7 @@ This reference defines the context that Egress Policy Enforcer (EPE) exposes whi
 
 EPE receives request data through Envoy external processing. Header names are normalized to lowercase. EPE buffers a request body only when a matched action requires it; body bytes and the sandbox bearer token are deliberately not exposed to CEL, Go templates, profile inputs, or audit payloads.
 
-The token-header evaluation contract below describes the internal EPE filter payload. It is not a currently published `SecurityProfile` CRD field: until the corresponding agents-api prerequisite is released, public policy examples continue to use the legacy `apiKey` form.
+The chart ships the public `SecurityProfile` fields `apiKey.targetHeaders` and `apiKey.value`. Prefer these fields for new policies; the legacy single-header form remains supported. See [Transform outbound credentials](../tasks/transform-outbound-credentials.md).
 
 ## Request attributes
 
@@ -24,11 +24,11 @@ Policy matching sees the same host, port, path, method, scheme, headers, and par
 
 The internal routing filters use additional fields that are not exposed to CEL or templates. Request callbacks receive an owned `Stream.Upstream` snapshot of the target selected by preceding filters, including after a buffered body continuation. Place `route` before `egressauthz`: authorization checks the selected IP and port, retains an allowed target without DNS, and rejects a denied explicit target without switching destinations. Without an explicit target, authorization prefers an allowed `HTTPRequest.OriginalDestination` from Envoy's restored downstream destination attributes; an absent or denied original target falls back to resolving the request Host and selecting an allowed candidate. An allowed original target need not occur in the Host's DNS answer. Host/authority stays unchanged. `Config.Family` constrains host resolution, not an already selected or restored address.
 
-These filters currently provide EPE building blocks, not public SecurityProfile routing configuration. Gateway configuration must consume the emitted `agentio.route` target metadata to pin the actual connection address; mandatory authorization and that upstream integration remain separate work.
+The `route` filter is an internal building block, not public SecurityProfile routing configuration. The EPE binary can independently enable mandatory destination authorization with `--enable-egressauthz`; the Agentio Envoy gateway consumes its emitted `agentio.route` IP/port metadata to pin the upstream connection. See [deployment prerequisites and verification](../tasks/configure-epe-destination-authorization.md).
 
 ## Source peer and stream information
 
-Envoy filter-state attributes identify the caller:
+Envoy filter-state attributes identify the caller. On the native Envoy gateway, Porter resolves the verified Workload from discovery and writes its name, namespace and labels into this context. The CONNECT-header and `downstream_peer` sources below describe the legacy gateway compatibility path; native gateways do not trust caller-supplied workload name/label headers. See [Traffic processing](../concepts/traffic-processing.md#porter-and-epe-handle-different-requests).
 
 | EPE stream field | Envoy attribute | Type | Absence behavior |
 | --- | --- | --- | --- |
@@ -39,9 +39,9 @@ Envoy filter-state attributes identify the caller:
 | Sandbox token | `filter_state['sandbox.token']` | internal object | Base64 JSON or raw JSON with `requestId`, `accessToken`, and `sandboxClientId`; nil when absent or malformed. Not expression-visible. |
 | Request ID | `x-request-id` | string | Empty when absent. Used for log correlation, not expression evaluation. |
 
-ztunnel sets these headers from the source Pod's name and namespace, not its owning Deployment. The gateway preserves them in filter state across internal HTTP/TLS hops and exports them in EPE request attributes. EPE reads this captured context, not same-named headers on the inner application request. Default gateway access logs use the same per-field precedence for `workload_name` and `workload_namespace`, replacing `sandbox_name` and `sandbox_namespace`.
+On the legacy path, ztunnel sets these headers from the source Pod's name and namespace, not its owning Deployment. The gateway preserves them in filter state across internal HTTP/TLS hops and exports them in EPE request attributes. EPE reads this captured context, not same-named headers on the inner application request. Default gateway access logs use the same per-field precedence for `workload_name` and `workload_namespace`, replacing `sandbox_name` and `sandbox_namespace`.
 
-Both Pod namespace and name are required. Without them EPE cannot select a profile and passes the request through. The token is consumed only by provider-backed credential transformations; its bearer `accessToken` is never exposed in `request`, `pod`, `inputs`, templates, CEL, or audit context.
+Both Pod namespace and name are required. Without them EPE cannot select a profile. It passes the request through by default, or returns HTTP 403 when `--fail-closed-on-missing-identity` or `--enable-egressauthz` is enabled. The token is consumed only by provider-backed credential transformations; its bearer `accessToken` is never exposed in `request`, `pod`, `inputs`, templates, CEL, or audit context.
 
 The filter stream also records matched profile/rule actions, filter outcomes, final disposition (`passthrough`, `mutated`, `blocked`, `bypassed`, or `error`), any resolved error text, and bytes forwarded before a verdict. These are internal/audit observations, not general CEL variables.
 

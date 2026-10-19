@@ -54,12 +54,12 @@ generate() {
 
 generate "$repo_root/docs/reference/traffic-policy-api.md" \
   "TrafficPolicy API reference" \
-  "This page is generated from the CustomResourceDefinition schemas installed by the Agentio chart. See [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md) for usage." \
+  "This page is generated from the CustomResourceDefinition schemas installed by the Agentio chart. See [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md) for usage. **Agentio runtime scope:** a TrafficPolicy in the mesh root namespace with an empty selector is a mesh-wide baseline, despite the namespace-only scope described in the schema below. Outside the root namespace it is namespace-scoped." \
   "$crds_dir/trafficpolicies.yaml" \
   "$crds_dir/globaltrafficpolicies.yaml"
 
 generate "$repo_root/docs/reference/security-profile-api.md" \
   "SecurityProfile API reference" \
-  "This page is generated from the CustomResourceDefinition schemas installed by the Agentio chart. See [SecurityProfile reference](security-profile.md) for the evaluation behavior." \
+  "This page is generated from the CustomResourceDefinition schemas installed by the Agentio chart. See [SecurityProfile reference](security-profile.md) for the evaluation behavior. **Agentio runtime header values:** current EPE evaluates SecurityProfile and GlobalSecurityProfile headerManipulation values as Go templates, despite the verbatim wording in the upstream schema below. Sandbox annotation values remain literal. See [Modify request headers](../tasks/modify-request-headers.md) for examples and the distinction." \
   "$crds_dir/securityprofiles.yaml" \
   "$crds_dir/globalsecurityprofiles.yaml"

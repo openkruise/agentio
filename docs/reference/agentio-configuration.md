@@ -124,7 +124,7 @@ Agentio evaluates `egressPolicies` in document order. Put specific rules first a
 | `matchCidrs` | `string[]` | Empty | Destination CIDRs. Empty matches every destination address. |
 | `matchPorts` | `string[]` | Empty | Decimal destination ports such as `"443"`. Empty matches every port. CIDR/host and port conditions must both match when both are set. |
 | `policy` | Enum | `PASSTHROUGH` | `PASSTHROUGH` connects directly and `GATEWAY` forwards to `gateway`. Legacy `DENY` is not supported by native Sandbox routing; migrate rejection rules to TrafficPolicy. |
-| `gateway.service` | String | Empty | Fully qualified or resolvable Service name of the egress gateway used by a `GATEWAY` action. |
+| `gateway.service` | String | Empty | Kubernetes Service DNS name of the egress gateway. Use at least `service.namespace`, preferably the full Service FQDN; a bare Service name is rejected even if DNS could resolve it. |
 | `gateway.port` | Integer | `0` | Gateway target port. Set it explicitly when the target does not use the data plane's standard gateway port. |
 
 Example with a gateway route and passthrough fallback:
@@ -263,7 +263,7 @@ An HTTPS connection reaches gateway HTTP filters such as EPE only when its SNI h
 
 Configure all three parts of the trust boundary:
 
-1. Add each inspected hostname to the `tlsTermination.includeHosts` of the `egressGateways` entry whose `name` and `namespace` match the gateway ServiceAccount.
+1. Choose the TLS decision mode. With `agentiod.enableSNITrafficPolicy: false` (default), add each inspected hostname to `tlsTermination.includeHosts` on the gateway entry. With SNI policy enabled, policy-derived TLS actions select termination instead; `includeHosts` does not drive that branch. Gateway `excludeHosts` take precedence in both modes. See [Inspect HTTPS traffic](../tasks/inspect-https-traffic.md) for the two paths.
 2. Configure the MITM signing CA. For production, select `SECRET` mode and provide a Secret containing `ca.crt` and `ca.key`; the default `SELF_SIGN` mode maintains a control-plane-managed CA in a Secret.
 3. Configure calling workloads to trust the MITM CA. In sidecar mode, set `agentiod.injector.clientTrust.enabled: true` to combine and distribute public CAs with the MITM trust bundle and inject Python/Node.js/curl trust environment variables into newly created business containers. This master switch defaults to disabled and is independent of Gateway TLS termination and SNI traffic policy configuration. See [client CA trust](../tasks/configure-client-ca-trust.md) for container selection, overrides, custom sources and the rollout required for existing Pods. Other clients and ambient workloads need their own trust configuration. Do not disable certificate verification as a production workaround.
 
