@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Name }}-tls
+data:
+  tls.crt: {{ printf "%q" .Certificate }}
+  tls.key: {{ printf "%q" .Key }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}-http
+spec:
+  selector: {app: {{ .Name }}-http}
+  ports:
+  - {name: http, port: 8080, targetPort: 8080}
+  - {name: https, port: 443, targetPort: 8081}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Name }}-http
+  labels: {app: {{ .Name }}-http, agentio.kruise.io/dataplane-mode: none}
+spec:
+  containers:
+  - name: http
+    image: {{ .FixtureImage }}
+    args: ["-oauth2-port=8080", "-oauth2-cert=/etc/oauth2/tls.crt", "-oauth2-key=/etc/oauth2/tls.key"]
+    volumeMounts:
+    - {name: tls, mountPath: /etc/oauth2, readOnly: true}
+    readinessProbe:
+      tcpSocket: {port: 8081}
+      periodSeconds: 1
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 128Mi}
+  volumes:
+  - name: tls
+    configMap: {name: "{{ .Name }}-tls"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}
+spec:
+  selector: {app: {{ .Name }}}
+  ports: [{name: grpc, port: 9002, targetPort: 9002}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Name }}
+  labels: {app: {{ .Name }}, agentio.kruise.io/dataplane-mode: none}
+spec:
+  serviceAccountName: agentio-epe
+  containers:
+  - name: epe
+    image: {{ .EPEImage }}
+    args: ["-epe-config={{ .Name }}", "-epe-config-primary={{ .Name }}-primary", "-namespace={{ .Namespace }}", "-fail-closed-on-missing-identity=true", "-enable-debug=true"]
+    env:
+    - {name: IDENTITY_PROVIDER_URL, value: "http://{{ .Host }}:8080/identity"}
+    - {name: CREDENTIAL_PROVIDER_MTLS_SOURCE, value: none}
+    readinessProbe:
+      grpc: {port: 9003}
+      periodSeconds: 1
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: "1", memory: 512Mi}
+---
+# Trust the fixture's HTTPS certificate at the gateway, without weakening TLS
+# verification. This uses the same source mechanism as the upstream TLS suite.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Name }}-origin-trust
+  labels:
+    manifests.agents.kruise.io/kube-source: "true"
+data:
+  sources: |
+    apiVersion: networking.istio.io/v1alpha3
+    kind: EnvoyFilter
+    metadata:
+      name: {{ .Name }}-origin-trust
+      namespace: {{ .Namespace }}
+    spec:
+      targetRefs:
+      - group: gateway.networking.k8s.io
+        kind: Gateway
+        name: egress-gateway
+      configPatches:
+      - applyTo: CLUSTER
+        match:
+          context: ANY
+          cluster:
+            name: tls_connect_originate
+        patch:
+          operation: MERGE
+          value:
+            transport_socket:
+              name: envoy.transport_sockets.tls
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+                common_tls_context:
+                  validation_context:
+                    trusted_ca:
+                      inline_string: {{ printf "%q" .Certificate }}

@@ -138,7 +138,17 @@ func main() {
 		"serve the credential-provider HTTP fixture instead of ext-proc",
 	)
 	calloutPort := flag.Int("http-callout-port", 0, "serve the HTTPCallout fixture instead of ext-proc")
+	oauth2Port := flag.Int(
+		"oauth2-port",
+		0,
+		"serve OAuth2 credential/control HTTP and resource HTTPS on consecutive ports",
+	)
+	oauth2Cert := flag.String("oauth2-cert", "", "OAuth2 resource server certificate file")
+	oauth2Key := flag.String("oauth2-key", "", "OAuth2 resource server private key file")
 	flag.Parse()
+	if *oauth2Port != 0 {
+		log.Fatalf("serve OAuth2 fixture: %v", serveOAuth2Fixture(*oauth2Port, *oauth2Cert, *oauth2Key))
+	}
 	if *calloutPort != 0 {
 		server := &http.Server{
 			Addr:              fmt.Sprintf(":%d", *calloutPort),

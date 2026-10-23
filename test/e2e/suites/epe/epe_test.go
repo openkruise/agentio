@@ -602,11 +602,12 @@ func applyEPESelectorProbe(t *testing.T, environment *e2e.Environment) echo.Inst
 
 // applyEPEProviderConfig configures this scenario to route EPE traffic through
 // the gateway. Cleanup restores the shared PASSTHROUGH baseline.
-func applyEPEProviderConfig(t *testing.T, scope *kube.ResourceScope, service string) {
+func applyEPEProviderConfig(t *testing.T, scope *kube.ResourceScope, service string, tlsHosts ...string) {
 	t.Helper()
 	rig.ApplyConfig(t, scope, map[string]any{
 		"Namespace": resolvedAgentioConfig.Namespace,
 		"Service":   service,
+		"TLSHosts":  tlsHosts,
 	}, `
 apiVersion: v1
 kind: ConfigMap
@@ -637,6 +638,16 @@ data:
     - gateway:
         service: egress-gateway.{{ .Namespace }}.svc.cluster.local
       policy: GATEWAY
+    {{ if .TLSHosts }}
+    egressGateways:
+    - name: egress-gateway
+      namespace: {{ .Namespace }}
+      tlsTermination:
+        includeHosts:
+        {{ range .TLSHosts }}
+        - {{ printf "%q" . }}
+        {{ end }}
+    {{ end }}
 `)
 }
 

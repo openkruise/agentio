@@ -1,0 +1,48 @@
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata:
+  name: {{ .Name }}
+spec:
+  selector:
+    matchLabels: {app: {{ .Caller }}}
+  rules:
+  - name: device
+    match:
+    - domains: ["{{ .Host }}"]
+      paths: [{type: Exact, value: /device}]
+      methods: [POST]
+    actions:
+      tokenTransformation:
+        type: OAuth2
+        credentialRef: {credentialProvider: {name: oauth2-e2e}}
+        oauth2:
+          operation: {deviceAuthorization: {}}
+  - name: token
+    match:
+    - domains: ["{{ .Host }}"]
+      paths: [{type: Exact, value: /token}]
+      methods: [POST]
+    actions:
+      tokenTransformation:
+        type: OAuth2
+        credentialRef: {credentialProvider: {name: oauth2-e2e}}
+        oauth2:
+          operation:
+            token:
+              allowedGrantTypes: ["urn:ietf:params:oauth:grant-type:device_code", refresh_token]
+          customResponse:
+            success: {code: 0}
+            error: {code: 20050}
+  - name: resource
+    match:
+    - domains: ["{{ .Host }}"]
+      paths: [{type: Exact, value: /resource}]
+      methods: [GET]
+    actions:
+      tokenTransformation:
+        type: OAuth2
+        credentialRef: {credentialProvider: {name: oauth2-e2e}}
+        oauth2:
+          operation: {resource: {}}
+          customResponse:
+            authorizationRequired: {code: 99991663}
