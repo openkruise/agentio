@@ -16,13 +16,19 @@
 package envoy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	agentiolog "github.com/openkruise/agentio/pkg/log"
 )
 
 type lifecycleProxy struct {
@@ -155,5 +161,82 @@ func TestSlowAdminCannotExtendTerminationDeadline(t *testing.T) {
 	case <-finished:
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("admin query exceeded drain deadline")
+	}
+}
+
+func TestDrainOutcomeLogs(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		active     int
+		waitActive bool
+		level      string
+		reason     string
+	}{
+		{"connections drained", 0, true, "INFO", "connections_closed"},
+		{"active connections at deadline", 3, true, "WARN", "deadline"},
+		{"fixed drain wait", 0, false, "INFO", "fixed_wait"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			logger, err := agentiolog.NewLogger(&logs, "info", "json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			slog.SetDefault(logger)
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if _, err := fmt.Fprintf(
+					w, "listener.0.0.0.0_15008.downstream_cx_active: %d\n", tc.active,
+				); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			address := server.Listener.Addr().(*net.TCPAddr)
+			old := activeConnectionCheckDelay
+			activeConnectionCheckDelay = time.Millisecond
+			defer func() { activeConnectionCheckDelay = old }()
+			p := &lifecycleProxy{started: make(chan struct{})}
+			a := NewAgent(p, 100*time.Millisecond, 0, address.IP.String(), address.Port, 15021, 15090, tc.waitActive)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			finished := make(chan struct{})
+			go func() {
+				a.Run(ctx)
+				close(finished)
+			}()
+			<-p.started
+			cancel()
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+				t.Fatal("drain did not terminate")
+			}
+			decoder := json.NewDecoder(&logs)
+			outcomes := 0
+			for decoder.More() {
+				var record map[string]any
+				if err := decoder.Decode(&record); err != nil {
+					t.Fatal(err)
+				}
+				if record["msg"] == "gateway Envoy drain in progress" {
+					t.Fatal("per-poll drain progress should not appear at INFO")
+				}
+				if record["msg"] != "gateway Envoy drain ended" {
+					continue
+				}
+				outcomes++
+				if record["level"] != tc.level || record["reason"] != tc.reason || record["duration"] == nil {
+					t.Fatalf("incorrect drain outcome: %v", record)
+				}
+				if tc.waitActive && record["last_active_connections"] != float64(tc.active) {
+					t.Fatalf("missing last observed connection count: %v", record)
+				}
+			}
+			if outcomes != 1 {
+				t.Fatalf("got %d drain outcomes, want 1", outcomes)
+			}
+		})
 	}
 }

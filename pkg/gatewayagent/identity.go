@@ -152,6 +152,12 @@ func (m *identityManager) run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
+				var remaining time.Duration
+				m.mu.RLock()
+				if !m.expires.IsZero() {
+					remaining = time.Until(m.expires)
+				}
+				m.mu.RUnlock()
 				certLog.Warn(
 					"gateway certificate renewal failed",
 					"error",
@@ -160,6 +166,10 @@ func (m *identityManager) run(ctx context.Context) {
 					retry,
 					"duration",
 					time.Since(started),
+					"certificate_valid",
+					remaining > 0,
+					"certificate_remaining",
+					remaining,
 				)
 				renew.Reset(retry)
 				retry = min(30*time.Second, retry*2)

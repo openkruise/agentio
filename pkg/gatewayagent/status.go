@@ -45,6 +45,7 @@ func startStatus(ctx context.Context, c Config, agent *envoy.Agent, cancel conte
 	var probeMu sync.Mutex
 	var lastReason string
 	var checked bool
+	var everReady bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz/ready", func(w http.ResponseWriter, _ *http.Request) {
 		probeMu.Lock()
@@ -57,7 +58,10 @@ func startStatus(ctx context.Context, c Config, agent *envoy.Agent, cancel conte
 				case isDraining:
 					statusLog.Info("gateway is draining")
 				case reason == "":
+					everReady = true
 					statusLog.Info("gateway is ready")
+				case !everReady:
+					statusLog.Info("gateway is waiting for readiness", "reason", reason)
 				default:
 					statusLog.Warn("gateway is not ready", "reason", reason)
 				}

@@ -90,7 +90,92 @@ func TestADSSessionLogs(t *testing.T) {
 		!strings.Contains(logs.String(), "Unavailable") {
 		t.Fatal(logs.String())
 	}
+	var connectionID any
+	var firstDuration float64
+	for i, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		duration, ok := record["duration"].(float64)
+		if !ok || duration <= 0 || record["connection_id"] == nil {
+			t.Fatalf("missing session timing or identity: %s", line)
+		}
+		if i == 0 {
+			connectionID, firstDuration = record["connection_id"], duration
+		} else if record["connection_id"] != connectionID || duration < firstDuration {
+			t.Fatalf("termination does not match the established session: %s", line)
+		}
+	}
+	nextReceived, nextFinished := p.observeSession(t.Context())
+	nextReceived()
+	nextFinished(nil, "relay")
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	var next map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &next); err != nil {
+		t.Fatal(err)
+	}
+	if next["connection_id"] == nil || next["connection_id"] == connectionID {
+		t.Fatalf("reconnection reused session identity: %v", next)
+	}
 }
+
+func TestADSSessionTerminationLogLevel(t *testing.T) {
+	const maxAge = `closing transport due to: connection error: desc = "error reading from server: EOF", received prior goaway: code: NO_ERROR, debug data: "max_age"`
+	for _, tc := range []struct {
+		name  string
+		err   error
+		level string
+	}{
+		{"max age", status.Error(codes.Unavailable, maxAge), "DEBUG"},
+		{"wrapped max age", fmt.Errorf("receive: %w", status.Error(codes.Unavailable, maxAge)), "DEBUG"},
+		{"server EOF", status.Error(codes.Unavailable, "connection error: error reading from server: EOF"), "DEBUG"},
+		{"transport closing", status.Error(codes.Unavailable, "transport is closing"), "DEBUG"},
+		{"client disconnected", status.Error(codes.Unavailable, "client disconnected"), "DEBUG"},
+		{"normal GOAWAY", status.Error(codes.Unavailable, "received prior goaway: code: NO_ERROR"), "DEBUG"},
+		{"normal reset", status.Error(codes.Internal, "stream terminated by RST_STREAM with error code: NO_ERROR"), "DEBUG"},
+		{"connection refused", status.Error(codes.Unavailable, "dial tcp: connect: connection refused"), "WARN"},
+		{"unexpected reset", status.Error(codes.Unavailable, "connection reset by peer"), "WARN"},
+		{"abnormal GOAWAY", status.Error(codes.Unavailable, "received prior goaway: code: ENHANCE_YOUR_CALM"), "WARN"},
+		{"abnormal GOAWAY with EOF", status.Error(codes.Unavailable,
+			strings.ReplaceAll(maxAge, `code: NO_ERROR, debug data: "max_age"`,
+				`code: ENHANCE_YOUR_CALM, debug data: "too_many_pings"`)), "WARN"},
+		{"abnormal GOAWAY with transport closing", status.Error(codes.Unavailable,
+			`closing transport due to: transport is closing, received prior goaway: code: INTERNAL_ERROR, debug data: ""`), "WARN"},
+		{"deadline", status.Error(codes.DeadlineExceeded, "context deadline exceeded"), "WARN"},
+		{"internal error", status.Error(codes.Internal, "transport is closing"), "WARN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureGatewayLogs(t)
+			c := FromEnvironment()
+			t.Cleanup(func() {
+				if err := ConfigureLogging(c, logs); err != nil {
+					t.Fatal(err)
+				}
+			})
+			debug := c
+			debug.AgentLogLevel, debug.LogAsJSON = "debug", true
+			if err := ConfigureLogging(debug, logs); err != nil {
+				t.Fatal(err)
+			}
+			p := &xdsProxy{config: testConfig(t)}
+			_, finished := p.observeSession(t.Context())
+			finished(tc.err, "relay")
+			var record map[string]any
+			if err := json.Unmarshal([]byte(logs.String()), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record["level"] != tc.level {
+				t.Fatalf("level = %v, want %s: %s", record["level"], tc.level, logs.String())
+			}
+			if record["error"] != tc.err.Error() || record["stage"] != "relay" ||
+				record["code"] != status.Code(tc.err).String() || record["address"] != p.config.Proxy.DiscoveryAddress {
+				t.Fatalf("missing termination details: %s", logs.String())
+			}
+		})
+	}
+}
+
 func TestReadinessTransitionLogs(t *testing.T) {
 	logs := captureGatewayLogs(t)
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,13 +231,27 @@ func TestReadinessTransitionLogs(t *testing.T) {
 			t.Fatalf("status %d, want %d", response.StatusCode, want)
 		}
 	}
-	if strings.Count(logs.String(), "gateway is not ready") != 3 ||
+	if strings.Count(logs.String(), "gateway is waiting for readiness") != 2 ||
+		strings.Count(logs.String(), "gateway is not ready") != 1 ||
 		strings.Count(logs.String(), "gateway is ready") != 2 {
 		t.Fatal(logs.String())
 	}
 	if !strings.Contains(logs.String(), "certificate pending") ||
 		!strings.Contains(logs.String(), "certificate expired") {
 		t.Fatal(logs.String())
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		want := "INFO"
+		if record["msg"] == "gateway is not ready" {
+			want = "WARN"
+		}
+		if record["level"] != want {
+			t.Fatalf("readiness transition level = %v, want %s: %s", record["level"], want, line)
+		}
 	}
 }
 func TestTrustBundleLogRecovery(t *testing.T) {
@@ -200,6 +299,70 @@ func TestTrustBundleLogRecovery(t *testing.T) {
 		t.Fatal(logs.String())
 	}
 }
+
+func TestCertificateFailureLogsRemainingValidity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		lifetime time.Duration
+	}{
+		{"initial issuance", 0},
+		{"valid certificate", time.Hour},
+		{"expired certificate", -time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureGatewayLogs(t)
+			issuer := newTestCA(t)
+			issuer.fail.Store(true)
+			c := testConfig(t)
+			c.CAAddress = issuer.serve(t)
+			c.ECCCurve = "P256"
+			c.RootCertFile = filepath.Join(t.TempDir(), "root.pem")
+			c.CARootCertFile = c.RootCertFile
+			c.TokenFile = filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(c.RootCertFile, issuer.root, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(c.TokenFile, []byte("test-token"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			m := &identityManager{config: c, root: rootSecret(issuer.root), done: make(chan struct{})}
+			if tc.lifetime != 0 {
+				m.expires = time.Now().Add(tc.lifetime)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			go m.run(ctx)
+			defer func() {
+				cancel()
+				<-m.done
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for !strings.Contains(logs.String(), "gateway certificate renewal failed") {
+				if time.Now().After(deadline) {
+					t.Fatal("missing certificate failure log")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			cancel()
+			<-m.done
+			for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatal(err)
+				}
+				if record["msg"] != "gateway certificate renewal failed" {
+					continue
+				}
+				remaining, ok := record["certificate_remaining"].(float64)
+				if !ok || record["certificate_valid"] != (tc.lifetime > 0) ||
+					(tc.lifetime == 0 && remaining != 0) || (tc.lifetime > 0 && remaining <= 0) ||
+					(tc.lifetime < 0 && remaining >= 0) {
+					t.Fatalf("incorrect certificate risk information: %s", line)
+				}
+			}
+		})
+	}
+}
+
 func TestSDSNackLogFields(t *testing.T) {
 	logs := captureGatewayLogs(t)
 	s := &localSDS{identity: &identityManager{}}

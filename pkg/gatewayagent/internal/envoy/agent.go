@@ -158,9 +158,24 @@ func (a *Agent) DrainNow() {
 
 // terminate starts exiting the process.
 func (a *Agent) terminate() {
-	infof("Agent draining Proxy for termination")
+	started := time.Now()
+	reason := "process_exited"
+	lastActive := -1 // No connection count has been observed yet.
+	defer func() {
+		fields := []any{"reason", reason, "duration", time.Since(started)}
+		if lastActive >= 0 {
+			fields = append(fields, "last_active_connections", lastActive)
+		}
+		if reason == "deadline" || reason == "stats_error" {
+			processLog.Warn("gateway Envoy drain ended", fields...)
+		} else {
+			processLog.Info("gateway Envoy drain ended", fields...)
+		}
+	}()
+	processLog.Info("gateway Envoy drain started", "timeout", a.terminationDrainDuration,
+		"minimum_duration", a.minDrainDuration, "wait_for_connections", a.exitOnZeroActiveConnections)
 	if a.skipDrain.Load() {
-		infof("Agent already drained, exiting immediately")
+		reason = "drain_disabled"
 		a.abortCh <- errAbort
 		<-a.statusCh
 		return
@@ -173,20 +188,19 @@ func (a *Agent) terminate() {
 	// after min(all connections close, terminationGracePeriodSeconds-minimumDrainDuration).
 	// exitOnZeroActiveConnections is disabled (default), retain the existing behavior.
 	if a.exitOnZeroActiveConnections {
-		infof("Agent draining proxy for %v, then waiting for active connections to terminate...", a.minDrainDuration)
 		expires := time.Now().Add(a.terminationDrainDuration)
 		deadline := time.NewTimer(a.terminationDrainDuration)
 		defer deadline.Stop()
 		select {
 		case <-time.After(a.minDrainDuration):
 		case <-deadline.C:
+			reason = "deadline"
 			a.abortCh <- errAbort
 			<-a.statusCh
 			return
 		case <-a.statusCh:
 			return
 		}
-		infof("Checking for active connections...")
 		ticker := time.NewTicker(activeConnectionCheckDelay)
 		defer ticker.Stop()
 
@@ -196,6 +210,7 @@ func (a *Agent) terminate() {
 			select {
 			case <-ticker.C:
 			case <-deadline.C:
+				reason = "deadline"
 				a.abortCh <- errAbort
 				break graceful_loop
 			case <-a.statusCh:
@@ -209,42 +224,40 @@ func (a *Agent) terminate() {
 				return
 			default:
 				if err != nil {
-					processLog.Error(err.Error())
 					retryCount++
+					processLog.Warn("gateway Envoy connection count failed", "error", err, "attempt", retryCount)
 					// Max retry 5 times
 					if retryCount > 4 {
+						reason = "stats_error"
 						a.abortCh <- errAbort
-						warnf("Graceful termination logic ended prematurely, error while obtaining downstream_cx_active stat (Max retry %d exceeded)", retryCount)
 						break graceful_loop
 					}
-					warnf("Retrying (%d attempt) to obtain active connections...", retryCount)
 					continue graceful_loop
 				}
 				if ac == -1 {
-					processLog.Info("downstream_cx_active are not available. This either means there are no downstream connection established yet" +
-						" or the stats are not enabled. Skipping active connections check...")
+					reason = "connection_stats_unavailable"
 					a.abortCh <- errAbort
 					break graceful_loop
 				}
+				lastActive = ac
 				if ac == 0 {
-					processLog.Info("There are no more active connections. terminating proxy...")
+					reason = "connections_closed"
 					a.abortCh <- errAbort
 					break graceful_loop
 				}
-				infof("There are still %d active connections", ac)
+				processLog.Debug("gateway Envoy drain in progress", "active_connections", ac)
 				// reset retry count
 				retryCount = 0
 			}
 		}
 	} else {
-		infof("Graceful termination period is %v, starting...", a.terminationDrainDuration)
 		select {
 		case status := <-a.statusCh:
 			infof("Envoy exited with status %v", status.err)
 			infof("Graceful termination logic ended prematurely, envoy process terminated early")
 			return
 		case <-time.After(a.terminationDrainDuration):
-			infof("Graceful termination period complete, terminating remaining proxies.")
+			reason = "fixed_wait"
 			a.abortCh <- errAbort
 		}
 	}

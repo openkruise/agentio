@@ -25,6 +25,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/grpc"
@@ -44,7 +46,8 @@ var xdsLog = agentiolog.New("gateway-xds")
 // resources here, filter response types, or replay cached messages with old nonces.
 type xdsProxy struct {
 	discovery.UnimplementedAggregatedDiscoveryServiceServer
-	config Config
+	config           Config
+	nextConnectionID atomic.Uint64
 }
 
 func startXDS(c Config) (func(), <-chan error, error) {
@@ -175,22 +178,53 @@ func (p *xdsProxy) StreamAggregatedResources(
 
 // Observe actual responses rather than gRPC client creation, which is asynchronous.
 func (p *xdsProxy) observeSession(ctx context.Context) (func(), func(error, string)) {
+	started := time.Now()
 	received, finished := observeADS(ctx, p.config.metrics)
-	logger := xdsLog.With("address", p.config.Proxy.DiscoveryAddress)
+	logger := xdsLog.With("address", p.config.Proxy.DiscoveryAddress, "connection_id", p.nextConnectionID.Add(1))
 	var first sync.Once
 	return func() {
 			received()
-			first.Do(func() { logger.Info("gateway ADS received first control-plane response") })
+			first.Do(func() {
+				logger.Info("gateway ADS received first control-plane response", "duration", time.Since(started))
+			})
 		}, func(err error, stage string) {
 			finished()
-			fields := []any{"stage", stage, "code", status.Code(err).String(), "error", err}
-			if ctx.Err() != nil || err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) ||
-				status.Code(err) == codes.Canceled {
+			fields := []any{
+				"stage", stage, "code", status.Code(err).String(), "error", err, "duration", time.Since(started),
+			}
+			if ctx.Err() != nil || expectedADSClosure(err) {
 				logger.Debug("gateway ADS stream closed", fields...)
 			} else {
 				logger.Warn("gateway ADS stream failed", fields...)
 			}
 		}
+}
+
+// Like Istio's GRPCErrorType, recognize normal transport shutdowns even when
+// gRPC reports them as RPC errors. This only controls logging, not relay errors.
+func expectedADSClosure(err error) bool {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	s := status.Convert(err)
+	if s.Code() == codes.Canceled {
+		return true
+	}
+	// gRPC combines the read error (often EOF) with a preceding GOAWAY.
+	// Preserve non-NO_ERROR GOAWAYs before considering generic close messages.
+	if _, goaway, ok := strings.Cut(s.Message(), "received prior goaway: code: "); ok {
+		code, _, _ := strings.Cut(goaway, ",")
+		return code == "NO_ERROR"
+	}
+	if s.Code() == codes.Unavailable {
+		for _, message := range []string{"client disconnected", "error reading from server: EOF", "transport is closing"} {
+			if strings.Contains(s.Message(), message) {
+				return true
+			}
+		}
+	}
+	// Unlike Istio, keep DeadlineExceeded visible: ADS has no normal deadline.
+	return strings.Contains(err.Error(), "stream terminated by RST_STREAM with error code: NO_ERROR")
 }
 
 // Returning terminates the downstream handler and cancels the upstream RPC,
