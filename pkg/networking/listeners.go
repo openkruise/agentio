@@ -444,7 +444,9 @@ func (b *resourceBuilder) buildForwardHCM(
 		filters = append(filters, b.egressTargetFilters()...)
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
-		ImplementationSpecifier:         &dfphttpv3.FilterConfig_DnsCacheConfig{DnsCacheConfig: dnsCacheConfig()},
+		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
+			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		},
 		AllowDynamicHostFromFilterState: true,
 	})))
 	if terminatedTLS {

@@ -32,6 +32,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	setstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -93,6 +94,17 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 		if !strings.HasPrefix(key, model.ClusterType+"\x00") {
 			delete(got, key)
 			continue
+		}
+		// The legacy oracle predates DFP destination filtering. The complete
+		// cache configuration is covered by TestDFPAddressFilterInGatewayGraph.
+		if cluster := message.(*clusterv3.Cluster); cluster.GetName() == HTTPDynamicForwardProxy ||
+			cluster.GetName() == TLSConnectOriginate {
+			cfg := &dfpclusterv3.ClusterConfig{}
+			if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg.GetDnsCacheConfig().ResolvedAddressFilter = nil
+			cluster.GetClusterType().TypedConfig = mustGatewayAny(t, cfg)
 		}
 		// The legacy oracle predates disabling the shared cross-SNI session
 		// cache and explicit compatible TLS defaults. Both are covered by the
