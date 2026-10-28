@@ -16,6 +16,10 @@
 {{- end -}}
 {{- $_ := set $defaults "sandboxExtProc" $provider -}}
 {{- end -}}
+{{- if and (eq .Values.epe.mode "managed") .Values.epe.enableXDSEgressAuthz -}}
+{{- $principal := printf "spiffe://%s/ns/%s/sa/%s" (replace "@" "." .Values.global.trustDomain) .Release.Namespace (include "epe.serviceAccountName" .) -}}
+{{- $_ := set $defaults "xdsClients" (list (dict "principal" $principal "resources" (list "Workload" "TrafficPolicy"))) -}}
+{{- end -}}
 {{- $config := mergeOverwrite (deepCopy $defaults) (.Values.agentiod.config.values | default dict) -}}
 apiVersion: v1
 kind: ConfigMap

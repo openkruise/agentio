@@ -277,3 +277,17 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 		})
 	}
 }
+
+func TestKubernetesResourceConsumerUsesBoundPodScope(t *testing.T) {
+	resolver := &fakeNodeResolver{scope: ztunnelScope()}
+	node := nodeWithMetadata(map[string]string{})
+	node.Id = model.ProxyTypeResourceConsumer + "~10.0.0.1~epe.demo~demo.svc.cluster.local"
+	scope, err := KubernetesScopeFunc(resolver)(node, model.PeerIdentity{AttestedBy: model.AttestationKubernetes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.Class != model.ClientResourceConsumer || scope.Principal != resolver.scope.Principal ||
+		scope.GatewayKey != "" {
+		t.Fatalf("scope = %+v", scope)
+	}
+}

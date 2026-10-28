@@ -331,6 +331,19 @@ func newEgressEPE(t *testing.T, enableXDS bool) (*egressEPE, *kube.ResourceScope
 		logs, err := environment.Kube.Logs(ctx, namespace, name, "epe", nil)
 		t.Logf("egress EPE logs (%v):\n%s", err, logs)
 	})
+	if enableXDS {
+		rig.ApplyConfig(t, scope, map[string]any{"Namespace": namespace}, `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: `+harness.ConfigMapName+`
+data:
+  config: |
+    xdsClients:
+    - principal: spiffe://cluster.local/ns/{{ .Namespace }}/sa/agentio-epe
+      resources: [Workload, TrafficPolicy]
+`)
+	}
 	e2econfig.New(scope).Eval(namespace, map[string]any{
 		"Namespace": namespace,
 		"Image":     resolvedAgentioConfig.EPEImage,
@@ -432,7 +445,7 @@ func epePinnedAddress(response *extprocv3.ProcessingResponse) string {
 		GetFields()["upstream"].GetStructValue().GetFields()["address"].GetStringValue()
 }
 
-// The fixture uses the gateway identity for ADS and the EPE roles for Kubernetes watches.
+// The fixture uses the EPE identity for ADS and Kubernetes watches.
 const egressEPEYAML = `
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -444,7 +457,7 @@ roleRef:
   name: agentio-epe-{{ .Namespace }}
 subjects:
 - kind: ServiceAccount
-  name: egress-gateway
+  name: agentio-epe
   namespace: {{ .Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -458,7 +471,7 @@ roleRef:
   name: agentio-epe
 subjects:
 - kind: ServiceAccount
-  name: egress-gateway
+  name: agentio-epe
   namespace: {{ .Namespace }}
 ---
 apiVersion: v1
@@ -476,9 +489,8 @@ metadata:
   labels:
     app: epe-egressauthz
     agentio.kruise.io/dataplane-mode: none
-    gateway.networking.k8s.io/gateway-name: egress-gateway
 spec:
-  serviceAccountName: egress-gateway
+  serviceAccountName: agentio-epe
   containers:
   - name: epe
     image: {{ .Image }}

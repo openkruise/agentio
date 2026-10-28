@@ -62,8 +62,8 @@ func (s *Server) handleRequest(
 		"unsub", len(request.GetResourceNamesUnsubscribe()),
 		"initial_versions", len(request.GetInitialResourceVersions()),
 		"nonce", request.GetResponseNonce())
-	known, allowed := typeAccess(scope.Class, typeURL)
-	if known && !allowed {
+	known, allowed := clientTypeAccess(scope, typeURL)
+	if !allowed && (known || scope.Access != nil || scope.Class == model.ClientResourceConsumer) {
 		return status.Errorf(codes.PermissionDenied, "client class %s cannot subscribe to %s", scope.Class, typeURL)
 	}
 	watch := watches[typeURL]
@@ -159,7 +159,7 @@ func (s *Server) handleRequest(
 		return nil
 	}
 	if !initial && !watch.wildcard &&
-		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress) {
+		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress || scope.Class == model.ClientResourceConsumer) {
 		snapshot := s.resources.Snapshot()
 		if view, ok := demandReconciliationView(snapshot, typeURL, scope, watch,
 			request.GetResourceNamesSubscribe(), request.GetResourceNamesUnsubscribe()); ok {

@@ -28,6 +28,7 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
@@ -50,6 +51,7 @@ type ResourceStore interface {
 }
 
 type Server struct {
+	clientAccess clientAccess
 	discoveryv3.UnimplementedAggregatedDiscoveryServiceServer
 	authenticator attestation.Authenticator
 	scopeFuncs    ScopeFuncs
@@ -73,6 +75,7 @@ type streamRequest struct {
 var errRequestRateLimited = errors.New("request rate limit exceeded")
 
 var clientClasses = [...]model.ClientClass{
+	model.ClientResourceConsumer,
 	model.ClientSharedZTunnel,
 	model.ClientDedicatedZTunnel,
 	model.ClientEgressGateway,
@@ -148,6 +151,7 @@ func newServerWithScheduler(
 		metrics.Default.EnsureXDSConnectionClass(string(class))
 	}
 	server := &Server{
+		clientAccess:  clientAccess{changed: make(chan struct{})},
 		authenticator: authenticator,
 		scopeFuncs:    scopeFuncs,
 		resources:     resources,
@@ -222,6 +226,10 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
+	scope, accessChanged, err := s.clientAccess.resolve(scope)
+	if err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
 	if err := scope.Validate(); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
@@ -261,6 +269,17 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	if err := s.handleRequest(stream, scope, connLog, watches, subscription, first.request); err != nil {
 		return err
 	}
+	refreshAccess := func() error {
+		current, changed, err := s.clientAccess.resolve(scope)
+		if err != nil {
+			return status.Error(codes.PermissionDenied, err.Error())
+		}
+		if !proto.Equal(scope.Access, current.Access) {
+			return status.Error(codes.PermissionDenied, "xDS client grant changed; reconnect to reauthorize")
+		}
+		accessChanged = changed
+		return nil
+	}
 	inputClosed := false
 	handleIncoming := func(incoming streamRequest) (bool, error) {
 		if incoming.err != nil {
@@ -282,6 +301,10 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
+		case <-accessChanged:
+			if err := refreshAccess(); err != nil {
+				return err
+			}
 		case incoming := <-requests:
 			stop, err := handleIncoming(incoming)
 			if stop || err != nil {
@@ -302,6 +325,10 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
+		case <-accessChanged:
+			if err := refreshAccess(); err != nil {
+				return err
+			}
 		case incoming := <-requests:
 			stop, err := handleIncoming(incoming)
 			if stop || err != nil {

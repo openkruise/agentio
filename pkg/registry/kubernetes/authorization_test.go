@@ -240,6 +240,13 @@ func TestGatewayCertificateAuthorizationUsesEffectiveConfiguration(t *testing.T)
 	if err := authorizer.Authorize(scope); err != nil {
 		t.Fatalf("Authorize denied configured gateway: %v", err)
 	}
+	consumer := scope
+	consumer.Class = model.ClientResourceConsumer
+	consumer.Access = &configv1.XDSClient{Principal: scope.Principal.String(), Resources: []string{"*"}}
+	if err := authorizer.Authorize(consumer); err == nil {
+		t.Fatal("wildcard type grant bypassed gateway certificate authorization")
+	}
+
 	scope.GatewayKey = "agentio-system/other"
 	if err := authorizer.Authorize(scope); err == nil {
 		t.Fatal("Authorize allowed an unregistered gateway")

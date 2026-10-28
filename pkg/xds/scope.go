@@ -80,9 +80,14 @@ func KubernetesScopeFunc(resolver interface {
 			return model.ClientScope{}, err
 		}
 		proxyType := nodeProxyType(node)
+		if proxyType == model.ProxyTypeResourceConsumer {
+			// The Pod is attested; the ADS server requires an explicit principal grant.
+			scope.Class = model.ClientResourceConsumer
+			return scope, nil
+		}
 		var expectedType string
 		switch scope.Class {
-		case model.ClientSharedZTunnel, model.ClientDedicatedZTunnel:
+		case model.ClientDedicatedZTunnel, model.ClientSharedZTunnel:
 			expectedType = model.ProxyTypeZTunnel
 		case model.ClientEgressGateway:
 			expectedType = model.ProxyTypeWaypoint

@@ -42,7 +42,7 @@ var (
 	xdsTokenPath = flag.String(
 		"xds-token-path",
 		"/var/run/secrets/kubernetes.io/serviceaccount/token",
-		"Projected Pod-bound token for ADS (requires an authorized gateway Pod)",
+		"Projected Pod-bound token for ADS (requires an authorized xDS principal)",
 	)
 	xdsClusterID = flag.String(
 		"xds-cluster-id",
@@ -52,7 +52,7 @@ var (
 	xdsNodeID = flag.String(
 		"xds-node-id",
 		"",
-		"ADS node ID; defaults to waypoint~POD_IP~POD_NAME.POD_NAMESPACE~POD_NAMESPACE.svc.cluster.local",
+		"ADS node ID; defaults to resource-consumer~POD_IP~POD_NAME.POD_NAMESPACE~POD_NAMESPACE.svc.cluster.local",
 	)
 )
 
@@ -66,7 +66,7 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 		if name == "" || ns == "" {
 			return nil, nil, fmt.Errorf("POD_NAME and POD_NAMESPACE or --xds-node-id are required")
 		}
-		id = "waypoint~" + os.Getenv("POD_IP") + "~" + name + "." + ns + "~" + ns + ".svc.cluster.local"
+		id = "resource-consumer~" + os.Getenv("POD_IP") + "~" + name + "." + ns + "~" + ns + ".svc.cluster.local"
 	}
 	metadata, err := structpb.NewStruct(
 		map[string]any{

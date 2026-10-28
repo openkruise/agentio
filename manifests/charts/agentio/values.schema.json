@@ -455,6 +455,9 @@
         "mode"
       ],
       "properties": {
+        "enableXDSEgressAuthz": {
+          "type": "boolean"
+        },
         "mode": {
           "type": "string",
           "enum": [

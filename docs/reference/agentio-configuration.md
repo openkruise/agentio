@@ -112,7 +112,51 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `additionalExtProcs` | `ExtProcProvider[]` | Empty | Ordered processors appended after the effective sandbox provider. Disabled when that provider is absent or explicitly disabled. |
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from sandbox workload metadata to reduce xDS size. |
+| `xdsClients` | `XDSClient[]` | Empty | Exact authenticated principals and allowed xDS resource types; generic consumers require an explicit grant. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway TLS termination, `ext_proc`, connection pool, and CONNECT rate-limit settings. |
+
+## xDS client access
+
+`xdsClients` authorizes exact, canonical SPIFFE principals, independently of the
+credential or attestation used to authenticate them. Kubernetes Pod-bound tokens
+resolve to `spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>`. Other
+integrations supply their verified principal and instance scope through a trusted
+registered authenticator and scope function; Node metadata cannot grant identity.
+This setting does not enable another authentication method by itself.
+
+```yaml
+xdsClients:
+  - principal: spiffe://cluster.local/ns/agentio-system/sa/agentio-epe
+    resources: [Workload, TrafficPolicy]
+  - principal: spiffe://example.com/services/policy-reader
+    resources: ["*"]
+```
+
+Supported resource names are `Address`, `Workload`, `Authorization`,
+`TrafficPolicy`, `Sandbox`, `Cluster`, `Endpoint`, `Listener`, `Route`, `Secret`,
+`ExtensionConfiguration`, and `ProxyConfig`. `"*"` permits every supported type,
+including types added in future versions. Unknown names and duplicate principals
+are invalid. An empty resource list denies every type.
+
+Generic clients use the `resource-consumer~...` Node ID prefix and require a
+matching, non-empty grant. Their policy discovery is cluster-wide: they can read
+Workloads and Sandbox bindings across namespaces and policies referenced by those
+Workloads. The namespace in a Kubernetes principal identifies the client, not a
+namespace limit on returned data. Resource subscriptions, including named
+subscriptions, do not expand authorization.
+
+An explicit entry replaces a native client's built-in type permissions. Native
+gateway and ztunnel scopes retain their existing resource visibility; without an
+entry they keep their built-in permissions. Gateway-owned resources and on-demand
+SDS certificate issuance still require their existing gateway ownership and
+issuance authorization. A generic consumer does not acquire a gateway scope by
+listing `Secret` or `"*"`.
+
+The list replaces lower configuration layers. Preserve every required entry when
+overriding it, including Helm's generated EPE entry. Valid grant changes disconnect
+affected streams; clients must reconnect and reauthorize. Unrelated grant changes
+leave existing streams open. Removing a generic client's entry revokes access;
+removing a native client's override restores its built-in type permissions.
 
 ## Egress policies
 

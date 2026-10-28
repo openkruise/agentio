@@ -605,8 +605,9 @@ func applyEPESelectorProbe(t *testing.T, environment *e2e.Environment) echo.Inst
 func applyEPEProviderConfig(t *testing.T, scope *kube.ResourceScope, service string) {
 	t.Helper()
 	rig.ApplyConfig(t, scope, map[string]any{
-		"Namespace": resolvedAgentioConfig.Namespace,
-		"Service":   service,
+		"Namespace":      resolvedAgentioConfig.Namespace,
+		"Service":        service,
+		"XDSEgressAuthz": service == "epe-egressauthz",
 	}, `
 apiVersion: v1
 kind: ConfigMap
@@ -614,6 +615,11 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
+    {{- if .XDSEgressAuthz }}
+    xdsClients:
+    - principal: spiffe://cluster.local/ns/{{ .Namespace }}/sa/agentio-epe
+      resources: [Workload, TrafficPolicy]
+    {{- end }}
     sandboxExtProc:
       service: {{ .Service }}.{{ .Namespace }}.svc.cluster.local
       port: 9002

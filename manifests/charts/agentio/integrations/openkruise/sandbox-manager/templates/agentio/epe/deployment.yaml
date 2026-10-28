@@ -6,8 +6,8 @@
 {{- $certificateSource := .Values.agentio.epe.tls.certificateSource | default dict }}
 {{- $ca := $certificateSource.ca | default dict }}
 {{- $caMode := and .Values.agentio.epe.tls.enabled (not (hasKey $certificateSource "file")) }}
-{{- $mountRoot := and $caMode (not (hasKey $ca "caCertificateFile")) }}
-{{- $mountToken := and $caMode (not (hasKey $ca "tokenFile")) }}
+{{- $mountRoot := or .Values.agentio.epe.enableXDSEgressAuthz (and $caMode (not (hasKey $ca "caCertificateFile"))) }}
+{{- $mountToken := or .Values.agentio.epe.enableXDSEgressAuthz (and $caMode (not (hasKey $ca "tokenFile"))) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,6 +50,13 @@ spec:
             - -epe-config={{ include "agentio.epe.fullname" . }}-config
             - -epe-config-primary={{ include "agentio.epe.fullname" . }}-config-primary
             - -namespace={{ (include "agentio.namespace" .) }}
+            {{- if .Values.agentio.epe.enableXDSEgressAuthz }}
+            - --enable-xds-egressauthz
+            - --xds-address={{ printf "%s.%s.svc.%s:15012" (include "agentio.agentiod.fullname" .) (include "agentio.namespace" .) .Values.agentio.global.clusterDomain }}
+            - --xds-root-path=/var/run/secrets/agentio/root-cert.pem
+            - --xds-token-path=/var/run/secrets/tokens/agentio-token
+            - --xds-cluster-id={{ .Values.agentio.global.clusterId }}
+            {{- end }}
             - -secret-watch-scope={{ .Values.agentio.epe.secretWatchScope }}
             {{- if .Values.agentio.epe.tls.enabled }}
             {{- if $caMode }}
@@ -70,6 +77,20 @@ spec:
             - -metrics-port={{ .Values.agentio.epe.service.metricsPort }}
             - -audit-webhook-insecure-skip-verify={{ .Values.agentio.epe.auditWebhook.insecureSkipVerify }}
           env:
+            {{- if .Values.agentio.epe.enableXDSEgressAuthz }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

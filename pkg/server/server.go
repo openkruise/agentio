@@ -347,6 +347,10 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		return err
 	}
 	defer discoveryServer.Close()
+	clientAccessChanges := sources.AgentioConfig.Register(func(event krt.Event[model.AgentioConfiguration]) {
+		discoveryServer.SetClientAccess(event.Latest().Value.GetXdsClients())
+	})
+	defer clientAccessChanges.UnregisterHandler()
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(math.MaxInt32),
 		grpc.Creds(credentials.NewTLS(authority.TLSConfig())),
@@ -433,7 +437,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	nextSyncLog := time.Now().Add(10 * time.Second)
-	for !registry.HasSynced() || !resourceCompiler.HasSynced() {
+	for !registry.HasSynced() || !resourceCompiler.HasSynced() || !clientAccessChanges.HasSynced() {
 		select {
 		case <-ctx.Done():
 			_ = healthServer.Shutdown(context.Background())

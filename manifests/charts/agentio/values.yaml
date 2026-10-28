@@ -344,6 +344,9 @@ egressGateway:
         protocol: HBONE
 
 epe:
+  # Managed EPE: query native Workload/TrafficPolicy over xDS using its own identity.
+  # Helm supplies the principal grant, Pod identity, trust bundle and projected token.
+  enableXDSEgressAuthz: false
   # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
   # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
   # null leaves the base externally managed; primary is always externally managed.

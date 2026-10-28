@@ -18,19 +18,24 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 )
 
 // Proxy type prefixes in xDS node IDs, independent of authenticated client classes.
 const (
-	ProxyTypeZTunnel       = "ztunnel"
-	ProxyTypeWaypoint      = "waypoint"
-	ProxyTypeAgentioEgress = "agentio-egress"
-	ProxyTypeAgentioPorter = "agentio-porter"
+	ProxyTypeResourceConsumer = "resource-consumer"
+	ProxyTypeZTunnel          = "ztunnel"
+	ProxyTypeWaypoint         = "waypoint"
+	ProxyTypeAgentioEgress    = "agentio-egress"
+	ProxyTypeAgentioPorter    = "agentio-porter"
 )
 
 type ClientClass string
 
+// Client classes select resource visibility independently of the authentication method.
 const (
+	ClientResourceConsumer ClientClass = "resource-consumer"
 	ClientSharedZTunnel    ClientClass = "shared-ztunnel"
 	ClientDedicatedZTunnel ClientClass = "dedicated-ztunnel"
 	ClientEgressGateway    ClientClass = "egress-gateway"
@@ -123,6 +128,8 @@ func validIdentitySegment(value string) bool {
 }
 
 type ClientScope struct {
+	// Access is the immutable explicit type grant; nil uses built-in permissions.
+	Access *configv1.XDSClient
 	// WorkloadUID + Source bind a dedicated stream to its authenticated
 	// runtime object. Its Sandbox set is resolved dynamically on each update.
 	WorkloadUID string
@@ -140,6 +147,8 @@ func (s ClientScope) Validate() error {
 		return fmt.Errorf("principal: %w", err)
 	}
 	switch s.Class {
+	case ClientResourceConsumer:
+		// The attestation owns instance verification; explicit grants authorize discovery.
 	case ClientSharedZTunnel:
 		if strings.TrimSpace(s.NodeName) == "" {
 			return fmt.Errorf("shared ztunnel scope requires node name")

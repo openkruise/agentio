@@ -60,7 +60,8 @@ func (v *addressSelection) hasScopedWorkload(references model.WorkloadQuery) boo
 }
 
 func (v *addressSelection) visible(resource model.Resource) bool {
-	if v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress {
+	if v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress ||
+		v.scope.Class == model.ClientResourceConsumer {
 		return true
 	}
 	if resource.Facts.GatewayOwner != "" && v.hasScopedWorkload(model.WorkloadQuery{
@@ -94,7 +95,8 @@ func (v *addressSelection) selected(resource model.Resource) bool {
 	if scope.Class != model.ClientSharedZTunnel && len(v.subscription.names) == 0 {
 		return false
 	}
-	if scope.Class != model.ClientEgressGateway && scope.Class != model.ClientAgentioEgress {
+	if scope.Class != model.ClientEgressGateway && scope.Class != model.ClientAgentioEgress &&
+		scope.Class != model.ClientResourceConsumer {
 		if resource.Facts.GatewayOwner != "" && v.hasScopedWorkload(model.WorkloadQuery{
 			GatewayReference: resource.Facts.GatewayOwner,
 		}) {
@@ -151,7 +153,7 @@ func resourceNamesMatch(resource model.Resource, contains func(string) bool) boo
 // as incremental generation. Named lookups never scan the entire snapshot.
 func (v *addressSelection) list() []model.Resource {
 	if v.subscription.Wildcard() &&
-		(v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress) {
+		(v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress || v.scope.Class == model.ClientResourceConsumer) {
 		return v.resources.List(v.typeURL)
 	}
 	if !v.subscription.Wildcard() && len(v.subscription.names) == 0 && v.scope.Class != model.ClientSharedZTunnel {

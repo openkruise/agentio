@@ -123,6 +123,20 @@ Omitting or setting `egressAuthorization` to null inherits the lower configurati
 
 Set `--enable-xds-egressauthz=true` to additionally retrieve the calling Workload and its TrafficPolicy resources from Agentiod. Supply `--xds-address` and the existing xDS TLS/token settings. The xDS authorizer rejects missing or incomplete workload identity with HTTP 403 before querying resources; audit records use the reason `missing_source_identity`. Unavailable policies also fail closed. Enabling xDS does not change `--fail-closed-on-missing-identity`: that separate flag rejects missing identity at the request boundary, before any authorizer runs. `--enable-xds-egressauthz` defaults to false; when this xDS flag is disabled, authorization does not connect to xDS or query Workload/TrafficPolicy resources.
 
+For a Helm-managed EPE, set `epe.enableXDSEgressAuthz: true` alongside
+`epe.mode: managed`. The chart supplies xDS flags, downward-API Pod identity,
+a projected token and the trust bundle, and grants EPE's own principal
+`Workload` and `TrafficPolicy` access in `AgentioConfig.xdsClients`. Custom EPE
+ServiceAccount names and namespaces are reflected automatically. This is
+independent of gateway-to-EPE TLS.
+
+For a separately deployed EPE, add its authenticated principal to
+[`xdsClients`](agentio-configuration.md#xds-client-access), and set `POD_NAME`,
+`POD_NAMESPACE`, `POD_UID` and `POD_IP` for Kubernetes authentication. EPE now
+defaults its xDS Node ID to `resource-consumer~...`; it needs no gateway membership
+or gateway ServiceAccount. When upgrading an existing xDS-enabled EPE, configure
+its grant on the control plane before rolling out the new EPE binary.
+
 Replace the former `--enable-egressauthz` argument with `--enable-xds-egressauthz` when upgrading a deployment that used native TrafficPolicy authorization. The old argument is removed. Deployments without either argument now perform target resolution and pinning too, and enforce the mandatory destination restrictions even when the user list is empty. EPE must be able to resolve the destination names previously resolved by the gateway; DNS failure now rejects the request.
 
 Keep gateway request header processing at `SEND` and `failureModeAllow: false`, and upgrade gateway and EPE together so the gateway consumes the pinned IP. Coverage is for HTTP forwarding through EPE, including HTTPS terminated into that path. This is not a blanket TCP/TLS passthrough or UDP restriction. Application-level CONNECT forwards through a separate upstream-proxy route; this HTTP DFP target-pinning guarantee does not describe that route or the proxy's eventual tunnel destination. Traffic that bypasses EPE is unaffected.
@@ -131,6 +145,7 @@ Keep gateway request header processing at `SEND` and `failureModeAllow: false`, 
 
 | Value | Default | Rendered effect |
 | --- | --- | --- |
+| `epe.enableXDSEgressAuthz` | `false` | Managed EPE: enables native Workload/TrafficPolicy xDS checks and generates the principal grant and authentication mounts. |
 | `epe.mode` | `disabled` | `managed` creates the EPE ServiceAccount, cluster RBAC, headless Service, Deployment, and PodDisruptionBudget and writes `sandboxExtProc` into `agentio-config`; `external` wires the configured external address without deploying EPE. |
 | `epe.nameOverride` | `agentio-epe` | Names the Kubernetes objects and the generated ext_proc Service hostname. |
 | `epe.config` | `null` | When set, creates `<epe-name>-config` with EPEConfig in `data.config`. EPE watches this name even when the ConfigMap is absent. |

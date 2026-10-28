@@ -49,11 +49,20 @@ func TestManagerMasterModesAndConfiguration(t *testing.T) {
 		for _, epe := range []string{"disabled", "managed", "external"} {
 			t.Run(gateway+"/"+epe, func(t *testing.T) {
 				values := map[string]any{"agentio": map[string]any{
-					"enabled":       true,
-					"global":        map[string]any{"namespace": "custom-agentio", "clusterDomain": "cluster.example"},
-					"agentiod":      map[string]any{"logging": map[string]any{"format": "json"}, "config": map[string]any{"values": map[string]any{"sandboxIgnoredLabels": []string{"custom-label"}}}},
+					"enabled": true,
+					"global":  map[string]any{"namespace": "custom-agentio", "clusterDomain": "cluster.example"},
+					"agentiod": map[string]any{
+						"logging": map[string]any{"format": "json"},
+						"config": map[string]any{
+							"values": map[string]any{"sandboxIgnoredLabels": []string{"custom-label"}},
+						},
+					},
 					"egressGateway": map[string]any{"mode": gateway, "gatewayAPI": map[string]any{"create": true}},
-					"epe":           map[string]any{"mode": epe, "external": map[string]any{"address": "epe.external", "port": 9443}},
+					"epe": map[string]any{
+						"mode":                 epe,
+						"enableXDSEgressAuthz": epe == "managed",
+						"external":             map[string]any{"address": "epe.external", "port": 9443},
+					},
 				}}
 				rendered := renderChart(t, target, values)
 				all := ""
@@ -108,6 +117,18 @@ func TestManagerMasterModesAndConfiguration(t *testing.T) {
 				for _, bad := range []string{"parent.invalid", "parent-epe", "agentgateway", "mutatingwebhookconfigurations", "15017", "AGENTIO_NATIVE_SIDECARS", "AGENTIO_INJECTOR_CONFIGMAP_NAME", "egress-gateway: |", "sidecar-injector"} {
 					if strings.Contains(all, bad) {
 						t.Errorf("rendered manager contains %s", bad)
+					}
+				}
+
+				if epe == "managed" {
+					for _, required := range []string{
+						"principal: spiffe://cluster.local/ns/custom-agentio/sa/agentio-epe",
+						"--xds-address=agentiod.custom-agentio.svc.cluster.example:15012",
+						"--enable-xds-egressauthz",
+					} {
+						if !strings.Contains(all, required) {
+							t.Fatalf("missing EPE xDS integration %q", required)
+						}
 					}
 				}
 				if epe == "managed" && !strings.Contains(all, "agentio-epe.custom-agentio.svc.cluster.example") {

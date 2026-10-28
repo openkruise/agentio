@@ -50,6 +50,11 @@ message AgentioConfig {
   // Names must be unique DNS labels. Empty lists remove all additional processors.
   repeated ExtProcProvider additional_ext_procs = 5;
 
+  // Exact authenticated principals and their allowed xDS resource types.
+  // Matching entries replace built-in type permissions; generic resource consumers
+  // require an entry. Lists replace across configuration layers; [] revokes grants.
+  repeated XDSClient xds_clients = 6;
+
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same
@@ -375,4 +380,16 @@ message RateLimitEntry {
   //   filter_state["downstream_peer"].namespace
   //   filter_state["agentio.peer.principal"]
   string cel = 3;
+}
+
+// XDSClient grants type access independently of the client's authentication method.
+// Resource ownership and certificate issuance authorization still apply.
+message XDSClient {
+  // Canonical SPIFFE principal produced by the trusted attestation scope function.
+  string principal = 1;
+  // Address, Workload, Authorization, TrafficPolicy, Sandbox, Cluster, Endpoint,
+  // Listener, Route, Secret, ExtensionConfiguration or ProxyConfig.
+  // "*" allows every supported type, including types added by future versions.
+  // Empty lists grant no access. Generic consumers discover policy data cluster-wide.
+  repeated string resources = 2;
 }
