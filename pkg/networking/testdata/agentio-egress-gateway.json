@@ -183,7 +183,47 @@
             "@type": "type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig",
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
-              "dnsLookupFamily": "V4_ONLY"
+              "dnsLookupFamily": "V4_ONLY",
+              "resolvedAddressFilter": {
+                "ranges": [
+                  {
+                    "addressPrefix": "127.0.0.0",
+                    "prefixLen": 8
+                  },
+                  {
+                    "addressPrefix": "::ffff:127.0.0.0",
+                    "prefixLen": 104
+                  },
+                  {
+                    "addressPrefix": "::1",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "0.0.0.0",
+                    "prefixLen": 32
+                  },
+                  {
+                    "addressPrefix": "::ffff:0.0.0.0",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "::",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "169.254.0.0",
+                    "prefixLen": 16
+                  },
+                  {
+                    "addressPrefix": "::ffff:169.254.0.0",
+                    "prefixLen": 112
+                  },
+                  {
+                    "addressPrefix": "fe80::",
+                    "prefixLen": 10
+                  }
+                ]
+              }
             },
             "allowInsecureClusterOptions": true
           }
@@ -226,7 +266,47 @@
             "@type": "type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig",
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
-              "dnsLookupFamily": "V4_ONLY"
+              "dnsLookupFamily": "V4_ONLY",
+              "resolvedAddressFilter": {
+                "ranges": [
+                  {
+                    "addressPrefix": "127.0.0.0",
+                    "prefixLen": 8
+                  },
+                  {
+                    "addressPrefix": "::ffff:127.0.0.0",
+                    "prefixLen": 104
+                  },
+                  {
+                    "addressPrefix": "::1",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "0.0.0.0",
+                    "prefixLen": 32
+                  },
+                  {
+                    "addressPrefix": "::ffff:0.0.0.0",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "::",
+                    "prefixLen": 128
+                  },
+                  {
+                    "addressPrefix": "169.254.0.0",
+                    "prefixLen": 16
+                  },
+                  {
+                    "addressPrefix": "::ffff:169.254.0.0",
+                    "prefixLen": 112
+                  },
+                  {
+                    "addressPrefix": "fe80::",
+                    "prefixLen": 10
+                  }
+                ]
+              }
             }
           }
         },
@@ -1234,7 +1314,47 @@
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig",
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
-                          "dnsLookupFamily": "V4_ONLY"
+                          "dnsLookupFamily": "V4_ONLY",
+                          "resolvedAddressFilter": {
+                            "ranges": [
+                              {
+                                "addressPrefix": "127.0.0.0",
+                                "prefixLen": 8
+                              },
+                              {
+                                "addressPrefix": "::ffff:127.0.0.0",
+                                "prefixLen": 104
+                              },
+                              {
+                                "addressPrefix": "::1",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "0.0.0.0",
+                                "prefixLen": 32
+                              },
+                              {
+                                "addressPrefix": "::ffff:0.0.0.0",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "::",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "169.254.0.0",
+                                "prefixLen": 16
+                              },
+                              {
+                                "addressPrefix": "::ffff:169.254.0.0",
+                                "prefixLen": 112
+                              },
+                              {
+                                "addressPrefix": "fe80::",
+                                "prefixLen": 10
+                              }
+                            ]
+                          }
                         },
                         "allowDynamicHostFromFilterState": true
                       }
@@ -1956,7 +2076,47 @@
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig",
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
-                          "dnsLookupFamily": "V4_ONLY"
+                          "dnsLookupFamily": "V4_ONLY",
+                          "resolvedAddressFilter": {
+                            "ranges": [
+                              {
+                                "addressPrefix": "127.0.0.0",
+                                "prefixLen": 8
+                              },
+                              {
+                                "addressPrefix": "::ffff:127.0.0.0",
+                                "prefixLen": 104
+                              },
+                              {
+                                "addressPrefix": "::1",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "0.0.0.0",
+                                "prefixLen": 32
+                              },
+                              {
+                                "addressPrefix": "::ffff:0.0.0.0",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "::",
+                                "prefixLen": 128
+                              },
+                              {
+                                "addressPrefix": "169.254.0.0",
+                                "prefixLen": 16
+                              },
+                              {
+                                "addressPrefix": "::ffff:169.254.0.0",
+                                "prefixLen": 112
+                              },
+                              {
+                                "addressPrefix": "fe80::",
+                                "prefixLen": 10
+                              }
+                            ]
+                          }
                         },
                         "allowDynamicHostFromFilterState": true
                       }
@@ -2062,7 +2222,47 @@
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig",
                   "dnsCacheConfig": {
                     "name": "agentio_dns_cache",
-                    "dnsLookupFamily": "V4_ONLY"
+                    "dnsLookupFamily": "V4_ONLY",
+                    "resolvedAddressFilter": {
+                      "ranges": [
+                        {
+                          "addressPrefix": "127.0.0.0",
+                          "prefixLen": 8
+                        },
+                        {
+                          "addressPrefix": "::ffff:127.0.0.0",
+                          "prefixLen": 104
+                        },
+                        {
+                          "addressPrefix": "::1",
+                          "prefixLen": 128
+                        },
+                        {
+                          "addressPrefix": "0.0.0.0",
+                          "prefixLen": 32
+                        },
+                        {
+                          "addressPrefix": "::ffff:0.0.0.0",
+                          "prefixLen": 128
+                        },
+                        {
+                          "addressPrefix": "::",
+                          "prefixLen": 128
+                        },
+                        {
+                          "addressPrefix": "169.254.0.0",
+                          "prefixLen": 16
+                        },
+                        {
+                          "addressPrefix": "::ffff:169.254.0.0",
+                          "prefixLen": 112
+                        },
+                        {
+                          "addressPrefix": "fe80::",
+                          "prefixLen": 10
+                        }
+                      ]
+                    }
                   },
                   "portValue": 443
                 }

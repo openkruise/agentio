@@ -17,9 +17,11 @@ package networking
 import (
 	"fmt"
 	"math"
+	"net/netip"
 	"slices"
 	"time"
 
+	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -195,8 +197,10 @@ func (b *resourceBuilder) buildDFPCluster(
 	settings *configv1.UpstreamTlsSettings,
 ) *clusterv3.Cluster {
 	typed := b.pack(&dfpclusterv3.ClusterConfig{
-		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{DnsCacheConfig: dnsCacheConfig()},
-		AllowInsecureClusterOptions:    allowInsecure,
+		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
+			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		},
+		AllowInsecureClusterOptions: allowInsecure,
 	})
 	cluster := &clusterv3.Cluster{
 		Name:            name,
@@ -347,8 +351,31 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 	return cluster
 }
 
-func dnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
-	return &dfpcommonv3.DnsCacheConfig{Name: DNSCacheName, DnsLookupFamily: clusterv3.Cluster_V4_ONLY}
+func dnsCacheConfig(legacy bool) *dfpcommonv3.DnsCacheConfig {
+	config := &dfpcommonv3.DnsCacheConfig{Name: DNSCacheName, DnsLookupFamily: clusterv3.Cluster_V4_ONLY}
+	// Legacy gateways keep their frozen wire contract and may run an Envoy
+	// version without resolved_address_filter support.
+	if legacy {
+		return config
+	}
+	filter := &matcherv3.AddressMatcher{}
+	for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
+		prefix := netip.MustParsePrefix(cidr)
+		filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
+			AddressPrefix: prefix.Addr().String(),
+			PrefixLen:     wrapperspb.UInt32(uint32(prefix.Bits())),
+		})
+		if prefix.Addr().Is4() {
+			// EPE unmaps IPv4-in-IPv6 before evaluation. Envoy matches CIDRs
+			// by address family, so include the equivalent mapped IPv6 range.
+			filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
+				AddressPrefix: netip.AddrFrom16(prefix.Addr().As16()).String(),
+				PrefixLen:     wrapperspb.UInt32(uint32(96 + prefix.Bits())),
+			})
+		}
+	}
+	config.ResolvedAddressFilter = filter
+	return config
 }
 
 func defaultCircuitBreakers() *clusterv3.CircuitBreakers {

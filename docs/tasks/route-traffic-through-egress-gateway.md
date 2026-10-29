@@ -20,6 +20,36 @@ HTTP inspection and policies that depend on detecting TLS/SNI do not apply to
 traffic classified as opaque TCP. Policies for successfully detected protocols
 retain their normal behavior.
 
+## Default DFP destination restrictions
+
+The native `agentio-egress` gateway's dynamic forward proxy (DFP) filters destination IPs using the same
+built-in restrictions as [EPE egress authorization](../reference/epe-configuration.md#global-destination-authorization):
+
+| Destination | Denied ranges |
+| --- | --- |
+| Loopback | `127.0.0.0/8`, `::1/128` |
+| Unspecified | `0.0.0.0/32`, `::/128` |
+| Link-local | `169.254.0.0/16`, `fe80::/10` |
+
+Equivalent IPv4-mapped IPv6 addresses are also filtered. Private service networks
+and Alibaba Cloud metadata at `100.100.100.200` remain allowed by this default.
+
+The filter is enabled for HTTP, TLS origination, and SNI DFP even without EPE.
+It applies to IP literals and DNS results, including destinations selected through
+DFP filter state. Envoy removes matching addresses before adding them to the DNS
+cache. If none remain on the first resolution, forwarding fails; if a refresh
+returns only denied addresses, Envoy retains the previously allowed address.
+Filtered addresses increment `dns_cache.agentio_dns_cache.dns_address_filter_out`.
+
+This requires Envoy 1.39 or later; the bundled gateway image satisfies that
+requirement. Custom native gateway images must also support
+[`resolved_address_filter`](https://www.envoyproxy.io/docs/envoy/v1.39.4/api-v3/extensions/common/dynamic_forward_proxy/v3/dns_cache.proto#envoy-v3-api-field-extensions-common-dynamic-forward-proxy-v3-dnscacheconfig-resolved-address-filter).
+Legacy waypoint gateways retain their existing configuration without this filter.
+These restrictions cover DFP only. Original-destination TCP/UDP forwarding and
+explicit upstream proxy connections use other clusters. Operator-added
+`EPEConfig.egressAuthorization.deniedCIDRs` remain EPE-only and are not copied to
+the gateway's DNS cache.
+
 ## Before you begin
 
 Complete one onboarding path from [Getting started](../getting-started.md). The selected guide exports these variables:

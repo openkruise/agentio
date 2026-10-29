@@ -95,6 +95,17 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			delete(got, key)
 			continue
 		}
+		// The legacy oracle predates DFP destination filtering. The complete
+		// cache configuration is covered by TestDFPAddressFilterInGatewayGraph.
+		if cluster := message.(*clusterv3.Cluster); cluster.GetName() == HTTPDynamicForwardProxy ||
+			cluster.GetName() == TLSConnectOriginate {
+			cfg := &dfpclusterv3.ClusterConfig{}
+			if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg.GetDnsCacheConfig().ResolvedAddressFilter = nil
+			cluster.GetClusterType().TypedConfig = mustGatewayAny(t, cfg)
+		}
 		// The legacy oracle predates disabling the shared cross-SNI session
 		// cache and explicit compatible TLS defaults. Both are covered by the
 		// TLS origination regression tests.

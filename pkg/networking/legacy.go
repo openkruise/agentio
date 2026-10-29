@@ -19,6 +19,7 @@ import (
 	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -34,6 +35,13 @@ const (
 )
 
 var (
+	legacySNIDFPFilter = networkFilter(
+		"envoy.filters.network.sni_dynamic_forward_proxy",
+		mustPack(&dfpnetworkv3.FilterConfig{
+			DnsCacheConfig: dnsCacheConfig(true),
+			PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
+		}),
+	)
 	legacyPeerMetadataFilter = buildDownstreamPeerMetadataFilter()
 	legacyConnectAuthority   = buildConnectAuthorityFilter(
 		"istio.hashable_string",

@@ -23,14 +23,6 @@ import (
 
 const defaultCredentialProviderName = "agentio-default-credential-provider"
 
-// mandatoryDeniedCIDRs are appended after operator configuration and cannot be
-// removed by ConfigMap overrides. Private service networks remain operator-owned.
-var mandatoryDeniedCIDRs = []string{
-	"127.0.0.0/8", "::1/128", // Loopback.
-	"0.0.0.0/32", "::/128", // Unspecified.
-	"169.254.0.0/16", "fe80::/10", // Link-local.
-}
-
 // DefaultEPEConfig assembles the lowest configuration layer from built-in
 // destination restrictions and optional environment-configured providers.
 func DefaultEPEConfig() (*configv1.EPEConfig, error) {
@@ -40,7 +32,7 @@ func DefaultEPEConfig() (*configv1.EPEConfig, error) {
 	}
 	cfg := &configv1.EPEConfig{
 		EgressAuthorization: &configv1.EgressAuthorization{
-			DeniedCidrs: slices.Clone(mandatoryDeniedCIDRs),
+			DeniedCidrs: configv1.MandatoryEgressDeniedCIDRs(),
 		},
 	}
 	if provider != nil {
@@ -64,7 +56,7 @@ func ApplyEPEConfig(content string, base *configv1.EPEConfig) (*configv1.EPEConf
 		cfg.EgressAuthorization = &configv1.EgressAuthorization{}
 	}
 	denied := cfg.EgressAuthorization.DeniedCidrs
-	for _, cidr := range mandatoryDeniedCIDRs {
+	for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
 		if !slices.Contains(denied, cidr) {
 			denied = append(denied, cidr)
 		}

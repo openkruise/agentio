@@ -154,7 +154,7 @@ var (
 	captureSNIFilter = buildCaptureSNIFilter("envoy.hashable_string")
 
 	sniDFPFilter = networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", mustPack(&dfpnetworkv3.FilterConfig{
-		DnsCacheConfig: dnsCacheConfig(),
+		DnsCacheConfig: dnsCacheConfig(false),
 		PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
 	}))
 
@@ -270,6 +270,10 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 			sniPolicyListenerFilter(),
 		)
 	}
+	sniDFP := sniDFPFilter
+	if b.legacyGateway {
+		sniDFP = legacySNIDFPFilter
+	}
 	mainForward := &listenerv3.Listener{
 		Name: MainForward,
 		ListenerSpecifier: &listenerv3.Listener_InternalListener{
@@ -288,7 +292,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 				Name: forwardTCPChain,
 				Filters: b.applicationTCPFilters(
 					config,
-					[]*listenerv3.Filter{sniDFPFilter},
+					[]*listenerv3.Filter{sniDFP},
 					TLSConnectOriginate,
 					connectionPool,
 				),
@@ -400,7 +404,9 @@ func (b *resourceBuilder) buildForwardHCM(
 		filters = append(filters, b.egressTargetFilters()...)
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
-		ImplementationSpecifier:         &dfphttpv3.FilterConfig_DnsCacheConfig{DnsCacheConfig: dnsCacheConfig()},
+		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
+			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		},
 		AllowDynamicHostFromFilterState: true,
 	})))
 	if terminatedTLS {
