@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -66,7 +67,14 @@ type Registry struct {
 	EndpointSlices     krt.Collection[*discoveryv1.EndpointSlice]
 	// Secrets is the shared cache for consumers that read arbitrary Secret references.
 	// Consumers wait for it separately from the compiler's registry synchronization.
-	Secrets krt.Collection[*corev1.Secret]
+	Secrets    krt.Collection[*corev1.Secret]
+	ConfigMaps krt.Collection[*corev1.ConfigMap]
+
+	// Raw policy objects retain UID and generation for validation status.
+	TrafficPolicyObjects         krt.Collection[*agentsv1alpha1.TrafficPolicy]
+	GlobalTrafficPolicyObjects   krt.Collection[*agentsv1alpha1.GlobalTrafficPolicy]
+	SecurityProfileObjects       krt.Collection[*agentsv1alpha1.SecurityProfile]
+	GlobalSecurityProfileObjects krt.Collection[*agentsv1alpha1.GlobalSecurityProfile]
 
 	Sandboxes                  krt.Collection[model.Sandbox]
 	Workloads                  krt.Collection[model.Workload]
@@ -164,6 +172,9 @@ func New(
 		stop,
 		policyOptions("global-security-profile-objects")...,
 	)
+	r.ConfigMaps = configMaps
+	r.TrafficPolicyObjects, r.GlobalTrafficPolicyObjects = trafficPolicyObjects, globalTrafficObjects
+	r.SecurityProfileObjects, r.GlobalSecurityProfileObjects = securityProfileObjects, globalSecurityObjects
 	gatewayInformer.Start(stop)
 	gatewayClassInformer.Start(stop)
 	gatewayObjects := krt.WrapClient(gatewayInformer, derivedOptions("gateway-api-gateways")...)

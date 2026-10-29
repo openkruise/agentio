@@ -436,6 +436,9 @@ func (sp Profile) ResourceName() string {
 // compile, or any audit entry fails to compile. The caller rejects that
 // candidate; the profile store may continue serving LKG.
 func NewProfile(obj metav1.Object, spec *v1alpha1.SecurityProfileSpec) (*Profile, error) {
+	if err := ValidateInputs(obj.GetNamespace(), spec.Inputs); err != nil {
+		return nil, err
+	}
 	selector, err := metav1.LabelSelectorAsSelector(&spec.Selector)
 	if err != nil {
 		return nil, err
@@ -460,6 +463,19 @@ func NewProfile(obj metav1.Object, spec *v1alpha1.SecurityProfileSpec) (*Profile
 		return nil, err
 	}
 	return sp, nil
+}
+
+// ValidateInputs checks input declarations without accessing Kubernetes.
+func ValidateInputs(namespace string, inputs []v1alpha1.SecurityProfileInput) error {
+	for _, input := range inputs {
+		if (input.Inline != nil) == (input.ConfigMap != nil) {
+			return fmt.Errorf("input %q must set exactly one source", input.Name)
+		}
+		if input.ConfigMap != nil && input.ConfigMap.Namespace == "" && namespace == "" {
+			return fmt.Errorf("ConfigMap input %q requires an explicit namespace for a global profile", input.Name)
+		}
+	}
+	return nil
 }
 
 // InvalidProfile returns an identity-bearing collection item for a source

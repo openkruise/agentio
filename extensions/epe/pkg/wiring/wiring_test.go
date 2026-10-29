@@ -14,6 +14,7 @@
 package wiring
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/extensionprovider"
@@ -35,6 +36,32 @@ func TestBuildFiltersOrderIsExplicit(t *testing.T) {
 	for i, reg := range regs {
 		if reg.Name != want[i] {
 			t.Errorf("position %d = %q, want %q", i, reg.Name, want[i])
+		}
+	}
+}
+
+func TestValidationUsesProductionParsers(t *testing.T) {
+	production, err := BuildFilters(Deps{Providers: &extensionprovider.Registry{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation, err := BuildValidationFilters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(production) != len(validation) {
+		t.Fatal("validation filter set differs from production")
+	}
+	for i, reg := range production {
+		if validation[i].Name != reg.Name {
+			t.Fatalf("validation filter %d differs", i)
+		}
+		for _, payload := range []string{minimalPayloads[reg.Name], `{}`, `{"broken`} {
+			_, want := reg.Parse(json.RawMessage(payload))
+			_, got := validation[i].Parse(json.RawMessage(payload))
+			if (got == nil) != (want == nil) {
+				t.Errorf("%s: validation=%v, production=%v", reg.Name, got, want)
+			}
 		}
 	}
 }

@@ -35,7 +35,7 @@ func oauth2Payload(a *v1alpha1.TokenTransformationAction) (json.RawMessage, erro
 	if a.FailStrategy != "" && a.FailStrategy != v1alpha1.FailStrategyBlock {
 		return nil, fmt.Errorf("OAuth2 requires the Block failure strategy")
 	}
-	ref, err := normalizeCredentialRef(a.CredentialRef)
+	ref, err := NormalizeCredentialRef(a.CredentialRef)
 	if err != nil {
 		return nil, err
 	}

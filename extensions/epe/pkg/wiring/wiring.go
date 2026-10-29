@@ -56,6 +56,16 @@ func BuildFilters(deps Deps) ([]filter.Registration, error) {
 	if deps.Providers == nil {
 		return nil, fmt.Errorf("provider registry is required")
 	}
+	return buildFilters(deps)
+}
+
+// BuildValidationFilters exposes the production parsers without runtime services.
+// Callers may use Parse/Project, but must not execute the returned filters.
+func BuildValidationFilters() ([]filter.Registration, error) {
+	return buildFilters(Deps{})
+}
+
+func buildFilters(deps Deps) ([]filter.Registration, error) {
 	ttDeps := tokentransform.Deps{
 		SecretSource:   deps.Secrets,
 		Limiter:        tokentransform.NewLimiter(time.Minute, nil),

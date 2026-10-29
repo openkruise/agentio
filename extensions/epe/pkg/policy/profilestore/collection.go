@@ -248,6 +248,9 @@ func resolveInputs(
 	meta securityprofile.Meta,
 	declared []agentsv1alpha1.SecurityProfileInput,
 ) (map[string]any, string, error) {
+	if err := securityprofile.ValidateInputs(meta.Namespace, declared); err != nil {
+		return nil, "", err
+	}
 	if len(declared) == 0 {
 		return nil, "", nil
 	}
@@ -255,12 +258,7 @@ func resolveInputs(
 	resolved := make(map[string]any, len(declared))
 	var missing []string
 	for _, input := range declared {
-		hasInline := input.Inline != nil
-		hasConfigMap := input.ConfigMap != nil
-		if hasInline == hasConfigMap {
-			return nil, "", fmt.Errorf("input %q must set exactly one source", input.Name)
-		}
-		if hasInline {
+		if input.Inline != nil {
 			resolved[input.Name] = maps.Clone(input.Inline)
 			continue
 		}
@@ -268,9 +266,6 @@ func resolveInputs(
 		namespace := input.ConfigMap.Namespace
 		if namespace == "" {
 			namespace = meta.Namespace
-		}
-		if namespace == "" {
-			return nil, "", fmt.Errorf("ConfigMap input %q requires an explicit namespace for a global profile", input.Name)
 		}
 		key := namespace + "/" + input.ConfigMap.Name
 		if configMaps == nil || ctx == nil {

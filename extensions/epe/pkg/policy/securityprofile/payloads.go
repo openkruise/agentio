@@ -206,7 +206,7 @@ func payloadsFor(rule *Rule) (map[string]json.RawMessage, error) {
 // cleared because presence of the key is what enables the filter. Both are
 // CRD compatibility concerns that must not travel into the filter.
 func tokenTransformPayload(a *v1alpha1.TokenTransformationAction) (json.RawMessage, error) {
-	ref, err := normalizeCredentialRef(a.CredentialRef)
+	ref, err := NormalizeCredentialRef(a.CredentialRef)
 	if err != nil {
 		return nil, err
 	}

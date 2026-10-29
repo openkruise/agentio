@@ -135,3 +135,9 @@ Notable defaults are priority `1000`, `block.statusCode` `403`, MCP `defaultActi
 - [Credential provider contract](credential-provider.md)
 - [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md)
 - [SecurityProfile API reference](security-profile-api.md)
+
+## Validation status
+
+agentiod reports `Accepted` and `ResolvedRefs` using the existing status fields.
+See [Policy validation status](../components/securityprofile-status.md) for
+condition meanings, reference scope and the distinction from data-plane loading.

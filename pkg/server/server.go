@@ -41,6 +41,7 @@ import (
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policystatus"
 	"github.com/openkruise/agentio/pkg/registry"
 	kubernetesregistry "github.com/openkruise/agentio/pkg/registry/kubernetes"
 	"github.com/openkruise/agentio/pkg/security/attestation"
@@ -261,6 +262,12 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	if err != nil {
 		return err
 	}
+	statusController, err := policystatus.New(kubeClient, registry, options.RootNamespace,
+		features.ScopedSecrets, resolver.Resolve, ctx.Done())
+	if err != nil {
+		return err
+	}
+	go statusController.Run(ctx)
 	empty, err := model.NewResourceSet(nil)
 	if err != nil {
 		return err

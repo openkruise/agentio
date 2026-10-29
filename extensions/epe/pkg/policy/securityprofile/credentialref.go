@@ -25,11 +25,11 @@ import (
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
 
-// normalizeCredentialRef returns ref with only the typed union populated,
+// NormalizeCredentialRef returns ref with only the typed union populated,
 // rejecting the combinations the CRD's own schema validation cannot
 // express. Rejecting is the point: an unreadable credentialRef must fail
 // the rule closed rather than resolve to some default source.
-func normalizeCredentialRef(ref v1alpha1.CredentialRef) (v1alpha1.CredentialRef, error) {
+func NormalizeCredentialRef(ref v1alpha1.CredentialRef) (v1alpha1.CredentialRef, error) {
 	hasSecret := ref.Secret != nil
 	hasProvider := ref.CredentialProvider != nil
 	if hasSecret && hasProvider {
