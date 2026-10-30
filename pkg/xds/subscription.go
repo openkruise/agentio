@@ -242,16 +242,34 @@ func demandReconciliationView(snapshot model.ResourceSet, typeURL string, scope 
 }
 
 // newIncrementalSubscriptionView copies sent versions only for affected wire
-// identities. Subscription names still describe the complete selection, so
-// aliases and dependency expansion cannot accidentally withdraw another match.
+// identities. Sandbox subscriptions use canonical UIDs, so only changed names
+// can affect their selection. Other types retain the complete subscription for
+// alias and dependency expansion.
 func newIncrementalSubscriptionView(watch *watchState, typeURL string, update xdsstore.Update) SubscriptionView {
-	view := SubscriptionView{wildcard: watch.wildcard, names: sortedNames(watch.names), sent: make(map[string]string)}
-	for _, candidate := range update.Candidates(typeURL) {
+	view := SubscriptionView{wildcard: watch.wildcard, sent: make(map[string]string)}
+	candidates := update.Candidates(typeURL)
+	// Copy the subscriptions when that is cheaper than testing every candidate.
+	namedSandbox := typeURL == model.SandboxType && !watch.wildcard && len(watch.names) >= len(candidates)
+	if namedSandbox {
+		view.names = make([]string, 0, len(candidates))
+	} else {
+		view.names = sortedNames(watch.names)
+	}
+	for _, candidate := range candidates {
 		for _, identity := range candidate.Identities {
+			// A migration retains multiple identities for the same Sandbox UID.
+			if namedSandbox && (len(view.names) == 0 || view.names[len(view.names)-1] != identity.Name) &&
+				watch.names.Contains(identity.Name) {
+				view.names = append(view.names, identity.Name)
+			}
 			if version, found := watch.sent[identity.Name]; found {
 				view.sent[identity.Name] = version
 			}
 		}
+	}
+	if namedSandbox {
+		slices.Sort(view.names)
+		view.names = slices.Compact(view.names)
 	}
 	return view
 }
