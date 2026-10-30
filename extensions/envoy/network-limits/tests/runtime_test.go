@@ -227,6 +227,8 @@ type runtime struct {
 	cmd        *exec.Cmd
 	listener   object
 	lds        string
+	routes     object
+	rds        string
 	extensions map[string]object
 }
 
@@ -258,6 +260,18 @@ func writeJSON(t *testing.T, path string, v any) {
 }
 func (r *runtime) writeLDS(t *testing.T, listener object) {
 	v := clone(t, listener)
+	if r.routes != nil {
+		chain := obj(v["filter_chains"].([]any)[0])
+		hcm := nested(chain["filters"].([]any)[0], "typed_config")
+		delete(hcm, "route_config")
+		hcm["rds"] = object{
+			"route_config_name": r.routes["name"],
+			"config_source": object{
+				"resource_api_version": "V3",
+				"path_config_source":   object{"path": r.rds},
+			},
+		}
+	}
 	if r.extensions != nil {
 		for _, f := range filters(v) {
 			name := obj(f)["name"].(string)
@@ -321,6 +335,10 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 		edit(r.listener)
 	}
 	if ecds {
+		chain := obj(r.listener["filter_chains"].([]any)[0])
+		r.routes = clone(t, nested(chain["filters"].([]any)[0], "typed_config", "route_config"))
+		r.rds = filepath.Join(filepath.Dir(r.lds), "rds.json")
+		r.writeRDS(t, r.routes)
 		r.extensions = make(map[string]object)
 		for _, f := range filters(r.listener) {
 			name := obj(f)["name"].(string)
@@ -557,4 +575,42 @@ func (r *runtime) reloadECDS(t *testing.T, name string, edit func(object), rejec
 	if !reject {
 		r.extensions[name] = filter
 	}
+}
+
+func (r *runtime) writeRDS(t *testing.T, routes object) {
+	t.Helper()
+	resource := clone(t, routes)
+	resource["@type"] = "type.googleapis.com/envoy.config.route.v3.RouteConfiguration"
+	writeJSON(t, r.rds, object{
+		"version_info": strconv.FormatInt(time.Now().UnixNano(), 10),
+		"resources":    []any{resource},
+	})
+}
+
+func (r *runtime) routeGate(t *testing.T, name string, enabled bool) {
+	t.Helper()
+	routes := clone(t, r.routes)
+	for _, host := range routes["virtual_hosts"].([]any) {
+		for _, value := range obj(host)["routes"].([]any) {
+			route := obj(value)
+			configs, ok := route["typed_per_filter_config"].(map[string]any)
+			if !ok {
+				configs = object{}
+				route["typed_per_filter_config"] = configs
+			}
+			if enabled {
+				// Empty Any presence enables the HCM slot without a module-specific route config.
+				configs[name] = object{
+					"@type":  "type.googleapis.com/envoy.config.route.v3.FilterConfig",
+					"config": object{},
+				}
+			} else {
+				delete(configs, name)
+			}
+		}
+	}
+	before := r.stat(t, "rds.*update_success")
+	r.writeRDS(t, routes)
+	eventually(t, func() bool { return r.stat(t, "rds.*update_success") > before })
+	r.routes = routes
 }

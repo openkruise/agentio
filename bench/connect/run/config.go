@@ -135,7 +135,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 func schedule(c config) []scenario {
 	var cases []scenario
 	if c.Suite == "overhead" {
-		for _, mode := range []string{"baseline", "disabled", "concurrency", "high", "distinct-high", "combined"} {
+		for _, mode := range []string{"baseline", "disabled", "route-disabled", "concurrency", "high", "distinct-high", "combined"} {
 			for _, n := range []int{1, 32, 256, 1024} {
 				cases = append(cases, scenario{Mode: mode, Streams: n, Direction: "D"})
 			}
@@ -223,6 +223,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		object(hcm["http2_protocol_options"])["max_concurrent_streams"] = 200000
 	}
 	filters := hcm["http_filters"].([]any)
+	object(filters[1])["disabled"] = s.Mode == "route-disabled"
 	module := object(object(object(filters[1])["typed_config"])["value"])
 	object(object(object(module["dynamic_module_config"])["module"])["local"])["filename"] = c.Module
 	policy := object(object(module["filter_config"])["value"])
@@ -251,7 +252,8 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		object(object(descriptors[0])["entries"].([]any)[0])["value"] = "unmatched"
 	}
 	policy["descriptors"] = descriptors
-	if s.Mode == "disabled" {
+	disabled := s.Mode == "disabled" || s.Mode == "route-disabled"
+	if disabled {
 		policy["enabled"] = false
 	}
 	policy["max_dynamic_buckets"] = 10000
@@ -270,7 +272,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		filters = []any{filters[0], filters[2]}
 	}
 	limit := c.ConcurrencyLimit
-	if c.Suite == "overhead" && (s.Mode == "disabled" || s.Mode == "concurrency" || s.Mode == "combined") {
+	if c.Suite == "overhead" && (disabled || s.Mode == "concurrency" || s.Mode == "combined") {
 		limit = 100000
 	}
 	if limit > 0 {
@@ -285,7 +287,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		}
 		admission["filter_name"] = "envoy_agentio_connect_concurrency"
 		object(admission["filter_config"])["value"] = map[string]any{
-			"enabled":             s.Mode != "disabled",
+			"enabled":             !disabled,
 			"budget_name":         "bench-concurrency",
 			"rate_limits":         policy["rate_limits"],
 			"max_dynamic_buckets": 10000,
@@ -297,7 +299,8 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 			},
 		}
 		filter := map[string]any{
-			"name": "agentio.connect_concurrency",
+			"name":     "agentio.connect_concurrency",
+			"disabled": s.Mode == "route-disabled",
 			"typed_config": map[string]any{
 				"@type":    "type.googleapis.com/udpa.type.v1.TypedStruct",
 				"type_url": "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",

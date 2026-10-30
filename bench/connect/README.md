@@ -48,7 +48,7 @@ The default run uses three repeats, two seconds of warmup and six seconds of mea
 | --- | ---: | --- |
 | `bandwidth` | 19 | Download 1/32/256 streams: baseline, bypass, high, shared, distinct; upload 32 streams: all except bypass. |
 | `capacity` | 11 | Unbounded baseline/bypass/high cases with exact worker connection balancing. |
-| `overhead` | 30 | Download at 1/32/256/1024 streams and upload at 32 streams, comparing six unbounded filter configurations. |
+| `overhead` | 35 | Download at 1/32/256/1024 streams and upload at 32 streams, comparing seven unbounded filter configurations. |
 | `isolation` | 3 | One fast sandbox beside 0/32/256 noisy streams; exact worker connection balancing. |
 | `pilot` | 4 | 32-stream download: baseline, high, shared, distinct. |
 | `fairness` | 7 | Shared download/upload at 1/8/32 streams, plus 32 noisy streams beside one fast sandbox. |
@@ -63,7 +63,7 @@ Modes:
 - `distinct`: each stream has its own budget; configured rates total 32 MiB/s.
 - `isolation`: noisy streams share 32 MiB/s; the last stream has a distinct 1 TiB/s download budget.
 
-The `overhead` suite adds `disabled` (both bandwidth and concurrency filters resident but disabled), `concurrency` (only a nonbinding per-sandbox concurrency filter), `distinct-high` (one nonbinding bandwidth bucket per stream), and `combined` (both nonbinding limits, with one sandbox per stream). It also runs `baseline` and shared `high`. A 1 TiB/s byte budget and a 100000-stream concurrency cap avoid intentional throttling. The suite rejects `-concurrency-limit` because it selects filter placement itself. Native connection-rate limiting is absent. For example:
+The `overhead` suite adds `disabled` (both bandwidth and concurrency filters resident with module policy `enabled: false`), `route-disabled` (the same policies, plus HCM `disabled: true` and no route override, so Envoy skips creating their stream instances), `concurrency` (only a nonbinding per-sandbox concurrency filter), `distinct-high` (one nonbinding bandwidth bucket per stream), and `combined` (both nonbinding limits, with one sandbox per stream). It also runs `baseline` and shared `high`. These overhead cases use static filter and route configuration; they measure stream processing costs, not ECDS/RDS delivery or update costs. A 1 TiB/s byte budget and a 100000-stream concurrency cap avoid intentional throttling. The suite rejects `-concurrency-limit` because it selects filter placement itself. Native connection-rate limiting is absent. For example:
 
 ```sh
 connect-bench run -suite=overhead -repeats=3 -warmup=2s -duration=8s -output=/results/overhead
@@ -75,6 +75,8 @@ Use `-case=combined/1024/D` to select one case from a suite, retaining `-repeats
 connect-bench run -suite=overhead -case=combined/1024/D -connections=128 \
   -repeats=3 -warmup=2s -duration=8s -output=/results/combined-1024-c128
 ```
+
+Compare `-case=route-disabled/1024/D` with `-case=baseline/1024/D` and `-case=disabled/1024/D`, each in its own output directory, to measure the native creation gate against omitted filters and resident disabled instances.
 
 Keep outer connection counts identical between compared versions. With many streams on a small number of connections, connection-level watermark broadcasts can dominate Envoy CPU; the fixture's 32 KiB listener write watermark makes this especially visible. Include both a fixed-connection stress case and a case with fewer streams per connection before extrapolating capacity. `connections` in the environment row records the requested maximum, while `h2_connections` records actual connections.
 

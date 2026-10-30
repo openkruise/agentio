@@ -27,7 +27,7 @@ import (
 )
 
 func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
-	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 90, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
+	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 105, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
 		c := config{Suite: suite, Repeats: 3}
 		cases := schedule(c)
 		if len(cases) != want || !reflect.DeepEqual(cases, schedule(c)) {
@@ -70,7 +70,7 @@ func TestSingleCaseRetainsRepeatsAndConnectionTopology(t *testing.T) {
 }
 
 func TestOverheadModes(t *testing.T) {
-	for _, mode := range []string{"baseline", "disabled", "concurrency", "high", "distinct-high", "combined"} {
+	for _, mode := range []string{"baseline", "disabled", "route-disabled", "concurrency", "high", "distinct-high", "combined"} {
 		data, err := envoyConfig(
 			config{Suite: "overhead", BasePort: 19000, ConnectTimeout: time.Second},
 			scenario{Mode: mode, Streams: 1024},
@@ -85,6 +85,7 @@ func TestOverheadModes(t *testing.T) {
 		l := object(object(b["static_resources"])["listeners"].([]any)[0])
 		hcm := object(object(object(l["filter_chains"].([]any)[0])["filters"].([]any)[0])["typed_config"])
 		seen := map[string]bool{}
+		disabled := mode == "disabled" || mode == "route-disabled"
 		for _, f := range hcm["http_filters"].([]any) {
 			filter := object(f)
 			name := filter["name"].(string)
@@ -93,10 +94,13 @@ func TestOverheadModes(t *testing.T) {
 			}
 			seen[name] = true
 			p := object(object(object(object(filter["typed_config"])["value"])["filter_config"])["value"])
-			if mode == "disabled" && p["enabled"] != false {
+			if disabled && p["enabled"] != false {
 				t.Fatal("resident filter was not disabled")
 			}
-			if name == "agentio.bandwidth" && mode != "disabled" {
+			if (filter["disabled"] == true) != (mode == "route-disabled") {
+				t.Fatalf("%s: unexpected filter creation gate for %s", mode, name)
+			}
+			if name == "agentio.bandwidth" && !disabled {
 				d := object(p["descriptors"].([]any)[0])
 				if object(d["bandwidth_limit"])["download_bytes_per_second"] != "1099511627776" {
 					t.Fatal("overhead measurement is bandwidth constrained")
@@ -104,8 +108,21 @@ func TestOverheadModes(t *testing.T) {
 			}
 		}
 		if seen["agentio.bandwidth"] != (mode != "baseline" && mode != "concurrency") ||
-			seen["agentio.connect_concurrency"] != (mode == "disabled" || mode == "concurrency" || mode == "combined") {
+			seen["agentio.connect_concurrency"] != (disabled || mode == "concurrency" || mode == "combined") {
 			t.Fatalf("%s: unexpected filters %v", mode, seen)
+		}
+		if mode == "route-disabled" {
+			for _, v := range object(hcm["route_config"])["virtual_hosts"].([]any) {
+				vhost := object(v)
+				if vhost["typed_per_filter_config"] != nil {
+					t.Fatal("virtual host overrides the disabled filter defaults")
+				}
+				for _, r := range vhost["routes"].([]any) {
+					if object(r)["typed_per_filter_config"] != nil {
+						t.Fatal("route overrides the disabled filter defaults")
+					}
+				}
+			}
 		}
 	}
 }

@@ -1100,6 +1100,7 @@
                     },
                     {
                       "name": "agentio.connect_concurrency",
+                      "disabled": true,
                       "configDiscovery": {
                         "configSource": {
                           "ads": {},
@@ -1112,6 +1113,7 @@
                     },
                     {
                       "name": "agentio.bandwidth",
+                      "disabled": true,
                       "configDiscovery": {
                         "configSource": {
                           "ads": {},

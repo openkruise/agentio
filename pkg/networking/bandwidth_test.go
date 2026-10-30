@@ -19,6 +19,7 @@ import (
 
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
@@ -101,5 +102,105 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 	}
 	if modulePolicy(networkLimitExtension(t, resources, bandwidthFilterName)).Fields["enabled"].GetBoolValue() {
 		t.Fatal("removed policy still enabled")
+	}
+}
+
+func TestNetworkLimitsRouteGates(t *testing.T) {
+	test.SetForTest(t, &features.EnableUDPProxy, true)
+	settings := new(configv1.EgressGateway)
+	if err := protojson.Unmarshal([]byte(`{
+ "bandwidthLimit":{
+ "rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],
+ "descriptors":[{"entries":[{"key":"sandbox"}],"bandwidthLimit":{"downloadBytesPerSecond":100}}]},
+ "connectConcurrencyLimit":{
+ "rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],
+ "descriptors":[{"entries":[{"key":"sandbox"}],"maxConcurrentStreams":2}]}
+ }`), settings); err != nil {
+		t.Fatal(err)
+	}
+	var initial *hcmv3.HttpConnectionManager
+	for _, tc := range []struct {
+		name        string
+		bandwidth   bool
+		concurrency bool
+	}{{"off", false, false}, {"bandwidth", true, false}, {"concurrency", false, true}, {"both", true, true}, {"off-again", false, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := proto.Clone(settings).(*configv1.EgressGateway)
+			if !tc.bandwidth {
+				gateway.BandwidthLimit = nil
+			}
+			if !tc.concurrency {
+				gateway.ConnectConcurrencyLimit = nil
+			}
+			resources, err := Build(
+				Inputs{Gateway: testGateway(gateway), DiscoveryAddress: "agentiod:15012", TrustDomain: "cluster.local"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listeners := messagesOf(
+				t,
+				resources,
+				model.ListenerType,
+				func() *listenerv3.Listener { return new(listenerv3.Listener) },
+			)
+			hcm := findHCM(t, listeners[ConnectTerminate])
+			if initial == nil {
+				initial = hcm
+			} else if !proto.Equal(initial, hcm) {
+				t.Fatal("enabling limits changed HCM and would drain existing HTTP/2 connections")
+			}
+			routes := messagesOf(
+				t,
+				resources,
+				model.RouteType,
+				func() *routev3.RouteConfiguration { return new(routev3.RouteConfiguration) },
+			)
+			for name, enabled := range map[string]bool{bandwidthFilterName: tc.bandwidth, concurrencyFilterName: tc.concurrency} {
+				found := false
+				for _, filter := range hcm.HttpFilters {
+					if filter.Name == name {
+						found = true
+						if !filter.Disabled || filter.GetConfigDiscovery() == nil {
+							t.Fatalf("%s needs a default-disabled ECDS slot", name)
+						}
+					}
+				}
+				if !found ||
+					modulePolicy(networkLimitExtension(t, resources, name)).Fields["enabled"].GetBoolValue() != enabled {
+					t.Fatalf("%s slot/policy disagrees with setting", name)
+				}
+				for _, routeConfig := range routes {
+					for _, host := range routeConfig.VirtualHosts {
+						for _, route := range host.Routes {
+							config := route.TypedPerFilterConfig[name]
+							want := enabled && routeConfig.Name == ConnectTerminate &&
+								route.GetRoute().GetCluster() == MainInternal
+							if (config != nil) != want {
+								t.Fatalf(
+									"%s gate on %s route: got %v, want %v",
+									name,
+									routeConfig.Name,
+									config != nil,
+									want,
+								)
+							}
+							if config != nil {
+								wrapper := new(routev3.FilterConfig)
+								if err := config.UnmarshalTo(wrapper); err != nil {
+									t.Fatal(err)
+								}
+								if wrapper.Disabled || wrapper.Config == nil || wrapper.Config.TypeUrl != "" {
+									t.Fatalf(
+										"%s needs a present empty config to enable without a module per-route API",
+										name,
+									)
+								}
+							}
+						}
+					}
+				}
+			}
+		})
 	}
 }

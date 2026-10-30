@@ -88,10 +88,11 @@ func (b *resourceBuilder) connectResourceFilter(
 			TypeUrl: moduleType,
 			Value:   fields,
 		})})
-	// Keep the filter installed while disabled so existing CONNECT streams can
-	// be accounted for when a later ECDS update enables a policy.
+	// Keep the ECDS slot stable, but create stream instances only when RDS
+	// enables this filter. Unconfigured streams avoid module callbacks entirely.
 	return &hcmv3.HttpFilter{
-		Name: name,
+		Name:     name,
+		Disabled: true,
 		ConfigType: &hcmv3.HttpFilter_ConfigDiscovery{
 			ConfigDiscovery: &corev3.ExtensionConfigSource{
 				ConfigSource: adsConfigSource(),
