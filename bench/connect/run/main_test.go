@@ -43,6 +43,32 @@ func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
 	}
 }
 
+func TestSingleCaseRetainsRepeatsAndConnectionTopology(t *testing.T) {
+	c, err := parseConfig([]string{
+		"-output=x", "-suite=overhead", "-case=combined/1024/D", "-connections=128", "-repeats=3",
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := schedule(c)
+	if len(cases) != 3 || c.Connections != 128 {
+		t.Fatalf("unexpected cases/topology: %+v %+v", c, cases)
+	}
+	for _, s := range cases {
+		if s.Mode != "combined" || s.Streams != 1024 || s.Direction != "D" {
+			t.Fatalf("unexpected selected case: %+v", s)
+		}
+	}
+	for _, args := range [][]string{
+		{"-output=x", "-connections=0"},
+		{"-output=x", "-suite=overhead", "-case=combined/1024/U"},
+	} {
+		if _, err := parseConfig(args, io.Discard); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
 func TestOverheadModes(t *testing.T) {
 	for _, mode := range []string{"baseline", "disabled", "concurrency", "high", "distinct-high", "combined"} {
 		data, err := envoyConfig(

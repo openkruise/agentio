@@ -11,13 +11,17 @@ use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilterScheduler;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
     num::NonZeroU64,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 pub struct Ledger {
     pub config: Config,
     pub streams: Streams,
+    generation: Arc<AtomicU64>,
     buckets: HashMap<Key, Bucket>,
     dynamic_buckets: usize,
     expirations: BTreeSet<(Instant, Key)>,
@@ -50,6 +54,7 @@ struct Bucket {
 
 pub struct Budget {
     pub ledger: Arc<Mutex<Ledger>>,
+    pub generation: Arc<AtomicU64>,
     pub timer: Arc<Timer>,
     reaper_id: u64,
 }
@@ -62,11 +67,14 @@ pub struct Registration {
 
 impl Budget {
     pub fn new(config: Config) -> Result<Self, String> {
-        let ledger = Arc::new(Mutex::new(Ledger::new(config)));
+        let ledger = Ledger::new(config);
+        let generation = ledger.generation.clone();
+        let ledger = Arc::new(Mutex::new(ledger));
         let timer = Timer::shared().map_err(|e| e.to_string())?;
         let reaper_id = timer.id();
         Ok(Self {
             ledger,
+            generation,
             timer,
             reaper_id,
         })
@@ -103,6 +111,7 @@ impl Ledger {
         Self {
             config,
             streams: Streams::default(),
+            generation: Arc::default(),
             buckets: HashMap::new(),
             dynamic_buckets: 0,
             expirations: BTreeSet::new(),
@@ -125,8 +134,10 @@ impl Ledger {
             || self.config.buffer_limit_bytes != config.buffer_limit_bytes;
         let changed = layout_changed || self.config.descriptors != config.descriptors;
         if changed {
-            self.expirations.clear();
+            self.dynamic_buckets = 0;
+            let mut expirations = Vec::new();
             for (key, bucket) in &mut self.buckets {
+                let old_due = *bucket.ready.iter().max().unwrap();
                 let descriptor = config.descriptor(key);
                 let new = descriptor
                     .map(|d| d.bandwidth_limit.clone())
@@ -134,6 +145,7 @@ impl Ledger {
                 if let Some(descriptor) = descriptor {
                     bucket.dynamic = descriptor.dynamic();
                 }
+                self.dynamic_buckets += usize::from(bucket.dynamic);
                 bucket.limits = new.clone();
                 for (direction, new) in [new.upload_bytes_per_second, new.download_bytes_per_second]
                     .into_iter()
@@ -159,14 +171,36 @@ impl Ledger {
                     }
                 }
                 if bucket.users == 0 {
-                    self.expirations
-                        .insert((*bucket.ready.iter().max().unwrap(), key.clone()));
+                    let due = *bucket.ready.iter().max().unwrap();
+                    if due != old_due {
+                        expirations.push((old_due, due, key));
+                    }
+                }
+            }
+            // A bulk rate change need not remove every old index entry individually.
+            let rebuild = expirations.len() == self.expirations.len();
+            if rebuild {
+                // Match the old index order to reuse keys without cloning or hashing them.
+                expirations.sort_unstable_by(|a, b| (a.0, a.2).cmp(&(b.0, b.2)));
+                self.expirations = std::mem::take(&mut self.expirations)
+                    .into_iter()
+                    .zip(expirations)
+                    .map(|((_, key), (_, due, _))| (due, key))
+                    .collect();
+            } else {
+                for (old_due, due, key) in expirations {
+                    let mut expiration = (old_due, key.clone());
+                    self.expirations.remove(&expiration);
+                    expiration.0 = due;
+                    self.expirations.insert(expiration);
                 }
             }
         }
         self.config = config;
-        self.dynamic_buckets = self.buckets.values().filter(|b| b.dynamic).count();
         if layout_changed {
+            // Publish before posting: an idle worker may handle the callback immediately.
+            self.generation
+                .store(self.streams.generation + 1, Ordering::Release);
             self.streams.changed();
         }
         if changed {
@@ -356,8 +390,8 @@ impl Ledger {
         if bytes == 0 {
             return None;
         }
-        let limits = |key: &Key| {
-            let limit = &self.buckets[key].limits;
+        let limits = |bucket: &Bucket| {
+            let limit = &bucket.limits;
             if direction == 0 {
                 (limit.upload_bytes_per_second, limit.upload_burst_bytes)
             } else {
@@ -367,9 +401,10 @@ impl Ledger {
         let due = keys
             .iter()
             .filter_map(|k| {
-                let (rate, burst) = limits(k);
+                let bucket = &self.buckets[k];
+                let (rate, burst) = limits(bucket);
                 rate.map(|rate| {
-                    let remaining = self.buckets[k].ready[direction].saturating_duration_since(now);
+                    let remaining = bucket.ready[direction].saturating_duration_since(now);
                     // Reserve enough credit for the whole batch. Oversized batches require a full
                     // bucket; they pass whole and their entire cost remains payable afterward.
                     let credit = burst.map_or(0, |b| b.get().saturating_sub(bytes as u64));
@@ -388,14 +423,14 @@ impl Ledger {
         // Check all budgets before charging any; a tenant and its sandbox must commit together.
         // shortcut: oversized callback batches can exceed burst capacity; strict caps need partial injection.
         for key in keys {
-            let limit = &self.buckets[key].limits;
+            let bucket = self.buckets.get_mut(key).unwrap();
+            let limit = &bucket.limits;
             let rate = if direction == 0 {
                 limit.upload_bytes_per_second
             } else {
                 limit.download_bytes_per_second
             };
             if let Some(rate) = rate {
-                let bucket = self.buckets.get_mut(key).unwrap();
                 bucket.debt_rates[direction] = Some(rate);
                 let bytes = bytes as u64;
                 let rate = rate.get();
@@ -560,6 +595,96 @@ mod tests {
         ledger.reap(now + Duration::from_secs(6));
         assert_eq!(ledger.buckets.len(), 1);
         ledger.reap(now + Duration::from_secs(9));
+        assert!(ledger.buckets.is_empty());
+        assert_eq!(ledger.dynamic_buckets, 0);
+    }
+
+    #[test]
+    fn update_keeps_unaffected_expirations_and_dynamic_accounting() {
+        let mut config = config();
+        let first = config.resolve(|_| Some("a".into())).unwrap();
+        let second = config.resolve(|_| Some("b".into())).unwrap();
+        let mut ledger = Ledger::new(config.clone());
+        let now = Instant::now();
+        for keys in [&first, &second] {
+            ledger.acquire(keys, now).unwrap();
+        }
+        ledger.charge(&first, 0, 1000, now);
+        ledger.charge(&second, 1, 2000, now);
+        ledger.release(&first, now);
+        ledger.release(&second, now);
+
+        config.descriptors[0]
+            .bandwidth_limit
+            .upload_bytes_per_second = Some(200.try_into().unwrap());
+        let mut exact = config.descriptors[0].clone();
+        exact.entries[0].value = "a".into();
+        config.descriptors.push(exact);
+        ledger.update(config.clone(), now + Duration::from_secs(2));
+        let unchanged = now + Duration::from_secs(10);
+        let updated = now + Duration::from_secs(6);
+        assert_eq!(ledger.expirations.len(), 2);
+        assert!(ledger.expirations.contains(&(unchanged, second[0].clone())));
+        assert!(ledger.expirations.contains(&(updated, first[0].clone())));
+        assert_eq!(ledger.dynamic_buckets, 1);
+
+        ledger.update(config, now + Duration::from_secs(3));
+        ledger.reap(updated);
+        assert_eq!(ledger.buckets.len(), 1);
+        assert_eq!(ledger.dynamic_buckets, 1);
+        ledger.reap(unchanged);
+        assert!(ledger.buckets.is_empty());
+        assert_eq!(ledger.dynamic_buckets, 0);
+    }
+
+    #[test]
+    fn layout_generation_is_published_before_idle_worker_notification() {
+        let config = config();
+        let mut ledger = Ledger::new(config.clone());
+        let generation = ledger.generation.clone();
+        let mut scheduler = MockEnvoyHttpFilterScheduler::new();
+        scheduler.expect_commit().times(1).returning(move |tag| {
+            assert_eq!(generation.load(Ordering::Acquire), tag);
+            assert_eq!(tag, 1);
+        });
+        ledger.streams.handles.insert(1, Arc::new(scheduler));
+        ledger.update(config, Instant::now());
+    }
+
+    #[test]
+    fn bulk_expiration_rebuild_preserves_keys_when_deadlines_reorder() {
+        let mut config = config();
+        let keys: Vec<_> = ["b", "a", "c"]
+            .map(|id| config.resolve(|_| Some(id.into())).unwrap())
+            .into();
+        let mut ledger = Ledger::new(config.clone());
+        let now = Instant::now();
+        for (i, key) in keys.iter().enumerate() {
+            ledger.acquire(key, now).unwrap();
+            ledger.charge(key, usize::from(i == 2), 1000, now);
+            ledger.release(key, now);
+        }
+        config.descriptors[0]
+            .bandwidth_limit
+            .upload_bytes_per_second = Some(2000.try_into().unwrap());
+        config.descriptors[0]
+            .bandwidth_limit
+            .download_bytes_per_second = Some(50.try_into().unwrap());
+        let mut exact = config.descriptors[0].clone();
+        exact.entries[0].value = "a".into();
+        exact.bandwidth_limit.upload_bytes_per_second = Some(1000.try_into().unwrap());
+        config.descriptors.push(exact);
+        ledger.update(config, now);
+        assert_eq!(ledger.expirations.len(), 3);
+        ledger.reap(now + Duration::from_millis(500));
+        assert_eq!(ledger.buckets.len(), 2);
+        assert!(!ledger.buckets.contains_key(&keys[0][0]));
+        assert!(ledger.buckets.contains_key(&keys[1][0]));
+        ledger.reap(now + Duration::from_secs(1));
+        assert_eq!(ledger.buckets.len(), 1);
+        assert!(ledger.buckets.contains_key(&keys[2][0]));
+        assert_eq!(ledger.dynamic_buckets, 1);
+        ledger.reap(now + Duration::from_secs(20));
         assert!(ledger.buckets.is_empty());
         assert_eq!(ledger.dynamic_buckets, 0);
     }

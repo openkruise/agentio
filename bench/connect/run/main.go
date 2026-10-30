@@ -123,6 +123,7 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 		"warmup_seconds":          c.Warmup.Seconds(),
 		"measurement":             c.Duration.String(),
 		"connection_balance":      balance,
+		"connections":             c.Connections,
 		"suite":                   c.Suite,
 		"concurrency_limit":       c.ConcurrencyLimit,
 		"ticks":                   ticks,
@@ -255,6 +256,7 @@ func runCase(
 		cpus[2:6],
 		c.Load,
 		fmt.Sprintf("-streams=%d", s.Streams),
+		fmt.Sprintf("-connections=%d", c.Connections),
 		"-direction="+s.Direction,
 		fmt.Sprintf(
 			"-distinct=%t",
@@ -300,7 +302,7 @@ func runCase(
 	if err := json.Unmarshal(output, &row); err != nil {
 		return nil, err
 	}
-	if row["errors"] != float64(0) || row["h2_connections"] != float64(min(s.Streams, 4)) {
+	if row["errors"] != float64(0) || row["h2_connections"] != float64(min(s.Streams, c.Connections)) {
 		return nil, fmt.Errorf("invalid measurement: %s", output)
 	}
 	return row, nil

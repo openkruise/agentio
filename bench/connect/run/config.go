@@ -28,6 +28,8 @@ import (
 )
 
 type config struct {
+	Connections      int
+	Case             string
 	ConnectTimeout   time.Duration
 	SharedRate       int64
 	ProgressInterval time.Duration
@@ -62,6 +64,8 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	f := flag.NewFlagSet("connect-bench run", flag.ContinueOnError)
 	f.SetOutput(w)
 	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, overhead, isolation, pilot, buckets, fairness")
+	f.IntVar(&c.Connections, "connections", 4, "maximum outer HTTP/2 connections")
+	f.StringVar(&c.Case, "case", "", "one suite case: mode/streams/direction; empty runs the whole suite")
 	f.Int64Var(
 		&c.SharedRate,
 		"bytes-per-second",
@@ -96,6 +100,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	if f.NArg() != 0 ||
 		c.Output == "" ||
 		c.Repeats <= 0 ||
+		c.Connections <= 0 ||
 		c.SharedRate <= 0 || c.ConnectTimeout <= 0 ||
 		c.ProgressInterval < 0 ||
 		c.Duration <= 0 ||
@@ -117,6 +122,9 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		(c.Reload && c.Suite != "buckets") ||
 		((c.Suite == "buckets" || c.Suite == "overhead") && c.ConcurrencyLimit != 0) {
 		return c, fmt.Errorf("invalid suite, output, counts, duration, port or concurrency limit")
+	}
+	if c.Case != "" && len(schedule(c)) == 0 {
+		return c, fmt.Errorf("case %q is not in suite %q", c.Case, c.Suite)
 	}
 	if c.Suite == "buckets" && c.Repeats > (65536-c.BasePort)/4 {
 		return c, fmt.Errorf("bucket repeats need four distinct ports per case starting at base-port")
@@ -172,6 +180,9 @@ func schedule(c config) []scenario {
 	var result []scenario
 	for repeat := 1; repeat <= c.Repeats; repeat++ {
 		for _, s := range cases {
+			if c.Case != "" && c.Case != fmt.Sprintf("%s/%d/%s", s.Mode, s.Streams, s.Direction) {
+				continue
+			}
 			s.Repeat = repeat
 			result = append(result, s)
 		}

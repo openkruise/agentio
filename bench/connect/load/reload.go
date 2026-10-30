@@ -35,8 +35,8 @@ func startReloads(ctx context.Context, c config) <-chan reloadResult {
 	done := make(chan reloadResult, 1)
 	go func() {
 		var result reloadResult
-		for _, mode := range []string{"rate", "grouping"} {
-			if result.err = pause(ctx, c.Duration/3); result.err != nil {
+		for _, mode := range []string{"rate", "resident_rate", "grouping"} {
+			if result.err = pause(ctx, c.Duration/4); result.err != nil {
 				break
 			}
 			var row map[string]any
@@ -51,7 +51,7 @@ func startReloads(ctx context.Context, c config) <-chan reloadResult {
 	return done
 }
 
-// mutatePolicy preserves the resident rate so seeded debt remains resident.
+// Resident debt must outlast measurement even after its rate doubles.
 func mutatePolicy(resource map[string]any, mode string) {
 	object := func(v any) map[string]any { return v.(map[string]any) }
 	extension := object(resource["resources"].([]any)[0])
@@ -60,6 +60,8 @@ func mutatePolicy(resource map[string]any, mode string) {
 	descriptors := policy["descriptors"].([]any)
 	if mode == "rate" {
 		object(object(descriptors[0])["bandwidth_limit"])["download_bytes_per_second"] = "2199023255552"
+	} else if mode == "resident_rate" {
+		object(object(descriptors[1])["bandwidth_limit"])["upload_bytes_per_second"] = "2"
 	} else {
 		for _, rule := range policy["rate_limits"].([]any) {
 			slices.Reverse(object(rule)["actions"].([]any))

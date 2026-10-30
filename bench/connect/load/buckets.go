@@ -242,7 +242,11 @@ func runBuckets(ctx context.Context, c config) (result map[string]any, resultErr
 	if err != nil {
 		return nil, err
 	}
-	if c.ResidentBuckets > 0 && c.ResidentMode == "debt" && time.Since(started).Seconds() >= float64(c.DebtBytes) {
+	debtLifetime := float64(c.DebtBytes)
+	if c.ReloadPath != "" {
+		debtLifetime /= 2
+	}
+	if c.ResidentBuckets > 0 && c.ResidentMode == "debt" && time.Since(started).Seconds() >= debtLifetime {
 		return nil, fmt.Errorf("seed debt expired during measurement; increase -debt-bytes")
 	}
 	result["resident_buckets"], result["resident_mode"] = c.ResidentBuckets, c.ResidentMode

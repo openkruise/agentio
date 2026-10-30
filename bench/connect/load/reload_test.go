@@ -43,6 +43,10 @@ func TestReloadPreservesDebtAndDescriptorMatching(t *testing.T) {
 	if err != nil || string(got) != string(old) {
 		t.Fatalf("resident debt rate changed: %s / %s: %v", old, got, err)
 	}
+	mutatePolicy(resource, "resident_rate")
+	if object(object(descriptors[1])["bandwidth_limit"])["upload_bytes_per_second"] != "2" {
+		t.Fatal("resident-rate update does not exercise debt rescaling")
+	}
 	actions := object(p["rate_limits"].([]any)[0])["actions"].([]any)
 	mutatePolicy(resource, "grouping")
 	for _, d := range descriptors {

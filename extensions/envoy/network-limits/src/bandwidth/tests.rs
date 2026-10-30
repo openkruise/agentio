@@ -386,6 +386,7 @@ fn filter() -> Filter {
         scheduler: Arc::new(MockEnvoyHttpFilterScheduler::new()),
         keys: RefCell::new(Vec::new()),
         waiting: Cell::new([None; 2]),
+        timer_armed: Cell::new(false),
         generation: Cell::new(0),
         registered: Cell::new(false),
     }

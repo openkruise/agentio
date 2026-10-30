@@ -20,7 +20,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 };
 use std::{
     cell::{Cell, RefCell},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
     time::Instant,
 };
 use timer::Timer;
@@ -72,6 +72,7 @@ impl<E: EnvoyHttpFilter> HttpFilterConfig<E> for FilterConfig {
             scheduler: Arc::new(envoy.new_scheduler()),
             keys: RefCell::new(Vec::new()),
             waiting: Cell::new([None; 2]),
+            timer_armed: Cell::new(false),
             generation: Cell::new(0),
             registered: Cell::new(false),
         })
@@ -95,13 +96,16 @@ struct Filter {
     scheduler: Arc<dyn EnvoyHttpFilterScheduler>,
     keys: RefCell<Vec<Key>>,
     waiting: Cell<[Option<Wait>; 2]>,
+    timer_armed: Cell<bool>,
     generation: Cell<u64>,
     registered: Cell<bool>,
 }
 
 impl Filter {
     fn refresh(&self, envoy: &mut impl EnvoyHttpFilter) -> bool {
-        if !self.registered.get() {
+        if !self.registered.get()
+            || self.generation.get() == self.budget.generation.load(Ordering::Acquire)
+        {
             return true;
         }
         let mut ledger = self.budget.ledger.lock().unwrap();
@@ -160,7 +164,8 @@ impl Filter {
             .min();
         if let Some(due) = due {
             self.timer.schedule(self.id, due, self.scheduler.clone());
-        } else {
+            self.timer_armed.set(true);
+        } else if self.timer_armed.replace(false) {
             self.timer.cancel(self.id);
         }
     }
