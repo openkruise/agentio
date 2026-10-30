@@ -20,6 +20,7 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -95,7 +96,10 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 		model.ListenerType,
 		func() *listenerv3.Listener { return new(listenerv3.Listener) },
 	)
-	if hasHTTPFilter(findHCM(t, listeners[ConnectTerminate]), bandwidthFilterName) {
-		t.Fatal("removed bandwidth configuration still emitted a filter")
+	if !proto.Equal(hcm, findHCM(t, listeners[ConnectTerminate])) {
+		t.Fatal("policy removal changed the listener")
+	}
+	if modulePolicy(networkLimitExtension(t, resources, bandwidthFilterName)).Fields["enabled"].GetBoolValue() {
+		t.Fatal("removed policy still enabled")
 	}
 }

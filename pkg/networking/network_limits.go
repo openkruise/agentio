@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -61,6 +62,7 @@ func (b *resourceBuilder) connectResourceFilter(
 	if err := protojson.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("encode %s: %w", name, err)
 	}
+	config.Fields["enabled"] = structpb.NewBoolValue(settings.ProtoReflect().IsValid())
 	config.Fields["budget_name"] = structpb.NewStringValue("agentio/" + gateway + "/" + scope)
 	fields, err := structpb.NewStruct(map[string]any{
 		"dynamic_module_config": map[string]any{
@@ -79,8 +81,22 @@ func (b *resourceBuilder) connectResourceFilter(
 	if err != nil {
 		return nil, fmt.Errorf("encode %s module: %w", name, err)
 	}
-	return httpFilter(name, b.pack(&udpatypev1.TypedStruct{
-		TypeUrl: "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
-		Value:   fields,
-	})), nil
+	const moduleType = "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+	b.extensions = append(b.extensions, &corev3.TypedExtensionConfig{
+		Name: name,
+		TypedConfig: b.pack(&udpatypev1.TypedStruct{
+			TypeUrl: moduleType,
+			Value:   fields,
+		})})
+	// Keep the filter installed while disabled so existing CONNECT streams can
+	// be accounted for when a later ECDS update enables a policy.
+	return &hcmv3.HttpFilter{
+		Name: name,
+		ConfigType: &hcmv3.HttpFilter_ConfigDiscovery{
+			ConfigDiscovery: &corev3.ExtensionConfigSource{
+				ConfigSource: adsConfigSource(),
+				TypeUrls:     []string{moduleType},
+			},
+		},
+	}, nil
 }

@@ -1,8 +1,12 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{config::Config, timer::Timer};
+use super::{
+    config::{BandwidthLimit, Config},
+    timer::Timer,
+};
 use crate::descriptor::Key;
+use crate::streams::Streams;
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilterScheduler;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
@@ -13,15 +17,30 @@ use std::{
 
 pub struct Ledger {
     pub config: Config,
+    pub streams: Streams,
     buckets: HashMap<Key, Bucket>,
     dynamic_buckets: usize,
     expirations: BTreeSet<(Instant, Key)>,
-    registrations: BTreeMap<u64, Config>,
-    next_registration: u64,
     pub waiters: HashMap<u64, Arc<dyn EnvoyHttpFilterScheduler>>,
+    pending_batches: HashMap<(u64, usize), Batch>,
+    next_ticket: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wait {
+    Turn,
+    Until(Instant),
+}
+
+struct Batch {
+    ticket: u64,
+    keys: Vec<Key>,
 }
 
 struct Bucket {
+    queued: [BTreeMap<u64, u64>; 2],
+    limits: BandwidthLimit,
+    dynamic: bool,
     users: usize,
     // Time when all consumed credit has refilled, not the next batch's admission time.
     // Keeping idle buckets until then prevents reconnects from replenishing burst credit.
@@ -35,25 +54,10 @@ pub struct Budget {
     reaper_id: u64,
 }
 
-// The newest live Envoy configuration supplies rates. Dropping a rejected
-// candidate restores the preceding configuration without replacing its buckets.
+// Config construction is staged; only accepted configurations publish a policy.
+// Stream/config destruction never restores an older policy.
 pub struct Registration {
     pub budget: Arc<Budget>,
-    id: u64,
-}
-
-impl Drop for Registration {
-    fn drop(&mut self) {
-        let mut ledger = self.budget.ledger.lock().unwrap();
-        ledger.registrations.remove(&self.id);
-        if let Some((_, config)) = ledger.registrations.last_key_value() {
-            let config = config.clone();
-            ledger.update(config, Instant::now());
-        }
-        let due = ledger.next_expiration();
-        drop(ledger);
-        self.budget.reap_at(due);
-    }
 }
 
 impl Budget {
@@ -86,17 +90,11 @@ impl Budget {
             Entry::Vacant(entry) => entry.insert(Arc::new(Self::new(config.clone())?)).clone(),
         };
         let mut ledger = budget.ledger.lock().unwrap();
-        if !ledger.config.same_layout(&config) {
-            return Err("bandwidth grouping is still in use; drain it before changing actions or descriptor entries".into());
-        }
-        ledger.next_registration += 1;
-        let id = ledger.next_registration;
-        ledger.registrations.insert(id, config.clone());
         ledger.update(config, now);
         let due = ledger.next_expiration();
         drop(ledger);
         budget.reap_at(due);
-        Ok(Registration { budget, id })
+        Ok(Registration { budget })
     }
 }
 
@@ -104,12 +102,13 @@ impl Ledger {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            streams: Streams::default(),
             buckets: HashMap::new(),
             dynamic_buckets: 0,
             expirations: BTreeSet::new(),
-            registrations: BTreeMap::new(),
-            next_registration: 0,
             waiters: HashMap::new(),
+            pending_batches: HashMap::new(),
+            next_ticket: 0,
         }
     }
 
@@ -120,11 +119,22 @@ impl Ledger {
     }
 
     fn update(&mut self, config: Config, now: Instant) {
-        let changed = self.config.descriptors != config.descriptors;
+        let layout_changed = self.streams.generation == 0
+            || self.config.enabled != config.enabled
+            || !self.config.same_layout(&config)
+            || self.config.buffer_limit_bytes != config.buffer_limit_bytes;
+        let changed = layout_changed || self.config.descriptors != config.descriptors;
         if changed {
             self.expirations.clear();
             for (key, bucket) in &mut self.buckets {
-                let new = &config.descriptors[key.0].bandwidth_limit;
+                let descriptor = config.descriptor(key);
+                let new = descriptor
+                    .map(|d| d.bandwidth_limit.clone())
+                    .unwrap_or_default();
+                if let Some(descriptor) = descriptor {
+                    bucket.dynamic = descriptor.dynamic();
+                }
+                bucket.limits = new.clone();
                 for (direction, new) in [new.upload_bytes_per_second, new.download_bytes_per_second]
                     .into_iter()
                     .enumerate()
@@ -155,6 +165,10 @@ impl Ledger {
             }
         }
         self.config = config;
+        self.dynamic_buckets = self.buckets.values().filter(|b| b.dynamic).count();
+        if layout_changed {
+            self.streams.changed();
+        }
         if changed {
             // Drop removes waiters under this lock, quiescing posts before worker teardown.
             for scheduler in self.waiters.values() {
@@ -163,18 +177,45 @@ impl Ledger {
         }
     }
 
+    pub fn rebind(&mut self, id: u64, old: &[Key], new: &[Key], now: Instant) -> Option<Instant> {
+        let added: Vec<_> = new.iter().filter(|k| !old.contains(k)).cloned().collect();
+        let removed: Vec<_> = old.iter().filter(|k| !new.contains(k)).cloned().collect();
+        self.acquire_inner(&added, now, false).unwrap();
+        if old != new {
+            for direction in 0..2 {
+                if let Some(mut batch) = self.take_batch(id, direction) {
+                    batch.keys = new.to_vec();
+                    self.insert_batch(id, direction, batch);
+                }
+            }
+        }
+        self.release(&removed, now)
+    }
+
     pub fn acquire(&mut self, keys: &[Key], now: Instant) -> Result<(), ()> {
+        self.acquire_inner(keys, now, true)
+    }
+    fn acquire_inner(&mut self, keys: &[Key], now: Instant, admission: bool) -> Result<(), ()> {
         self.reap(now);
         let needed = keys
             .iter()
-            .filter(|k| self.config.descriptors[k.0].dynamic() && !self.buckets.contains_key(*k))
+            .filter(|k| {
+                self.config.descriptor(k).unwrap().dynamic() && !self.buckets.contains_key(*k)
+            })
             .count();
-        if needed > 0 && self.dynamic_buckets + needed > self.config.max_dynamic_buckets {
+        if admission
+            && needed > 0
+            && self.dynamic_buckets + needed > self.config.max_dynamic_buckets
+        {
             return Err(());
         }
         self.dynamic_buckets += needed;
         for key in keys {
+            let descriptor = self.config.descriptor(key).unwrap();
             let bucket = self.buckets.entry(key.clone()).or_insert(Bucket {
+                queued: Default::default(),
+                limits: descriptor.bandwidth_limit.clone(),
+                dynamic: descriptor.dynamic(),
                 users: 0,
                 ready: [now; 2],
                 debt_rates: [None; 2],
@@ -205,8 +246,8 @@ impl Ledger {
     }
 
     fn remove_bucket(&mut self, key: &Key) {
-        self.buckets.remove(key).unwrap();
-        self.dynamic_buckets -= usize::from(self.config.descriptors[key.0].dynamic());
+        let bucket = self.buckets.remove(key).unwrap();
+        self.dynamic_buckets -= usize::from(bucket.dynamic);
     }
 
     fn next_expiration(&self) -> Option<Instant> {
@@ -225,6 +266,86 @@ impl Ledger {
         self.next_expiration()
     }
 
+    // Tickets order whole buffered batches, independently in each direction. A stream
+    // that just made progress rejoins at the tail rather than racing all waiters.
+    // The same ticket enters every applicable bucket, preventing cyclic waits when
+    // a stream is constrained by both a tenant and a sandbox budget.
+    pub fn admit_batch(
+        &mut self,
+        id: u64,
+        keys: &[Key],
+        direction: usize,
+        bytes: usize,
+        now: Instant,
+    ) -> Option<Wait> {
+        if bytes == 0 {
+            self.take_batch(id, direction);
+            return None;
+        }
+        let behind = keys.iter().any(|key| {
+            let bucket = &self.buckets[key];
+            let rate = if direction == 0 {
+                bucket.limits.upload_bytes_per_second
+            } else {
+                bucket.limits.download_bytes_per_second
+            };
+            rate.is_some()
+                && bucket.queued[direction]
+                    .first_key_value()
+                    .is_some_and(|(_, first)| *first != id)
+        });
+        let waiting = if behind {
+            Some(Wait::Turn)
+        } else {
+            self.charge(keys, direction, bytes, now).map(Wait::Until)
+        };
+        if waiting.is_some() {
+            if !self.pending_batches.contains_key(&(id, direction)) {
+                self.next_ticket += 1;
+                self.insert_batch(
+                    id,
+                    direction,
+                    Batch {
+                        ticket: self.next_ticket,
+                        keys: keys.to_vec(),
+                    },
+                );
+            }
+        } else {
+            self.take_batch(id, direction);
+        }
+        waiting
+    }
+
+    fn insert_batch(&mut self, id: u64, direction: usize, batch: Batch) {
+        for key in &batch.keys {
+            self.buckets.get_mut(key).unwrap().queued[direction].insert(batch.ticket, id);
+        }
+        self.pending_batches.insert((id, direction), batch);
+    }
+
+    fn take_batch(&mut self, id: u64, direction: usize) -> Option<Batch> {
+        let batch = self.pending_batches.remove(&(id, direction))?;
+        for key in &batch.keys {
+            self.buckets.get_mut(key).unwrap().queued[direction].remove(&batch.ticket);
+        }
+        // Wake only successors, not every contender. Non-head waiters have no timer.
+        for key in &batch.keys {
+            if let Some((_, next)) = self.buckets[key].queued[direction].first_key_value()
+                && let Some(scheduler) = self.waiters.get(next)
+            {
+                scheduler.commit(0);
+            }
+        }
+        Some(batch)
+    }
+
+    pub fn cancel_batches(&mut self, id: u64) {
+        for direction in 0..2 {
+            self.take_batch(id, direction);
+        }
+    }
+
     pub fn charge(
         &mut self,
         keys: &[Key],
@@ -236,7 +357,7 @@ impl Ledger {
             return None;
         }
         let limits = |key: &Key| {
-            let limit = &self.config.descriptors[key.0].bandwidth_limit;
+            let limit = &self.buckets[key].limits;
             if direction == 0 {
                 (limit.upload_bytes_per_second, limit.upload_burst_bytes)
             } else {
@@ -267,7 +388,13 @@ impl Ledger {
         // Check all budgets before charging any; a tenant and its sandbox must commit together.
         // shortcut: oversized callback batches can exceed burst capacity; strict caps need partial injection.
         for key in keys {
-            if let (Some(rate), _) = limits(key) {
+            let limit = &self.buckets[key].limits;
+            let rate = if direction == 0 {
+                limit.upload_bytes_per_second
+            } else {
+                limit.download_bytes_per_second
+            };
+            if let Some(rate) = rate {
                 let bucket = self.buckets.get_mut(key).unwrap();
                 bucket.debt_rates[direction] = Some(rate);
                 let bytes = bytes as u64;

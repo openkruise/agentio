@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
+use envoy_proxy_dynamic_modules_rust_sdk::{
+    EnvoyBuffer, MockEnvoyHttpFilter, MockEnvoyHttpFilterScheduler,
+};
 
 const CONFIG: &str = r#"{
   "rate_limits":[
@@ -36,7 +38,17 @@ fn atomic_admission_exact_precedence_and_release() {
     let a = keys(&config, "a");
     let b = keys(&config, "b");
     assert_eq!(a.len(), 2); // Repeated matching groups consume one slot.
-    assert_eq!(keys(&config, "vip")[0].0, 2);
+    assert_eq!(
+        descriptor::matching_descriptor(
+            &config.rate_limits,
+            &config.descriptors,
+            &keys(&config, "vip")[0]
+        )
+        .unwrap()
+        .max_concurrent_streams
+        .get(),
+        3
+    );
     let registration = Registration::shared(config).unwrap();
     let mut ledger = registration.ledger.lock().unwrap();
     ledger.acquire(&a).unwrap();
@@ -96,7 +108,7 @@ fn concurrent_workers_share_a_strict_limit() {
 }
 
 #[test]
-fn reload_preserves_counts_and_rejected_candidate_restores_limits() {
+fn reload_preserves_counts_and_config_drop_does_not_rollback() {
     let mut config = config("concurrency-reload");
     let keys = keys(&config, "a");
     let original = Registration::shared(config.clone()).unwrap();
@@ -109,14 +121,15 @@ fn reload_preserves_counts_and_rejected_candidate_restores_limits() {
         Err(Rejection::Limit)
     );
     drop(candidate);
-    original.ledger.lock().unwrap().acquire(&keys).unwrap();
+    assert_eq!(
+        original.ledger.lock().unwrap().acquire(&keys),
+        Err(Rejection::Limit)
+    );
     config.descriptors[0].max_concurrent_streams = NonZeroU32::new(3).unwrap();
     let raised = Registration::shared(config.clone()).unwrap();
     raised.ledger.lock().unwrap().acquire(&keys).unwrap();
-    config.rate_limits[0].actions.clear();
-    assert!(Registration::shared(config).is_err());
     let mut ledger = original.ledger.lock().unwrap();
-    for _ in 0..3 {
+    for _ in 0..2 {
         ledger.release(&keys);
     }
 }
@@ -124,11 +137,19 @@ fn reload_preserves_counts_and_rejected_candidate_restores_limits() {
 #[test]
 fn filter_drop_releases_once_and_body_end_does_not_release() {
     let registration = Registration::shared(config("concurrency-lifecycle")).unwrap();
-    let mut filter = Filter {
+    let filter = Filter {
         registration: registration.clone(),
-        keys: Vec::new(),
+        keys: RefCell::new(Vec::new()),
+        id: Streams::id(),
+        generation: Cell::new(0),
+        admitted: Cell::new(false),
+        waiting: Cell::new(false),
+        registered: Cell::new(false),
     };
     let mut envoy = MockEnvoyHttpFilter::new();
+    envoy
+        .expect_new_scheduler()
+        .returning(|| Box::new(MockEnvoyHttpFilterScheduler::new()));
     envoy
         .expect_get_filter_state_bytes()
         .returning(|_| Some(EnvoyBuffer::new(b"a")));
@@ -138,16 +159,24 @@ fn filter_drop_releases_once_and_body_end_does_not_release() {
     );
     filter.on_request_body(&mut envoy, true);
     filter.on_response_headers(&mut envoy, false);
-    let keys = filter.keys.clone();
+    let keys = filter.keys.borrow().clone();
     assert_eq!(registration.ledger.lock().unwrap().active[&keys[0]], 1);
     drop(filter);
     assert!(registration.ledger.lock().unwrap().active.is_empty());
 
-    let mut rejected = Filter {
+    let rejected = Filter {
         registration: registration.clone(),
-        keys: Vec::new(),
+        keys: RefCell::new(Vec::new()),
+        id: Streams::id(),
+        generation: Cell::new(0),
+        admitted: Cell::new(false),
+        waiting: Cell::new(false),
+        registered: Cell::new(false),
     };
     let mut missing = MockEnvoyHttpFilter::new();
+    missing
+        .expect_new_scheduler()
+        .returning(|| Box::new(MockEnvoyHttpFilterScheduler::new()));
     missing.expect_get_filter_state_bytes().returning(|_| None);
     let observed = registration.clone();
     missing
@@ -162,6 +191,16 @@ fn filter_drop_releases_once_and_body_end_does_not_release() {
         rejected.on_request_headers(&mut missing, false),
         Headers::StopIteration
     );
+    assert!(
+        registration
+            .ledger
+            .lock()
+            .unwrap()
+            .streams
+            .handles
+            .is_empty()
+    );
+    rejected.on_scheduled(&mut missing, 0); // Rejected streams must never enter a later census/admission.
     drop(rejected);
     assert!(registration.ledger.lock().unwrap().active.is_empty());
 }
@@ -190,4 +229,58 @@ fn invalid_limits_and_grouping_are_rejected() {
     ] {
         assert!(Config::parse(invalid.as_bytes()).is_err(), "{invalid}");
     }
+}
+
+#[test]
+fn enabling_waits_for_idle_streams_and_close_completes_the_census() {
+    let mut initial = config("idle-census");
+    initial.enabled = false;
+    let factory = FilterConfig {
+        config: initial.clone(),
+        registration: Mutex::new(None),
+    };
+    let mut envoy = MockEnvoyHttpFilter::new();
+    envoy.expect_new_scheduler().returning(|| {
+        let mut scheduler = MockEnvoyHttpFilterScheduler::new();
+        scheduler.expect_commit().return_const(());
+        Box::new(scheduler)
+    });
+    envoy
+        .expect_get_filter_state_bytes()
+        .returning(|_| Some(EnvoyBuffer::new(b"a")));
+    let first = factory.new_http_filter(&mut envoy);
+    let second = factory.new_http_filter(&mut envoy);
+    assert_eq!(
+        first.on_request_headers(&mut envoy, false),
+        Headers::Continue
+    );
+    assert_eq!(
+        second.on_request_headers(&mut envoy, false),
+        Headers::Continue
+    );
+    initial.enabled = true;
+    initial.descriptors[0].max_concurrent_streams = NonZeroU32::new(1).unwrap();
+    let current = Registration::shared(initial.clone()).unwrap();
+    let waiting = factory.new_http_filter(&mut envoy);
+    assert_eq!(
+        waiting.on_request_headers(&mut envoy, false),
+        Headers::StopAllIterationAndWatermark
+    );
+    assert_eq!(current.ledger.lock().unwrap().streams.pending.len(), 2);
+    first.on_scheduled(&mut envoy, 0);
+    first.on_scheduled(&mut envoy, 0); // A delayed notification must not count twice.
+    assert_eq!(
+        current.ledger.lock().unwrap().active[&keys(&initial, "a")[0]],
+        1
+    );
+    drop(second); // Closing before its callback must still finish the census.
+    assert!(current.ledger.lock().unwrap().streams.pending.is_empty());
+    envoy
+        .expect_send_response()
+        .times(1)
+        .returning(|code, _, _, _| assert_eq!(code, 429));
+    waiting.on_scheduled(&mut envoy, 0);
+    drop(waiting);
+    drop(first);
+    assert!(current.ledger.lock().unwrap().active.is_empty());
 }

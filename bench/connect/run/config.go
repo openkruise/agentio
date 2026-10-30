@@ -21,12 +21,16 @@ import (
 	"io"
 	"math/rand"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/openkruise/agentio/bench/connect/fixture"
 )
 
 type config struct {
+	ConnectTimeout   time.Duration
+	SharedRate       int64
+	ProgressInterval time.Duration
 	Suite            string
 	Repeats          int
 	Duration         time.Duration
@@ -56,7 +60,20 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	c := config{}
 	f := flag.NewFlagSet("connect-bench run", flag.ContinueOnError)
 	f.SetOutput(w)
-	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, isolation, pilot, buckets")
+	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, isolation, pilot, buckets, fairness")
+	f.Int64Var(
+		&c.SharedRate,
+		"bytes-per-second",
+		32*1048576,
+		"shared byte rate (distinct mode divides it across streams)",
+	)
+	f.DurationVar(
+		&c.ConnectTimeout,
+		"upstream-connect-timeout",
+		time.Second,
+		"Envoy TCP upstream connect timeout; increase for SYN loss tests",
+	)
+	f.DurationVar(&c.ProgressInterval, "progress-interval", 0, "per-stream progress sampling; 0 disables it")
 	f.IntVar(&c.Repeats, "repeats", 3, "repetitions per case")
 	f.DurationVar(&c.Duration, "duration", 6*time.Second, "measurement window")
 	f.DurationVar(&c.Warmup, "warmup", 2*time.Second, "warmup window")
@@ -74,13 +91,25 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	if err := f.Parse(args); err != nil {
 		return c, err
 	}
-	if f.NArg() != 0 || c.Output == "" || c.Repeats <= 0 || c.Duration <= 0 || c.Warmup < 0 || c.BasePort < 1 ||
+	if f.NArg() != 0 ||
+		c.Output == "" ||
+		c.Repeats <= 0 ||
+		c.SharedRate <= 0 || c.ConnectTimeout <= 0 ||
+		c.ProgressInterval < 0 ||
+		c.Duration <= 0 ||
+		c.Warmup < 0 ||
+		c.BasePort < 1 ||
 		c.BasePort > 65532 ||
 		c.ConcurrencyLimit < 0 ||
 		uint64(c.ConcurrencyLimit) > 1<<32-1 ||
-		!slices.Contains([]string{"bandwidth", "capacity", "isolation", "pilot", "buckets"}, c.Suite) ||
-		c.ResidentBuckets < 0 || !slices.Contains([]string{"active", "debt"}, c.ResidentMode) ||
-		c.DebtBytes < 4 || c.DebtBytes > 16384 || c.RecoveryWait < 0 || c.ProbeRequests <= 0 || (c.Suite == "buckets" && c.ConcurrencyLimit != 0) {
+		!slices.Contains([]string{"bandwidth", "capacity", "isolation", "pilot", "buckets", "fairness"}, c.Suite) ||
+		c.ResidentBuckets < 0 ||
+		!slices.Contains([]string{"active", "debt"}, c.ResidentMode) ||
+		c.DebtBytes < 4 ||
+		c.DebtBytes > 16384 ||
+		c.RecoveryWait < 0 ||
+		c.ProbeRequests <= 0 ||
+		(c.Suite == "buckets" && c.ConcurrencyLimit != 0) {
 		return c, fmt.Errorf("invalid suite, output, counts, duration, port or concurrency limit")
 	}
 	if c.Suite == "buckets" && c.Repeats > (65536-c.BasePort)/4 {
@@ -91,7 +120,14 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 
 func schedule(c config) []scenario {
 	var cases []scenario
-	if c.Suite == "buckets" {
+	if c.Suite == "fairness" {
+		for _, direction := range []string{"U", "D"} {
+			for _, n := range []int{1, 8, 32} {
+				cases = append(cases, scenario{Mode: "shared", Streams: n, Direction: direction})
+			}
+		}
+		cases = append(cases, scenario{Mode: "isolation", Streams: 33, Direction: "D"})
+	} else if c.Suite == "buckets" {
 		cases = append(cases, scenario{Mode: "high", Streams: 32, Direction: "D"})
 	} else if c.Suite == "isolation" {
 		for _, n := range []int{1, 33, 257} {
@@ -143,10 +179,11 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 	resources := object(b["static_resources"])
 	listener := object(resources["listeners"].([]any)[0])
 	object(object(listener["address"])["socket_address"])["port_value"] = c.BasePort + 2
-	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" {
+	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" || c.Suite == "fairness" {
 		listener["connection_balance_config"] = map[string]any{"exact_balance": map[string]any{}}
 	}
 	for _, cluster := range resources["clusters"].([]any) {
+		object(cluster)["connect_timeout"] = strconv.FormatFloat(c.ConnectTimeout.Seconds(), 'f', -1, 64) + "s"
 		if c.Suite == "buckets" {
 			object(cluster)["circuit_breakers"] = map[string]any{"thresholds": []any{map[string]any{
 				"max_connections": 200000,
@@ -165,7 +202,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 	object(object(object(module["dynamic_module_config"])["module"])["local"])["filename"] = c.Module
 	policy := object(object(module["filter_config"])["value"])
 	descriptors := policy["descriptors"].([]any)[:1]
-	rate := int64(32 * 1048576)
+	rate := c.SharedRate
 	if s.Mode == "high" || s.Mode == "bypass" {
 		rate = 1 << 40
 	}

@@ -23,10 +23,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
-	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "isolation": 9, "pilot": 12, "buckets": 3} {
+	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
 		c := config{Suite: suite, Repeats: 3}
 		cases := schedule(c)
 		if len(cases) != want || !reflect.DeepEqual(cases, schedule(c)) {
@@ -43,7 +44,13 @@ func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
 }
 
 func TestConfigVariantsAndIndependentConcurrency(t *testing.T) {
-	c := config{Suite: "capacity", BasePort: 19000, Module: "/modules/test.so"}
+	c := config{
+		ConnectTimeout: time.Second,
+		SharedRate:     32 * 1048576,
+		Suite:          "capacity",
+		BasePort:       19000,
+		Module:         "/modules/test.so",
+	}
 	for _, mode := range []string{"baseline", "bypass", "high", "shared", "distinct", "isolation"} {
 		for _, limit := range []int{0, 1024} {
 			c.ConcurrencyLimit = limit
@@ -112,7 +119,10 @@ func TestInputsAndCPUParsing(t *testing.T) {
 }
 
 func TestBucketFixtureSeparatesResidentDebtAndProbeTraffic(t *testing.T) {
-	data, err := envoyConfig(config{Suite: "buckets", BasePort: 19000, ResidentBuckets: 100000}, scenario{Mode: "high"})
+	data, err := envoyConfig(
+		config{ConnectTimeout: time.Second, Suite: "buckets", BasePort: 19000, ResidentBuckets: 100000},
+		scenario{Mode: "high"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

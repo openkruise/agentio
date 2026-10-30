@@ -81,9 +81,11 @@ func (t *transfers) establish(setup context.Context, i int) error {
 		return errors.Join(err, reader.Close(), writer.Close())
 	}
 	if resp.StatusCode != http.StatusOK {
+		detail, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		cancel()
 		return errors.Join(
-			fmt.Errorf("CONNECT stream %d: %s", i, resp.Status),
+			fmt.Errorf("CONNECT stream %d: %s: %s", i, resp.Status, detail),
+			readErr,
 			resp.Body.Close(),
 			reader.Close(),
 			writer.Close(),
@@ -238,6 +240,11 @@ func (t *transfers) measure() (map[string]any, error) {
 	}
 	peakRSS := startCPU[0].RSS
 	started := time.Now()
+	var progress *progressWindow
+	if c.ProgressInterval > 0 {
+		progress = newProgressWindow(before, started)
+	}
+	nextProgress := started.Add(c.ProgressInterval)
 	for time.Since(started) < c.Duration {
 		if err := pause(t.ctx, min(100*time.Millisecond, c.Duration-time.Since(started))); err != nil {
 			return nil, err
@@ -247,6 +254,15 @@ func (t *transfers) measure() (map[string]any, error) {
 			return nil, err
 		}
 		peakRSS = max(peakRSS, sample.RSS)
+		if progress != nil && !time.Now().Before(nextProgress) {
+			counts, err := t.counters()
+			if err != nil {
+				return nil, err
+			}
+			now := time.Now()
+			progress.observe(counts, now)
+			nextProgress = now.Add(c.ProgressInterval)
+		}
 	}
 	after, err := t.counters()
 	if err != nil {
@@ -280,6 +296,13 @@ func (t *transfers) measure() (map[string]any, error) {
 		"stream_min_mib_per_s": rates[0],
 		"stream_p50_mib_per_s": rates[len(rates)/2],
 		"stream_max_mib_per_s": rates[len(rates)-1],
+	}
+	if progress != nil {
+		progress.observe(after, time.Now())
+		gaps := progress.finish(time.Now())
+		result["stream_max_idle_ms"] = gaps
+		result["max_idle_ms"] = slices.Max(gaps)
+		result["progress_interval_ms"] = float64(c.ProgressInterval) / float64(time.Millisecond)
 	}
 	if c.FastStream {
 		result["fast_mib_per_s"] = fastRate

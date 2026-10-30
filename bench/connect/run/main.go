@@ -108,7 +108,7 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 	defer func() { result = errors.Join(result, rows.Close()) }()
 	encoder := json.NewEncoder(io.MultiWriter(rows, out))
 	balance := "default"
-	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" {
+	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" || c.Suite == "fairness" {
 		balance = "exact"
 	}
 	env := map[string]any{
@@ -118,14 +118,16 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 		"envoy": strings.TrimSpace(
 			string(version),
 		),
-		"cpu_model":          model,
-		"warmup_seconds":     c.Warmup.Seconds(),
-		"measurement":        c.Duration.String(),
-		"connection_balance": balance,
-		"suite":              c.Suite,
-		"concurrency_limit":  c.ConcurrencyLimit,
-		"ticks":              ticks,
-		"module":             c.Module,
+		"cpu_model":               model,
+		"warmup_seconds":          c.Warmup.Seconds(),
+		"measurement":             c.Duration.String(),
+		"connection_balance":      balance,
+		"suite":                   c.Suite,
+		"concurrency_limit":       c.ConcurrencyLimit,
+		"ticks":                   ticks,
+		"module":                  c.Module,
+		"shared_bytes_per_second": c.SharedRate,
+		"progress_interval":       c.ProgressInterval.String(),
 	}
 	if c.Suite == "buckets" {
 		env["resident_buckets"], env["resident_mode"] = c.ResidentBuckets, c.ResidentMode
@@ -246,6 +248,7 @@ func runCase(
 		fmt.Sprintf("-fast-stream=%t", s.Mode == "isolation"),
 		"-duration="+c.Duration.String(),
 		"-warmup="+c.Warmup.String(),
+		"-progress-interval="+c.ProgressInterval.String(),
 		"-target="+target,
 		"-stats="+statsAddr,
 		fmt.Sprintf(

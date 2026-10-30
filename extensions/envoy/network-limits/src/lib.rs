@@ -4,6 +4,7 @@
 mod bandwidth;
 mod concurrency;
 mod descriptor;
+mod streams;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig, declare_init_functions,
@@ -17,7 +18,7 @@ fn init() -> bool {
 }
 
 fn new_config<C: EnvoyHttpFilterConfig, E: EnvoyHttpFilter>(
-    _: &mut C,
+    envoy: &mut C,
     name: &str,
     bytes: &[u8],
 ) -> Option<Box<dyn HttpFilterConfig<E>>> {
@@ -29,7 +30,12 @@ fn new_config<C: EnvoyHttpFilterConfig, E: EnvoyHttpFilter>(
         _ => return None,
     };
     match result {
-        Ok(config) => Some(config),
+        Ok(config) => {
+            // Publish on the main dispatcher after construction has returned. Rejected
+            // candidates are destroyed before this weakly-owned callback can run.
+            envoy.new_scheduler().commit(0);
+            Some(config)
+        }
         Err(error) => {
             envoy_log_error!("{} config rejected: {}", name, error);
             None

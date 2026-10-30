@@ -28,8 +28,26 @@ fn keys(config: &Config, tenant: &str, sandbox: &str) -> Vec<Key> {
 #[test]
 fn descriptors_are_ordered_combined_keys_with_exact_precedence() {
     let config = Config::parse(CONFIG.as_bytes()).unwrap();
-    assert_eq!(keys(&config, "vip", "one")[0].0, 1);
-    assert_eq!(keys(&config, "vip", "two")[0].0, 0);
+    assert_eq!(
+        config
+            .descriptor(&keys(&config, "vip", "one")[0])
+            .unwrap()
+            .bandwidth_limit
+            .download_bytes_per_second
+            .unwrap()
+            .get(),
+        1000
+    );
+    assert_eq!(
+        config
+            .descriptor(&keys(&config, "vip", "two")[0])
+            .unwrap()
+            .bandwidth_limit
+            .download_bytes_per_second
+            .unwrap()
+            .get(),
+        200
+    );
     assert_ne!(keys(&config, "a", "one"), keys(&config, "b", "one"));
     assert_ne!(keys(&config, "a", "one"), keys(&config, "a", "two"));
     assert!(config.resolve(|_| None).is_err());
@@ -287,7 +305,7 @@ fn burst_configuration_accepts_protojson_and_requires_positive_matching_rates() 
 }
 
 #[test]
-fn reload_reuses_budget_and_rejects_conflicting_grouping() {
+fn reload_reuses_budget_across_grouping_changes() {
     let mut config = Config::parse(CONFIG.as_bytes()).unwrap();
     config.budget_name = "reload-test".into();
     let first = Budget::shared(config.clone()).unwrap();
@@ -296,12 +314,15 @@ fn reload_reuses_budget_and_rejects_conflicting_grouping() {
     assert!(Arc::ptr_eq(&first.budget, &second.budget));
     config.max_dynamic_buckets += 1;
     assert!(Budget::shared(config.clone()).is_ok());
-    config.rate_limits[0].actions.reverse();
-    assert!(Budget::shared(config).is_err());
+    Arc::make_mut(&mut config.rate_limits[0].actions).reverse();
+    for descriptor in &mut config.descriptors {
+        descriptor.entries.reverse();
+    }
+    assert!(Budget::shared(config).is_ok());
 }
 
 #[test]
-fn rejected_candidate_restores_previous_rates_without_replacing_buckets() {
+fn dropping_config_does_not_restore_previous_rates() {
     let mut config = Config::parse(CONFIG.as_bytes()).unwrap();
     config.budget_name = "rollback-test".into();
     let first = Budget::shared(config.clone()).unwrap();
@@ -332,7 +353,7 @@ fn rejected_candidate_restores_previous_rates_without_replacing_buckets() {
             .upload_bytes_per_second
             .unwrap()
             .get(),
-        100
+        200
     );
     assert!(ledger.charge(&key, 0, 1, Instant::now()).is_some());
     ledger.release(&key, Instant::now());
@@ -363,15 +384,16 @@ fn filter() -> Filter {
         id: timer.id(),
         timer,
         scheduler: Arc::new(MockEnvoyHttpFilterScheduler::new()),
-        buffer_limit: 65536,
-        keys: Vec::new(),
-        waiting: [None; 2],
+        keys: RefCell::new(Vec::new()),
+        waiting: Cell::new([None; 2]),
+        generation: Cell::new(0),
+        registered: Cell::new(false),
     }
 }
 
 #[test]
 fn callbacks_count_buffered_bytes_once_and_stop_trailers() {
-    let mut filter = filter();
+    let filter = filter();
     let mut envoy = MockEnvoyHttpFilter::new();
     envoy.expect_get_request_header_value().returning(|_| None);
     envoy
@@ -413,7 +435,7 @@ fn callbacks_count_buffered_bytes_once_and_stop_trailers() {
 
 #[test]
 fn missing_identity_rejects_and_local_response_is_not_charged() {
-    let mut filter = filter();
+    let filter = filter();
     let mut envoy = MockEnvoyHttpFilter::new();
     envoy.expect_get_request_header_value().returning(|_| None);
     envoy.expect_get_filter_state_bytes().returning(|_| None);
@@ -435,7 +457,7 @@ fn missing_identity_rejects_and_local_response_is_not_charged() {
 #[test]
 fn retry_headers_are_rejected_before_acquiring_a_budget() {
     for header in ["x-envoy-retry-on", "x-envoy-retry-grpc-on"] {
-        let mut filter = filter();
+        let filter = filter();
         let mut envoy = MockEnvoyHttpFilter::new();
         envoy
             .expect_get_request_header_value()
@@ -451,13 +473,16 @@ fn retry_headers_are_rejected_before_acquiring_a_budget() {
             filter.on_request_headers(&mut envoy, false),
             Headers::StopIteration
         );
-        assert!(filter.keys.is_empty());
+        assert!(filter.keys.borrow().is_empty());
     }
 }
 
 #[test]
 fn scheduled_resume_returns_before_touching_the_other_direction() {
     let mut filter = filter();
+    let mut scheduler = MockEnvoyHttpFilterScheduler::new();
+    scheduler.expect_commit().times(1).return_const(());
+    filter.scheduler = Arc::new(scheduler);
     let now = Instant::now();
     let keys = keys(&filter.budget.ledger.lock().unwrap().config, "a", "one");
     filter
@@ -467,9 +492,12 @@ fn scheduled_resume_returns_before_touching_the_other_direction() {
         .unwrap()
         .acquire(&keys, now)
         .unwrap();
-    filter.keys = keys;
+    *filter.keys.borrow_mut() = keys;
     // Future deadlines keep the real timer from racing this manually delivered event.
-    filter.waiting = [Some(now + Duration::from_secs(60)); 2];
+    filter.waiting.set([
+        Some(Wait::Until(now + Duration::from_secs(60))),
+        Some(Wait::Turn),
+    ]);
 
     let mut request = MockEnvoyHttpFilter::new();
     request
@@ -479,8 +507,8 @@ fn scheduled_resume_returns_before_touching_the_other_direction() {
     request.expect_continue_decoding().times(1).return_const(());
     // No further Envoy calls are allowed: continue_decoding may have destroyed the filter.
     filter.on_scheduled(&mut request, 0);
-    assert!(filter.waiting[0].is_none());
-    assert!(filter.waiting[1].is_some());
+    assert!(filter.waiting.get()[0].is_none());
+    assert!(filter.waiting.get()[1].is_some());
     assert!(
         filter
             .budget
@@ -502,7 +530,7 @@ fn scheduled_resume_returns_before_touching_the_other_direction() {
         .times(1)
         .return_const(());
     filter.on_scheduled(&mut response, 0);
-    assert_eq!(filter.waiting, [None; 2]);
+    assert_eq!(filter.waiting.get(), [None; 2]);
     assert!(
         !filter
             .budget
@@ -512,4 +540,95 @@ fn scheduled_resume_returns_before_touching_the_other_direction() {
             .waiters
             .contains_key(&filter.id)
     );
+}
+
+#[test]
+fn descriptor_override_and_reorder_preserve_burst_consumption() {
+    let mut config = Config::parse(CONFIG.as_bytes()).unwrap();
+    config.budget_name = "descriptor-override".into();
+    config.descriptors[0].bandwidth_limit.upload_burst_bytes = Some(100.try_into().unwrap());
+    let registration = Budget::shared(config.clone()).unwrap();
+    let key = keys(&config, "a", "one");
+    let now = Instant::now();
+    let mut ledger = registration.budget.ledger.lock().unwrap();
+    ledger.acquire(&key, now).unwrap();
+    assert_eq!(ledger.charge(&key, 0, 100, now), None);
+    drop(ledger);
+    let mut exact = config.descriptors[0].clone();
+    exact.entries[0].value = "a".into();
+    exact.entries[1].value = "one".into();
+    config.descriptors.insert(0, exact);
+    config.descriptors.reverse();
+    let updated = Budget::shared(config.clone()).unwrap();
+    assert_eq!(key, keys(&config, "a", "one"));
+    let mut ledger = updated.budget.ledger.lock().unwrap();
+    assert!(ledger.charge(&key, 0, 100, now).is_some());
+    ledger.release(&key, now);
+}
+
+#[test]
+fn shared_bucket_rotates_batches_without_blocking_other_keys_or_directions() {
+    let config = Config::parse(CONFIG.as_bytes()).unwrap();
+    let shared = keys(&config, "a", "one");
+    let other = keys(&config, "b", "one");
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    for _ in 0..3 {
+        ledger.acquire(&shared, now).unwrap();
+    }
+    ledger.acquire(&other, now).unwrap();
+    assert_eq!(ledger.admit_batch(1, &shared, 0, 100, now), None);
+    assert_eq!(
+        ledger.admit_batch(1, &shared, 0, 100, now),
+        Some(Wait::Until(now + Duration::from_secs(1)))
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &shared, 0, 100, now),
+        Some(Wait::Turn)
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &shared, 0, 100, now),
+        Some(Wait::Turn)
+    );
+    assert_eq!(ledger.admit_batch(4, &other, 0, 100, now), None);
+    assert_eq!(ledger.admit_batch(2, &shared, 1, 100, now), None);
+    for (second, winner) in [(1, 1), (2, 2), (3, 3), (4, 1), (5, 2)] {
+        let time = now + Duration::from_secs(second);
+        let loser = winner % 3 + 1;
+        assert_eq!(
+            ledger.admit_batch(loser, &shared, 0, 100, time),
+            Some(Wait::Turn)
+        );
+        assert_eq!(ledger.admit_batch(winner, &shared, 0, 100, time), None);
+        assert_eq!(
+            ledger.admit_batch(winner, &shared, 0, 100, time),
+            Some(Wait::Turn)
+        );
+    }
+}
+
+#[test]
+fn queued_batch_rebind_and_cancellation_leave_no_stale_head() {
+    let config = Config::parse(CONFIG.as_bytes()).unwrap();
+    let shared = keys(&config, "a", "one");
+    let other = keys(&config, "b", "one");
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    for _ in 0..3 {
+        ledger.acquire(&shared, now).unwrap();
+    }
+    ledger.admit_batch(1, &shared, 0, 100, now);
+    ledger.admit_batch(1, &shared, 0, 100, now);
+    ledger.admit_batch(2, &shared, 0, 100, now);
+    ledger.admit_batch(3, &shared, 0, 100, now);
+    ledger.cancel_batches(1);
+    ledger.release(&shared, now);
+    ledger.rebind(2, &shared, &other, now);
+    assert_eq!(ledger.admit_batch(2, &other, 0, 100, now), None);
+    assert_eq!(
+        ledger.admit_batch(3, &shared, 0, 100, now + Duration::from_secs(1)),
+        None
+    );
+    ledger.release(&other, now + Duration::from_secs(2));
+    ledger.release(&shared, now + Duration::from_secs(2));
 }

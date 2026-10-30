@@ -3,9 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
-sdk_rev=b579d07d3ad7ee11d32b105e91a5a39ad24718d7
+sdk_rev=1.40.2
 if [ ! -f .envoy-sdk/source/extensions/dynamic_modules/sdk/rust/Cargo.toml ]; then
-  curl -fL "https://codeload.github.com/envoyproxy/envoy/tar.gz/$sdk_rev" -o .envoy-sdk.tar.gz
+  curl -fL "https://codeload.github.com/envoyproxy/envoy/tar.gz/v$sdk_rev" -o .envoy-sdk.tar.gz
   mkdir -p .envoy-sdk
   tar -xzf .envoy-sdk.tar.gz --strip-components=1 -C .envoy-sdk \
     "envoy-$sdk_rev/source/extensions/dynamic_modules"

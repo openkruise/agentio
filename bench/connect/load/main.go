@@ -28,26 +28,27 @@ import (
 )
 
 type config struct {
-	Streams         int
-	Connections     int
-	Direction       string
-	Distinct        bool
-	FastStream      bool
-	Duration        time.Duration
-	Warmup          time.Duration
-	SetupTimeout    time.Duration
-	Target          string
-	Origin          string
-	Stats           string
-	EnvoyPID        int
-	OriginPID       int
-	Ticks           float64
-	ResidentBuckets int
-	ResidentMode    string
-	DebtBytes       int
-	RecoveryWait    time.Duration
-	Admin           string
-	ProbeRequests   int
+	ProgressInterval time.Duration
+	Streams          int
+	Connections      int
+	Direction        string
+	Distinct         bool
+	FastStream       bool
+	Duration         time.Duration
+	Warmup           time.Duration
+	SetupTimeout     time.Duration
+	Target           string
+	Origin           string
+	Stats            string
+	EnvoyPID         int
+	OriginPID        int
+	Ticks            float64
+	ResidentBuckets  int
+	ResidentMode     string
+	DebtBytes        int
+	RecoveryWait     time.Duration
+	Admin            string
+	ProbeRequests    int
 }
 
 func main() {
@@ -92,6 +93,7 @@ func parseConfig(args []string) (config, error) {
 	f.StringVar(&c.Direction, "direction", "D", "D or U")
 	f.BoolVar(&c.Distinct, "distinct", false, "one sandbox per stream")
 	f.BoolVar(&c.FastStream, "fast-stream", false, "last stream uses the fast sandbox")
+	f.DurationVar(&c.ProgressInterval, "progress-interval", 0, "per-stream progress sampling; 0 disables it")
 	f.DurationVar(&c.Duration, "duration", 6*time.Second, "measurement window")
 	f.DurationVar(&c.Warmup, "warmup", 2*time.Second, "warmup before measuring")
 	f.DurationVar(&c.SetupTimeout, "setup-timeout", 30*time.Second, "CONNECT establishment deadline")
@@ -111,7 +113,7 @@ func parseConfig(args []string) (config, error) {
 		return c, err
 	}
 	if f.NArg() != 0 || c.Streams <= 0 || c.Connections <= 0 || c.Duration <= 0 || c.Warmup < 0 ||
-		c.SetupTimeout <= 0 ||
+		c.SetupTimeout <= 0 || c.ProgressInterval < 0 ||
 		c.Ticks <= 0 ||
 		(c.Direction != "D" && c.Direction != "U") || c.ResidentBuckets < 0 ||
 		(c.ResidentMode != "" && c.ResidentMode != "active" && c.ResidentMode != "debt") ||

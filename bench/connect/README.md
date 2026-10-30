@@ -50,6 +50,7 @@ The default run uses three repeats, two seconds of warmup and six seconds of mea
 | `capacity` | 11 | Unbounded baseline/bypass/high cases with exact worker connection balancing. |
 | `isolation` | 3 | One fast sandbox beside 0/32/256 noisy streams; exact worker connection balancing. |
 | `pilot` | 4 | 32-stream download: baseline, high, shared, distinct. |
+| `fairness` | 7 | Shared download/upload at 1/8/32 streams, plus 32 noisy streams beside one fast sandbox. |
 | `buckets` | 1 | Populate background buckets, probe 5,000 CONNECT open/close cycles, then measure 32-stream download. |
 
 Modes:
@@ -121,7 +122,7 @@ Download bytes are counted at the client; upload bytes at the origin. Process CP
 
 `connect_p50_ms` and `connect_p95_ms` now use the shared Go scheduler's latency/quantile convention and describe establishment, not application latency. Environment rows have `schema_version: 2`. Historical JSONL from the previous Python runner is kept outside the repository along with other run artifacts. Byte-rate/CPU/RSS field units are retained, but the Go seeded shuffle and setup percentile calculation are not identical to that runner. The analyzer also reads those historical rows.
 
-These short synthetic tests do not establish real-NIC capacity, outer mTLS overhead, long-term memory stability, connection churn, production identity costs, or multi-replica quota behavior. Shared bandwidth budgets still do not promise scheduling fairness.
+These short synthetic tests do not establish real-NIC capacity, outer mTLS overhead, long-term memory stability, connection churn, production identity costs, or multi-replica quota behavior. The module rotates waiting batches in FIFO order. This does not establish equal byte shares when batch sizes differ or minimum-bandwidth guarantees.
 
 Generated output is intentionally not versioned. Preserve the external output directory when sharing a run; the source tree contains only tools, input fixtures, tests and documentation.
 
@@ -132,3 +133,16 @@ go test -race ./bench/load ./bench/connect/...
 ```
 
 Unit tests cover scenario counts, configuration variants, CPU/stat parsing, upload counting, historical-result analysis, and tunnel survival after the shared setup scheduler finishes. Validate actual binaries with `pilot` on Linux; use `capacity` for both upload and download and `isolation` for mixed tenants.
+
+## Shared-bucket progress
+
+Use the same suite at normal and low rates; it uses no burst allowance. For example:
+
+```sh
+connect-bench run -suite=fairness -bytes-per-second=1048576 \
+  -progress-interval=100ms -repeats=1 -warmup=4s -duration=30s -output=/results/fairness
+```
+
+`-bytes-per-second` changes the shared rate (default 32 MiB/s); distinct mode divides it across streams. `-progress-interval` is optional and disabled by default so existing capacity runs do not incur extra counter requests. Upload progress is measured at the TCP origin, download progress at the client. JSON rows include `stream_max_idle_ms` in stream order and `max_idle_ms`; both include the beginning/end of the measurement window, even if a stream never advances. These are sampled intervals, with resolution limited by the polling interval and the 100 ms resource-sampling loop, not packet-level timestamps. In isolation mode the last stream is the fast sandbox.
+
+Check these intervals together with per-stream minimum throughput, aggregate rate, errors and CPU/RSS. A correct aggregate rate alone does not demonstrate absence of starvation. The finite-transfer regression tests separately verify payload content; the benchmark's infinite streams measure sustained throughput and progress rather than file integrity. `-upstream-connect-timeout` defaults to 1s; use 5s for SYN-loss experiments, where the TCP retransmission timer can exceed 1s. A CONNECT setup 503 fails the run rather than being silently retried. Run network-fault injection only in a disposable test namespace/container and retain its settings with the external results.
