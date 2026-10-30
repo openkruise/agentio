@@ -49,6 +49,7 @@ type config struct {
 	RecoveryWait     time.Duration
 	Admin            string
 	ProbeRequests    int
+	ReloadPath       string
 }
 
 func main() {
@@ -109,6 +110,7 @@ func parseConfig(args []string) (config, error) {
 	f.DurationVar(&c.RecoveryWait, "recovery-wait", 0, "quiet observation after releasing background streams")
 	f.StringVar(&c.Admin, "admin", "127.0.0.1:17901", "Envoy admin address for active-connection verification")
 	f.IntVar(&c.ProbeRequests, "probe-requests", 5000, "CONNECT open/close probes after bucket population")
+	f.StringVar(&c.ReloadPath, "reload-path", "", "bandwidth ECDS resource to update during measurement")
 	if err := f.Parse(args); err != nil {
 		return c, err
 	}

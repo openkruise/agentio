@@ -27,7 +27,7 @@ import (
 )
 
 func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
-	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
+	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 90, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
 		c := config{Suite: suite, Repeats: 3}
 		cases := schedule(c)
 		if len(cases) != want || !reflect.DeepEqual(cases, schedule(c)) {
@@ -40,6 +40,73 @@ func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
 			}
 			seen[s] = true
 		}
+	}
+}
+
+func TestOverheadModes(t *testing.T) {
+	for _, mode := range []string{"baseline", "disabled", "concurrency", "high", "distinct-high", "combined"} {
+		data, err := envoyConfig(
+			config{Suite: "overhead", BasePort: 19000, ConnectTimeout: time.Second},
+			scenario{Mode: mode, Streams: 1024},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b map[string]any
+		if err := json.Unmarshal(data, &b); err != nil {
+			t.Fatal(err)
+		}
+		l := object(object(b["static_resources"])["listeners"].([]any)[0])
+		hcm := object(object(object(l["filter_chains"].([]any)[0])["filters"].([]any)[0])["typed_config"])
+		seen := map[string]bool{}
+		for _, f := range hcm["http_filters"].([]any) {
+			filter := object(f)
+			name := filter["name"].(string)
+			if name != "agentio.bandwidth" && name != "agentio.connect_concurrency" {
+				continue
+			}
+			seen[name] = true
+			p := object(object(object(object(filter["typed_config"])["value"])["filter_config"])["value"])
+			if mode == "disabled" && p["enabled"] != false {
+				t.Fatal("resident filter was not disabled")
+			}
+			if name == "agentio.bandwidth" && mode != "disabled" {
+				d := object(p["descriptors"].([]any)[0])
+				if object(d["bandwidth_limit"])["download_bytes_per_second"] != "1099511627776" {
+					t.Fatal("overhead measurement is bandwidth constrained")
+				}
+			}
+		}
+		if seen["agentio.bandwidth"] != (mode != "baseline" && mode != "concurrency") ||
+			seen["agentio.connect_concurrency"] != (mode == "disabled" || mode == "concurrency" || mode == "combined") {
+			t.Fatalf("%s: unexpected filters %v", mode, seen)
+		}
+	}
+}
+
+func TestBucketDiscoveryKeepsPolicyAndUsesFileSource(t *testing.T) {
+	data, err := envoyConfig(
+		config{Suite: "buckets", BasePort: 19000, ConnectTimeout: time.Second},
+		scenario{Mode: "high", Streams: 32},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ecds.json")
+	data, err = discoverBandwidth(data, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("config_discovery")) || bytes.Contains(data, []byte("budget_name")) {
+		t.Fatal("policy is not supplied through ECDS")
+	}
+	resource, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(resource, []byte("bandwidth_limit")) ||
+		!bytes.Contains(resource, []byte("TypedExtensionConfig")) {
+		t.Fatal("ECDS resource lost the bandwidth policy")
 	}
 }
 

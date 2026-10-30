@@ -46,6 +46,7 @@ type config struct {
 	DebtBytes        int
 	RecoveryWait     time.Duration
 	ProbeRequests    int
+	Reload           bool
 }
 
 type scenario struct {
@@ -60,7 +61,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	c := config{}
 	f := flag.NewFlagSet("connect-bench run", flag.ContinueOnError)
 	f.SetOutput(w)
-	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, isolation, pilot, buckets, fairness")
+	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, overhead, isolation, pilot, buckets, fairness")
 	f.Int64Var(
 		&c.SharedRate,
 		"bytes-per-second",
@@ -88,6 +89,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	f.IntVar(&c.DebtBytes, "debt-bytes", 1024, "seed bytes at 1 byte/s for debt buckets")
 	f.DurationVar(&c.RecoveryWait, "recovery-wait", 0, "quiet observation after releasing background streams")
 	f.IntVar(&c.ProbeRequests, "probe-requests", 5000, "CONNECT open/close probes after bucket population")
+	f.BoolVar(&c.Reload, "reload", false, "bucket suite: change rate and grouping during throughput measurement")
 	if err := f.Parse(args); err != nil {
 		return c, err
 	}
@@ -102,14 +104,18 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		c.BasePort > 65532 ||
 		c.ConcurrencyLimit < 0 ||
 		uint64(c.ConcurrencyLimit) > 1<<32-1 ||
-		!slices.Contains([]string{"bandwidth", "capacity", "isolation", "pilot", "buckets", "fairness"}, c.Suite) ||
+		!slices.Contains(
+			[]string{"bandwidth", "capacity", "overhead", "isolation", "pilot", "buckets", "fairness"},
+			c.Suite,
+		) ||
 		c.ResidentBuckets < 0 ||
 		!slices.Contains([]string{"active", "debt"}, c.ResidentMode) ||
 		c.DebtBytes < 4 ||
 		c.DebtBytes > 16384 ||
 		c.RecoveryWait < 0 ||
 		c.ProbeRequests <= 0 ||
-		(c.Suite == "buckets" && c.ConcurrencyLimit != 0) {
+		(c.Reload && c.Suite != "buckets") ||
+		((c.Suite == "buckets" || c.Suite == "overhead") && c.ConcurrencyLimit != 0) {
 		return c, fmt.Errorf("invalid suite, output, counts, duration, port or concurrency limit")
 	}
 	if c.Suite == "buckets" && c.Repeats > (65536-c.BasePort)/4 {
@@ -120,7 +126,14 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 
 func schedule(c config) []scenario {
 	var cases []scenario
-	if c.Suite == "fairness" {
+	if c.Suite == "overhead" {
+		for _, mode := range []string{"baseline", "disabled", "concurrency", "high", "distinct-high", "combined"} {
+			for _, n := range []int{1, 32, 256, 1024} {
+				cases = append(cases, scenario{Mode: mode, Streams: n, Direction: "D"})
+			}
+			cases = append(cases, scenario{Mode: mode, Streams: 32, Direction: "U"})
+		}
+	} else if c.Suite == "fairness" {
 		for _, direction := range []string{"U", "D"} {
 			for _, n := range []int{1, 8, 32} {
 				cases = append(cases, scenario{Mode: "shared", Streams: n, Direction: direction})
@@ -179,12 +192,13 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 	resources := object(b["static_resources"])
 	listener := object(resources["listeners"].([]any)[0])
 	object(object(listener["address"])["socket_address"])["port_value"] = c.BasePort + 2
-	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" || c.Suite == "fairness" {
+	if c.Suite == "capacity" || c.Suite == "overhead" || c.Suite == "isolation" || c.Suite == "buckets" ||
+		c.Suite == "fairness" {
 		listener["connection_balance_config"] = map[string]any{"exact_balance": map[string]any{}}
 	}
 	for _, cluster := range resources["clusters"].([]any) {
 		object(cluster)["connect_timeout"] = strconv.FormatFloat(c.ConnectTimeout.Seconds(), 'f', -1, 64) + "s"
-		if c.Suite == "buckets" {
+		if c.Suite == "buckets" || c.Suite == "overhead" {
 			object(cluster)["circuit_breakers"] = map[string]any{"thresholds": []any{map[string]any{
 				"max_connections": 200000,
 				"max_requests":    200000,
@@ -203,7 +217,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 	policy := object(object(module["filter_config"])["value"])
 	descriptors := policy["descriptors"].([]any)[:1]
 	rate := c.SharedRate
-	if s.Mode == "high" || s.Mode == "bypass" {
+	if s.Mode == "high" || s.Mode == "bypass" || s.Mode == "distinct-high" || s.Mode == "combined" {
 		rate = 1 << 40
 	}
 	if s.Mode == "distinct" {
@@ -226,6 +240,9 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		object(object(descriptors[0])["entries"].([]any)[0])["value"] = "unmatched"
 	}
 	policy["descriptors"] = descriptors
+	if s.Mode == "disabled" {
+		policy["enabled"] = false
+	}
 	policy["max_dynamic_buckets"] = 10000
 	if c.Suite == "buckets" {
 		object(object(descriptors[0])["entries"].([]any)[0])["value"] = "perf"
@@ -238,10 +255,14 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		})
 		policy["max_dynamic_buckets"] = c.ResidentBuckets + 1024
 	}
-	if s.Mode == "baseline" {
+	if s.Mode == "baseline" || s.Mode == "concurrency" {
 		filters = []any{filters[0], filters[2]}
 	}
-	if c.ConcurrencyLimit > 0 {
+	limit := c.ConcurrencyLimit
+	if c.Suite == "overhead" && (s.Mode == "disabled" || s.Mode == "concurrency" || s.Mode == "combined") {
+		limit = 100000
+	}
+	if limit > 0 {
 		// Clone the module envelope, keeping admission state independent from shaping.
 		data, err := json.Marshal(module)
 		if err != nil {
@@ -253,13 +274,14 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		}
 		admission["filter_name"] = "envoy_agentio_connect_concurrency"
 		object(admission["filter_config"])["value"] = map[string]any{
+			"enabled":             s.Mode != "disabled",
 			"budget_name":         "bench-concurrency",
 			"rate_limits":         policy["rate_limits"],
 			"max_dynamic_buckets": 10000,
 			"descriptors": []any{
 				map[string]any{
 					"entries":                []any{map[string]any{"key": "tenant"}, map[string]any{"key": "sandbox"}},
-					"max_concurrent_streams": c.ConcurrencyLimit,
+					"max_concurrent_streams": limit,
 				},
 			},
 		}

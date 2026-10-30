@@ -301,6 +301,10 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 	r.listener["connection_balance_config"] = object{"exact_balance": object{}}
 	for _, v := range resources["clusters"].([]any) {
 		cluster := obj(v)
+		// Keep the upstream pool from imposing a separate ceiling on scale tests.
+		cluster["circuit_breakers"] = object{"thresholds": []any{
+			object{"max_connections": 100000, "max_requests": 100000},
+		}}
 		// Allow a TCP SYN retransmission when this fixture runs under external netem.
 		cluster["connect_timeout"] = "5s"
 		port := plain

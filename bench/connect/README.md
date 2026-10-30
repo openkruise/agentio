@@ -48,6 +48,7 @@ The default run uses three repeats, two seconds of warmup and six seconds of mea
 | --- | ---: | --- |
 | `bandwidth` | 19 | Download 1/32/256 streams: baseline, bypass, high, shared, distinct; upload 32 streams: all except bypass. |
 | `capacity` | 11 | Unbounded baseline/bypass/high cases with exact worker connection balancing. |
+| `overhead` | 30 | Download at 1/32/256/1024 streams and upload at 32 streams, comparing six unbounded filter configurations. |
 | `isolation` | 3 | One fast sandbox beside 0/32/256 noisy streams; exact worker connection balancing. |
 | `pilot` | 4 | 32-stream download: baseline, high, shared, distinct. |
 | `fairness` | 7 | Shared download/upload at 1/8/32 streams, plus 32 noisy streams beside one fast sandbox. |
@@ -61,6 +62,14 @@ Modes:
 - `shared`: all streams share a 32 MiB/s budget.
 - `distinct`: each stream has its own budget; configured rates total 32 MiB/s.
 - `isolation`: noisy streams share 32 MiB/s; the last stream has a distinct 1 TiB/s download budget.
+
+The `overhead` suite adds `disabled` (both bandwidth and concurrency filters resident but disabled), `concurrency` (only a nonbinding per-sandbox concurrency filter), `distinct-high` (one nonbinding bandwidth bucket per stream), and `combined` (both nonbinding limits, with one sandbox per stream). It also runs `baseline` and shared `high`. A 1 TiB/s byte budget and a 100000-stream concurrency cap avoid intentional throttling. The suite rejects `-concurrency-limit` because it selects filter placement itself. Native connection-rate limiting is absent. For example:
+
+```sh
+connect-bench run -suite=overhead -repeats=3 -warmup=2s -duration=8s -output=/results/overhead
+```
+
+Compare throughput medians and individual ranges against the same stream count/direction in `baseline`. CPU seconds per GiB, calculated as `envoy_cpu_cores * 1024 / mib_per_s`, helps compare processing costs when both workers are saturated. These are whole-Envoy costs, including FFI callbacks and shared-budget bookkeeping. They do not isolate the incremental cost of one implementation change.
 
 For concurrency-filter overhead, run the same suite twice with and without `-concurrency-limit=1024`, each into its own output directory. A positive value installs the independent concurrency filter in **every case, including baseline**. Choose a nonbinding limit for overhead comparisons: rejected CONNECTs fail the benchmark rather than count as successful throughput. This option does not implement a rejection/churn load scenario. Native CONNECT creation-rate limiting is not installed by these suites.
 
@@ -96,6 +105,10 @@ spec:
 Record this setting and apply it equally to both compared versions. It changes the test Pod's network namespace, not the host-wide range; it is not a production tuning recommendation.
 
 `-debt-bytes` defaults to 1024 (1024 seconds at the fixture's rate), accepts 4–16384, and fails the case if the earliest seeded debt could expire before the probes finish. `-recovery-wait` adds a quiet period after releasing streams, sampling Envoy CPU and RSS once per second without sending new CONNECT requests. For an expiry observation, use a smaller seed and a wait longer than its lifetime, for example `-debt-bytes=128 -recovery-wait=140s`. No module bucket-count gauge is exposed: debt population is established by successful seed acknowledgements and elapsed time, while recovery samples measure resource usage rather than an exact live-bucket count.
+
+Add `-reload` to the bucket suite to use a file-backed bandwidth ECDS resource. During the throughput window, it first changes the nonbinding download rate and then reverses the action/descriptor key order to trigger stream rebinding. Resident upload rates remain unchanged so seeded debt is retained. Use a measurement window long enough for both updates (for example 15 seconds), and `-progress-interval=100ms` to record receive stalls. The `reloads` array reports `ecds_observed_ms` from atomic file replacement until the admin update-success counter advances, polled at 1 ms intervals. This includes discovery and observation latency; it does not prove every worker has finished migration. The sampled idle interval covers the whole measurement window and does not attribute every stall to a configuration update. RSS for active populations includes their live TCP/HTTP streams, not just buckets.
+
+For a separate functional concurrency census at larger scales, compile the [real-Envoy tests](../../extensions/envoy/network-limits/tests) and run `TestEnvoyECDSIdleCensus` with `AGENTIO_TEST_IDLE_STREAMS=1000` or `10000`. This checks admission after all pre-existing idle streams have been counted, after splitting them into distinct sandbox buckets, after merging them into a shared quota, and after close. Its timing includes ECDS observation and a new admission check, not configuration parsing alone.
 
 Additional result fields include `population` and `admission` scheduler summaries, Envoy CPU seconds for each phase, `rss_empty_mib`, `rss_populated_mib`, `rss_released_mib`, `release_ms`, and the quiet `recovery` samples. Compare the same counts and modes across module versions, repeat runs, and retain the individual samples; allocator retention means RSS after closure need not return to its empty-table value.
 

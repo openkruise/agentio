@@ -108,7 +108,8 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 	defer func() { result = errors.Join(result, rows.Close()) }()
 	encoder := json.NewEncoder(io.MultiWriter(rows, out))
 	balance := "default"
-	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" || c.Suite == "fairness" {
+	if c.Suite == "capacity" || c.Suite == "overhead" || c.Suite == "isolation" || c.Suite == "buckets" ||
+		c.Suite == "fairness" {
 		balance = "exact"
 	}
 	env := map[string]any{
@@ -182,6 +183,17 @@ func runCase(
 	if err != nil {
 		return nil, err
 	}
+	var reloadPath string
+	if c.Reload {
+		reloadPath, err = filepath.Abs(filepath.Join(root, "bandwidth-ecds.json"))
+		if err != nil {
+			return nil, err
+		}
+		data, err = discoverBandwidth(data, reloadPath)
+		if err != nil {
+			return nil, err
+		}
+	}
 	path, err := filepath.Abs(filepath.Join(root, "envoy.json"))
 	if err != nil {
 		return nil, err
@@ -244,7 +256,10 @@ func runCase(
 		c.Load,
 		fmt.Sprintf("-streams=%d", s.Streams),
 		"-direction="+s.Direction,
-		fmt.Sprintf("-distinct=%t", s.Mode == "distinct"),
+		fmt.Sprintf(
+			"-distinct=%t",
+			s.Mode == "distinct" || s.Mode == "distinct-high" || s.Mode == "combined" || s.Mode == "concurrency",
+		),
 		fmt.Sprintf("-fast-stream=%t", s.Mode == "isolation"),
 		"-duration="+c.Duration.String(),
 		"-warmup="+c.Warmup.String(),
@@ -264,6 +279,9 @@ func runCase(
 			fmt.Sprintf("-resident-buckets=%d", c.ResidentBuckets), "-resident-mode="+c.ResidentMode,
 			fmt.Sprintf("-debt-bytes=%d", c.DebtBytes), "-recovery-wait="+c.RecoveryWait.String(),
 			fmt.Sprintf("-admin=127.0.0.1:%d", c.BasePort+1), "-setup-timeout=5m")
+	}
+	if c.Reload {
+		cmd.Args = append(cmd.Args, "-reload-path="+reloadPath)
 	}
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
 	loadLog, err := os.Create(filepath.Join(root, "load.log"))

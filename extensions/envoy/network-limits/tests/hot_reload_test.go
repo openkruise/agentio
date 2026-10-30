@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -90,16 +92,26 @@ func TestEnvoyECDSBandwidthExistingStream(t *testing.T) {
 }
 
 func TestEnvoyECDSIdleCensus(t *testing.T) {
+	count := 512
+	if value := os.Getenv("AGENTIO_TEST_IDLE_STREAMS"); value != "" {
+		var err error
+		count, err = strconv.Atoi(value)
+		must(t, err)
+		if count <= 0 {
+			t.Fatal("AGENTIO_TEST_IDLE_STREAMS must be positive")
+		}
+	}
 	origin := startOrigin(t, false)
 	r := startEnvoyConfig(t, origin.port(), freePort(t), func(l object) {
 		concurrencyConfig(t, l, false)
 		policy(filters(l)[1])["enabled"] = false
+		policy(filters(l)[1])["max_dynamic_buckets"] = count + 1024
 	}, true)
-	const count = 512
 	streams := make([]*stream, 0, count)
-	for range 8 {
+	perConnection := min(512, (count+7)/8)
+	for len(streams) < count {
 		client := newClient(t, r.port)
-		for range count / 8 {
+		for range min(perConnection, count-len(streams)) {
 			streams = append(streams, client.open(t, "test", fmt.Sprintf("sandbox-%d", len(streams)), "plain:80", 200))
 		}
 	}
@@ -120,6 +132,32 @@ func TestEnvoyECDSIdleCensus(t *testing.T) {
 	client := newClient(t, r.port)
 	client.open(t, "test", "new", "plain:80", 429).close()
 	t.Logf("enabled quota over %d idle streams in %s (ECDS observation plus admission)", count, time.Since(started))
+	shared := clone(t, policy(r.extensions["agentio.connect_concurrency"]))
+	started = time.Now()
+	r.reloadECDS(t, "agentio.connect_concurrency", func(p object) {
+		p["rate_limits"] = []any{object{
+			"actions": []any{object{"filter_state": object{"key": "sandbox.id", "descriptor_key": "sandbox"}}},
+		}}
+		p["descriptors"] = []any{object{
+			"entries":                []any{object{"key": "sandbox"}},
+			"max_concurrent_streams": 1,
+		}}
+	}, false)
+	client.open(t, "test", "sandbox-0", "plain:80", 429).close()
+	t.Logf(
+		"regrouped %d idle streams into distinct buckets in %s (ECDS observation plus admission)",
+		count,
+		time.Since(started),
+	)
+	finish(t, client.open(t, "test", "fresh-key", "plain:80", 200))
+	started = time.Now()
+	r.reloadECDS(t, "agentio.connect_concurrency", func(p object) { maps.Copy(p, shared) }, false)
+	client.open(t, "test", "new", "plain:80", 429).close()
+	t.Logf(
+		"merged %d idle streams into shared quota in %s (ECDS observation plus admission)",
+		count,
+		time.Since(started),
+	)
 	for _, s := range streams {
 		s.close()
 	}

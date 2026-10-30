@@ -240,6 +240,10 @@ func (t *transfers) measure() (map[string]any, error) {
 	}
 	peakRSS := startCPU[0].RSS
 	started := time.Now()
+	var updates <-chan reloadResult
+	if c.ReloadPath != "" {
+		updates = startReloads(t.ctx, c)
+	}
 	var progress *progressWindow
 	if c.ProgressInterval > 0 {
 		progress = newProgressWindow(before, started)
@@ -303,6 +307,13 @@ func (t *transfers) measure() (map[string]any, error) {
 		result["stream_max_idle_ms"] = gaps
 		result["max_idle_ms"] = slices.Max(gaps)
 		result["progress_interval_ms"] = float64(c.ProgressInterval) / float64(time.Millisecond)
+	}
+	if updates != nil {
+		u := <-updates
+		if u.err != nil {
+			return nil, u.err
+		}
+		result["reloads"] = u.rows
 	}
 	if c.FastStream {
 		result["fast_mib_per_s"] = fastRate
