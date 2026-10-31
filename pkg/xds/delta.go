@@ -37,6 +37,9 @@ var pushOrder = []string{
 	model.ClusterType,
 	model.EndpointType,
 	model.ListenerType,
+	// Publish policies before routes enable their filter slots. Worker adoption
+	// is asynchronous; callers must still allow for convergence across types.
+	model.ExtensionConfigurationType,
 	model.RouteType,
 	model.SecretType,
 	model.AddressType,
@@ -44,7 +47,6 @@ var pushOrder = []string{
 	model.WorkloadAuthorizationType,
 	model.TrafficPolicyType,
 	model.SandboxType,
-	model.ExtensionConfigurationType,
 	model.ProxyConfigType,
 }
 

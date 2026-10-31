@@ -108,7 +108,8 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 	defer func() { result = errors.Join(result, rows.Close()) }()
 	encoder := json.NewEncoder(io.MultiWriter(rows, out))
 	balance := "default"
-	if c.Suite == "capacity" || c.Suite == "isolation" || c.Suite == "buckets" {
+	if c.Suite == "capacity" || c.Suite == "overhead" || c.Suite == "isolation" || c.Suite == "buckets" ||
+		c.Suite == "fairness" {
 		balance = "exact"
 	}
 	env := map[string]any{
@@ -118,14 +119,17 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 		"envoy": strings.TrimSpace(
 			string(version),
 		),
-		"cpu_model":          model,
-		"warmup_seconds":     c.Warmup.Seconds(),
-		"measurement":        c.Duration.String(),
-		"connection_balance": balance,
-		"suite":              c.Suite,
-		"concurrency_limit":  c.ConcurrencyLimit,
-		"ticks":              ticks,
-		"module":             c.Module,
+		"cpu_model":               model,
+		"warmup_seconds":          c.Warmup.Seconds(),
+		"measurement":             c.Duration.String(),
+		"connection_balance":      balance,
+		"connections":             c.Connections,
+		"suite":                   c.Suite,
+		"concurrency_limit":       c.ConcurrencyLimit,
+		"ticks":                   ticks,
+		"module":                  c.Module,
+		"shared_bytes_per_second": c.SharedRate,
+		"progress_interval":       c.ProgressInterval.String(),
 	}
 	if c.Suite == "buckets" {
 		env["resident_buckets"], env["resident_mode"] = c.ResidentBuckets, c.ResidentMode
@@ -179,6 +183,17 @@ func runCase(
 	data, err := envoyConfig(c, s)
 	if err != nil {
 		return nil, err
+	}
+	var reloadPath string
+	if c.Reload {
+		reloadPath, err = filepath.Abs(filepath.Join(root, "bandwidth-ecds.json"))
+		if err != nil {
+			return nil, err
+		}
+		data, err = discoverBandwidth(data, reloadPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 	path, err := filepath.Abs(filepath.Join(root, "envoy.json"))
 	if err != nil {
@@ -241,11 +256,16 @@ func runCase(
 		cpus[2:6],
 		c.Load,
 		fmt.Sprintf("-streams=%d", s.Streams),
+		fmt.Sprintf("-connections=%d", c.Connections),
 		"-direction="+s.Direction,
-		fmt.Sprintf("-distinct=%t", s.Mode == "distinct"),
+		fmt.Sprintf(
+			"-distinct=%t",
+			s.Mode == "distinct" || s.Mode == "distinct-high" || s.Mode == "combined" || s.Mode == "concurrency",
+		),
 		fmt.Sprintf("-fast-stream=%t", s.Mode == "isolation"),
 		"-duration="+c.Duration.String(),
 		"-warmup="+c.Warmup.String(),
+		"-progress-interval="+c.ProgressInterval.String(),
 		"-target="+target,
 		"-stats="+statsAddr,
 		fmt.Sprintf(
@@ -261,6 +281,9 @@ func runCase(
 			fmt.Sprintf("-resident-buckets=%d", c.ResidentBuckets), "-resident-mode="+c.ResidentMode,
 			fmt.Sprintf("-debt-bytes=%d", c.DebtBytes), "-recovery-wait="+c.RecoveryWait.String(),
 			fmt.Sprintf("-admin=127.0.0.1:%d", c.BasePort+1), "-setup-timeout=5m")
+	}
+	if c.Reload {
+		cmd.Args = append(cmd.Args, "-reload-path="+reloadPath)
 	}
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
 	loadLog, err := os.Create(filepath.Join(root, "load.log"))
@@ -279,7 +302,7 @@ func runCase(
 	if err := json.Unmarshal(output, &row); err != nil {
 		return nil, err
 	}
-	if row["errors"] != float64(0) || row["h2_connections"] != float64(min(s.Streams, 4)) {
+	if row["errors"] != float64(0) || row["h2_connections"] != float64(min(s.Streams, c.Connections)) {
 		return nil, fmt.Errorf("invalid measurement: %s", output)
 	}
 	return row, nil

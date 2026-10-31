@@ -1029,6 +1029,32 @@
                       }
                     },
                     {
+                      "name": "agentio.connect_concurrency",
+                      "disabled": true,
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+                        ]
+                      }
+                    },
+                    {
+                      "name": "agentio.bandwidth",
+                      "disabled": true,
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+                        ]
+                      }
+                    },
+                    {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"

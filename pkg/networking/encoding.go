@@ -20,6 +20,7 @@ import (
 	"github.com/openkruise/agentio/pkg/util/protoutil"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	"google.golang.org/protobuf/proto"
@@ -33,6 +34,7 @@ import (
 // failure; the entry points discard the entire result if any extension failed.
 type resourceBuilder struct {
 	legacyGateway bool
+	extensions    []*corev3.TypedExtensionConfig
 	err           error
 }
 

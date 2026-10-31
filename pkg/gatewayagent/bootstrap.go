@@ -34,6 +34,9 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// shortcut: Envoy 1.40 internal-socket RST drops TLS CONNECT response bytes;
+// restore its default once the internal CONNECT close regression passes with RST enabled.
+//
 //go:embed envoy_bootstrap.json.tmpl
 var bootstrapTemplate string
 

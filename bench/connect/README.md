@@ -48,8 +48,10 @@ The default run uses three repeats, two seconds of warmup and six seconds of mea
 | --- | ---: | --- |
 | `bandwidth` | 19 | Download 1/32/256 streams: baseline, bypass, high, shared, distinct; upload 32 streams: all except bypass. |
 | `capacity` | 11 | Unbounded baseline/bypass/high cases with exact worker connection balancing. |
+| `overhead` | 35 | Download at 1/32/256/1024 streams and upload at 32 streams, comparing seven unbounded filter configurations. |
 | `isolation` | 3 | One fast sandbox beside 0/32/256 noisy streams; exact worker connection balancing. |
 | `pilot` | 4 | 32-stream download: baseline, high, shared, distinct. |
+| `fairness` | 7 | Shared download/upload at 1/8/32 streams, plus 32 noisy streams beside one fast sandbox. |
 | `buckets` | 1 | Populate background buckets, probe 5,000 CONNECT open/close cycles, then measure 32-stream download. |
 
 Modes:
@@ -61,9 +63,28 @@ Modes:
 - `distinct`: each stream has its own budget; configured rates total 32 MiB/s.
 - `isolation`: noisy streams share 32 MiB/s; the last stream has a distinct 1 TiB/s download budget.
 
+The `overhead` suite adds `disabled` (both bandwidth and concurrency filters resident with module policy `enabled: false`), `route-disabled` (the same policies, plus HCM `disabled: true` and no route override, so Envoy skips creating their stream instances), `concurrency` (only a nonbinding per-sandbox concurrency filter), `distinct-high` (one nonbinding bandwidth bucket per stream), and `combined` (both nonbinding limits, with one sandbox per stream). It also runs `baseline` and shared `high`. These overhead cases use static filter and route configuration; they measure stream processing costs, not ECDS/RDS delivery or update costs. A 1 TiB/s byte budget and a 100000-stream concurrency cap avoid intentional throttling. The suite rejects `-concurrency-limit` because it selects filter placement itself. Native connection-rate limiting is absent. For example:
+
+```sh
+connect-bench run -suite=overhead -repeats=3 -warmup=2s -duration=8s -output=/results/overhead
+```
+
+Use `-case=combined/1024/D` to select one case from a suite, retaining `-repeats`. Set `-connections=128` to spread those streams across more outer HTTP/2 connections (default 4, capped by the stream count). For example:
+
+```sh
+connect-bench run -suite=overhead -case=combined/1024/D -connections=128 \
+  -repeats=3 -warmup=2s -duration=8s -output=/results/combined-1024-c128
+```
+
+Compare `-case=route-disabled/1024/D` with `-case=baseline/1024/D` and `-case=disabled/1024/D`, each in its own output directory, to measure the native creation gate against omitted filters and resident disabled instances.
+
+Keep outer connection counts identical between compared versions. With many streams on a small number of connections, connection-level watermark broadcasts can dominate Envoy CPU; the fixture's 32 KiB listener write watermark makes this especially visible. Include both a fixed-connection stress case and a case with fewer streams per connection before extrapolating capacity. `connections` in the environment row records the requested maximum, while `h2_connections` records actual connections.
+
+Compare throughput medians and individual ranges against the same stream count/direction in `baseline`. CPU seconds per GiB, calculated as `envoy_cpu_cores * 1024 / mib_per_s`, helps compare processing costs when both workers are saturated. These are whole-Envoy costs, including FFI callbacks and shared-budget bookkeeping. They do not isolate the incremental cost of one implementation change.
+
 For concurrency-filter overhead, run the same suite twice with and without `-concurrency-limit=1024`, each into its own output directory. A positive value installs the independent concurrency filter in **every case, including baseline**. Choose a nonbinding limit for overhead comparisons: rejected CONNECTs fail the benchmark rather than count as successful throughput. This option does not implement a rejection/churn load scenario. Native CONNECT creation-rate limiting is not installed by these suites.
 
-Other runner flags: `-envoy`, `-load`, `-module`, and `-base-port`. These allow different compatible binaries and port ranges without changing source. `connect-load -h` documents standalone generator arguments, including outer connection count, target address, origin counters and setup timeout. All suites use two Envoy workers; the original suites use at most four HTTP/2 connections, while `buckets` adds a separate background connection pool.
+Other runner flags: `-envoy`, `-load`, `-module`, and `-base-port`. These allow different compatible binaries and port ranges without changing source. `connect-load -h` documents standalone generator arguments, including outer connection count, target address, origin counters and setup timeout. All suites use two Envoy workers and default to at most four HTTP/2 connections; `buckets` adds a separate background connection pool.
 
 ### Large bucket populations
 
@@ -96,6 +117,10 @@ Record this setting and apply it equally to both compared versions. It changes t
 
 `-debt-bytes` defaults to 1024 (1024 seconds at the fixture's rate), accepts 4–16384, and fails the case if the earliest seeded debt could expire before the probes finish. `-recovery-wait` adds a quiet period after releasing streams, sampling Envoy CPU and RSS once per second without sending new CONNECT requests. For an expiry observation, use a smaller seed and a wait longer than its lifetime, for example `-debt-bytes=128 -recovery-wait=140s`. No module bucket-count gauge is exposed: debt population is established by successful seed acknowledgements and elapsed time, while recovery samples measure resource usage rather than an exact live-bucket count.
 
+Add `-reload` to the bucket suite to use a file-backed bandwidth ECDS resource. During the throughput window, it changes the nonbinding download rate (`rate`), doubles every resident bucket's upload rate from 1 to 2 bytes/s (`resident_rate`), then reverses the action/descriptor key order to trigger stream rebinding (`grouping`). This measures both updates that leave resident deadlines unchanged and updates that rescale all resident debt. Use a measurement window long enough for all three updates (for example 15 seconds), and `-progress-interval=100ms` to record receive stalls. Debt runs with reload require population, probes and measurement to finish within half the seed lifetime, conservatively ensuring no seeded bucket expires at the faster rate; increase `-debt-bytes` for large populations. The `reloads` array reports `ecds_observed_ms` from atomic file replacement until the admin update-success counter advances, polled at 1 ms intervals. This includes discovery and observation latency; it does not prove every worker has finished migration. The sampled idle interval covers the whole measurement window and does not attribute every stall to a configuration update. RSS for active populations includes their live TCP/HTTP streams, not just buckets. Historical runs before `resident_rate` was added contain only the other two updates.
+
+For a separate functional concurrency census at larger scales, compile the [real-Envoy tests](../../extensions/envoy/network-limits/tests) and run `TestEnvoyECDSIdleCensus` with `AGENTIO_TEST_IDLE_STREAMS=1000` or `10000`. This checks admission after all pre-existing idle streams have been counted, after splitting them into distinct sandbox buckets, after merging them into a shared quota, and after close. Its timing includes ECDS observation and a new admission check, not configuration parsing alone.
+
 Additional result fields include `population` and `admission` scheduler summaries, Envoy CPU seconds for each phase, `rss_empty_mib`, `rss_populated_mib`, `rss_released_mib`, `release_ms`, and the quiet `recovery` samples. Compare the same counts and modes across module versions, repeat runs, and retain the individual samples; allocator retention means RSS after closure need not return to its empty-table value.
 
 For Kubernetes, use the same image and command in a `restartPolicy: Never` Pod with a writable output volume and enough unquotaed CPU availability. Retain logs and output before removing its disposable namespace. The runner manages its child processes, not cluster resources; follow the existing bench convention of an explicit kubeconfig/context for deployment and cleanup.
@@ -121,7 +146,7 @@ Download bytes are counted at the client; upload bytes at the origin. Process CP
 
 `connect_p50_ms` and `connect_p95_ms` now use the shared Go scheduler's latency/quantile convention and describe establishment, not application latency. Environment rows have `schema_version: 2`. Historical JSONL from the previous Python runner is kept outside the repository along with other run artifacts. Byte-rate/CPU/RSS field units are retained, but the Go seeded shuffle and setup percentile calculation are not identical to that runner. The analyzer also reads those historical rows.
 
-These short synthetic tests do not establish real-NIC capacity, outer mTLS overhead, long-term memory stability, connection churn, production identity costs, or multi-replica quota behavior. Shared bandwidth budgets still do not promise scheduling fairness.
+These short synthetic tests do not establish real-NIC capacity, outer mTLS overhead, long-term memory stability, connection churn, production identity costs, or multi-replica quota behavior. The module rotates waiting batches in FIFO order. This does not establish equal byte shares when batch sizes differ or minimum-bandwidth guarantees.
 
 Generated output is intentionally not versioned. Preserve the external output directory when sharing a run; the source tree contains only tools, input fixtures, tests and documentation.
 
@@ -132,3 +157,16 @@ go test -race ./bench/load ./bench/connect/...
 ```
 
 Unit tests cover scenario counts, configuration variants, CPU/stat parsing, upload counting, historical-result analysis, and tunnel survival after the shared setup scheduler finishes. Validate actual binaries with `pilot` on Linux; use `capacity` for both upload and download and `isolation` for mixed tenants.
+
+## Shared-bucket progress
+
+Use the same suite at normal and low rates; it uses no burst allowance. For example:
+
+```sh
+connect-bench run -suite=fairness -bytes-per-second=1048576 \
+  -progress-interval=100ms -repeats=1 -warmup=4s -duration=30s -output=/results/fairness
+```
+
+`-bytes-per-second` changes the shared rate (default 32 MiB/s); distinct mode divides it across streams. `-progress-interval` is optional and disabled by default so existing capacity runs do not incur extra counter requests. Upload progress is measured at the TCP origin, download progress at the client. JSON rows include `stream_max_idle_ms` in stream order and `max_idle_ms`; both include the beginning/end of the measurement window, even if a stream never advances. These are sampled intervals, with resolution limited by the polling interval and the 100 ms resource-sampling loop, not packet-level timestamps. In isolation mode the last stream is the fast sandbox.
+
+Check these intervals together with per-stream minimum throughput, aggregate rate, errors and CPU/RSS. A correct aggregate rate alone does not demonstrate absence of starvation. The finite-transfer regression tests separately verify payload content; the benchmark's infinite streams measure sustained throughput and progress rather than file integrity. `-upstream-connect-timeout` defaults to 1s; use 5s for SYN-loss experiments, where the TCP retransmission timer can exceed 1s. A CONNECT setup 503 fails the run rather than being silently retried. Run network-fault injection only in a disposable test namespace/container and retain its settings with the external results.

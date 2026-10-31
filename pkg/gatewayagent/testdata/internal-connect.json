@@ -1,0 +1,29 @@
+{
+  "clusters": [
+    {"name":"internal","type":"STATIC","connect_timeout":"1s",
+     "load_assignment":{"cluster_name":"internal","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"envoy_internal_address":{"server_listener_name":"internal"}}}}]}]},
+     "transport_socket":{"name":"envoy.transport_sockets.internal_upstream","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport","transport_socket":{"name":"envoy.transport_sockets.raw_buffer","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer"}}}}},
+    {"name":"forward","type":"STATIC","connect_timeout":"1s",
+     "load_assignment":{"cluster_name":"forward","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"envoy_internal_address":{"server_listener_name":"forward"}}}}]}]},
+     "transport_socket":{"name":"envoy.transport_sockets.internal_upstream","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport","transport_socket":{"name":"envoy.transport_sockets.raw_buffer","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer"}}}}},
+    {"name":"origin","type":"STATIC","connect_timeout":"1s",
+     "load_assignment":{"cluster_name":"origin","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"127.0.0.1","port_value":0}}}}]}]}}
+  ],
+  "listeners": [
+    {"name":"front","address":{"socket_address":{"address":"127.0.0.1","port_value":0}},"filter_chains":[{"filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{
+      "@type":"type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+      "stat_prefix":"front","http2_protocol_options":{"allow_connect":true},"upgrade_configs":[{"upgrade_type":"CONNECT"}],
+      "route_config":{"name":"front","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"connect_matcher":{}},"route":{"cluster":"internal","timeout":"0s","upgrade_configs":[{"upgrade_type":"CONNECT","connect_config":{}}]}}]}]},
+      "http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]
+    }}]}]},
+    {"name":"internal","internal_listener":{},"filter_chains":[{
+      "transport_socket":{"name":"envoy.transport_sockets.tls","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext","common_tls_context":{"tls_certificates":[{"certificate_chain":{"inline_string":""},"private_key":{"inline_string":""}}]}}},
+      "filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"bridge","cluster":"forward"}}]
+    }]},
+    {"name":"forward","internal_listener":{},"filter_chains":[{"filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{
+      "@type":"type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager","stat_prefix":"forward",
+      "route_config":{"name":"forward","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"prefix":"/"},"route":{"cluster":"origin"}}]}]},
+      "http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]
+    }}]}]}
+  ]
+}

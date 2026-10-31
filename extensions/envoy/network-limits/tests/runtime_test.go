@@ -180,6 +180,18 @@ func (o *origin) serve(c net.Conn) {
 		if _, err = io.ReadFull(r, data); err == nil && bytes.Equal(data, payload(n)) {
 			_, _ = c.Write([]byte("OK"))
 		}
+	case "P":
+		for n > 0 {
+			buf := make([]byte, min(n, 16384))
+			if _, err = io.ReadFull(r, buf); err != nil || !bytes.Equal(buf, payload(len(buf))) {
+				return
+			}
+			if _, err = c.Write([]byte("p")); err != nil {
+				return
+			}
+			n -= len(buf)
+		}
+		_, _ = c.Write([]byte("OK"))
 	case "D":
 		_, _ = c.Write(payload(n))
 	case "E":
@@ -210,11 +222,14 @@ func (o *origin) serve(c net.Conn) {
 }
 
 type runtime struct {
-	port     int
-	admin    int
-	cmd      *exec.Cmd
-	listener object
-	lds      string
+	port       int
+	admin      int
+	cmd        *exec.Cmd
+	listener   object
+	lds        string
+	routes     object
+	rds        string
+	extensions map[string]object
 }
 
 func filters(listener object) []any {
@@ -245,10 +260,42 @@ func writeJSON(t *testing.T, path string, v any) {
 }
 func (r *runtime) writeLDS(t *testing.T, listener object) {
 	v := clone(t, listener)
+	if r.routes != nil {
+		chain := obj(v["filter_chains"].([]any)[0])
+		hcm := nested(chain["filters"].([]any)[0], "typed_config")
+		delete(hcm, "route_config")
+		hcm["rds"] = object{
+			"route_config_name": r.routes["name"],
+			"config_source": object{
+				"resource_api_version": "V3",
+				"path_config_source":   object{"path": r.rds},
+			},
+		}
+	}
+	if r.extensions != nil {
+		for _, f := range filters(v) {
+			name := obj(f)["name"].(string)
+			if _, ok := r.extensions[name]; ok {
+				delete(obj(f), "typed_config")
+				obj(f)["config_discovery"] = object{
+					"config_source": object{
+						"resource_api_version": "V3",
+						"path_config_source":   object{"path": filepath.Join(filepath.Dir(r.lds), name+".json")},
+					},
+					"type_urls": []any{
+						"type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
+					},
+				}
+			}
+		}
+	}
 	v["@type"] = "type.googleapis.com/envoy.config.listener.v3.Listener"
 	writeJSON(t, r.lds, object{"version_info": strconv.FormatInt(time.Now().UnixNano(), 10), "resources": []any{v}})
 }
 func startEnvoy(t *testing.T, plain, tlsPort int, edit func(object)) *runtime {
+	return startEnvoyConfig(t, plain, tlsPort, edit, false)
+}
+func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds bool) *runtime {
 	t.Helper()
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
@@ -268,6 +315,12 @@ func startEnvoy(t *testing.T, plain, tlsPort int, edit func(object)) *runtime {
 	r.listener["connection_balance_config"] = object{"exact_balance": object{}}
 	for _, v := range resources["clusters"].([]any) {
 		cluster := obj(v)
+		// Keep the upstream pool from imposing a separate ceiling on scale tests.
+		cluster["circuit_breakers"] = object{"thresholds": []any{
+			object{"max_connections": 100000, "max_requests": 100000},
+		}}
+		// Allow a TCP SYN retransmission when this fixture runs under external netem.
+		cluster["connect_timeout"] = "5s"
 		port := plain
 		if cluster["name"] == "tls" {
 			port = tlsPort
@@ -280,6 +333,20 @@ func startEnvoy(t *testing.T, plain, tlsPort int, edit func(object)) *runtime {
 	moduleConfig["filename"] = module
 	if edit != nil {
 		edit(r.listener)
+	}
+	if ecds {
+		chain := obj(r.listener["filter_chains"].([]any)[0])
+		r.routes = clone(t, nested(chain["filters"].([]any)[0], "typed_config", "route_config"))
+		r.rds = filepath.Join(filepath.Dir(r.lds), "rds.json")
+		r.writeRDS(t, r.routes)
+		r.extensions = make(map[string]object)
+		for _, f := range filters(r.listener) {
+			name := obj(f)["name"].(string)
+			if name == "agentio.bandwidth" || name == "agentio.connect_concurrency" {
+				r.extensions[name] = clone(t, obj(f))
+				r.writeECDS(t, name, r.extensions[name])
+			}
+		}
 	}
 	delete(resources, "listeners")
 	b["node"] = object{"id": "network-limits-test", "cluster": "network-limits-test"}
@@ -330,10 +397,13 @@ func startEnvoy(t *testing.T, plain, tlsPort int, edit func(object)) *runtime {
 	return r
 }
 func (r *runtime) counter(t *testing.T, name string) int {
+	return r.stat(t, "listener_manager.lds."+name)
+}
+func (r *runtime) stat(t *testing.T, name string) int {
 	t.Helper()
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(
-		fmt.Sprintf("http://127.0.0.1:%d/stats?format=json&filter=listener_manager.lds.%s", r.admin, name),
+		fmt.Sprintf("http://127.0.0.1:%d/stats?format=json&filter=%s", r.admin, name),
 	)
 	must(t, err)
 	defer closeTest(t, resp.Body)
@@ -474,4 +544,73 @@ func tunnel(t *testing.T, port int, sandbox string, encrypted bool) net.Conn {
 		c = tls.Client(c, &tls.Config{InsecureSkipVerify: true})
 	} // Test-only local certificate.
 	return c
+}
+
+func (r *runtime) writeECDS(t *testing.T, name string, filter object) {
+	resource := object{
+		"@type":        "type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig",
+		"name":         name,
+		"typed_config": filter["typed_config"],
+	}
+	writeJSON(
+		t,
+		filepath.Join(filepath.Dir(r.lds), name+".json"),
+		object{"version_info": strconv.FormatInt(time.Now().UnixNano(), 10), "resources": []any{resource}},
+	)
+}
+func (r *runtime) reloadECDS(t *testing.T, name string, edit func(object), reject bool) {
+	t.Helper()
+	filter := clone(t, r.extensions[name])
+	edit(policy(filter))
+	if reject {
+		nested(filter, "typed_config", "value")["filter_name"] = "unknown-filter"
+	}
+	stat := "extension_config_discovery.*update_success"
+	if reject {
+		stat = "extension_config_discovery.*config_fail"
+	}
+	before := r.stat(t, stat)
+	r.writeECDS(t, name, filter)
+	eventually(t, func() bool { return r.stat(t, stat) > before })
+	if !reject {
+		r.extensions[name] = filter
+	}
+}
+
+func (r *runtime) writeRDS(t *testing.T, routes object) {
+	t.Helper()
+	resource := clone(t, routes)
+	resource["@type"] = "type.googleapis.com/envoy.config.route.v3.RouteConfiguration"
+	writeJSON(t, r.rds, object{
+		"version_info": strconv.FormatInt(time.Now().UnixNano(), 10),
+		"resources":    []any{resource},
+	})
+}
+
+func (r *runtime) routeGate(t *testing.T, name string, enabled bool) {
+	t.Helper()
+	routes := clone(t, r.routes)
+	for _, host := range routes["virtual_hosts"].([]any) {
+		for _, value := range obj(host)["routes"].([]any) {
+			route := obj(value)
+			configs, ok := route["typed_per_filter_config"].(map[string]any)
+			if !ok {
+				configs = object{}
+				route["typed_per_filter_config"] = configs
+			}
+			if enabled {
+				// Empty Any presence enables the HCM slot without a module-specific route config.
+				configs[name] = object{
+					"@type":  "type.googleapis.com/envoy.config.route.v3.FilterConfig",
+					"config": object{},
+				}
+			} else {
+				delete(configs, name)
+			}
+		}
+	}
+	before := r.stat(t, "rds.*update_success")
+	r.writeRDS(t, routes)
+	eventually(t, func() bool { return r.stat(t, "rds.*update_success") > before })
+	r.routes = routes
 }

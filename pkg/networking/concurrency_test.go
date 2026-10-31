@@ -18,8 +18,11 @@ import (
 	"testing"
 
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -57,13 +60,13 @@ func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
 		}
 		found = true
 		if hcm.HttpFilters[i-1].Name != "envoy.filters.http.local_ratelimit" ||
-			hcm.HttpFilters[i+1].Name != "envoy.filters.http.router" {
+			hcm.HttpFilters[i+1].Name != bandwidthFilterName {
 			t.Fatal(hcm.HttpFilters)
 		}
-		typed := new(udpatypev1.TypedStruct)
-		if err := filter.GetTypedConfig().UnmarshalTo(typed); err != nil {
-			t.Fatal(err)
+		if filter.GetConfigDiscovery() == nil {
+			t.Fatal("expected ECDS")
 		}
+		typed := networkLimitExtension(t, resources, filter.Name)
 		if typed.Value.Fields["filter_name"].GetStringValue() != "envoy_agentio_connect_concurrency" {
 			t.Fatal(typed)
 		}
@@ -71,7 +74,8 @@ func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
 			t.Fatal(typed)
 		}
 	}
-	if !found || hasHTTPFilter(hcm, bandwidthFilterName) {
+	if !found ||
+		modulePolicy(networkLimitExtension(t, resources, bandwidthFilterName)).Fields["enabled"].GetBoolValue() {
 		t.Fatal("concurrency must work without bandwidth")
 	}
 	for _, upgrade := range hcm.UpgradeConfigs {
@@ -99,7 +103,31 @@ func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
 		model.ListenerType,
 		func() *listenerv3.Listener { return new(listenerv3.Listener) },
 	)
-	if hasHTTPFilter(findHCM(t, listeners[ConnectTerminate]), concurrencyFilterName) {
-		t.Fatal("removed concurrency filter still present")
+	if !proto.Equal(hcm, findHCM(t, listeners[ConnectTerminate])) {
+		t.Fatal("policy removal changed the listener")
 	}
+	if modulePolicy(networkLimitExtension(t, resources, concurrencyFilterName)).Fields["enabled"].GetBoolValue() {
+		t.Fatal("removed policy still enabled")
+	}
+}
+
+func networkLimitExtension(t *testing.T, resources []model.Resource, name string) *udpatypev1.TypedStruct {
+	t.Helper()
+	extensions := messagesOf(
+		t,
+		resources,
+		model.ExtensionConfigurationType,
+		func() *corev3.TypedExtensionConfig { return new(corev3.TypedExtensionConfig) },
+	)
+	typed := new(udpatypev1.TypedStruct)
+	if extensions[name] == nil {
+		t.Fatalf("missing ECDS resource %s", name)
+	}
+	if err := extensions[name].TypedConfig.UnmarshalTo(typed); err != nil {
+		t.Fatal(err)
+	}
+	return typed
+}
+func modulePolicy(typed *udpatypev1.TypedStruct) *structpb.Struct {
+	return typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue()
 }

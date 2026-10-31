@@ -9,7 +9,10 @@
   "deferred_stat_options": {"enable_deferred_creation_stats": true},
   "cluster_manager": {"enable_deferred_cluster_creation": true},
   "layered_runtime": {"layers": [
-    {"name": "agentio", "static_layer": {"re2.max_program_size.error_level": 32768}},
+    {"name": "agentio", "static_layer": {
+      "re2.max_program_size.error_level": 32768,
+      "envoy.reloadable_features.enable_send_rst_on_user_space_socket": false
+    }},
     {"name": "admin", "admin_layer": {}}
   ]},
   "stats_config": {"stats_tags": [{"tag_name": "response_code", "regex": "^agentio_gateway[.](?:istio_requests_total)([.]response_code[.]([0-9]+))$"}]},

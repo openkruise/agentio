@@ -12,7 +12,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust" }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+
+[dev-dependencies]
+envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust", features = ["mock"] }
 
 [workspace]

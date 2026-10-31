@@ -80,6 +80,20 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 			},
 		}},
 	}
+	// An empty, present config enables a default-disabled HTTP filter without
+	// requiring filter-specific per-route configuration. Only TCP CONNECT uses it.
+	tcp := connect.VirtualHosts[0].Routes[0]
+	for name, enabled := range map[string]bool{
+		bandwidthFilterName:   gateway.GetBandwidthLimit() != nil,
+		concurrencyFilterName: gateway.GetConnectConcurrencyLimit() != nil,
+	} {
+		if enabled {
+			if tcp.TypedPerFilterConfig == nil {
+				tcp.TypedPerFilterConfig = make(map[string]*anypb.Any)
+			}
+			tcp.TypedPerFilterConfig[name] = b.pack(&routev3.FilterConfig{Config: &anypb.Any{}})
+		}
+	}
 	if features.EnableUDPProxy {
 		vhost := connect.VirtualHosts[0]
 		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)

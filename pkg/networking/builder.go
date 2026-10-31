@@ -139,7 +139,7 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	var extensionConfigurations []*corev3.TypedExtensionConfig
+	extensionConfigurations := b.extensions
 	if len(inputs.GatewayPatches) > 0 {
 		patches := envoyfilterpatch.NewPatchSet(inputs.GatewayPatches)
 		clusters, err = envoyfilterpatch.ApplyClusters(patches, clusters)
@@ -154,7 +154,7 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 		if err != nil {
 			return nil, fmt.Errorf("apply EnvoyFilter route patches: %w", err)
 		}
-		extensionConfigurations, err = envoyfilterpatch.ApplyExtensionConfigurations(patches, nil)
+		extensionConfigurations, err = envoyfilterpatch.ApplyExtensionConfigurations(patches, extensionConfigurations)
 		if err != nil {
 			return nil, fmt.Errorf("apply EnvoyFilter extension patches: %w", err)
 		}

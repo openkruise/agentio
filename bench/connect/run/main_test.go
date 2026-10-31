@@ -23,10 +23,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
-	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "isolation": 9, "pilot": 12, "buckets": 3} {
+	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 105, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
 		c := config{Suite: suite, Repeats: 3}
 		cases := schedule(c)
 		if len(cases) != want || !reflect.DeepEqual(cases, schedule(c)) {
@@ -42,8 +43,124 @@ func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
 	}
 }
 
+func TestSingleCaseRetainsRepeatsAndConnectionTopology(t *testing.T) {
+	c, err := parseConfig([]string{
+		"-output=x", "-suite=overhead", "-case=combined/1024/D", "-connections=128", "-repeats=3",
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := schedule(c)
+	if len(cases) != 3 || c.Connections != 128 {
+		t.Fatalf("unexpected cases/topology: %+v %+v", c, cases)
+	}
+	for _, s := range cases {
+		if s.Mode != "combined" || s.Streams != 1024 || s.Direction != "D" {
+			t.Fatalf("unexpected selected case: %+v", s)
+		}
+	}
+	for _, args := range [][]string{
+		{"-output=x", "-connections=0"},
+		{"-output=x", "-suite=overhead", "-case=combined/1024/U"},
+	} {
+		if _, err := parseConfig(args, io.Discard); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
+func TestOverheadModes(t *testing.T) {
+	for _, mode := range []string{"baseline", "disabled", "route-disabled", "concurrency", "high", "distinct-high", "combined"} {
+		data, err := envoyConfig(
+			config{Suite: "overhead", BasePort: 19000, ConnectTimeout: time.Second},
+			scenario{Mode: mode, Streams: 1024},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b map[string]any
+		if err := json.Unmarshal(data, &b); err != nil {
+			t.Fatal(err)
+		}
+		l := object(object(b["static_resources"])["listeners"].([]any)[0])
+		hcm := object(object(object(l["filter_chains"].([]any)[0])["filters"].([]any)[0])["typed_config"])
+		seen := map[string]bool{}
+		disabled := mode == "disabled" || mode == "route-disabled"
+		for _, f := range hcm["http_filters"].([]any) {
+			filter := object(f)
+			name := filter["name"].(string)
+			if name != "agentio.bandwidth" && name != "agentio.connect_concurrency" {
+				continue
+			}
+			seen[name] = true
+			p := object(object(object(object(filter["typed_config"])["value"])["filter_config"])["value"])
+			if disabled && p["enabled"] != false {
+				t.Fatal("resident filter was not disabled")
+			}
+			if (filter["disabled"] == true) != (mode == "route-disabled") {
+				t.Fatalf("%s: unexpected filter creation gate for %s", mode, name)
+			}
+			if name == "agentio.bandwidth" && !disabled {
+				d := object(p["descriptors"].([]any)[0])
+				if object(d["bandwidth_limit"])["download_bytes_per_second"] != "1099511627776" {
+					t.Fatal("overhead measurement is bandwidth constrained")
+				}
+			}
+		}
+		if seen["agentio.bandwidth"] != (mode != "baseline" && mode != "concurrency") ||
+			seen["agentio.connect_concurrency"] != (disabled || mode == "concurrency" || mode == "combined") {
+			t.Fatalf("%s: unexpected filters %v", mode, seen)
+		}
+		if mode == "route-disabled" {
+			for _, v := range object(hcm["route_config"])["virtual_hosts"].([]any) {
+				vhost := object(v)
+				if vhost["typed_per_filter_config"] != nil {
+					t.Fatal("virtual host overrides the disabled filter defaults")
+				}
+				for _, r := range vhost["routes"].([]any) {
+					if object(r)["typed_per_filter_config"] != nil {
+						t.Fatal("route overrides the disabled filter defaults")
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestBucketDiscoveryKeepsPolicyAndUsesFileSource(t *testing.T) {
+	data, err := envoyConfig(
+		config{Suite: "buckets", BasePort: 19000, ConnectTimeout: time.Second},
+		scenario{Mode: "high", Streams: 32},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ecds.json")
+	data, err = discoverBandwidth(data, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("config_discovery")) || bytes.Contains(data, []byte("budget_name")) {
+		t.Fatal("policy is not supplied through ECDS")
+	}
+	resource, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(resource, []byte("bandwidth_limit")) ||
+		!bytes.Contains(resource, []byte("TypedExtensionConfig")) {
+		t.Fatal("ECDS resource lost the bandwidth policy")
+	}
+}
+
 func TestConfigVariantsAndIndependentConcurrency(t *testing.T) {
-	c := config{Suite: "capacity", BasePort: 19000, Module: "/modules/test.so"}
+	c := config{
+		ConnectTimeout: time.Second,
+		SharedRate:     32 * 1048576,
+		Suite:          "capacity",
+		BasePort:       19000,
+		Module:         "/modules/test.so",
+	}
 	for _, mode := range []string{"baseline", "bypass", "high", "shared", "distinct", "isolation"} {
 		for _, limit := range []int{0, 1024} {
 			c.ConcurrencyLimit = limit
@@ -112,7 +229,10 @@ func TestInputsAndCPUParsing(t *testing.T) {
 }
 
 func TestBucketFixtureSeparatesResidentDebtAndProbeTraffic(t *testing.T) {
-	data, err := envoyConfig(config{Suite: "buckets", BasePort: 19000, ResidentBuckets: 100000}, scenario{Mode: "high"})
+	data, err := envoyConfig(
+		config{ConnectTimeout: time.Second, Suite: "buckets", BasePort: 19000, ResidentBuckets: 100000},
+		scenario{Mode: "high"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

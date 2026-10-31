@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -87,12 +88,20 @@ func TestBandwidthConfigWatchAndGeneratedListener(t *testing.T) {
 					continue
 				}
 				found = true
-				if hcm.HttpFilters[i-1].Name != "envoy.filters.http.local_ratelimit" ||
+				if hcm.HttpFilters[i-1].Name != "agentio.connect_concurrency" ||
 					hcm.HttpFilters[i+1].Name != "envoy.filters.http.router" {
-					t.Fatalf("bandwidth must follow connection rate limiting and precede router: %v", hcm.HttpFilters)
+					t.Fatalf("bandwidth must follow concurrency limiting and precede router: %v", hcm.HttpFilters)
 				}
 				typed := new(udpatypev1.TypedStruct)
-				if err := filter.GetTypedConfig().UnmarshalTo(typed); err != nil {
+				if filter.GetConfigDiscovery() == nil {
+					t.Fatal("expected ECDS filter")
+				}
+				if err := networkLimitExtension(
+					t,
+					resources,
+					filter.Name,
+				).GetTypedConfig().
+					UnmarshalTo(typed); err != nil {
 					t.Fatal(err)
 				}
 				config := typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue()
@@ -163,4 +172,19 @@ func TestBandwidthValidationAtBothConfigEntrypoints(t *testing.T) {
 			}
 		})
 	}
+}
+
+func networkLimitExtension(t *testing.T, resources []model.Resource, name string) *corev3.TypedExtensionConfig {
+	t.Helper()
+	for _, resource := range resources {
+		if resource.Key.TypeURL == model.ExtensionConfigurationType && resource.XDSName == name {
+			extension := new(corev3.TypedExtensionConfig)
+			if err := resource.Value.UnmarshalTo(extension); err != nil {
+				t.Fatal(err)
+			}
+			return extension
+		}
+	}
+	t.Fatalf("missing ECDS resource %s", name)
+	return nil
 }

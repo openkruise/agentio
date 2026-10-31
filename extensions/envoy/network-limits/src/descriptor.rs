@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
-pub type Key = (usize, Vec<String>);
+// Bucket identity is independent of the matching descriptor and its position.
+pub type Key = (Arc<[Action]>, Vec<String>);
 
 pub fn default_budget_name() -> String {
     "default".into()
@@ -13,13 +14,13 @@ pub fn default_capacity() -> usize {
     10000
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct RateLimit {
-    pub actions: Vec<Action>,
+    pub actions: Arc<[Action]>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     FilterState {
@@ -42,7 +43,7 @@ impl Action {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub key: String,
@@ -69,7 +70,7 @@ pub fn validate_groups<D: MatchDescriptor>(
         if rule.actions.is_empty() {
             return Err("actions must not be empty".into());
         }
-        for action in &rule.actions {
+        for action in rule.actions.iter() {
             if action.key().is_empty() || !keys.insert(action.key()) {
                 return Err("descriptor keys must be nonempty and unique within actions".into());
             }
@@ -123,7 +124,7 @@ pub fn resolve<D: MatchDescriptor>(
     rules: &[RateLimit],
     descriptors: &[D],
     mut get: impl FnMut(&str) -> Option<String>,
-) -> Result<Vec<(usize, Vec<String>)>, ()> {
+) -> Result<Vec<Key>, ()> {
     let mut matched = Vec::new();
     for rule in rules {
         let values: Vec<String> = rule
@@ -136,25 +137,36 @@ pub fn resolve<D: MatchDescriptor>(
                 } => Ok(descriptor_value.clone()),
             })
             .collect::<Result<_, _>>()?;
-        let matches = |d: &D| {
-            rule.actions.len() == d.entries().len()
-                && rule
-                    .actions
-                    .iter()
-                    .zip(&values)
-                    .zip(d.entries())
-                    .all(|((a, v), e)| a.key() == e.key && (e.value.is_empty() || e.value == *v))
-        };
-        let index = descriptors
-            .iter()
-            .position(|d| !d.dynamic() && matches(d))
-            .or_else(|| descriptors.iter().position(matches));
-        if let Some(index) = index {
-            let key = (index, values);
-            if !matched.contains(&key) {
-                matched.push(key);
-            }
+        let key = (rule.actions.clone(), values);
+        if matching_descriptor(rules, descriptors, &key).is_some() && !matched.contains(&key) {
+            matched.push(key);
         }
     }
     Ok(matched)
+}
+
+// Full exact matches win; wildcard priority remains the configured order.
+pub fn matching_descriptor<'a, D: MatchDescriptor>(
+    rules: &[RateLimit],
+    descriptors: &'a [D],
+    key: &Key,
+) -> Option<&'a D> {
+    if !rules.iter().any(|rule| rule.actions == key.0) {
+        return None;
+    }
+    let matches = |d: &&D| {
+        key.0.len() == d.entries().len()
+            && key
+                .0
+                .iter()
+                .zip(&key.1)
+                .zip(d.entries())
+                .all(|((action, value), entry)| {
+                    action.key() == entry.key && (entry.value.is_empty() || entry.value == *value)
+                })
+    };
+    descriptors
+        .iter()
+        .find(|d| !d.dynamic() && matches(d))
+        .or_else(|| descriptors.iter().find(matches))
 }

@@ -94,7 +94,15 @@ func TestConcurrencyConfigWatchAndGeneratedListener(t *testing.T) {
 					t.Fatalf("concurrency must follow rate limiting and precede bandwidth: %v", hcm.HttpFilters)
 				}
 				typed := new(udpatypev1.TypedStruct)
-				if err := filter.GetTypedConfig().UnmarshalTo(typed); err != nil {
+				if filter.GetConfigDiscovery() == nil {
+					t.Fatal("expected ECDS filter")
+				}
+				if err := networkLimitExtension(
+					t,
+					resources,
+					filter.Name,
+				).GetTypedConfig().
+					UnmarshalTo(typed); err != nil {
 					t.Fatal(err)
 				}
 				config := typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue()

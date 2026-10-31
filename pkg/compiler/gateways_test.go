@@ -24,6 +24,7 @@ import (
 	"time"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	fileaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/file/v3"
@@ -1226,8 +1227,10 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			settings := new(configv1.EgressGateway)
 			limit := `"bandwidthLimit":{"downloadBytesPerSecond":1024}`
+			filterName := "agentio.bandwidth"
 			if field == "connectConcurrencyLimit" {
 				limit = `"maxConcurrentStreams":2`
+				filterName = "agentio.connect_concurrency"
 			}
 			raw := `{"` + field + `":{"rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],"descriptors":[{"entries":[{"key":"sandbox"}],` + limit + `}]}}`
 			if err := protojson.Unmarshal([]byte(raw), settings); err != nil {
@@ -1256,8 +1259,8 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 				if !resource.Facts.AgentioEgress {
 					t.Fatalf("unsupported legacy variant published: %v", resource.Key)
 				}
-				if resource.Key.TypeURL == model.ListenerType {
-					message := new(listenerv3.Listener)
+				if resource.Key.TypeURL == model.ExtensionConfigurationType && resource.XDSName == filterName {
+					message := new(corev3.TypedExtensionConfig)
 					if err := resource.Value.UnmarshalTo(message); err != nil {
 						t.Fatal(err)
 					}
@@ -1269,7 +1272,7 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Fatal("network limits module not present in compiled listener")
+				t.Fatal("network limits module not present in compiled ECDS configuration")
 			}
 		})
 	}
