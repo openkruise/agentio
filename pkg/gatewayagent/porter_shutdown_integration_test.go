@@ -59,6 +59,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -521,15 +522,11 @@ func TestPorterPodTermination(t *testing.T) {
 				t.Logf("%s logs:\n%s", name, logs)
 			}
 		}
-		current, err := kube.CoreV1().Pods(namespace.Name).Get(cleanupCtx, pod.Name, metav1.GetOptions{})
+		// Kubelet may still update terminal status; patch only the test finalizer.
+		current, err := kube.CoreV1().Pods(namespace.Name).Patch(
+			cleanupCtx, pod.Name, types.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{},
+		)
 		if err != nil {
-			t.Error(err)
-			return
-		}
-		current.Finalizers = nil
-		if _, err := kube.CoreV1().
-			Pods(namespace.Name).
-			Update(cleanupCtx, current, metav1.UpdateOptions{}); err != nil {
 			t.Error(err)
 			return
 		}
@@ -700,6 +697,13 @@ func TestPorterPodTermination(t *testing.T) {
 	)
 }
 
+func TestShutdownConnectFilters(t *testing.T) {
+	filters := shutdownConnectFilters(t, "../networking/testdata/agentio-egress-gateway.json")
+	if len(filters) != 4 {
+		t.Fatalf("got %d filters, want three production identity filters and a router", len(filters))
+	}
+}
+
 func shutdownConnectFilters(t *testing.T, path string) []json.RawMessage {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -721,7 +725,7 @@ func shutdownConnectFilters(t *testing.T, path string) []json.RawMessage {
 				for _, raw := range filters {
 					filter := raw.(map[string]any)
 					switch filter["name"] {
-					case "connect_authority", "envoy.filters.http.ext_proc", "connect_workload":
+					case "agentio.connect_authority", "envoy.filters.http.ext_proc", "agentio.connect_workload":
 						encoded, err := json.Marshal(filter)
 						if err != nil {
 							t.Fatal(err)

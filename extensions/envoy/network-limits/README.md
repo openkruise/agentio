@@ -83,6 +83,8 @@ CONNECT-UDP, separately configured upgrade filter chains, and traffic bypassing 
 
 **Envoy v1.39.4 limitation:** when a raw TCP upstream closes first while the HTTP/2 CONNECT request remains open and the response is blocked by the downstream HTTP/2 window, Envoy can reset the stream before delivering its final bytes. This also reproduces without this module. The runtime option `allow_multiplexed_upstream_half_close` does not fix the TCP-upstream case. The HTTP/2 transfer tests half-close the request after sending its payload; the HTTP/1 tests exercise upstream-first closure. Validate this close pattern with your actual HBONE client before production deployment; this module does not fix Envoy's CONNECT close semantics.
 
+**Envoy v1.40.2 gateway compatibility:** the gateway bootstrap disables `envoy.reloadable_features.enable_send_rst_on_user_space_socket` to preserve final TLS responses over its two internal listener hops when an HTTP server closes the connection. This restores the earlier EOF behavior and weakens reset propagation over internal sockets; custom internal tunneling configurations may retain connections until idle timeout. The standalone module does not set this process-wide runtime value. `TestCommunityEnvoyInternalConnect` covers complete small and buffered responses with server-first closure, and explicit HTTP/2 stream cancellation releasing the upstream request.
+
 ## Build and test
 
 On Linux, install Rust 1.93+, Go (the version in `go.mod`), clang/libclang, curl, tar and Docker. Run from the repository root:
