@@ -56,7 +56,7 @@ func (g SandboxGenerator) Generate(ctx context.Context, request GenerationReques
 				request.Snapshot,
 				resource,
 			) && matchesSource(resource, g.Source)
-	}, nil), nil
+	}, nil, nil), nil
 }
 
 func scopedSandboxNames(scope model.ClientScope, snapshot model.ResourceSet) sets.Set[string] {

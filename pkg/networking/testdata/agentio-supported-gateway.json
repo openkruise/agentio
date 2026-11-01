@@ -445,6 +445,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typed_config": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "stat_prefix": "connect_terminate",
                   "rds": {
                     "config_source": {
@@ -765,6 +767,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typed_config": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "stat_prefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "config_source": {
@@ -1304,6 +1308,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typed_config": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "stat_prefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "config_source": {

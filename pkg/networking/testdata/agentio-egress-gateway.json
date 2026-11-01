@@ -731,6 +731,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "connect_terminate",
                   "rds": {
                     "configSource": {
@@ -807,7 +809,7 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE"
+                            "sharedWithUpstream": "ONCE"
                           },
                           {
                             "objectKey": "sandbox.id",
@@ -818,10 +820,10 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE"
+                            "sharedWithUpstream": "ONCE"
                           },
                           {
-                            "objectKey": "sandbox.metadata",
+                            "objectKey": "agentio.sandbox.metadata",
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
@@ -829,7 +831,7 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE",
+                            "sharedWithUpstream": "ONCE",
                             "skipIfEmpty": true
                           },
                           {
@@ -900,7 +902,7 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE",
+                            "sharedWithUpstream": "ONCE",
                             "skipIfEmpty": true
                           },
                           {
@@ -912,7 +914,7 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE",
+                            "sharedWithUpstream": "ONCE",
                             "skipIfEmpty": true
                           },
                           {
@@ -924,31 +926,19 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE",
+                            "sharedWithUpstream": "ONCE",
                             "skipIfEmpty": true
                           },
                           {
                             "objectKey": "sandbox.labels",
-                            "factoryKey": "envoy.hashable_string",
+                            "factoryKey": "envoy.string",
                             "formatString": {
                               "textFormatSource": {
                                 "inlineString": "%DYNAMIC_METADATA(agentio:workload_labels)%"
                               },
                               "omitEmptyValues": true
                             },
-                            "sharedWithUpstream": "TRANSITIVE",
-                            "skipIfEmpty": true
-                          },
-                          {
-                            "objectKey": "agentio.workload.instance",
-                            "factoryKey": "envoy.hashable_string",
-                            "formatString": {
-                              "textFormatSource": {
-                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_instance)%"
-                              },
-                              "omitEmptyValues": true
-                            },
-                            "sharedWithUpstream": "TRANSITIVE",
+                            "sharedWithUpstream": "ONCE",
                             "skipIfEmpty": true
                           }
                         ]
@@ -1142,6 +1132,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "configSource": {
@@ -1367,6 +1359,88 @@
                       "formatString": {
                         "textFormatSource": {
                           "inlineString": "%FILTER_STATE(agentio.connect.authority:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "sandbox.id",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(sandbox.id:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE"
+                    },
+                    {
+                      "objectKey": "sandbox.token",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(sandbox.token:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE"
+                    },
+                    {
+                      "objectKey": "agentio.sandbox.metadata",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(agentio.sandbox.metadata:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "agentio.workload.name",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(agentio.workload.name:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "agentio.workload.namespace",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(agentio.workload.namespace:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "agentio.workload.labels",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(agentio.workload.labels:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "sandbox.labels",
+                      "factoryKey": "envoy.string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(sandbox.labels:PLAIN)%"
                         },
                         "omitEmptyValues": true
                       },
@@ -1636,6 +1710,8 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "configSource": {

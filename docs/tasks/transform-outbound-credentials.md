@@ -28,7 +28,7 @@ For a new installation, provide the complete installation values instead of this
 
 Replace the example URL with a provider endpoint reachable from the EPE Pods. The chart maps it to `IDENTITY_PROVIDER_URL`, sets the API-key cache to `TOKEN_CACHE_TTL=15m` and `TOKEN_CACHE_MAX_SIZE=10000`, and the example makes the default STS cache capacity explicit. See [EPE configuration](../reference/epe-configuration.md#credential-provider-and-webhook-environment-variables) for the complete Helm and environment surface.
 
-The provider must authenticate the EPE client and authorize the sandbox identity carried in Envoy `filter_state['sandbox.metadata']` (or legacy `filter_state['sandbox.token']`). A missing or malformed identity cannot serve a provider-backed rule. See the [credential provider contract](../reference/credential-provider.md#request-flow) for token file and ztunnel settings.
+The provider must authenticate the EPE client and authorize the sandbox identity carried in Envoy `filter_state['agentio.sandbox.metadata']` (or legacy `filter_state['sandbox.token']`). A missing or malformed identity cannot serve a provider-backed rule. See the [credential provider contract](../reference/credential-provider.md#request-flow) for token file and ztunnel settings.
 
 This example matches `https://api.example.com`, so the selected egress gateway must terminate TLS for `api.example.com`; otherwise the connection stays on the gateway's TCP path and never reaches EPE's HTTP filter chain. Configure `egressGateways[].tlsTermination.includeHosts`, configure the MITM signing CA, and make the calling workload trust that CA as described in [TLS termination for HTTPS inspection](../reference/agentio-configuration.md#tls-termination-for-https-inspection).
 

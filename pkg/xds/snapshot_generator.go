@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 
+	"istio.io/istio/pkg/util/sets"
+
 	"github.com/openkruise/agentio/pkg/model"
+	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
 
 // SnapshotGenerator generates precompiled resources from store snapshots and incremental updates.
@@ -45,11 +48,26 @@ func generateSnapshotDiff(request GenerationRequest) GeneratedDelta {
 	) {
 		selected[resource.XDSName] = resource
 	}
-	return diffSelected(request.Subscription, selected)
+	if len(request.SubscribedNames) == 0 {
+		return diffSelected(request.Subscription, selected)
+	}
+	subscribed := sets.New(request.SubscribedNames...)
+	return diffResourceSelection(selected, request.Subscription.SentNames(), func(name string) (string, bool) {
+		resource := selected[name]
+		if resourceNamesMatch(resource, subscribed.Contains) {
+			return "", false
+		}
+		return request.Subscription.SentVersion(name)
+	})
 }
 
 func generateSnapshotIncremental(request GenerationRequest) GeneratedDelta {
 	return generateIncremental(request, func(resource model.Resource) bool {
 		return scopeAllows(request.Scope, resource) && request.Subscription.allows(resource)
-	}, nil)
+	}, nil, func(identity *xdsstore.Identity) bool {
+		return scopeAllows(request.Scope, model.Resource{
+			Key:   model.ResourceKey{TypeURL: request.TypeURL},
+			Facts: identity.Facts,
+		})
+	})
 }

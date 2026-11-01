@@ -16,7 +16,7 @@ sandbox ──> egress gateway ──ext_proc──> EPE ──HTTPS/mTLS──>
                                           └─ injects apiKey / signs with STS
 ```
 
-1. ztunnel sends the caller's identity in the HBONE CONNECT header `x-agentio-sandbox-metadata`. The gateway captures it as `filter_state['sandbox.metadata']`:
+1. ztunnel sends the caller's identity in the HBONE CONNECT header `x-agentio-sandbox-metadata`. The gateway captures it as `filter_state['agentio.sandbox.metadata']`:
 
    ```text
    agent-identity.access-token=...,agent-identity.sandbox-client-id=...

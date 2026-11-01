@@ -41,6 +41,7 @@ type Store struct {
 	subscribersByType            map[string]map[uint64]*subscriber
 	sandboxSubscribersByWorkload map[string]map[uint64]*subscriber
 	nextID                       uint64
+	nextMailboxID                uint64
 }
 
 // New creates a store with an initial snapshot and no subscribers.
@@ -153,20 +154,42 @@ func (s *Store) NotifyKeys(keys []model.ResourceKey) {
 }
 
 func (s *Store) notifyLocked(update Update) {
+	s.nextMailboxID++
+	publicationID := s.nextMailboxID
+	// Readers at the same backlog boundary share the same immutable notice.
+	// Merge that notice with this publication once, not once per connection.
+	// Keep this cache local: readers at different boundaries need different unions.
+	type notice struct {
+		update Update
+		id     uint64
+	}
+	var mergedByPending map[uint64]notice
 	for _, subscriber := range s.affectedSubscribersLocked(update) {
 		// Capacity-one, type-aware mailbox; the first coalescing boundary.
 		// PushScheduler merges later duplicates.
 		select {
 		case subscriber.updates <- update:
+			subscriber.mailboxID = publicationID
 		default:
 			merged := update
+			mergedID := publicationID
 			select {
 			case pending := <-subscriber.updates:
-				merged = Merge(pending, update)
+				cached, found := mergedByPending[subscriber.mailboxID]
+				if !found {
+					s.nextMailboxID++
+					cached = notice{update: Merge(pending, update), id: s.nextMailboxID}
+					if mergedByPending == nil {
+						mergedByPending = make(map[uint64]notice)
+					}
+					mergedByPending[subscriber.mailboxID] = cached
+				}
+				merged, mergedID = cached.update, cached.id
 			default:
 			}
 			select {
 			case subscriber.updates <- merged:
+				subscriber.mailboxID = mergedID
 			default:
 			}
 		}

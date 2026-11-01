@@ -30,7 +30,7 @@ import (
 // Credentials are separate from Subject and never expression-visible.
 type CallerContext struct {
 	Subject subject.Subject
-	// Token carries sandbox.metadata or legacy sandbox.token; copies share the lazy result.
+	// Token carries agentio.sandbox.metadata or legacy sandbox.token; copies share the lazy result.
 	Token *SandboxToken
 }
 

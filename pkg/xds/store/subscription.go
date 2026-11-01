@@ -30,7 +30,9 @@ type Subscription interface {
 }
 
 type subscriber struct {
-	updates         chan Update
+	updates chan Update
+	// Only notifyLocked reads this ID, after receiving the corresponding notice.
+	mailboxID       uint64
 	types           sets.Set[string]
 	sandboxWorkload string
 }

@@ -444,6 +444,7 @@ func TestManagedEPE(t *testing.T) {
 	requireContains(t, manifest,
 		"image: \"docker.io/openkruise/agentio-epe:0.1.0\"",
 		"service: agentio-epe.agentio-system.svc.cluster.local",
+		"filter_state['agentio.sandbox.metadata']",
 		"filter_state['agentio.workload.name']",
 		"filter_state['agentio.workload.namespace']",
 		"filter_state['downstream_peer'].name",

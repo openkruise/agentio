@@ -160,6 +160,7 @@ func generateIncremental(
 	request GenerationRequest,
 	visible func(model.Resource) bool,
 	previouslyVisible func(*xdsstore.Identity) bool,
+	identityInScope func(*xdsstore.Identity) bool,
 ) GeneratedDelta {
 	var delta GeneratedDelta
 	for _, candidate := range request.Update.Candidates(request.TypeURL) {
@@ -170,6 +171,11 @@ func generateIncremental(
 		}
 		for i := range candidate.Identities {
 			identity := &candidate.Identities[i]
+			// Gateway wire names are shared across owners and variants. A sent
+			// name alone does not mean this identity ever belonged to the client.
+			if identityInScope != nil && !identityInScope(identity) {
+				continue
+			}
 			if selected && identity.Name == resource.XDSName {
 				continue
 			}

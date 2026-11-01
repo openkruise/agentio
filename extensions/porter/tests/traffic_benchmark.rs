@@ -180,7 +180,7 @@ fn inventory(
             },
         ];
         resources.insert(
-            format!("instance/5:bench{uid}"),
+            format!("workload-instance/bench/{uid}"),
             pack(
                 WDS,
                 Workload {

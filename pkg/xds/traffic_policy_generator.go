@@ -47,7 +47,7 @@ func (TrafficPolicyGenerator) Generate(ctx context.Context, request GenerationRe
 		}
 		query.TrafficPolicyReference = resource.Key.Name
 		return request.Snapshot.HasWorkload(model.AddressType, query)
-	}, nil), nil
+	}, nil, nil), nil
 }
 
 func selectTrafficPolicyResources(

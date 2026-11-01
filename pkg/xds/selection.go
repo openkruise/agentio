@@ -17,18 +17,28 @@ package xds
 import (
 	"sort"
 
-	"github.com/openkruise/agentio/pkg/model"
 	"istio.io/istio/pkg/util/sets"
+
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 // selectGeneric returns scope-allowed resources of any generic xDS type, by name or in full.
-func selectGeneric(scope model.ClientScope, snapshot model.ResourceSet, typeURL string, names []string) []model.Resource {
+func selectGeneric(
+	scope model.ClientScope,
+	snapshot model.ResourceSet,
+	typeURL string,
+	names []string,
+) []model.Resource {
+	owned := snapshot.ListResourcesOwnedByGateway(typeURL, scope.GatewayKey)
 	if names == nil {
-		return filterScope(scope, snapshot.List(typeURL))
+		return filterScope(scope, owned)
 	}
-	candidates := make([]model.Resource, 0, len(names))
-	for _, name := range names {
-		candidates = append(candidates, snapshot.Lookup(typeURL, name)...)
+	requested := sets.New(names...)
+	candidates := owned[:0]
+	for _, resource := range owned {
+		if resourceNamesMatch(resource, requested.Contains) {
+			candidates = append(candidates, resource)
+		}
 	}
 	return filterScope(scope, candidates)
 }

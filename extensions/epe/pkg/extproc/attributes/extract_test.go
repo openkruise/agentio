@@ -69,8 +69,8 @@ func TestExtractSandboxMetadataPrecedence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attrs := makeAttrs(t, map[string]any{
-				FilterStateSandboxMetadata: tc.metadata,
-				FilterStateSandboxToken:    `{"accessToken":"old","sandboxClientId":"old-client"}`,
+				"filter_state['agentio.sandbox.metadata']": tc.metadata,
+				FilterStateSandboxToken:                    `{"accessToken":"old","sandboxClientId":"old-client"}`,
 			})
 			peer, _ := Extract(t.Context(), nil, attrs)
 			if got := peer.Token.Parse(t.Context()); !reflect.DeepEqual(got, tc.want) {

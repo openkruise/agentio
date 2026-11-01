@@ -101,6 +101,11 @@ func newGatewayResources(
 	options collectionOptions,
 ) krt.Collection[model.Resource] {
 	extProcs := globalExtProc.AsCollection()
+	// Overrides retain additional processors without depending on the global primary.
+	additionalExtProcs := krt.NewCollection(extProcs,
+		func(_ krt.HandlerContext, current gatewayGlobalExtProc) *gatewayGlobalExtProc {
+			return &gatewayGlobalExtProc{Additional: current.Additional}
+		}, options("gateway-additional-ext-proc")...)
 	providerOverrides := inputs.TelemetryProviderOverrides.AsCollection()
 	// A primary-input delete bypasses the transformation below. Clear any
 	// recorded builder failure once that gateway identity no longer exists.
@@ -135,12 +140,17 @@ func newGatewayResources(
 					krt.FilterIndex(base.telemetryDefaultsByNamespace, inputs.RootNamespace))...)
 			}
 			providerOverride := krt.FetchOne(ctx, providerOverrides)
-			current := krt.FetchOne(ctx, extProcs)
 			var provider *configv1.ExtProcProvider
 			var additional []*configv1.ExtProcProvider
-			if current != nil {
-				provider = current.Provider
-				additional = current.Additional
+			if override := item.Config.GetExtProc(); override == nil {
+				if current := krt.FetchOne(ctx, extProcs); current != nil {
+					provider = current.Provider
+					additional = current.Additional
+				}
+			} else if override.GetService() != "" {
+				if current := krt.FetchOne(ctx, additionalExtProcs); current != nil {
+					additional = current.Additional
+				}
 			}
 			resources, err := gatewayResourcesFor(
 				item,

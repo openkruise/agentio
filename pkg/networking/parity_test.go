@@ -250,8 +250,12 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 			t.Fatalf("decode TLS relay filter %s: %v", filter.GetName(), err)
 		}
 		for _, state := range config.GetOnNewConnection() {
-			if !state.GetSkipIfEmpty() || !state.GetFormatString().GetOmitEmptyValues() {
-				t.Errorf("TLS relay key %q must skip and omit empty values", state.GetObjectKey())
+			wantSkip := state.GetObjectKey() != model.FilterStateSandboxID && state.GetObjectKey() != "sandbox.token"
+			if state.GetSkipIfEmpty() != wantSkip || !state.GetFormatString().GetOmitEmptyValues() {
+				t.Errorf(
+					"TLS relay key %q: skip_if_empty must be %v and omit_empty_values must be true",
+					state.GetObjectKey(), wantSkip,
+				)
 			}
 		}
 	}

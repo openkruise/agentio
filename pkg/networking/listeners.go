@@ -376,12 +376,14 @@ func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpCo
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{})))
 	hcm := &hcmv3.HttpConnectionManager{
-		StatPrefix:        ConnectTerminate,
-		ServerName:        "agentio-envoy",
-		RouteSpecifier:    &hcmv3.HttpConnectionManager_Rds{Rds: rds(ConnectTerminate)},
-		UseRemoteAddress:  wrapperspb.Bool(false),
-		StreamIdleTimeout: durationpb.New(0),
-		UpgradeConfigs:    []*hcmv3.HttpConnectionManager_UpgradeConfig{{UpgradeType: "CONNECT"}},
+		StatPrefix:                   ConnectTerminate,
+		NormalizePath:                wrapperspb.Bool(true),
+		PathWithEscapedSlashesAction: hcmv3.HttpConnectionManager_KEEP_UNCHANGED,
+		ServerName:                   "agentio-envoy",
+		RouteSpecifier:               &hcmv3.HttpConnectionManager_Rds{Rds: rds(ConnectTerminate)},
+		UseRemoteAddress:             wrapperspb.Bool(false),
+		StreamIdleTimeout:            durationpb.New(0),
+		UpgradeConfigs:               []*hcmv3.HttpConnectionManager_UpgradeConfig{{UpgradeType: "CONNECT"}},
 		Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
 			AllowConnect:         true,
 			MaxConcurrentStreams: wrapperspb.UInt32(100),
@@ -458,14 +460,16 @@ func (b *resourceBuilder) buildForwardHCM(
 		streamIdle = configured
 	}
 	hcm := &hcmv3.HttpConnectionManager{
-		StatPrefix:        forwardHCMStatPrefix,
-		RouteSpecifier:    &hcmv3.HttpConnectionManager_Rds{Rds: rds(routeName)},
-		ServerName:        "agentio-envoy",
-		Proxy_100Continue: true,
-		UseRemoteAddress:  wrapperspb.Bool(false),
-		StreamIdleTimeout: streamIdle,
-		HttpFilters:       filters,
-		UpgradeConfigs:    []*hcmv3.HttpConnectionManager_UpgradeConfig{{UpgradeType: "websocket"}},
+		StatPrefix:                   forwardHCMStatPrefix,
+		RouteSpecifier:               &hcmv3.HttpConnectionManager_Rds{Rds: rds(routeName)},
+		ServerName:                   "agentio-envoy",
+		Proxy_100Continue:            true,
+		NormalizePath:                wrapperspb.Bool(true),
+		PathWithEscapedSlashesAction: hcmv3.HttpConnectionManager_KEEP_UNCHANGED,
+		UseRemoteAddress:             wrapperspb.Bool(false),
+		StreamIdleTimeout:            streamIdle,
+		HttpFilters:                  filters,
+		UpgradeConfigs:               []*hcmv3.HttpConnectionManager_UpgradeConfig{{UpgradeType: "websocket"}},
 		Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
 			AllowConnect: true,
 		},
@@ -689,26 +693,27 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 					"%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":workload:" + field.name + ")%",
 				),
 			},
-			SharedWithUpstream: setstatecommonv3.FilterStateValue_TRANSITIVE,
+			SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
 			SkipIfEmpty:        true,
 		})
 	}
 	for _, field := range []struct {
 		key      string
 		metadata string
+		factory  string
 	}{
-		{model.FilterStateWorkloadLabels, "workload_labels"},
+		// Concurrent CONNECTs can share a pool while carrying different label snapshots.
+		{model.FilterStateWorkloadLabels, "workload_labels", "envoy.hashable_string"},
 		// Keep the old output while older EPE instances are still deployed.
-		{"sandbox.labels", "workload_labels"},
-		{"agentio.workload.instance", "workload_instance"},
+		{"sandbox.labels", "workload_labels", "envoy.string"},
 	} {
 		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
 			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},
-			FactoryKey: "envoy.hashable_string",
+			FactoryKey: field.factory,
 			Value: &setstatecommonv3.FilterStateValue_FormatString{
 				FormatString: formatString("%DYNAMIC_METADATA(agentio:" + field.metadata + ")%"),
 			},
-			SharedWithUpstream: setstatecommonv3.FilterStateValue_TRANSITIVE,
+			SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
 			SkipIfEmpty:        true,
 		})
 	}
@@ -907,15 +912,16 @@ func buildConnectAuthorityFilter(factory, peerPrincipal, localPrincipal string, 
 			case "sandbox.labels", model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace:
 				continue
 			case model.FilterStateSandboxID, "sandbox.token":
-				// Each CONNECT selects a sandbox; isolate its context in internal pools.
+				// Share identity only across internal hops, not with the external pool.
 				state.FactoryKey = factory
+				state.SharedWithUpstream = setstatecommonv3.FilterStateValue_ONCE
 			}
 			filtered = append(filtered, state)
 		}
 		values = filtered
 		// Keep legacy token capture for old ztunnels during rolling upgrades.
-		metadata := value("sandbox.metadata", "%REQ(X-AGENTIO-SANDBOX-METADATA)%",
-			factory, setstatecommonv3.FilterStateValue_TRANSITIVE)
+		metadata := value("agentio.sandbox.metadata", "%REQ(X-AGENTIO-SANDBOX-METADATA)%",
+			factory, setstatecommonv3.FilterStateValue_ONCE)
 		metadata.SkipIfEmpty = true
 		values = append(values, metadata)
 		// Read the TLS-verified peer certificate, never a CONNECT header.
@@ -963,6 +969,23 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 		{key: localPrincipal, factory: factory},
 		{key: authorityKey, factory: factory},
 	}
+	if factory == "envoy.hashable_string" {
+		// TLS termination adds one internal hop; stop sharing again at main_forward.
+		for _, key := range []string{
+			model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
+			model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
+			model.FilterStateWorkloadLabels, "sandbox.labels",
+		} {
+			stateFactory := factory
+			if key == "sandbox.labels" {
+				stateFactory = "envoy.string"
+			}
+			downstreamRelayKeys = append(downstreamRelayKeys, struct {
+				key     string
+				factory string
+			}{key: key, factory: stateFactory})
+		}
+	}
 	values := make([]*setstatecommonv3.FilterStateValue, 0, len(downstreamRelayKeys))
 	for _, relay := range downstreamRelayKeys {
 		values = append(values, &setstatecommonv3.FilterStateValue{
@@ -972,7 +995,7 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 				FormatString: formatString(fmt.Sprintf("%%FILTER_STATE(%s:PLAIN)%%", relay.key)),
 			},
 			SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
-			SkipIfEmpty:        true,
+			SkipIfEmpty:        relay.key != model.FilterStateSandboxID && relay.key != "sandbox.token",
 		})
 	}
 	name := "connect_downstream_peer"
