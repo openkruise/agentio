@@ -190,3 +190,32 @@ connect-bench run -suite=fairness -bytes-per-second=1048576 \
 `-bytes-per-second` changes the shared rate (default 32 MiB/s); distinct mode divides it across streams. `-progress-interval` is optional and disabled by default so existing capacity runs do not incur extra counter requests. Upload progress is measured at the TCP origin, download progress at the client. JSON rows include `stream_max_idle_ms` in stream order and `max_idle_ms`; both include the beginning/end of the measurement window, even if a stream never advances. These are sampled intervals, with resolution limited by the polling interval and the 100 ms resource-sampling loop, not packet-level timestamps. In isolation mode the last stream is the fast sandbox.
 
 Check these intervals together with per-stream minimum throughput, aggregate rate, errors and CPU/RSS. A correct aggregate rate alone does not demonstrate absence of starvation. The finite-transfer regression tests separately verify payload content; the benchmark's infinite streams measure sustained throughput and progress rather than file integrity. `-upstream-connect-timeout` defaults to 1s; use 5s for SYN-loss experiments, where the TCP retransmission timer can exceed 1s. A CONNECT setup 503 fails the run rather than being silently retried. Run network-fault injection only in a disposable test namespace/container and retain its settings with the external results.
+
+## Stability scenarios
+
+Use the shared [scenario framework](../scenario/README.md) for repeatable tests with assertions. The Go scenario adapter builds the runtime test binary automatically, starts each case in a fresh Docker container, and preserves its bootstrap, LDS/ECDS files and Envoy log. The test code reuses the real-Envoy regression helpers in `extensions/envoy/network-limits/tests`; no per-run shell/Python traffic orchestration is needed.
+
+```sh
+go run ./bench/connect/scenarios \
+  -image agentio-network-limits:runtime \
+  -profile smoke \
+  -output /tmp/network-smoke-001
+```
+
+The candidate image must contain `/usr/local/bin/envoy` and its compatible module. Use `-module /absolute/candidate.so` to override the module, or `-test-binary /absolute/network-limits.test` to use a prebuilt Linux test binary. Automatic builds follow the image architecture and retain the binary in `<output>-inputs` for replay. For remote execution, cross-compile the adapter and test binary, copy them to the Linux host, and invoke the same command with `-test-binary`. Keep generated binaries and all outputs outside the checkout.
+
+| Profile | Cases | Assertions |
+| --- | --- | --- |
+| `smoke` | 64 sandbox identities × 4 download/upload streams; 256 queued streams during ECDS updates; three limits with a stalled reader; 30 s bucket churn | Exact file contents, progress gaps and completion time, cancellation without hanging survivors, re-enabled quota on a new stream, native admission/concurrency rejection, independent progress, bounded source buffering, new-key admission after debt recovery. |
+| `scale` | 1,000 × 4, 5,000 × 2, 10,000 × 1 downloads; 1,000 × 4 uploads; 1,024 streams sharing a bucket; 1,024 streams during reload; combined limits | Same integrity and progress assertions at scale, using 2/4/8 Envoy workers. Every stream transfers data; these are not idle connection counts. |
+| `soak` | 30 minutes, 512 identities × 2 streams per cycle, one Envoy process throughout | Cancel pending downloads, wait for upstream connections/debt to clear, fill every slot with new keys; after five warmup cycles fail if closed-connection FD count grows by more than 16 or RSS grows by more than 128 MiB. |
+
+Use `-case shared-1024 -profile scale` to replay a single case. `suite.json` can also be executed directly with `go run ./bench/scenario/run -suite ... -output ...`; edit a copy to record a longer churn `Seconds` value and increase both `-test.timeout` and the outer case timeout accordingly. The limits in these plans are test acceptance criteria, not production sizing recommendations.
+
+Active cases transfer 512 KiB per stream, with 128 KiB/s per sandbox (8 MiB/s for the single shared bucket). They reject completion faster than 70% of the ideal quota time and validate every file. A maximum gap greater than the larger of 30 seconds or a two-watermark rotation plus five seconds fails. These tolerances detect severe starvation or quota bypass; they do not prove equal per-stream byte shares. Traffic spans multiple H2 connections, at most 64 streams per connection.
+
+Reload cases exercise rate/burst edits, regrouping by tenant, cancellation of one quarter of the waiting flows, a rejected configuration, disable/drain, and re-enable followed by a timed transfer. An ECDS acknowledgement alone is not treated as proof of correctness. This scenario checks survivor integrity/progress and the resulting quota; it does not claim that no transient overshoot occurs during every intermediate regrouping.
+
+The combined case leaves a download body unread while another sandbox transfers, checks source production and Envoy RSS bounds, independently observes native rate-limit rejection and concurrency rejection, then checks admission recovery. Churn logs include per-cycle RSS, FD count and successful new-key populations. There is no exact module bucket-count gauge: full-table replacement is verified behaviorally by admitting the next complete set of distinct keys.
+
+These are Linux component stability tests on synthetic CONNECT traffic, with trusted test headers. They do not validate real NIC saturation, mTLS identity, control-plane rollout, multiple replicas, or indefinite soak stability. Container memory includes the load client and origin as well as Envoy. Use the CPU-affined benchmark runner above for controlled performance comparisons.

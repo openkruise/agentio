@@ -140,7 +140,7 @@ func (o *origin) port() int { return o.listener.Addr().(*net.TCPAddr).Port }
 //
 //nolint:errcheck // Origin write failures are observed by the client or caused by deliberate cancellation.
 func (o *origin) serve(c net.Conn) {
-	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(streamTimeout()))
 	r := bufio.NewReader(c)
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -307,7 +307,13 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 	}
 	var b object
 	must(t, json.Unmarshal(fixture.Bootstrap, &b))
-	r := &runtime{port: freePort(t), admin: freePort(t), lds: filepath.Join(t.TempDir(), "lds.json")}
+	root := t.TempDir()
+	if artifacts := os.Getenv("AGENTIO_TEST_ARTIFACTS"); artifacts != "" {
+		var err error
+		root, err = os.MkdirTemp(artifacts, "envoy-")
+		must(t, err)
+	}
+	r := &runtime{port: freePort(t), admin: freePort(t), lds: filepath.Join(root, "lds.json")}
 	nested(b, "admin", "address", "socket_address")["port_value"] = r.admin
 	resources := obj(b["static_resources"])
 	r.listener = obj(resources["listeners"].([]any)[0])
@@ -359,7 +365,11 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 	logPath := filepath.Join(filepath.Dir(r.lds), "envoy.log")
 	log, err := os.Create(logPath)
 	must(t, err)
-	r.cmd = exec.Command(binary, "-c", path, "--concurrency", "2", "--disable-hot-restart", "--log-level", "error")
+	workers := "2"
+	if value := os.Getenv("AGENTIO_TEST_WORKERS"); value != "" {
+		workers = value
+	}
+	r.cmd = exec.Command(binary, "-c", path, "--concurrency", workers, "--disable-hot-restart", "--log-level", "error")
 	r.cmd.Stdout = log
 	r.cmd.Stderr = log
 	must(t, r.cmd.Start())
@@ -468,7 +478,7 @@ func newClient(t *testing.T, port int) *h2client {
 }
 func (c *h2client) open(t *testing.T, tenant, sandbox, target string, expected int) *stream {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), streamTimeout())
 	reader, writer := io.Pipe()
 	req, err := http.NewRequestWithContext(ctx, "CONNECT", "http://"+target, reader)
 	must(t, err)
