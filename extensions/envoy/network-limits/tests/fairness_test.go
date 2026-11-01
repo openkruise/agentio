@@ -135,7 +135,8 @@ func TestEnvoyHierarchicalBandwidthProgress(t *testing.T) {
 		nested(obj(descriptors[1]), "bandwidth_limit")["download_bytes_per_second"] = 1 << 30
 		p["rate_limits"] = append(p["rate_limits"].([]any), object{
 			"actions": []any{object{"generic_key": object{
-				"descriptor_key": "scope", "descriptor_value": "gateway",
+				"descriptor_key":   "scope",
+				"descriptor_value": "gateway",
 			}}},
 		})
 		p["descriptors"] = append(descriptors, object{

@@ -64,7 +64,12 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	c := config{}
 	f := flag.NewFlagSet("connect-bench run", flag.ContinueOnError)
 	f.SetOutput(w)
-	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, overhead, isolation, pilot, buckets, fairness, hierarchy")
+	f.StringVar(
+		&c.Suite,
+		"suite",
+		"bandwidth",
+		"bandwidth, capacity, overhead, isolation, pilot, buckets, fairness, hierarchy",
+	)
 	f.IntVar(&c.Connections, "connections", 4, "maximum outer HTTP/2 connections")
 	f.StringVar(&c.Case, "case", "", "one suite case: mode/streams/direction; empty runs the whole suite")
 	f.Int64Var(

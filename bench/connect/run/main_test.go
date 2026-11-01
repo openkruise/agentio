@@ -71,7 +71,13 @@ func TestSingleCaseRetainsRepeatsAndConnectionTopology(t *testing.T) {
 
 func TestHierarchyAddsSharedParentWithoutChangingSandboxLimits(t *testing.T) {
 	for _, mode := range []string{"isolation", "hierarchical"} {
-		c := config{Suite: "hierarchy", BasePort: 19000, SharedRate: 1048576, ParentRate: 33554432, ConnectTimeout: time.Second}
+		c := config{
+			Suite:          "hierarchy",
+			BasePort:       19000,
+			SharedRate:     1048576,
+			ParentRate:     33554432,
+			ConnectTimeout: time.Second,
+		}
 		data, err := envoyConfig(c, scenario{Mode: mode, Streams: 33, Direction: "D"})
 		if err != nil {
 			t.Fatal(err)
