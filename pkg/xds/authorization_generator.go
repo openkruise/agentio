@@ -114,5 +114,5 @@ func generateAuthorizationIncremental(request GenerationRequest) GeneratedDelta 
 	return generateIncremental(request, func(resource model.Resource) bool {
 		return request.Subscription.allows(resource) &&
 			authorizationVisibleForScope(request.Scope, request.Snapshot, resource)
-	}, nil)
+	}, nil, nil)
 }

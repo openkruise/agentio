@@ -623,7 +623,7 @@ data:
         attributes:
         - filter_state['sandbox.id']
         - filter_state['sandbox.token']
-        - filter_state['sandbox.metadata']
+        - filter_state['agentio.sandbox.metadata']
         - filter_state['agentio.workload.labels']
         - filter_state['sandbox.labels']
         - filter_state['agentio.workload.name']

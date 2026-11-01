@@ -24,9 +24,9 @@ import (
 )
 
 func TestWorkloadDemandAliasResendAndMissing(t *testing.T) {
-	resource := addressResource(t, "canonical", "pod", "instance/one", "/10.0.0.1")
+	resource := addressResource(t, "canonical", "pod", "workload-instance/one", "/10.0.0.1")
 	snapshot := selectionSnapshot(t, []model.Resource{resource})
-	for _, name := range []string{resource.XDSName, "instance/one", "/10.0.0.1", "missing"} {
+	for _, name := range []string{resource.XDSName, "workload-instance/one", "/10.0.0.1", "missing"} {
 		t.Run(name, func(t *testing.T) {
 			view, ok := demandSubscriptionView(snapshot, model.WorkloadType, []string{name})
 			if !ok {

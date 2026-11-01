@@ -320,7 +320,7 @@ func generateWDSIncremental(request GenerationRequest, workloadsOnly bool) Gener
 			return false
 		}
 	}
-	delta := generateIncremental(request, visible, previouslyVisible)
+	delta := generateIncremental(request, visible, previouslyVisible, nil)
 	delta.elideSentState = elide
 	return delta
 }

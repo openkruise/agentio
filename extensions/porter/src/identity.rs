@@ -12,6 +12,13 @@ use x509_parser::{
 
 const WORKLOAD_IDENTITY_OID: &str = "1.3.6.1.4.1.57874.5.1";
 
+// Match the control plane: leave only RFC 3986 unreserved UID bytes unescaped.
+const INSTANCE_UID_ESCAPE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid certificate URL encoding")]
@@ -65,10 +72,9 @@ pub fn certificate_instance(encoded: &str) -> Result<Option<String>, Error> {
                 return Err(Error::MissingIdentityFields);
             }
             return Ok(Some(format!(
-                "instance/{}:{}{}",
-                identity.registry.len(),
+                "workload-instance/{}/{}",
                 identity.registry,
-                identity.uid
+                percent_encoding::utf8_percent_encode(&identity.uid, INSTANCE_UID_ESCAPE)
             )));
         }
     }
@@ -103,12 +109,31 @@ mod tests {
     }
 
     #[test]
+    fn workload_alias_matches_control_plane() {
+        for (claim, expected) in [
+            (
+                r#"{"registry":"kubernetes/demo","uid":"pod-123"}"#,
+                "workload-instance/kubernetes/demo/pod-123",
+            ),
+            (
+                r#"{"registry":"runtime","uid":"a/b% c-._~"}"#,
+                "workload-instance/runtime/a%2Fb%25%20c-._~",
+            ),
+        ] {
+            assert_eq!(
+                certificate_instance(&certificate(Some(claim.as_bytes()))).unwrap(),
+                Some(expected.to_string())
+            );
+        }
+    }
+
+    #[test]
     fn runtime_identity_accepts_pem_and_url_encoding() {
         let pem = certificate(Some(
             r#"{"registry":"运行时","uid":"sandbox+42:/","role":"sandbox-attester","future":true}"#
                 .as_bytes(),
         ));
-        let expected = Some("instance/9:运行时sandbox+42:/".to_string());
+        let expected = Some("workload-instance/运行时/sandbox%2B42%3A%2F".to_string());
         assert_eq!(certificate_instance(&pem).unwrap(), expected);
         let encoded =
             percent_encoding::utf8_percent_encode(&pem, percent_encoding::NON_ALPHANUMERIC)

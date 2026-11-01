@@ -1054,9 +1054,9 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		states = config.GetOnRequestHeaders()
 	}
 	for key, header := range map[string]string{
-		"sandbox.id":       "X-AGENTIO-SANDBOX-ID",
-		"sandbox.token":    "X-AGENTIO-SANDBOX-TOKEN",
-		"sandbox.metadata": "X-AGENTIO-SANDBOX-METADATA",
+		"sandbox.id":               "X-AGENTIO-SANDBOX-ID",
+		"sandbox.token":            "X-AGENTIO-SANDBOX-TOKEN",
+		"agentio.sandbox.metadata": "X-AGENTIO-SANDBOX-METADATA",
 	} {
 		index := slices.IndexFunc(
 			states,
@@ -1072,13 +1072,13 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		if !state.GetFormatString().GetOmitEmptyValues() {
 			t.Errorf("%s must preserve missing headers as empty values", key)
 		}
-		if state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_TRANSITIVE {
-			t.Errorf("%s must survive every internal HTTP/TLS hop", key)
+		if state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE {
+			t.Errorf("%s must be shared only with the next internal hop", key)
 		}
 		if state.GetFactoryKey() != "envoy.hashable_string" {
 			t.Errorf("%s must distinguish upstream pools", key)
 		}
-		if key == "sandbox.metadata" && !state.GetSkipIfEmpty() {
+		if key == "agentio.sandbox.metadata" && !state.GetSkipIfEmpty() {
 			t.Error("absent metadata must not mask a legacy sandbox token")
 		}
 	}

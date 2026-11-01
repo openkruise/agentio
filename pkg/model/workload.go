@@ -17,7 +17,9 @@ package model
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
+	"strings"
 )
 
 type TunnelProtocol string
@@ -105,5 +107,5 @@ func (s SourceRef) String() string {
 
 // WorkloadAlias addresses a workload by immutable registry instance identity.
 func (s SourceRef) WorkloadAlias() string {
-	return "instance/" + s.String()
+	return "workload-instance/" + s.Registry + "/" + strings.ReplaceAll(url.QueryEscape(s.Key), "+", "%20")
 }

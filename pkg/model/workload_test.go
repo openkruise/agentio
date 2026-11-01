@@ -16,6 +16,21 @@ package model
 
 import "testing"
 
+func TestWorkloadAlias(t *testing.T) {
+	for _, tc := range []struct {
+		source SourceRef
+		want   string
+	}{
+		{SourceRef{Registry: "kubernetes/demo", Key: "pod-123"}, "workload-instance/kubernetes/demo/pod-123"},
+		{SourceRef{Registry: "运行时", Key: "sandbox+42:/"}, "workload-instance/运行时/sandbox%2B42%3A%2F"},
+		{SourceRef{Registry: "runtime", Key: "a/b% c-._~"}, "workload-instance/runtime/a%2Fb%25%20c-._~"},
+	} {
+		if got := tc.source.WorkloadAlias(); got != tc.want {
+			t.Errorf("%+v alias = %q, want %q", tc.source, got, tc.want)
+		}
+	}
+}
+
 func TestTunnelProtocolValidateRejectsUnknownProtocol(t *testing.T) {
 	for _, protocol := range []TunnelProtocol{"", TunnelProtocolNone, TunnelProtocolHBONE} {
 		if err := protocol.Validate(); err != nil {

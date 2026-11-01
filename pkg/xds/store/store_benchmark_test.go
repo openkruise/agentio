@@ -153,3 +153,82 @@ func BenchmarkAuthorizationDependencyExpansion(b *testing.B) {
 		}
 	}
 }
+
+// Two global gateway publications arrive while the same clients are behind.
+// Each gateway has legacy and native resources with the same wire name.
+func BenchmarkStoreGatewayBacklog(b *testing.B) {
+	for _, gateways := range []int{100, 1000} {
+		resources := make([]model.Resource, 0, gateways*2)
+		forward := make([]model.ResourceChange, 0, gateways*2)
+		reverse := make([]model.ResourceChange, 0, gateways*2)
+		for gateway := range gateways {
+			owner := fmt.Sprintf("demo/gateway-%04d", gateway)
+			for _, native := range []bool{false, true} {
+				key := model.ResourceKey{
+					TypeURL: model.ClusterType,
+					Name:    fmt.Sprintf("%s|native=%t|sandbox-ext-proc", owner, native),
+				}
+				facts := model.ResourceFacts{GatewayOwner: owner, AgentioEgress: native}
+				old, err := model.NewResource(
+					key,
+					"sandbox-ext-proc",
+					&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("old")},
+					nil,
+					facts,
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				next, err := model.NewResource(
+					key,
+					"sandbox-ext-proc",
+					&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("new")},
+					nil,
+					facts,
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				resources = append(resources, old)
+				forward = append(forward, model.ResourceChange{Key: key, Old: &old, New: &next})
+				reverse = append(reverse, model.ResourceChange{Key: key, Old: &next, New: &old})
+			}
+		}
+		initial, err := model.NewResourceSet(resources)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, clients := range []int{100, 1000} {
+			b.Run(fmt.Sprintf("gateways=%d/subscribers=%d", gateways, clients), func(b *testing.B) {
+				store := New(initial)
+				subscriptions := make([]Subscription, clients)
+				for i := range subscriptions {
+					subscriptions[i] = store.Subscribe(b.Context(), model.ClientScope{})
+					subscriptions[i].Watch(model.ClusterType)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					for _, changes := range [][]model.ResourceChange{forward, reverse} {
+						if _, err := store.Apply(changes); err != nil {
+							b.Fatal(err)
+						}
+					}
+					for _, subscription := range subscriptions {
+						if update := <-subscription.Updates(); len(
+							update.Candidates(model.ClusterType),
+						) != len(
+							resources,
+						) {
+							b.Fatalf(
+								"candidates=%d, want %d",
+								len(update.Candidates(model.ClusterType)),
+								len(resources),
+							)
+						}
+					}
+				}
+			})
+		}
+	}
+}

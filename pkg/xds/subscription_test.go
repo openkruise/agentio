@@ -235,3 +235,48 @@ func TestAcknowledgementWithoutMatchingSendDoesNotChangeState(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayPendingResponseAcknowledgement(t *testing.T) {
+	for _, mode := range []string{"ACK", "NACK", "unsubscribe"} {
+		t.Run(mode, func(t *testing.T) {
+			response := &discoveryv3.DeltaDiscoveryResponse{
+				Nonce:            "current",
+				Resources:        []*discoveryv3.Resource{{Name: "a"}, {Name: "b"}},
+				RemovedResources: []string{"gone"},
+			}
+			watch := &watchState{
+				trackAcks:       true,
+				nonceSent:       response.Nonce,
+				pendingResponse: response,
+				names:           sets.New("a", "b"),
+				sent:            map[string]string{"a": "v1", "b": "v1"},
+				started:         true,
+			}
+			watch.recordAcknowledgement(&discoveryv3.DeltaDiscoveryRequest{ResponseNonce: "unknown"})
+			if watch.pendingResponse != response || watch.pendingAcks != nil {
+				t.Fatal("unknown nonce changed the outstanding response")
+			}
+			req := &discoveryv3.DeltaDiscoveryRequest{ResponseNonce: response.Nonce}
+			if mode == "unsubscribe" {
+				applySubscription(watch, &discoveryv3.DeltaDiscoveryRequest{ResourceNamesUnsubscribe: []string{"b"}})
+				if watch.pendingResponse != nil || len(watch.pendingAcks) != 2 || watch.pendingAcks["b"] != "" {
+					t.Fatal("unsubscribe retained b or discarded other outstanding names")
+				}
+			}
+			if mode != "ACK" {
+				req.ErrorDetail = &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "invalid a"}
+			}
+			watch.recordAcknowledgement(req)
+			if watch.pendingResponse != nil {
+				t.Fatal("ACK/NACK retained the response payload")
+			}
+			if mode == "ACK" {
+				if watch.pendingAcks != nil || watch.recovering {
+					t.Fatal("ordinary ACK allocated an index or started recovery")
+				}
+			} else if !watch.recovering || watch.pendingAcks["a"] != response.Nonce || watch.pendingAcks["gone"] != response.Nonce {
+				t.Fatal("NACK lost outstanding additions or removals")
+			}
+		})
+	}
+}

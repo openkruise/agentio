@@ -34,7 +34,7 @@ type watchState struct {
 	sent     map[string]string
 	started  bool
 	// Nonces are scoped to this stream and resource type. nonceSent advances
-	// only after Send succeeds; ACK/NACK state only accepts that exact nonce.
+	// only after Send succeeds; diagnostics only accept that exact nonce.
 	nonceSent   string
 	nonceAcked  string
 	nonceNacked string
@@ -42,17 +42,50 @@ type watchState struct {
 	// nonceNacked == nonceSent identifies a rejection of the latest response.
 	lastError     string
 	lastErrorCode codes.Code
+	// A single outstanding response needs no per-resource index. Overlapping
+	// sends and NACKs materialize the latest unacknowledged nonce for each name.
+	trackAcks       bool
+	pendingResponse *discoveryv3.DeltaDiscoveryResponse
+	pendingAcks     map[string]string
+	recovering      bool
 	// denied tracks refused names so each refusal is logged once per stream.
 	denied sets.Set[string]
 	// pending contains initial demands deferred until publication or source removal.
 	pending sets.Set[string]
 }
 
-// recordAcknowledgement ignores spontaneous requests and acknowledgements of
-// older or unknown responses. Subscription changes are handled independently.
+// recordAcknowledgement resolves outstanding resource deliveries and only lets
+// the latest response update acknowledgement diagnostics. Subscription changes
+// are handled independently.
 func (watch *watchState) recordAcknowledgement(request *discoveryv3.DeltaDiscoveryRequest) bool {
 	nonce := request.GetResponseNonce()
-	if nonce == "" || nonce != watch.nonceSent {
+	if nonce == "" {
+		return false
+	}
+	if response := watch.pendingResponse; response != nil && response.Nonce == nonce {
+		if request.GetErrorDetail() == nil {
+			watch.pendingResponse = nil
+		} else {
+			watch.indexPendingResponse()
+		}
+	}
+	// Late replies still resolve their outstanding resources. A newer response
+	// may only cover some names from a rejected batch; its ACK cannot accept the
+	// rest. Superseded deliveries no longer need a separate response history.
+	for name, pendingNonce := range watch.pendingAcks {
+		if pendingNonce != nonce {
+			continue
+		}
+		if request.GetErrorDetail() != nil {
+			watch.recovering = true
+		} else {
+			delete(watch.pendingAcks, name)
+		}
+	}
+	if len(watch.pendingAcks) == 0 {
+		watch.recovering = false
+	}
+	if nonce != watch.nonceSent {
 		return false
 	}
 	if detail := request.GetErrorDetail(); detail != nil {
@@ -69,6 +102,23 @@ func (watch *watchState) recordAcknowledgement(request *discoveryv3.DeltaDiscove
 		watch.lastErrorCode = codes.OK
 	}
 	return true
+}
+
+func (watch *watchState) indexPendingResponse() {
+	response := watch.pendingResponse
+	if response == nil {
+		return
+	}
+	if watch.pendingAcks == nil {
+		watch.pendingAcks = make(map[string]string, len(response.Resources)+len(response.RemovedResources))
+	}
+	for _, resource := range response.Resources {
+		watch.pendingAcks[resource.Name] = response.Nonce
+	}
+	for _, name := range response.RemovedResources {
+		watch.pendingAcks[name] = response.Nonce
+	}
+	watch.pendingResponse = nil
 }
 
 func sortedNames(names sets.Set[string]) []string {
@@ -122,6 +172,11 @@ func applySubscription(watch *watchState, request *discoveryv3.DeltaDiscoveryReq
 		watch.pending.Delete(name)
 		// Unsubscribing is not a deletion; a late removal could fail a new demand.
 		delete(watch.sent, name)
+		watch.indexPendingResponse()
+		delete(watch.pendingAcks, name)
+	}
+	if len(watch.pendingAcks) == 0 {
+		watch.recovering = false
 	}
 	return changed
 }

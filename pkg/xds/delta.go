@@ -16,6 +16,7 @@ package xds
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -69,6 +70,11 @@ func (s *Server) handleRequest(
 	watch := watches[typeURL]
 	if watch == nil {
 		watch = &watchState{names: sets.New[string](), sent: make(map[string]string)}
+		switch typeURL {
+		case model.ClusterType, model.EndpointType, model.ListenerType, model.RouteType,
+			model.ExtensionConfigurationType, model.ProxyConfigType:
+			watch.trackAcks = true
+		}
 		watches[typeURL] = watch
 		subscription.Watch(typeURL)
 	}
@@ -108,12 +114,9 @@ func (s *Server) handleRequest(
 		}
 	}
 
-	// A nonce with an unchanged subscription is a pure acknowledgement; there
-	// is nothing to send.
-	explicitDemandSubscribe := (typeURL == model.SandboxType || typeURL == model.WorkloadType ||
-		typeURL == model.TrafficPolicyType) && len(request.GetResourceNamesSubscribe()) > 0
-	explicitSecretSubscribe := typeURL == model.SecretType && len(request.GetResourceNamesSubscribe()) > 0
-	if !changed && request.GetResponseNonce() != "" && !explicitSecretSubscribe && !explicitDemandSubscribe {
+	// Explicit subscriptions request retransmission after client eviction.
+	// Pure ACK/NACKs do not retry unchanged configuration.
+	if !changed && request.GetResponseNonce() != "" && len(request.GetResourceNamesSubscribe()) == 0 {
 		return nil
 	}
 	if generator, ok := s.generator(typeURL).(*SDSGenerator); ok {
@@ -282,6 +285,32 @@ func (s *Server) generateAndSend(
 	force bool,
 ) error {
 	started := time.Now()
+	if watch.recovering {
+		if !request.Full {
+			relevant := slices.ContainsFunc(
+				request.Update.Candidates(request.TypeURL),
+				func(candidate xdsstore.Candidate) bool {
+					resource, found := request.Snapshot.Get(candidate.Key)
+					if found && scopeAllows(request.Scope, resource) {
+						return true
+					}
+					// Retain withdrawals and ownership transfers, including intermediate owners.
+					return slices.ContainsFunc(candidate.Identities, func(identity xdsstore.Identity) bool {
+						return scopeAllows(request.Scope, model.Resource{Key: candidate.Key, Facts: identity.Facts})
+					})
+				},
+			)
+			if !relevant {
+				return nil
+			}
+		}
+		// Include uncertain removals while retaining already accepted versions.
+		request.Full = true
+		request.Subscription = newSubscriptionView(watch)
+		for name := range watch.pendingAcks {
+			request.Subscription.sent[name] = ""
+		}
+	}
 	if q := watch.sds; q != nil {
 		staticNames := staticSDSNames(request.Snapshot, q.scope)
 		// Publishing a static Secret supersedes same-name issuance, even if the
@@ -325,6 +354,15 @@ func (s *Server) sendGeneratedDelta(
 		// collect extensions when they become unreferenced rather than have them
 		// deleted immediately, so ECDS never sends removals. Sent state is kept
 		// because Envoy retains the extension.
+		if len(removed) > 0 {
+			watch.indexPendingResponse()
+		}
+		for _, name := range removed {
+			delete(watch.pendingAcks, name)
+		}
+		if len(watch.pendingAcks) == 0 {
+			watch.recovering = false
+		}
 		removed = nil
 	}
 	applyGenerationOutcomes(watch, request.Scope, connLog, delta)
@@ -388,6 +426,26 @@ func (s *Server) sendGeneratedDelta(
 		}
 		for _, resource := range resources {
 			watch.sent[resource.Name] = resource.Version
+		}
+	}
+	if watch.trackAcks {
+		// A delivery covering the same names fully supersedes the previous one.
+		if pending := watch.pendingResponse; pending != nil &&
+			slices.EqualFunc(pending.Resources, resources, func(a, b *discoveryv3.Resource) bool {
+				return a.Name == b.Name
+			}) && slices.Equal(pending.RemovedResources, removed) {
+			watch.pendingResponse = nil
+		}
+		watch.indexPendingResponse()
+		if len(watch.pendingAcks) == 0 {
+			watch.pendingResponse = response
+		} else {
+			for _, resource := range resources {
+				watch.pendingAcks[resource.Name] = nonce
+			}
+			for _, name := range removed {
+				watch.pendingAcks[name] = nonce
+			}
 		}
 	}
 	watch.nonceSent = nonce

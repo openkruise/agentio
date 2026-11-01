@@ -58,7 +58,7 @@ const (
 	// FilterStateSandboxLabels is the legacy label attribute used during rolling upgrades.
 	FilterStateSandboxLabels   = "filter_state['sandbox.labels']"
 	FilterStateSandboxToken    = "filter_state['sandbox.token']"
-	FilterStateSandboxMetadata = "filter_state['sandbox.metadata']"
+	FilterStateSandboxMetadata = "filter_state['agentio.sandbox.metadata']"
 	FilterStateRouteUpstream   = "filter_state['agentio.route.upstream']"
 
 	AttrDestinationPort    = "destination.port"
