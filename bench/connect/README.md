@@ -202,7 +202,7 @@ go run ./bench/connect/scenarios \
   -output /tmp/network-smoke-001
 ```
 
-The candidate image must contain `/usr/local/bin/envoy` and its compatible module. Use `-module /absolute/candidate.so` to override the module, or `-test-binary /absolute/network-limits.test` to use a prebuilt Linux test binary. Automatic builds follow the image architecture and retain the binary in `<output>-inputs` for replay. For remote execution, cross-compile the adapter and test binary, copy them to the Linux host, and invoke the same command with `-test-binary`. Keep generated binaries and all outputs outside the checkout.
+The adapter runs the container with the launcher's UID/GID so retained configuration files remain readable for CI artifact upload. The candidate image must contain `/usr/local/bin/envoy` and its compatible module. Use `-module /absolute/candidate.so` to override the module, or `-test-binary /absolute/network-limits.test` to use a prebuilt Linux test binary. Automatic builds follow the image architecture and retain the binary in `<output>-inputs` for replay. For remote execution, cross-compile the adapter and test binary, copy them to the Linux host, and invoke the same command with `-test-binary`. Keep generated binaries and all outputs outside the checkout.
 
 | Profile | Cases | Assertions |
 | --- | --- | --- |

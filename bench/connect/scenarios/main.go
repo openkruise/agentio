@@ -94,8 +94,10 @@ func run(image, module, binary, profile, only, output string) error {
 			SuccessMarker: "SCENARIO_COMPLETED",
 			Name:          c.Name,
 			Image:         image,
-			Timeout:       (timeout + 30*time.Second).String(),
-			Memory:        "12g",
+			// Keep retained 0600 configs readable by the launcher and CI artifact upload.
+			User:    fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+			Timeout: (timeout + 30*time.Second).String(),
+			Memory:  "12g",
 			Command: []string{
 				"/tests/network-limits.test",
 				"-test.v",

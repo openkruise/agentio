@@ -45,7 +45,7 @@ Example host suite (the `dir` must be an absolute checkout path):
 }
 ```
 
-For Docker, add `image`, use a command inside that image, and optionally specify `memory` (for example `12g`) and read-only `mounts` with absolute `source`/`target`. `dir` then refers to the container working directory. Commands are argv arrays; the framework never expands them through a shell. `SCENARIO_ARTIFACTS` points to the writable case directory (or `/artifacts` in Docker). Command arguments and environment values can use `{artifacts}` to pass this location to an existing runner.
+For Docker, add `image`, use a command inside that image, and optionally specify `user` (a Docker UID:GID override), `memory` (for example `12g`) and read-only `mounts` with absolute `source`/`target`. `dir` then refers to the container working directory. Commands are argv arrays; the framework never expands them through a shell. `SCENARIO_ARTIFACTS` points to the writable case directory (or `/artifacts` in Docker). Command arguments and environment values can use `{artifacts}` to pass this location to an existing runner.
 
 Each invocation requires a **new output directory outside the checkout**, whose parent already exists. Outputs include:
 

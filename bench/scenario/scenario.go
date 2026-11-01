@@ -46,6 +46,7 @@ type Suite struct {
 type Case struct {
 	Name          string            `json:"name"`
 	Image         string            `json:"image,omitempty"`
+	User          string            `json:"user,omitempty"`
 	Command       []string          `json:"command"`
 	Env           map[string]string `json:"env,omitempty"`
 	Mounts        []Mount           `json:"mounts,omitempty"`
@@ -88,8 +89,8 @@ func Validate(s Suite) error {
 		if err != nil || d <= 0 {
 			return fmt.Errorf("%s: positive timeout required", c.Name)
 		}
-		if c.Image == "" && (len(c.Mounts) > 0 || c.Memory != "") {
-			return fmt.Errorf("%s: mounts and memory require an image", c.Name)
+		if c.Image == "" && (len(c.Mounts) > 0 || c.Memory != "" || c.User != "") {
+			return fmt.Errorf("%s: mounts, memory and user require an image", c.Name)
 		}
 		for _, m := range c.Mounts {
 			if !filepath.IsAbs(m.Source) || !strings.HasPrefix(m.Target, "/") {
@@ -261,6 +262,9 @@ func runDocker(ctx context.Context, c Case, dir string, log io.Writer) (err erro
 	}
 	if c.Memory != "" {
 		args = append(args, "--memory", c.Memory, "--memory-swap", c.Memory)
+	}
+	if c.User != "" {
+		args = append(args, "--user", c.User)
 	}
 	if c.Dir != "" {
 		args = append(args, "--workdir", c.Dir)
