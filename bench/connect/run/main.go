@@ -109,7 +109,7 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 	encoder := json.NewEncoder(io.MultiWriter(rows, out))
 	balance := "default"
 	if c.Suite == "capacity" || c.Suite == "overhead" || c.Suite == "isolation" || c.Suite == "buckets" ||
-		c.Suite == "fairness" {
+		c.Suite == "fairness" || c.Suite == "hierarchy" {
 		balance = "exact"
 	}
 	env := map[string]any{
@@ -129,6 +129,7 @@ func run(ctx context.Context, c config, out io.Writer) (result error) {
 		"ticks":                   ticks,
 		"module":                  c.Module,
 		"shared_bytes_per_second": c.SharedRate,
+		"parent_bytes_per_second": c.ParentRate,
 		"progress_interval":       c.ProgressInterval.String(),
 	}
 	if c.Suite == "buckets" {
@@ -262,7 +263,7 @@ func runCase(
 			"-distinct=%t",
 			s.Mode == "distinct" || s.Mode == "distinct-high" || s.Mode == "combined" || s.Mode == "concurrency",
 		),
-		fmt.Sprintf("-fast-stream=%t", s.Mode == "isolation"),
+		fmt.Sprintf("-fast-stream=%t", s.Mode == "isolation" || s.Mode == "hierarchical"),
 		"-duration="+c.Duration.String(),
 		"-warmup="+c.Warmup.String(),
 		"-progress-interval="+c.ProgressInterval.String(),

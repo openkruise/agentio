@@ -32,6 +32,7 @@ type config struct {
 	Case             string
 	ConnectTimeout   time.Duration
 	SharedRate       int64
+	ParentRate       int64
 	ProgressInterval time.Duration
 	Suite            string
 	Repeats          int
@@ -63,7 +64,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 	c := config{}
 	f := flag.NewFlagSet("connect-bench run", flag.ContinueOnError)
 	f.SetOutput(w)
-	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, overhead, isolation, pilot, buckets, fairness")
+	f.StringVar(&c.Suite, "suite", "bandwidth", "bandwidth, capacity, overhead, isolation, pilot, buckets, fairness, hierarchy")
 	f.IntVar(&c.Connections, "connections", 4, "maximum outer HTTP/2 connections")
 	f.StringVar(&c.Case, "case", "", "one suite case: mode/streams/direction; empty runs the whole suite")
 	f.Int64Var(
@@ -72,6 +73,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		32*1048576,
 		"shared byte rate (distinct mode divides it across streams)",
 	)
+	f.Int64Var(&c.ParentRate, "parent-bytes-per-second", 32*1048576, "hierarchy suite: shared gateway byte rate")
 	f.DurationVar(
 		&c.ConnectTimeout,
 		"upstream-connect-timeout",
@@ -101,7 +103,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		c.Output == "" ||
 		c.Repeats <= 0 ||
 		c.Connections <= 0 ||
-		c.SharedRate <= 0 || c.ConnectTimeout <= 0 ||
+		c.SharedRate <= 0 || c.ParentRate <= 0 || c.ConnectTimeout <= 0 ||
 		c.ProgressInterval < 0 ||
 		c.Duration <= 0 ||
 		c.Warmup < 0 ||
@@ -110,7 +112,7 @@ func parseConfig(args []string, w io.Writer) (config, error) {
 		c.ConcurrencyLimit < 0 ||
 		uint64(c.ConcurrencyLimit) > 1<<32-1 ||
 		!slices.Contains(
-			[]string{"bandwidth", "capacity", "overhead", "isolation", "pilot", "buckets", "fairness"},
+			[]string{"bandwidth", "capacity", "overhead", "isolation", "pilot", "buckets", "fairness", "hierarchy"},
 			c.Suite,
 		) ||
 		c.ResidentBuckets < 0 ||
@@ -140,6 +142,12 @@ func schedule(c config) []scenario {
 				cases = append(cases, scenario{Mode: mode, Streams: n, Direction: "D"})
 			}
 			cases = append(cases, scenario{Mode: mode, Streams: 32, Direction: "U"})
+		}
+	} else if c.Suite == "hierarchy" {
+		for _, n := range []int{2, 33, 257} {
+			for _, mode := range []string{"isolation", "hierarchical"} {
+				cases = append(cases, scenario{Mode: mode, Streams: n, Direction: "D"})
+			}
 		}
 	} else if c.Suite == "fairness" {
 		for _, direction := range []string{"U", "D"} {
@@ -204,7 +212,7 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 	listener := object(resources["listeners"].([]any)[0])
 	object(object(listener["address"])["socket_address"])["port_value"] = c.BasePort + 2
 	if c.Suite == "capacity" || c.Suite == "overhead" || c.Suite == "isolation" || c.Suite == "buckets" ||
-		c.Suite == "fairness" {
+		c.Suite == "fairness" || c.Suite == "hierarchy" {
 		listener["connection_balance_config"] = map[string]any{"exact_balance": map[string]any{}}
 	}
 	for _, cluster := range resources["clusters"].([]any) {
@@ -239,13 +247,24 @@ func envoyConfig(c config, s scenario) ([]byte, error) {
 		"upload_bytes_per_second":   fmt.Sprint(rate),
 		"download_bytes_per_second": fmt.Sprint(rate),
 	}
-	if s.Mode == "isolation" {
+	if s.Mode == "isolation" || s.Mode == "hierarchical" {
 		descriptors = append(descriptors, map[string]any{
 			"entries": []any{
 				map[string]any{"key": "tenant", "value": "perf"},
 				map[string]any{"key": "sandbox", "value": "fast"},
 			},
 			"bandwidth_limit": map[string]any{"download_bytes_per_second": fmt.Sprint(int64(1) << 40)},
+		})
+	}
+	if s.Mode == "hierarchical" {
+		policy["rate_limits"] = append(policy["rate_limits"].([]any), map[string]any{
+			"actions": []any{map[string]any{
+				"generic_key": map[string]any{"descriptor_key": "scope", "descriptor_value": "gateway"},
+			}},
+		})
+		descriptors = append(descriptors, map[string]any{
+			"entries":         []any{map[string]any{"key": "scope", "value": "gateway"}},
+			"bandwidth_limit": map[string]any{"download_bytes_per_second": fmt.Sprint(c.ParentRate)},
 		})
 	}
 	if s.Mode == "bypass" {

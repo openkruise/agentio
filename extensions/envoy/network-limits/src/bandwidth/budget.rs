@@ -38,7 +38,11 @@ pub enum Wait {
 
 struct Batch {
     ticket: u64,
-    keys: Vec<Key>,
+    key: Option<Key>,
+    until: Option<Instant>,
+    // Retain credit positions already waited for, so intersecting budgets cannot
+    // repeatedly steal each other's recovered credit while this batch moves queues.
+    held: Vec<Key>,
 }
 
 struct Bucket {
@@ -50,6 +54,32 @@ struct Bucket {
     // Keeping idle buckets until then prevents reconnects from replenishing burst credit.
     ready: [Instant; 2],
     debt_rates: [Option<NonZeroU64>; 2],
+}
+
+impl Bucket {
+    fn due(&self, direction: usize, bytes: usize, now: Instant) -> Option<Instant> {
+        let (rate, burst) = if direction == 0 {
+            (
+                self.limits.upload_bytes_per_second,
+                self.limits.upload_burst_bytes,
+            )
+        } else {
+            (
+                self.limits.download_bytes_per_second,
+                self.limits.download_burst_bytes,
+            )
+        };
+        rate.map(|rate| {
+            let remaining = self.ready[direction].saturating_duration_since(now);
+            // Oversized callback batches require full credit, then pay their entire cost.
+            let credit = burst.map_or(0, |b| b.get().saturating_sub(bytes as u64));
+            let slack = Duration::from_secs(credit / rate.get())
+                + Duration::from_nanos(
+                    ((credit % rate.get()) as u128 * 1_000_000_000 / rate.get() as u128) as u64,
+                );
+            now + remaining.saturating_sub(slack)
+        })
+    }
 }
 
 pub struct Budget {
@@ -218,8 +248,11 @@ impl Ledger {
         if old != new {
             for direction in 0..2 {
                 if let Some(mut batch) = self.take_batch(id, direction) {
-                    batch.keys = new.to_vec();
-                    self.insert_batch(id, direction, batch);
+                    // The following admission chooses the new bottleneck, keeping FIFO age.
+                    batch.key = None;
+                    batch.until = None;
+                    batch.held.clear();
+                    self.pending_batches.insert((id, direction), batch);
                 }
             }
         }
@@ -300,10 +333,9 @@ impl Ledger {
         self.next_expiration()
     }
 
-    // Tickets order whole buffered batches, independently in each direction. A stream
-    // that just made progress rejoins at the tail rather than racing all waiters.
-    // The same ticket enters every applicable bucket, preventing cyclic waits when
-    // a stream is constrained by both a tenant and a sandbox budget.
+    // Queue only at the current bottleneck: a sandbox waiting for its own credit must
+    // not reserve the head of a shared parent queue. Keep the ticket when moving queues,
+    // so newly arriving batches cannot jump ahead once an older batch becomes eligible.
     pub fn admit_batch(
         &mut self,
         id: u64,
@@ -316,62 +348,120 @@ impl Ledger {
             self.take_batch(id, direction);
             return None;
         }
-        let behind = keys.iter().any(|key| {
+        // Uncontended traffic avoids queue lookups entirely.
+        if self.pending_batches.is_empty() && self.charge(keys, direction, bytes, now).is_none() {
+            return None;
+        }
+        let ticket = self
+            .pending_batches
+            .get(&(id, direction))
+            .map_or(u64::MAX, |b| b.ticket);
+        let mut delayed = None;
+        let mut behind = None;
+        for key in keys {
             let bucket = &self.buckets[key];
-            let rate = if direction == 0 {
-                bucket.limits.upload_bytes_per_second
-            } else {
-                bucket.limits.download_bytes_per_second
+            let Some(due) = bucket.due(direction, bytes, now) else {
+                continue;
             };
-            rate.is_some()
-                && bucket.queued[direction]
-                    .first_key_value()
-                    .is_some_and(|(_, first)| *first != id)
-        });
-        let waiting = if behind {
-            Some(Wait::Turn)
-        } else {
-            self.charge(keys, direction, bytes, now).map(Wait::Until)
-        };
-        if waiting.is_some() {
-            if !self.pending_batches.contains_key(&(id, direction)) {
-                self.next_ticket += 1;
-                self.insert_batch(
-                    id,
-                    direction,
-                    Batch {
-                        ticket: self.next_ticket,
-                        keys: keys.to_vec(),
-                    },
-                );
+            if due > now && delayed.is_none_or(|(_, previous)| due > previous) {
+                delayed = Some((key, due));
             }
-        } else {
-            self.take_batch(id, direction);
+            if let Some((&first_ticket, _)) = bucket.queued[direction].first_key_value()
+                && first_ticket < ticket
+                && behind.is_none_or(|(_, previous)| first_ticket < previous)
+            {
+                behind = Some((key, first_ticket));
+            }
         }
-        waiting
-    }
-
-    fn insert_batch(&mut self, id: u64, direction: usize, batch: Batch) {
-        for key in &batch.keys {
-            self.buckets.get_mut(key).unwrap().queued[direction].insert(batch.ticket, id);
+        // A credit delay takes priority over an earlier ticket in another bucket.
+        // Only that delayed bucket needs to keep this batch queued until it is eligible.
+        let blocked = delayed.or_else(|| behind.map(|(key, _)| (key, now)));
+        if let Some((key, due)) = blocked {
+            let current = self.pending_batches.get(&(id, direction));
+            if current.is_none_or(|batch| batch.key.as_ref() != Some(key)) {
+                let mut batch = self
+                    .pending_batches
+                    .remove(&(id, direction))
+                    .unwrap_or_else(|| {
+                        self.next_ticket += 1;
+                        Batch {
+                            ticket: self.next_ticket,
+                            key: None,
+                            until: None,
+                            held: Vec::new(),
+                        }
+                    });
+                if let Some(old) = &batch.key {
+                    if batch.until.is_some_and(|due| due <= now)
+                        && self.buckets[old]
+                            .due(direction, bytes, now)
+                            .is_some_and(|due| due <= now)
+                        && self.buckets[old].queued[direction]
+                            .first_key_value()
+                            .unwrap()
+                            .1
+                            == &id
+                        && !batch.held.contains(old)
+                    {
+                        batch.held.push(old.clone());
+                    }
+                    if !batch.held.contains(old)
+                        && let Some(next) = self.remove_queued(old, batch.ticket, direction)
+                        && let Some(scheduler) = self.waiters.get(&next)
+                    {
+                        scheduler.commit(0);
+                    }
+                }
+                batch.key = Some(key.clone());
+                self.buckets.get_mut(key).unwrap().queued[direction].insert(batch.ticket, id);
+                self.pending_batches.insert((id, direction), batch);
+            }
+            let (_, first) = self.buckets[key].queued[direction]
+                .first_key_value()
+                .unwrap();
+            let until = (*first == id).then_some(due);
+            self.pending_batches
+                .get_mut(&(id, direction))
+                .unwrap()
+                .until = until;
+            return Some(until.map_or(Wait::Turn, Wait::Until));
         }
-        self.pending_batches.insert((id, direction), batch);
+        self.charge(keys, direction, bytes, now);
+        self.take_batch(id, direction);
+        None
     }
 
     fn take_batch(&mut self, id: u64, direction: usize) -> Option<Batch> {
         let batch = self.pending_batches.remove(&(id, direction))?;
-        for key in &batch.keys {
-            self.buckets.get_mut(key).unwrap().queued[direction].remove(&batch.ticket);
-        }
-        // Wake only successors, not every contender. Non-head waiters have no timer.
-        for key in &batch.keys {
-            if let Some((_, next)) = self.buckets[key].queued[direction].first_key_value()
-                && let Some(scheduler) = self.waiters.get(next)
+        let mut notified = Vec::new();
+        for key in batch
+            .held
+            .iter()
+            .chain(batch.key.iter().filter(|key| !batch.held.contains(key)))
+        {
+            if let Some(next) = self.remove_queued(key, batch.ticket, direction)
+                && !notified.contains(&next)
+                && let Some(scheduler) = self.waiters.get(&next)
             {
                 scheduler.commit(0);
+                if !batch.held.is_empty() {
+                    notified.push(next);
+                }
             }
         }
         Some(batch)
+    }
+
+    fn remove_queued(&mut self, key: &Key, ticket: u64, direction: usize) -> Option<u64> {
+        let queue = &mut self.buckets.get_mut(key).unwrap().queued[direction];
+        let was_head = queue.first_key_value().unwrap().0 == &ticket;
+        queue.remove(&ticket);
+        // Removing a non-head batch does not change the next eligible waiter.
+        if was_head {
+            queue.first_key_value().map(|(_, id)| *id)
+        } else {
+            None
+        }
     }
 
     pub fn cancel_batches(&mut self, id: u64) {
@@ -390,32 +480,9 @@ impl Ledger {
         if bytes == 0 {
             return None;
         }
-        let limits = |bucket: &Bucket| {
-            let limit = &bucket.limits;
-            if direction == 0 {
-                (limit.upload_bytes_per_second, limit.upload_burst_bytes)
-            } else {
-                (limit.download_bytes_per_second, limit.download_burst_bytes)
-            }
-        };
         let due = keys
             .iter()
-            .filter_map(|k| {
-                let bucket = &self.buckets[k];
-                let (rate, burst) = limits(bucket);
-                rate.map(|rate| {
-                    let remaining = bucket.ready[direction].saturating_duration_since(now);
-                    // Reserve enough credit for the whole batch. Oversized batches require a full
-                    // bucket; they pass whole and their entire cost remains payable afterward.
-                    let credit = burst.map_or(0, |b| b.get().saturating_sub(bytes as u64));
-                    let slack = Duration::from_secs(credit / rate.get())
-                        + Duration::from_nanos(
-                            ((credit % rate.get()) as u128 * 1_000_000_000 / rate.get() as u128)
-                                as u64,
-                        );
-                    now + remaining.saturating_sub(slack)
-                })
-            })
+            .filter_map(|k| self.buckets[k].due(direction, bytes, now))
             .max();
         if let Some(due) = due.filter(|t| *t > now) {
             return Some(due);

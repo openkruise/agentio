@@ -633,3 +633,189 @@ fn queued_batch_rebind_and_cancellation_leave_no_stale_head() {
     ledger.release(&other, now + Duration::from_secs(2));
     ledger.release(&shared, now + Duration::from_secs(2));
 }
+
+#[test]
+fn slow_child_releases_parent_and_keeps_its_ticket_when_moving_queues() {
+    let config = Config::parse(br#"{
+      "rate_limits":[
+        {"actions":[{"filter_state":{"key":"id","descriptor_key":"id"}}]},
+        {"actions":[{"generic_key":{"descriptor_key":"scope","descriptor_value":"gateway"}}]}
+      ],
+      "descriptors":[
+        {"entries":[{"key":"id"}],"bandwidth_limit":{"download_bytes_per_second":100}},
+        {"entries":[{"key":"id","value":"fast"}],"bandwidth_limit":{"download_bytes_per_second":100000}},
+        {"entries":[{"key":"scope","value":"gateway"}],"bandwidth_limit":{"download_bytes_per_second":1000}}
+      ]
+    }"#).unwrap();
+    let slow = config.resolve(|_| Some("slow".into())).unwrap();
+    let fast = config.resolve(|_| Some("fast".into())).unwrap();
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    for keys in [&slow, &slow, &fast] {
+        ledger.acquire(keys, now).unwrap();
+    }
+    assert_eq!(ledger.admit_batch(1, &slow, 1, 100, now), None);
+    assert_eq!(
+        ledger.admit_batch(1, &slow, 1, 100, now),
+        Some(Wait::Until(now + Duration::from_secs(1)))
+    );
+    assert_eq!(ledger.admit_batch(2, &slow, 1, 100, now), Some(Wait::Turn));
+    // The slow sandbox cannot monopolize the parent while waiting for its own credit.
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, now + Duration::from_millis(100)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, now + Duration::from_millis(100)),
+        Some(Wait::Until(now + Duration::from_millis(200)))
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, now + Duration::from_millis(950)),
+        None
+    );
+    let parent_ready = now + Duration::from_millis(1050);
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, now + Duration::from_millis(950)),
+        Some(Wait::Until(parent_ready))
+    );
+    // Both slow batches move to the parent with their original priority.
+    assert_eq!(
+        ledger.admit_batch(1, &slow, 1, 100, now + Duration::from_secs(1)),
+        Some(Wait::Until(parent_ready))
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &slow, 1, 100, now + Duration::from_secs(1)),
+        Some(Wait::Turn)
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, parent_ready),
+        Some(Wait::Turn)
+    );
+    assert_eq!(ledger.admit_batch(1, &slow, 1, 100, parent_ready), None);
+    // Next slow batch moves back to its child, allowing the fast flow to proceed.
+    assert_eq!(
+        ledger.admit_batch(2, &slow, 1, 100, parent_ready),
+        Some(Wait::Until(parent_ready + Duration::from_secs(1)))
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &fast, 1, 100, parent_ready + Duration::from_millis(100)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &slow, 1, 100, parent_ready + Duration::from_secs(1)),
+        None
+    );
+}
+
+#[test]
+fn different_key_order_does_not_create_cyclic_queue_waits() {
+    let config = Config::parse(CONFIG.as_bytes()).unwrap();
+    let mut both = keys(&config, "a", "one");
+    both.extend(keys(&config, "b", "one"));
+    let reverse: Vec<_> = both.iter().rev().cloned().collect();
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    ledger.acquire(&both, now).unwrap();
+    ledger.acquire(&reverse, now).unwrap();
+    assert_eq!(ledger.admit_batch(1, &both, 0, 100, now), None);
+    assert_eq!(
+        ledger.admit_batch(1, &both, 0, 100, now),
+        Some(Wait::Until(now + Duration::from_secs(1)))
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &reverse, 0, 100, now),
+        Some(Wait::Until(now + Duration::from_secs(1)))
+    );
+    // Although each batch heads a different queue, the older ticket can advance.
+    assert_eq!(
+        ledger.admit_batch(2, &reverse, 0, 100, now + Duration::from_secs(1)),
+        Some(Wait::Turn)
+    );
+    assert_eq!(
+        ledger.admit_batch(1, &both, 0, 100, now + Duration::from_secs(1)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &reverse, 0, 100, now + Duration::from_secs(2)),
+        None
+    );
+}
+
+#[test]
+fn cancelling_non_head_does_not_wake_the_head() {
+    let config = Config::parse(CONFIG.as_bytes()).unwrap();
+    let keys = keys(&config, "a", "one");
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    ledger.acquire(&keys, now).unwrap();
+    ledger.charge(&keys, 0, 100, now);
+    ledger.admit_batch(1, &keys, 0, 100, now);
+    ledger.admit_batch(2, &keys, 0, 100, now);
+    let mut scheduler = MockEnvoyHttpFilterScheduler::new();
+    scheduler.expect_commit().times(0);
+    ledger.waiters.insert(1, Arc::new(scheduler));
+    ledger.cancel_batches(2);
+    assert_eq!(
+        ledger.admit_batch(1, &keys, 0, 100, now + Duration::from_secs(1)),
+        None
+    );
+}
+
+#[test]
+fn intersecting_budgets_cannot_steal_already_recovered_credit() {
+    let config = Config::parse(CONFIG.as_bytes()).unwrap();
+    let x = keys(&config, "x", "one");
+    let y = keys(&config, "y", "one");
+    let both: Vec<_> = x.iter().chain(&y).cloned().collect();
+    let mut ledger = Ledger::new(config);
+    let now = Instant::now();
+    for keys in [&x, &y, &both] {
+        ledger.acquire(keys, now).unwrap();
+    }
+    assert_eq!(ledger.admit_batch(1, &x, 0, 100, now), None);
+    assert_eq!(
+        ledger.admit_batch(2, &both, 0, 100, now),
+        Some(Wait::Until(now + Duration::from_secs(1)))
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &y, 0, 100, now + Duration::from_millis(900)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &both, 0, 100, now + Duration::from_secs(1)),
+        Some(Wait::Until(now + Duration::from_millis(1900)))
+    );
+    // Without retaining X's recovered position, an X-only stream could consume it
+    // just before Y recovers, moving the older batch back and forth forever.
+    assert_eq!(
+        ledger.admit_batch(1, &x, 0, 100, now + Duration::from_millis(1800)),
+        Some(Wait::Turn)
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &both, 0, 100, now + Duration::from_millis(1900)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(1, &x, 0, 100, now + Duration::from_millis(2900)),
+        None
+    );
+    // Repeat the staggered wait, then cancel while both positions are retained.
+    ledger.admit_batch(2, &both, 0, 100, now + Duration::from_millis(2900));
+    assert_eq!(
+        ledger.admit_batch(3, &y, 0, 100, now + Duration::from_millis(3800)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(2, &both, 0, 100, now + Duration::from_millis(3900)),
+        Some(Wait::Until(now + Duration::from_millis(4800)))
+    );
+    ledger.cancel_batches(2);
+    assert_eq!(
+        ledger.admit_batch(1, &x, 0, 100, now + Duration::from_secs(4)),
+        None
+    );
+    assert_eq!(
+        ledger.admit_batch(3, &y, 0, 100, now + Duration::from_millis(4800)),
+        None
+    );
+}

@@ -52,6 +52,7 @@ The default run uses three repeats, two seconds of warmup and six seconds of mea
 | `isolation` | 3 | One fast sandbox beside 0/32/256 noisy streams; exact worker connection balancing. |
 | `pilot` | 4 | 32-stream download: baseline, high, shared, distinct. |
 | `fairness` | 7 | Shared download/upload at 1/8/32 streams, plus 32 noisy streams beside one fast sandbox. |
+| `hierarchy` | 6 | 1/32/256 slow streams and one fast stream, with and without a shared gateway budget. |
 | `buckets` | 1 | Populate background buckets, probe 5,000 CONNECT open/close cycles, then measure 32-stream download. |
 
 Modes:
@@ -160,7 +161,26 @@ Unit tests cover scenario counts, configuration variants, CPU/stat parsing, uplo
 
 ## Shared-bucket progress
 
-Use the same suite at normal and low rates; it uses no burst allowance. For example:
+The `hierarchy` suite compares independent sandbox budgets (`isolation`) with the same
+budgets plus a shared gateway limit (`hierarchical`). All slow streams share one sandbox;
+the last stream uses a separate nonbinding sandbox limit. For example:
+
+```sh
+connect-bench run -suite=hierarchy -bytes-per-second=1048576 \
+  -parent-bytes-per-second=33554432 -progress-interval=100ms \
+  -repeats=3 -warmup=4s -duration=30s -output=/results/hierarchy
+```
+
+Inspect `fast_mib_per_s`, `noisy_mib_per_s`, and the last entry in
+`stream_max_idle_ms`. In this example the slow sandbox can use 1 MiB/s, while the
+fast sandbox has demand for the remaining gateway capacity. This exposes whether
+a slow sandbox waiting on its own quota blocks an otherwise eligible fast sandbox
+in the shared parent queue. Compare module builds using `-module`, identical CPU
+affinity and connection counts, and separate output directories; alternate build
+order across repetitions. These are throughput/progress measurements, not a
+guarantee of minimum bandwidth.
+
+Use the `fairness` suite at normal and low rates; it uses no burst allowance. For example:
 
 ```sh
 connect-bench run -suite=fairness -bytes-per-second=1048576 \

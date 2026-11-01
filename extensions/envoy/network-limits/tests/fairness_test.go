@@ -125,3 +125,36 @@ func TestEnvoySharedBucketProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvoyHierarchicalBandwidthProgress(t *testing.T) {
+	origin := startOrigin(t, false)
+	r := startEnvoy(t, origin.port(), freePort(t), func(l object) {
+		p := policy(filters(l)[1])
+		descriptors := p["descriptors"].([]any)
+		nested(obj(descriptors[0]), "bandwidth_limit")["download_bytes_per_second"] = 1048576
+		nested(obj(descriptors[1]), "bandwidth_limit")["download_bytes_per_second"] = 1 << 30
+		p["rate_limits"] = append(p["rate_limits"].([]any), object{
+			"actions": []any{object{"generic_key": object{
+				"descriptor_key": "scope", "descriptor_value": "gateway",
+			}}},
+		})
+		p["descriptors"] = append(descriptors, object{
+			"entries":         []any{object{"key": "scope", "value": "gateway"}},
+			"bandwidth_limit": object{"download_bytes_per_second": 32 * 1048576},
+		})
+	})
+	transfers := make([]transfer, 8, 9)
+	for i := range transfers {
+		transfers[i] = transfer{"test", "slow", "D", size}
+	}
+	transfers = append(transfers, transfer{"vip", "fast", "D", size})
+	times := multiplex(t, r.port, transfers)
+	// Fast traffic can use the parent's remaining credit while the slow sandbox waits.
+	durationBetween(t, times[8], 0, 2)
+	var slow time.Duration
+	for _, duration := range times[:8] {
+		slow = max(slow, duration)
+	}
+	durationBetween(t, slow, 3, 10)
+	t.Logf("fast file %s, slow sandbox %s; all payloads verified", times[8], slow)
+}

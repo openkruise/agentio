@@ -27,7 +27,7 @@ import (
 )
 
 func TestSuitesPreserveCasesAndRepeats(t *testing.T) {
-	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 105, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21} {
+	for suite, want := range map[string]int{"bandwidth": 57, "capacity": 33, "overhead": 105, "isolation": 9, "pilot": 12, "buckets": 3, "fairness": 21, "hierarchy": 18} {
 		c := config{Suite: suite, Repeats: 3}
 		cases := schedule(c)
 		if len(cases) != want || !reflect.DeepEqual(cases, schedule(c)) {
@@ -65,6 +65,37 @@ func TestSingleCaseRetainsRepeatsAndConnectionTopology(t *testing.T) {
 	} {
 		if _, err := parseConfig(args, io.Discard); err == nil {
 			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
+func TestHierarchyAddsSharedParentWithoutChangingSandboxLimits(t *testing.T) {
+	for _, mode := range []string{"isolation", "hierarchical"} {
+		c := config{Suite: "hierarchy", BasePort: 19000, SharedRate: 1048576, ParentRate: 33554432, ConnectTimeout: time.Second}
+		data, err := envoyConfig(c, scenario{Mode: mode, Streams: 33, Direction: "D"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b map[string]any
+		if err := json.Unmarshal(data, &b); err != nil {
+			t.Fatal(err)
+		}
+		l := object(object(b["static_resources"])["listeners"].([]any)[0])
+		hcm := object(object(object(l["filter_chains"].([]any)[0])["filters"].([]any)[0])["typed_config"])
+		filter := object(hcm["http_filters"].([]any)[1])
+		p := object(object(object(object(filter["typed_config"])["value"])["filter_config"])["value"])
+		d := p["descriptors"].([]any)
+		if object(object(d[0])["bandwidth_limit"])["download_bytes_per_second"] != "1048576" ||
+			object(object(d[1])["bandwidth_limit"])["download_bytes_per_second"] != "1099511627776" {
+			t.Fatal("slow and fast sandboxes lost their independent limits")
+		}
+		if mode == "hierarchical" {
+			if len(p["rate_limits"].([]any)) != 2 || len(d) != 3 ||
+				object(object(d[2])["bandwidth_limit"])["download_bytes_per_second"] != "33554432" {
+				t.Fatal("shared parent budget missing")
+			}
+		} else if len(p["rate_limits"].([]any)) != 1 || len(d) != 2 {
+			t.Fatal("isolation control unexpectedly has a parent budget")
 		}
 	}
 }
