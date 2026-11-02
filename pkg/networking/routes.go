@@ -102,8 +102,8 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		ValidateClusters:         wrapperspb.Bool(false),
 		IgnorePortInHostMatching: true,
 	}
-	settings := gateway.GetConnectionPool().GetHttp()
-	defaultSettings := settings.GetDefaultRoute()
+	settings := gateway.GetHttp().GetRouting()
+	defaultSettings := settings.GetFallback()
 	staticDomains := make(map[string]struct{})
 	for serviceIndex, service := range gateway.GetServiceEntries() {
 		addresses := make([]string, 0, len(service.GetEndpoints()))
@@ -126,7 +126,7 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 			})
 		}
 	}
-	for index, override := range settings.GetRouteOverrides() {
+	for index, override := range settings.GetHostOverrides() {
 		domains := make([]string, 0, len(override.GetHosts()))
 		for _, domain := range override.GetHosts() {
 			if domain == "*" {
@@ -208,10 +208,10 @@ func (b *resourceBuilder) staticEndpointRoute(
 	return result
 }
 
-func routeSettingsForHost(settings *configv1.ConnectionPoolHttpSettings, host string) *configv1.HttpRouteSettings {
-	result := settings.GetDefaultRoute()
+func routeSettingsForHost(settings *configv1.HttpRoutingSettings, host string) *configv1.HttpRouteSettings {
+	result := settings.GetFallback()
 	bestRank, bestLength := -1, -1
-	for _, override := range settings.GetRouteOverrides() {
+	for _, override := range settings.GetHostOverrides() {
 		for _, pattern := range override.GetHosts() {
 			rank, length, matched := domainMatchSpecificity(pattern, host)
 			if matched && (rank > bestRank || rank == bestRank && length > bestLength) {

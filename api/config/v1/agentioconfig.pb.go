@@ -303,37 +303,35 @@ type EgressGateway struct {
 	// nil means fall back to the global configuration.
 	// An explicit provider with an empty service disables ext_proc for this gateway.
 	ExtProc *ExtProcProvider `protobuf:"bytes,4,opt,name=ext_proc,json=extProc,proto3" json:"ext_proc,omitempty"`
-	// Per-gateway connection pool and timeout settings. Controls HCM
-	// StreamIdleTimeout, TCPProxy idle/max-connection-duration, and
-	// per-host HTTP route timeouts. nil means use hardcoded defaults
-	// (StreamIdleTimeout=30min, TCPProxy IdleTimeout=1h).
-	ConnectionPool *ConnectionPoolSettings `protobuf:"bytes,5,opt,name=connection_pool,json=connectionPool,proto3" json:"connection_pool,omitempty"`
 	// Per-gateway connect rate limit. Controls the rate at which new
 	// H2 CONNECT streams are accepted on the connect_terminate HCM.
 	// nil means no rate limiting.
-	ConnectRateLimit *LocalRateLimitSettings `protobuf:"bytes,6,opt,name=connect_rate_limit,json=connectRateLimit,proto3" json:"connect_rate_limit,omitempty"`
+	ConnectRateLimit *LocalRateLimitSettings `protobuf:"bytes,5,opt,name=connect_rate_limit,json=connectRateLimit,proto3" json:"connect_rate_limit,omitempty"`
 	// External services whose DNS result is overridden at this gateway. The
 	// original request port and detected protocol are preserved; only the
 	// upstream address is replaced by the configured endpoint.
-	ServiceEntries []*EgressServiceEntry `protobuf:"bytes,7,rep,name=service_entries,json=serviceEntries,proto3" json:"service_entries,omitempty"`
-	// TLS settings for connections originated to destinations and HTTPS proxies.
-	// Unset fields use the built-in upstream defaults; certificate verification
-	// and session cache behavior are not configurable here.
-	UpstreamTls *UpstreamTlsSettings `protobuf:"bytes,8,opt,name=upstream_tls,json=upstreamTls,proto3" json:"upstream_tls,omitempty"`
+	ServiceEntries []*EgressServiceEntry `protobuf:"bytes,6,rep,name=service_entries,json=serviceEntries,proto3" json:"service_entries,omitempty"`
 	// Format of this gateway's built-in envoy access-log provider on stdout.
 	// Applies to HTTP, TCP, CONNECT failures, and listener failures. Omitted or
 	// empty means the built-in JSON format. Telemetry still controls log enablement
 	// and filtering; explicitly overridden providers keep their own formats.
-	AccessLogFormat *AccessLogFormat `protobuf:"bytes,9,opt,name=access_log_format,json=accessLogFormat,proto3" json:"access_log_format,omitempty"`
+	AccessLogFormat *AccessLogFormat `protobuf:"bytes,7,opt,name=access_log_format,json=accessLogFormat,proto3" json:"access_log_format,omitempty"`
 	// Shapes TCP payload bytes on the CONNECT termination chain, independently
 	// of connect_rate_limit (which counts new CONNECT streams). Requires the
 	// community gateway image containing the bandwidth dynamic module.
-	BandwidthLimit *BandwidthLimitSettings `protobuf:"bytes,10,opt,name=bandwidth_limit,json=bandwidthLimit,proto3" json:"bandwidth_limit,omitempty"`
+	BandwidthLimit *BandwidthLimitSettings `protobuf:"bytes,8,opt,name=bandwidth_limit,json=bandwidthLimit,proto3" json:"bandwidth_limit,omitempty"`
 	// Limits active TCP CONNECT streams by trusted filter state, independently
 	// of creation rate and byte bandwidth. Requires the community gateway image.
-	ConnectConcurrencyLimit *ConnectConcurrencyLimitSettings `protobuf:"bytes,11,opt,name=connect_concurrency_limit,json=connectConcurrencyLimit,proto3" json:"connect_concurrency_limit,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	ConnectConcurrencyLimit *ConnectConcurrencyLimitSettings `protobuf:"bytes,9,opt,name=connect_concurrency_limit,json=connectConcurrencyLimit,proto3" json:"connect_concurrency_limit,omitempty"`
+	// Business HTTP protocol settings, including HTTP after TLS termination.
+	// Does not configure the outer HTTP/2 CONNECT tunnel.
+	Http *GatewayHttpSettings `protobuf:"bytes,10,opt,name=http,proto3" json:"http,omitempty"`
+	// TCP forwarding connection timeouts, including the TLS termination relay.
+	Tcp *TcpSettings `protobuf:"bytes,11,opt,name=tcp,proto3" json:"tcp,omitempty"`
+	// TLS origination settings. TLS interception remains in tls_termination.
+	Tls           *GatewayTlsSettings `protobuf:"bytes,12,opt,name=tls,proto3" json:"tls,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EgressGateway) Reset() {
@@ -394,13 +392,6 @@ func (x *EgressGateway) GetExtProc() *ExtProcProvider {
 	return nil
 }
 
-func (x *EgressGateway) GetConnectionPool() *ConnectionPoolSettings {
-	if x != nil {
-		return x.ConnectionPool
-	}
-	return nil
-}
-
 func (x *EgressGateway) GetConnectRateLimit() *LocalRateLimitSettings {
 	if x != nil {
 		return x.ConnectRateLimit
@@ -411,13 +402,6 @@ func (x *EgressGateway) GetConnectRateLimit() *LocalRateLimitSettings {
 func (x *EgressGateway) GetServiceEntries() []*EgressServiceEntry {
 	if x != nil {
 		return x.ServiceEntries
-	}
-	return nil
-}
-
-func (x *EgressGateway) GetUpstreamTls() *UpstreamTlsSettings {
-	if x != nil {
-		return x.UpstreamTls
 	}
 	return nil
 }
@@ -439,6 +423,27 @@ func (x *EgressGateway) GetBandwidthLimit() *BandwidthLimitSettings {
 func (x *EgressGateway) GetConnectConcurrencyLimit() *ConnectConcurrencyLimitSettings {
 	if x != nil {
 		return x.ConnectConcurrencyLimit
+	}
+	return nil
+}
+
+func (x *EgressGateway) GetHttp() *GatewayHttpSettings {
+	if x != nil {
+		return x.Http
+	}
+	return nil
+}
+
+func (x *EgressGateway) GetTcp() *TcpSettings {
+	if x != nil {
+		return x.Tcp
+	}
+	return nil
+}
+
+func (x *EgressGateway) GetTls() *GatewayTlsSettings {
+	if x != nil {
+		return x.Tls
 	}
 	return nil
 }
@@ -1646,62 +1651,6 @@ func (x *ProcessingModeOptions) GetAttributes() []string {
 	return nil
 }
 
-// ConnectionPoolSettings controls TCP and HTTP connection management for the
-// sandbox egress path.
-type ConnectionPoolSettings struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// TCP-level connection pool settings.
-	Tcp *TcpSettings `protobuf:"bytes,1,opt,name=tcp,proto3" json:"tcp,omitempty"`
-	// HTTP-level connection pool and route settings.
-	Http          *ConnectionPoolHttpSettings `protobuf:"bytes,2,opt,name=http,proto3" json:"http,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConnectionPoolSettings) Reset() {
-	*x = ConnectionPoolSettings{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConnectionPoolSettings) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConnectionPoolSettings) ProtoMessage() {}
-
-func (x *ConnectionPoolSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConnectionPoolSettings.ProtoReflect.Descriptor instead.
-func (*ConnectionPoolSettings) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *ConnectionPoolSettings) GetTcp() *TcpSettings {
-	if x != nil {
-		return x.Tcp
-	}
-	return nil
-}
-
-func (x *ConnectionPoolSettings) GetHttp() *ConnectionPoolHttpSettings {
-	if x != nil {
-		return x.Http
-	}
-	return nil
-}
-
 // TcpSettings configures TCP connection timeouts and limits for the
 // sandbox egress TCPProxy filters and passthrough path.
 type TcpSettings struct {
@@ -1719,7 +1668,7 @@ type TcpSettings struct {
 
 func (x *TcpSettings) Reset() {
 	*x = TcpSettings{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[23]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1731,7 +1680,7 @@ func (x *TcpSettings) String() string {
 func (*TcpSettings) ProtoMessage() {}
 
 func (x *TcpSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[23]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1744,7 +1693,7 @@ func (x *TcpSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TcpSettings.ProtoReflect.Descriptor instead.
 func (*TcpSettings) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{23}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TcpSettings) GetIdleTimeout() *duration.Duration {
@@ -1761,40 +1710,35 @@ func (x *TcpSettings) GetMaxConnectionDuration() *duration.Duration {
 	return nil
 }
 
-// ConnectionPoolHttpSettings configures HTTP connection manager and
-// route-level settings for the sandbox egress HCM.
-type ConnectionPoolHttpSettings struct {
+// HttpRoutingSettings configures host-specific HTTP timeout and retry policies.
+type HttpRoutingSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Maximum time a stream (including upgraded WebSocket/SSE) can be idle
-	// before Envoy closes it. Applies to the HCM StreamIdleTimeout.
-	// Default 30min.
-	StreamIdleTimeout *duration.Duration `protobuf:"bytes,1,opt,name=stream_idle_timeout,json=streamIdleTimeout,proto3" json:"stream_idle_timeout,omitempty"`
-	// Default route settings applied to the fallback wildcard ("*")
-	// VirtualHost. If nil, route timeout is 0 (disabled).
-	DefaultRoute *HttpRouteSettings `protobuf:"bytes,2,opt,name=default_route,json=defaultRoute,proto3" json:"default_route,omitempty"`
+	// Settings for the fallback wildcard ("*") VirtualHost. Host overrides do
+	// not inherit these settings. If nil, route timeout is 0 (disabled).
+	Fallback *HttpRouteSettings `protobuf:"bytes,1,opt,name=fallback,proto3" json:"fallback,omitempty"`
 	// Per-host route overrides. Each entry generates a dedicated VirtualHost
 	// with the specified hosts as domains. Evaluated by Envoy's domain
 	// matching (exact > suffix > prefix > wildcard).
-	RouteOverrides []*HttpRouteOverride `protobuf:"bytes,3,rep,name=route_overrides,json=routeOverrides,proto3" json:"route_overrides,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	HostOverrides []*HttpRouteOverride `protobuf:"bytes,2,rep,name=host_overrides,json=hostOverrides,proto3" json:"host_overrides,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ConnectionPoolHttpSettings) Reset() {
-	*x = ConnectionPoolHttpSettings{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[24]
+func (x *HttpRoutingSettings) Reset() {
+	*x = HttpRoutingSettings{}
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ConnectionPoolHttpSettings) String() string {
+func (x *HttpRoutingSettings) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ConnectionPoolHttpSettings) ProtoMessage() {}
+func (*HttpRoutingSettings) ProtoMessage() {}
 
-func (x *ConnectionPoolHttpSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[24]
+func (x *HttpRoutingSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1805,28 +1749,21 @@ func (x *ConnectionPoolHttpSettings) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ConnectionPoolHttpSettings.ProtoReflect.Descriptor instead.
-func (*ConnectionPoolHttpSettings) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{24}
+// Deprecated: Use HttpRoutingSettings.ProtoReflect.Descriptor instead.
+func (*HttpRoutingSettings) Descriptor() ([]byte, []int) {
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *ConnectionPoolHttpSettings) GetStreamIdleTimeout() *duration.Duration {
+func (x *HttpRoutingSettings) GetFallback() *HttpRouteSettings {
 	if x != nil {
-		return x.StreamIdleTimeout
+		return x.Fallback
 	}
 	return nil
 }
 
-func (x *ConnectionPoolHttpSettings) GetDefaultRoute() *HttpRouteSettings {
+func (x *HttpRoutingSettings) GetHostOverrides() []*HttpRouteOverride {
 	if x != nil {
-		return x.DefaultRoute
-	}
-	return nil
-}
-
-func (x *ConnectionPoolHttpSettings) GetRouteOverrides() []*HttpRouteOverride {
-	if x != nil {
-		return x.RouteOverrides
+		return x.HostOverrides
 	}
 	return nil
 }
@@ -1845,7 +1782,7 @@ type HttpRouteOverride struct {
 
 func (x *HttpRouteOverride) Reset() {
 	*x = HttpRouteOverride{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[25]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1857,7 +1794,7 @@ func (x *HttpRouteOverride) String() string {
 func (*HttpRouteOverride) ProtoMessage() {}
 
 func (x *HttpRouteOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[25]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1870,7 +1807,7 @@ func (x *HttpRouteOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HttpRouteOverride.ProtoReflect.Descriptor instead.
 func (*HttpRouteOverride) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{25}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *HttpRouteOverride) GetHosts() []string {
@@ -1900,7 +1837,7 @@ type HttpRouteSettings struct {
 
 func (x *HttpRouteSettings) Reset() {
 	*x = HttpRouteSettings{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[26]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1912,7 +1849,7 @@ func (x *HttpRouteSettings) String() string {
 func (*HttpRouteSettings) ProtoMessage() {}
 
 func (x *HttpRouteSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[26]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1925,7 +1862,7 @@ func (x *HttpRouteSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HttpRouteSettings.ProtoReflect.Descriptor instead.
 func (*HttpRouteSettings) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{26}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *HttpRouteSettings) GetTimeout() *duration.Duration {
@@ -1969,7 +1906,7 @@ type LocalRateLimitSettings struct {
 
 func (x *LocalRateLimitSettings) Reset() {
 	*x = LocalRateLimitSettings{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[27]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1981,7 +1918,7 @@ func (x *LocalRateLimitSettings) String() string {
 func (*LocalRateLimitSettings) ProtoMessage() {}
 
 func (x *LocalRateLimitSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[27]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1994,7 +1931,7 @@ func (x *LocalRateLimitSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalRateLimitSettings.ProtoReflect.Descriptor instead.
 func (*LocalRateLimitSettings) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{27}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *LocalRateLimitSettings) GetTokenBucket() *TokenBucket {
@@ -2041,7 +1978,7 @@ type TokenBucket struct {
 
 func (x *TokenBucket) Reset() {
 	*x = TokenBucket{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[28]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2053,7 +1990,7 @@ func (x *TokenBucket) String() string {
 func (*TokenBucket) ProtoMessage() {}
 
 func (x *TokenBucket) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[28]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2066,7 +2003,7 @@ func (x *TokenBucket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenBucket.ProtoReflect.Descriptor instead.
 func (*TokenBucket) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{28}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TokenBucket) GetMaxTokens() uint32 {
@@ -2105,7 +2042,7 @@ type RateLimitDescriptor struct {
 
 func (x *RateLimitDescriptor) Reset() {
 	*x = RateLimitDescriptor{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[29]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2117,7 +2054,7 @@ func (x *RateLimitDescriptor) String() string {
 func (*RateLimitDescriptor) ProtoMessage() {}
 
 func (x *RateLimitDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[29]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2130,7 +2067,7 @@ func (x *RateLimitDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimitDescriptor.ProtoReflect.Descriptor instead.
 func (*RateLimitDescriptor) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{29}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RateLimitDescriptor) GetEntries() []*RateLimitEntry {
@@ -2171,7 +2108,7 @@ type RateLimitEntry struct {
 
 func (x *RateLimitEntry) Reset() {
 	*x = RateLimitEntry{}
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[30]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2183,7 +2120,7 @@ func (x *RateLimitEntry) String() string {
 func (*RateLimitEntry) ProtoMessage() {}
 
 func (x *RateLimitEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[30]
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2196,7 +2133,7 @@ func (x *RateLimitEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimitEntry.ProtoReflect.Descriptor instead.
 func (*RateLimitEntry) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{30}
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RateLimitEntry) GetKey() string {
@@ -2220,6 +2157,119 @@ func (x *RateLimitEntry) GetCel() string {
 	return ""
 }
 
+// GatewayHttpSettings configures the gateway's business HTTP listeners.
+type GatewayHttpSettings struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Accept HTTP/1.0 requests. Defaults to true; explicitly false rejects them.
+	// Requests still require a Host header; no default host is configured.
+	AcceptHttp_10 *bool `protobuf:"varint,1,opt,name=accept_http_10,json=acceptHttp10,proto3,oneof" json:"accept_http_10,omitempty"`
+	// Maximum time a stream (including upgraded WebSocket/SSE) can be idle.
+	// Defaults to 30min; explicitly 0 disables the timeout.
+	StreamIdleTimeout *duration.Duration `protobuf:"bytes,2,opt,name=stream_idle_timeout,json=streamIdleTimeout,proto3" json:"stream_idle_timeout,omitempty"`
+	// Timeout and retry settings selected by the destination host.
+	Routing       *HttpRoutingSettings `protobuf:"bytes,3,opt,name=routing,proto3" json:"routing,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GatewayHttpSettings) Reset() {
+	*x = GatewayHttpSettings{}
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GatewayHttpSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GatewayHttpSettings) ProtoMessage() {}
+
+func (x *GatewayHttpSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GatewayHttpSettings.ProtoReflect.Descriptor instead.
+func (*GatewayHttpSettings) Descriptor() ([]byte, []int) {
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *GatewayHttpSettings) GetAcceptHttp_10() bool {
+	if x != nil && x.AcceptHttp_10 != nil {
+		return *x.AcceptHttp_10
+	}
+	return false
+}
+
+func (x *GatewayHttpSettings) GetStreamIdleTimeout() *duration.Duration {
+	if x != nil {
+		return x.StreamIdleTimeout
+	}
+	return nil
+}
+
+func (x *GatewayHttpSettings) GetRouting() *HttpRoutingSettings {
+	if x != nil {
+		return x.Routing
+	}
+	return nil
+}
+
+// GatewayTlsSettings configures outgoing business TLS connections.
+type GatewayTlsSettings struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// TLS settings for connections to destinations and HTTPS proxies.
+	// Omitted fields use the built-in upstream defaults.
+	Origination   *UpstreamTlsSettings `protobuf:"bytes,1,opt,name=origination,proto3" json:"origination,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GatewayTlsSettings) Reset() {
+	*x = GatewayTlsSettings{}
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GatewayTlsSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GatewayTlsSettings) ProtoMessage() {}
+
+func (x *GatewayTlsSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GatewayTlsSettings.ProtoReflect.Descriptor instead.
+func (*GatewayTlsSettings) Descriptor() ([]byte, []int) {
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *GatewayTlsSettings) GetOrigination() *UpstreamTlsSettings {
+	if x != nil {
+		return x.Origination
+	}
+	return nil
+}
+
 var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
 
 const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
@@ -2230,20 +2280,21 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\x0fegress_policies\x18\x02 \x03(\v2-.kruise.networking.extensions.v1.EgressPolicyR\x0eegressPolicies\x124\n" +
 	"\x16sandbox_ignored_labels\x18\x03 \x03(\tR\x14sandboxIgnoredLabels\x12I\n" +
 	"\x0fegress_gateways\x18\x04 \x03(\v2 .agentio.config.v1.EgressGatewayR\x0eegressGateways\x12T\n" +
-	"\x14additional_ext_procs\x18\x05 \x03(\v2\".agentio.config.v1.ExtProcProviderR\x12additionalExtProcs\"\xae\x06\n" +
+	"\x14additional_ext_procs\x18\x05 \x03(\v2\".agentio.config.v1.ExtProcProviderR\x12additionalExtProcs\"\xb6\x06\n" +
 	"\rEgressGateway\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12P\n" +
 	"\x0ftls_termination\x18\x03 \x01(\v2'.agentio.config.v1.TlsTerminationConfigR\x0etlsTermination\x12=\n" +
-	"\bext_proc\x18\x04 \x01(\v2\".agentio.config.v1.ExtProcProviderR\aextProc\x12R\n" +
-	"\x0fconnection_pool\x18\x05 \x01(\v2).agentio.config.v1.ConnectionPoolSettingsR\x0econnectionPool\x12W\n" +
-	"\x12connect_rate_limit\x18\x06 \x01(\v2).agentio.config.v1.LocalRateLimitSettingsR\x10connectRateLimit\x12N\n" +
-	"\x0fservice_entries\x18\a \x03(\v2%.agentio.config.v1.EgressServiceEntryR\x0eserviceEntries\x12I\n" +
-	"\fupstream_tls\x18\b \x01(\v2&.agentio.config.v1.UpstreamTlsSettingsR\vupstreamTls\x12N\n" +
-	"\x11access_log_format\x18\t \x01(\v2\".agentio.config.v1.AccessLogFormatR\x0faccessLogFormat\x12R\n" +
-	"\x0fbandwidth_limit\x18\n" +
-	" \x01(\v2).agentio.config.v1.BandwidthLimitSettingsR\x0ebandwidthLimit\x12n\n" +
-	"\x19connect_concurrency_limit\x18\v \x01(\v22.agentio.config.v1.ConnectConcurrencyLimitSettingsR\x17connectConcurrencyLimit\"\x87\x02\n" +
+	"\bext_proc\x18\x04 \x01(\v2\".agentio.config.v1.ExtProcProviderR\aextProc\x12W\n" +
+	"\x12connect_rate_limit\x18\x05 \x01(\v2).agentio.config.v1.LocalRateLimitSettingsR\x10connectRateLimit\x12N\n" +
+	"\x0fservice_entries\x18\x06 \x03(\v2%.agentio.config.v1.EgressServiceEntryR\x0eserviceEntries\x12N\n" +
+	"\x11access_log_format\x18\a \x01(\v2\".agentio.config.v1.AccessLogFormatR\x0faccessLogFormat\x12R\n" +
+	"\x0fbandwidth_limit\x18\b \x01(\v2).agentio.config.v1.BandwidthLimitSettingsR\x0ebandwidthLimit\x12n\n" +
+	"\x19connect_concurrency_limit\x18\t \x01(\v22.agentio.config.v1.ConnectConcurrencyLimitSettingsR\x17connectConcurrencyLimit\x12:\n" +
+	"\x04http\x18\n" +
+	" \x01(\v2&.agentio.config.v1.GatewayHttpSettingsR\x04http\x120\n" +
+	"\x03tcp\x18\v \x01(\v2\x1e.agentio.config.v1.TcpSettingsR\x03tcp\x127\n" +
+	"\x03tls\x18\f \x01(\v2%.agentio.config.v1.GatewayTlsSettingsR\x03tls\"\x87\x02\n" +
 	"\x1fConnectConcurrencyLimitSettings\x12D\n" +
 	"\vrate_limits\x18\x01 \x03(\v2#.agentio.config.v1.NetworkLimitRuleR\n" +
 	"rateLimits\x12Q\n" +
@@ -2335,17 +2386,13 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"headerMode\x12\x1e\n" +
 	"\n" +
 	"attributes\x18\x02 \x03(\tR\n" +
-	"attributes\"\x8d\x01\n" +
-	"\x16ConnectionPoolSettings\x120\n" +
-	"\x03tcp\x18\x01 \x01(\v2\x1e.agentio.config.v1.TcpSettingsR\x03tcp\x12A\n" +
-	"\x04http\x18\x02 \x01(\v2-.agentio.config.v1.ConnectionPoolHttpSettingsR\x04http\"\x9e\x01\n" +
+	"attributes\"\x9e\x01\n" +
 	"\vTcpSettings\x12<\n" +
 	"\fidle_timeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\vidleTimeout\x12Q\n" +
-	"\x17max_connection_duration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x15maxConnectionDuration\"\x81\x02\n" +
-	"\x1aConnectionPoolHttpSettings\x12I\n" +
-	"\x13stream_idle_timeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x11streamIdleTimeout\x12I\n" +
-	"\rdefault_route\x18\x02 \x01(\v2$.agentio.config.v1.HttpRouteSettingsR\fdefaultRoute\x12M\n" +
-	"\x0froute_overrides\x18\x03 \x03(\v2$.agentio.config.v1.HttpRouteOverrideR\x0erouteOverrides\"k\n" +
+	"\x17max_connection_duration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x15maxConnectionDuration\"\xa4\x01\n" +
+	"\x13HttpRoutingSettings\x12@\n" +
+	"\bfallback\x18\x01 \x01(\v2$.agentio.config.v1.HttpRouteSettingsR\bfallback\x12K\n" +
+	"\x0ehost_overrides\x18\x02 \x03(\v2$.agentio.config.v1.HttpRouteOverrideR\rhostOverrides\"k\n" +
 	"\x11HttpRouteOverride\x12\x14\n" +
 	"\x05hosts\x18\x01 \x03(\tR\x05hosts\x12@\n" +
 	"\bsettings\x18\x02 \x01(\v2$.agentio.config.v1.HttpRouteSettingsR\bsettings\"\x88\x01\n" +
@@ -2369,7 +2416,14 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\x0eRateLimitEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x10\n" +
-	"\x03cel\x18\x03 \x01(\tR\x03cel*1\n" +
+	"\x03cel\x18\x03 \x01(\tR\x03cel\"\xe0\x01\n" +
+	"\x13GatewayHttpSettings\x12)\n" +
+	"\x0eaccept_http_10\x18\x01 \x01(\bH\x00R\facceptHttp10\x88\x01\x01\x12I\n" +
+	"\x13stream_idle_timeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x11streamIdleTimeout\x12@\n" +
+	"\arouting\x18\x03 \x01(\v2&.agentio.config.v1.HttpRoutingSettingsR\aroutingB\x11\n" +
+	"\x0f_accept_http_10\"^\n" +
+	"\x12GatewayTlsSettings\x12H\n" +
+	"\vorigination\x18\x01 \x01(\v2&.agentio.config.v1.UpstreamTlsSettingsR\vorigination*1\n" +
 	"\x0eHeaderSendMode\x12\v\n" +
 	"\aDEFAULT\x10\x00\x12\b\n" +
 	"\x04SEND\x10\x01\x12\b\n" +
@@ -2388,7 +2442,7 @@ func file_api_config_v1_agentioconfig_proto_rawDescGZIP() []byte {
 }
 
 var file_api_config_v1_agentioconfig_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(HeaderSendMode)(0),                      // 0: agentio.config.v1.HeaderSendMode
 	(UpstreamTlsSettings_ProtocolVersion)(0), // 1: agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
@@ -2415,76 +2469,78 @@ var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(*ClusterSettings)(nil),                  // 22: agentio.config.v1.ClusterSettings
 	(*HttpSettings)(nil),                     // 23: agentio.config.v1.HttpSettings
 	(*ProcessingModeOptions)(nil),            // 24: agentio.config.v1.ProcessingModeOptions
-	(*ConnectionPoolSettings)(nil),           // 25: agentio.config.v1.ConnectionPoolSettings
-	(*TcpSettings)(nil),                      // 26: agentio.config.v1.TcpSettings
-	(*ConnectionPoolHttpSettings)(nil),       // 27: agentio.config.v1.ConnectionPoolHttpSettings
-	(*HttpRouteOverride)(nil),                // 28: agentio.config.v1.HttpRouteOverride
-	(*HttpRouteSettings)(nil),                // 29: agentio.config.v1.HttpRouteSettings
-	(*LocalRateLimitSettings)(nil),           // 30: agentio.config.v1.LocalRateLimitSettings
-	(*TokenBucket)(nil),                      // 31: agentio.config.v1.TokenBucket
-	(*RateLimitDescriptor)(nil),              // 32: agentio.config.v1.RateLimitDescriptor
-	(*RateLimitEntry)(nil),                   // 33: agentio.config.v1.RateLimitEntry
-	(*v1.EgressPolicy)(nil),                  // 34: kruise.networking.extensions.v1.EgressPolicy
-	(*_struct.Struct)(nil),                   // 35: google.protobuf.Struct
-	(*duration.Duration)(nil),                // 36: google.protobuf.Duration
-	(*v1alpha3.HTTPRetry)(nil),               // 37: istio.networking.v1alpha3.HTTPRetry
+	(*TcpSettings)(nil),                      // 25: agentio.config.v1.TcpSettings
+	(*HttpRoutingSettings)(nil),              // 26: agentio.config.v1.HttpRoutingSettings
+	(*HttpRouteOverride)(nil),                // 27: agentio.config.v1.HttpRouteOverride
+	(*HttpRouteSettings)(nil),                // 28: agentio.config.v1.HttpRouteSettings
+	(*LocalRateLimitSettings)(nil),           // 29: agentio.config.v1.LocalRateLimitSettings
+	(*TokenBucket)(nil),                      // 30: agentio.config.v1.TokenBucket
+	(*RateLimitDescriptor)(nil),              // 31: agentio.config.v1.RateLimitDescriptor
+	(*RateLimitEntry)(nil),                   // 32: agentio.config.v1.RateLimitEntry
+	(*GatewayHttpSettings)(nil),              // 33: agentio.config.v1.GatewayHttpSettings
+	(*GatewayTlsSettings)(nil),               // 34: agentio.config.v1.GatewayTlsSettings
+	(*v1.EgressPolicy)(nil),                  // 35: kruise.networking.extensions.v1.EgressPolicy
+	(*_struct.Struct)(nil),                   // 36: google.protobuf.Struct
+	(*duration.Duration)(nil),                // 37: google.protobuf.Duration
+	(*v1alpha3.HTTPRetry)(nil),               // 38: istio.networking.v1alpha3.HTTPRetry
 }
 var file_api_config_v1_agentioconfig_proto_depIdxs = []int32{
 	20, // 0: agentio.config.v1.AgentioConfig.sandbox_ext_proc:type_name -> agentio.config.v1.ExtProcProvider
-	34, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> kruise.networking.extensions.v1.EgressPolicy
+	35, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> kruise.networking.extensions.v1.EgressPolicy
 	4,  // 2: agentio.config.v1.AgentioConfig.egress_gateways:type_name -> agentio.config.v1.EgressGateway
 	20, // 3: agentio.config.v1.AgentioConfig.additional_ext_procs:type_name -> agentio.config.v1.ExtProcProvider
 	19, // 4: agentio.config.v1.EgressGateway.tls_termination:type_name -> agentio.config.v1.TlsTerminationConfig
 	20, // 5: agentio.config.v1.EgressGateway.ext_proc:type_name -> agentio.config.v1.ExtProcProvider
-	25, // 6: agentio.config.v1.EgressGateway.connection_pool:type_name -> agentio.config.v1.ConnectionPoolSettings
-	30, // 7: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings
-	17, // 8: agentio.config.v1.EgressGateway.service_entries:type_name -> agentio.config.v1.EgressServiceEntry
-	16, // 9: agentio.config.v1.EgressGateway.upstream_tls:type_name -> agentio.config.v1.UpstreamTlsSettings
-	15, // 10: agentio.config.v1.EgressGateway.access_log_format:type_name -> agentio.config.v1.AccessLogFormat
-	7,  // 11: agentio.config.v1.EgressGateway.bandwidth_limit:type_name -> agentio.config.v1.BandwidthLimitSettings
-	5,  // 12: agentio.config.v1.EgressGateway.connect_concurrency_limit:type_name -> agentio.config.v1.ConnectConcurrencyLimitSettings
-	8,  // 13: agentio.config.v1.ConnectConcurrencyLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	6,  // 14: agentio.config.v1.ConnectConcurrencyLimitSettings.descriptors:type_name -> agentio.config.v1.ConnectConcurrencyDescriptor
-	13, // 15: agentio.config.v1.ConnectConcurrencyDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
-	8,  // 16: agentio.config.v1.BandwidthLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	12, // 17: agentio.config.v1.BandwidthLimitSettings.descriptors:type_name -> agentio.config.v1.BandwidthDescriptor
-	9,  // 18: agentio.config.v1.NetworkLimitRule.actions:type_name -> agentio.config.v1.NetworkLimitAction
-	10, // 19: agentio.config.v1.NetworkLimitAction.filter_state:type_name -> agentio.config.v1.NetworkLimitFilterStateAction
-	11, // 20: agentio.config.v1.NetworkLimitAction.generic_key:type_name -> agentio.config.v1.NetworkLimitGenericKeyAction
-	13, // 21: agentio.config.v1.BandwidthDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
-	14, // 22: agentio.config.v1.BandwidthDescriptor.bandwidth_limit:type_name -> agentio.config.v1.BandwidthRates
-	35, // 23: agentio.config.v1.AccessLogFormat.json:type_name -> google.protobuf.Struct
-	1,  // 24: agentio.config.v1.UpstreamTlsSettings.min_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
-	1,  // 25: agentio.config.v1.UpstreamTlsSettings.max_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
-	18, // 26: agentio.config.v1.EgressServiceEntry.endpoints:type_name -> agentio.config.v1.EgressServiceEntryEndpoint
-	24, // 27: agentio.config.v1.ExtProcProvider.request:type_name -> agentio.config.v1.ProcessingModeOptions
-	24, // 28: agentio.config.v1.ExtProcProvider.response:type_name -> agentio.config.v1.ProcessingModeOptions
-	22, // 29: agentio.config.v1.ExtProcProvider.cluster_settings:type_name -> agentio.config.v1.ClusterSettings
-	21, // 30: agentio.config.v1.ExtProcProvider.tls:type_name -> agentio.config.v1.ExtProcTLSSettings
-	2,  // 31: agentio.config.v1.ExtProcTLSSettings.mode:type_name -> agentio.config.v1.ExtProcTLSSettings.Mode
-	23, // 32: agentio.config.v1.ClusterSettings.http:type_name -> agentio.config.v1.HttpSettings
-	0,  // 33: agentio.config.v1.ProcessingModeOptions.header_mode:type_name -> agentio.config.v1.HeaderSendMode
-	26, // 34: agentio.config.v1.ConnectionPoolSettings.tcp:type_name -> agentio.config.v1.TcpSettings
-	27, // 35: agentio.config.v1.ConnectionPoolSettings.http:type_name -> agentio.config.v1.ConnectionPoolHttpSettings
-	36, // 36: agentio.config.v1.TcpSettings.idle_timeout:type_name -> google.protobuf.Duration
-	36, // 37: agentio.config.v1.TcpSettings.max_connection_duration:type_name -> google.protobuf.Duration
-	36, // 38: agentio.config.v1.ConnectionPoolHttpSettings.stream_idle_timeout:type_name -> google.protobuf.Duration
-	29, // 39: agentio.config.v1.ConnectionPoolHttpSettings.default_route:type_name -> agentio.config.v1.HttpRouteSettings
-	28, // 40: agentio.config.v1.ConnectionPoolHttpSettings.route_overrides:type_name -> agentio.config.v1.HttpRouteOverride
-	29, // 41: agentio.config.v1.HttpRouteOverride.settings:type_name -> agentio.config.v1.HttpRouteSettings
-	36, // 42: agentio.config.v1.HttpRouteSettings.timeout:type_name -> google.protobuf.Duration
-	37, // 43: agentio.config.v1.HttpRouteSettings.retries:type_name -> istio.networking.v1alpha3.HTTPRetry
-	31, // 44: agentio.config.v1.LocalRateLimitSettings.token_bucket:type_name -> agentio.config.v1.TokenBucket
-	32, // 45: agentio.config.v1.LocalRateLimitSettings.descriptors:type_name -> agentio.config.v1.RateLimitDescriptor
-	8,  // 46: agentio.config.v1.LocalRateLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	36, // 47: agentio.config.v1.TokenBucket.fill_interval:type_name -> google.protobuf.Duration
-	33, // 48: agentio.config.v1.RateLimitDescriptor.entries:type_name -> agentio.config.v1.RateLimitEntry
-	31, // 49: agentio.config.v1.RateLimitDescriptor.token_bucket:type_name -> agentio.config.v1.TokenBucket
-	50, // [50:50] is the sub-list for method output_type
-	50, // [50:50] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	29, // 6: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings
+	17, // 7: agentio.config.v1.EgressGateway.service_entries:type_name -> agentio.config.v1.EgressServiceEntry
+	15, // 8: agentio.config.v1.EgressGateway.access_log_format:type_name -> agentio.config.v1.AccessLogFormat
+	7,  // 9: agentio.config.v1.EgressGateway.bandwidth_limit:type_name -> agentio.config.v1.BandwidthLimitSettings
+	5,  // 10: agentio.config.v1.EgressGateway.connect_concurrency_limit:type_name -> agentio.config.v1.ConnectConcurrencyLimitSettings
+	33, // 11: agentio.config.v1.EgressGateway.http:type_name -> agentio.config.v1.GatewayHttpSettings
+	25, // 12: agentio.config.v1.EgressGateway.tcp:type_name -> agentio.config.v1.TcpSettings
+	34, // 13: agentio.config.v1.EgressGateway.tls:type_name -> agentio.config.v1.GatewayTlsSettings
+	8,  // 14: agentio.config.v1.ConnectConcurrencyLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	6,  // 15: agentio.config.v1.ConnectConcurrencyLimitSettings.descriptors:type_name -> agentio.config.v1.ConnectConcurrencyDescriptor
+	13, // 16: agentio.config.v1.ConnectConcurrencyDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
+	8,  // 17: agentio.config.v1.BandwidthLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	12, // 18: agentio.config.v1.BandwidthLimitSettings.descriptors:type_name -> agentio.config.v1.BandwidthDescriptor
+	9,  // 19: agentio.config.v1.NetworkLimitRule.actions:type_name -> agentio.config.v1.NetworkLimitAction
+	10, // 20: agentio.config.v1.NetworkLimitAction.filter_state:type_name -> agentio.config.v1.NetworkLimitFilterStateAction
+	11, // 21: agentio.config.v1.NetworkLimitAction.generic_key:type_name -> agentio.config.v1.NetworkLimitGenericKeyAction
+	13, // 22: agentio.config.v1.BandwidthDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
+	14, // 23: agentio.config.v1.BandwidthDescriptor.bandwidth_limit:type_name -> agentio.config.v1.BandwidthRates
+	36, // 24: agentio.config.v1.AccessLogFormat.json:type_name -> google.protobuf.Struct
+	1,  // 25: agentio.config.v1.UpstreamTlsSettings.min_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
+	1,  // 26: agentio.config.v1.UpstreamTlsSettings.max_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
+	18, // 27: agentio.config.v1.EgressServiceEntry.endpoints:type_name -> agentio.config.v1.EgressServiceEntryEndpoint
+	24, // 28: agentio.config.v1.ExtProcProvider.request:type_name -> agentio.config.v1.ProcessingModeOptions
+	24, // 29: agentio.config.v1.ExtProcProvider.response:type_name -> agentio.config.v1.ProcessingModeOptions
+	22, // 30: agentio.config.v1.ExtProcProvider.cluster_settings:type_name -> agentio.config.v1.ClusterSettings
+	21, // 31: agentio.config.v1.ExtProcProvider.tls:type_name -> agentio.config.v1.ExtProcTLSSettings
+	2,  // 32: agentio.config.v1.ExtProcTLSSettings.mode:type_name -> agentio.config.v1.ExtProcTLSSettings.Mode
+	23, // 33: agentio.config.v1.ClusterSettings.http:type_name -> agentio.config.v1.HttpSettings
+	0,  // 34: agentio.config.v1.ProcessingModeOptions.header_mode:type_name -> agentio.config.v1.HeaderSendMode
+	37, // 35: agentio.config.v1.TcpSettings.idle_timeout:type_name -> google.protobuf.Duration
+	37, // 36: agentio.config.v1.TcpSettings.max_connection_duration:type_name -> google.protobuf.Duration
+	28, // 37: agentio.config.v1.HttpRoutingSettings.fallback:type_name -> agentio.config.v1.HttpRouteSettings
+	27, // 38: agentio.config.v1.HttpRoutingSettings.host_overrides:type_name -> agentio.config.v1.HttpRouteOverride
+	28, // 39: agentio.config.v1.HttpRouteOverride.settings:type_name -> agentio.config.v1.HttpRouteSettings
+	37, // 40: agentio.config.v1.HttpRouteSettings.timeout:type_name -> google.protobuf.Duration
+	38, // 41: agentio.config.v1.HttpRouteSettings.retries:type_name -> istio.networking.v1alpha3.HTTPRetry
+	30, // 42: agentio.config.v1.LocalRateLimitSettings.token_bucket:type_name -> agentio.config.v1.TokenBucket
+	31, // 43: agentio.config.v1.LocalRateLimitSettings.descriptors:type_name -> agentio.config.v1.RateLimitDescriptor
+	8,  // 44: agentio.config.v1.LocalRateLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	37, // 45: agentio.config.v1.TokenBucket.fill_interval:type_name -> google.protobuf.Duration
+	32, // 46: agentio.config.v1.RateLimitDescriptor.entries:type_name -> agentio.config.v1.RateLimitEntry
+	30, // 47: agentio.config.v1.RateLimitDescriptor.token_bucket:type_name -> agentio.config.v1.TokenBucket
+	37, // 48: agentio.config.v1.GatewayHttpSettings.stream_idle_timeout:type_name -> google.protobuf.Duration
+	26, // 49: agentio.config.v1.GatewayHttpSettings.routing:type_name -> agentio.config.v1.HttpRoutingSettings
+	16, // 50: agentio.config.v1.GatewayTlsSettings.origination:type_name -> agentio.config.v1.UpstreamTlsSettings
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_api_config_v1_agentioconfig_proto_init() }
@@ -2496,13 +2552,14 @@ func file_api_config_v1_agentioconfig_proto_init() {
 	file_api_config_v1_agentioconfig_proto_msgTypes[4].OneofWrappers = []any{}
 	file_api_config_v1_agentioconfig_proto_msgTypes[11].OneofWrappers = []any{}
 	file_api_config_v1_agentioconfig_proto_msgTypes[12].OneofWrappers = []any{}
+	file_api_config_v1_agentioconfig_proto_msgTypes[30].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_config_v1_agentioconfig_proto_rawDesc), len(file_api_config_v1_agentioconfig_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   31,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

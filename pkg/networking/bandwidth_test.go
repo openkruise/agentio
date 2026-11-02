@@ -31,7 +31,7 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 	test.SetForTest(t, &features.EnableUDPProxy, true)
 	settings := new(configv1.EgressGateway)
 	if err := protojson.Unmarshal([]byte(`{
-      "connectionPool":{"http":{"defaultRoute":{"retries":{"attempts":3,"retryOn":"5xx"}}}},
+      "http":{"routing":{"fallback":{"retries":{"attempts":3,"retryOn":"5xx"}}}},
       "bandwidthLimit":{
       "rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],
       "descriptors":[{"entries":[{"key":"sandbox"}],"bandwidthLimit":{"downloadBytesPerSecond":100}}]

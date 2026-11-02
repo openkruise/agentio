@@ -31,9 +31,9 @@ import (
 )
 
 func TestRouteSettingsForStaticHostUsesEnvoyDomainPrecedence(t *testing.T) {
-	settings := &configv1.ConnectionPoolHttpSettings{
-		DefaultRoute: &configv1.HttpRouteSettings{Timeout: durationpb.New(time.Second)},
-		RouteOverrides: []*configv1.HttpRouteOverride{
+	settings := &configv1.HttpRoutingSettings{
+		Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(time.Second)},
+		HostOverrides: []*configv1.HttpRouteOverride{
 			{Hosts: []string{"*"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(2 * time.Second)}},
 			{Hosts: []string{"api.*"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(3 * time.Second)}},
 			{Hosts: []string{"*.com"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(4 * time.Second)}},
@@ -73,19 +73,21 @@ func TestGatewayRouteOverridesUseOneWildcardAndIgnoreRequestPort(t *testing.T) {
 			DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 			TrustDomain:      "cluster.local",
 			Gateway: testGateway(&configv1.EgressGateway{
-				ConnectionPool: &configv1.ConnectionPoolSettings{Http: &configv1.ConnectionPoolHttpSettings{
-					DefaultRoute: &configv1.HttpRouteSettings{Timeout: durationpb.New(time.Second)},
-					RouteOverrides: []*configv1.HttpRouteOverride{
-						{
-							Hosts:    []string{"*", "api.example.com"},
-							Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(2 * time.Second)},
-						},
-						{
-							Hosts:    []string{"*.example.org"},
-							Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(3 * time.Second)},
+				Http: &configv1.GatewayHttpSettings{
+					Routing: &configv1.HttpRoutingSettings{
+						Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(time.Second)},
+						HostOverrides: []*configv1.HttpRouteOverride{
+							{
+								Hosts:    []string{"*", "api.example.com"},
+								Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(2 * time.Second)},
+							},
+							{
+								Hosts:    []string{"*.example.org"},
+								Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(3 * time.Second)},
+							},
 						},
 					},
-				}},
+				},
 			}),
 		})
 		if err != nil {
@@ -130,15 +132,17 @@ func TestGatewayRoutesUseSupportedAgentioRetries(t *testing.T) {
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 		TrustDomain:      "cluster.local",
 		Gateway: testGateway(&configv1.EgressGateway{
-			ConnectionPool: &configv1.ConnectionPoolSettings{Http: &configv1.ConnectionPoolHttpSettings{
-				DefaultRoute: &configv1.HttpRouteSettings{Timeout: durationpb.New(12 * time.Second)},
-				RouteOverrides: []*configv1.HttpRouteOverride{{
-					Hosts: []string{"api.example.com"},
-					Settings: &configv1.HttpRouteSettings{
-						Retries: &networkingv1alpha3.HTTPRetry{Attempts: 3, RetryOn: "connect-failure,refused-stream"},
-					},
-				}},
-			}},
+			Http: &configv1.GatewayHttpSettings{
+				Routing: &configv1.HttpRoutingSettings{
+					Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(12 * time.Second)},
+					HostOverrides: []*configv1.HttpRouteOverride{{
+						Hosts: []string{"api.example.com"},
+						Settings: &configv1.HttpRouteSettings{
+							Retries: &networkingv1alpha3.HTTPRetry{Attempts: 3, RetryOn: "connect-failure,refused-stream"},
+						},
+					}},
+				},
+			},
 		}),
 	})
 	if err != nil {
@@ -153,12 +157,18 @@ func TestGatewayRoutesUseSupportedAgentioRetries(t *testing.T) {
 	for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
 		config := routes[name]
 		configured := config.GetVirtualHosts()[0].GetRoutes()[1]
+		if got := configured.GetRoute().GetTimeout().AsDuration(); got != 0 {
+			t.Errorf("route %s host override inherited fallback timeout: %s", name, got)
+		}
 		retry := configured.GetRoute().GetRetryPolicy()
 		if retry.GetHostSelectionRetryMaxAttempts() != 5 || len(retry.GetRetryHostPredicate()) != 1 ||
 			retry.GetRetryHostPredicate()[0].GetName() != "envoy.retry_host_predicates.previous_hosts" {
 			t.Errorf("route %s configured retry host selection = %+v", name, retry)
 		}
 		fallback := config.GetVirtualHosts()[1].GetRoutes()[1]
+		if got := fallback.GetRoute().GetTimeout().AsDuration(); got != 12*time.Second {
+			t.Errorf("route %s fallback timeout = %s, want 12s", name, got)
+		}
 		if retry := fallback.GetRoute().
 			GetRetryPolicy(); retry.GetRetryOn() != "reset-before-request" ||
 			retry.GetNumRetries().GetValue() != 2 {

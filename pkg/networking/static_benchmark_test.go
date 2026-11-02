@@ -71,11 +71,11 @@ func BenchmarkGatewayBuild(b *testing.B) {
 						IncludeHosts: []string{"*.example.com"},
 						ExcludeHosts: []string{"legacy.example.com"},
 					},
-					ConnectionPool: &configv1.ConnectionPoolSettings{
-						Tcp: &configv1.TcpSettings{IdleTimeout: durationpb.New(2 * time.Minute)},
-						Http: &configv1.ConnectionPoolHttpSettings{
-							StreamIdleTimeout: durationpb.New(3 * time.Minute),
-							DefaultRoute:      &configv1.HttpRouteSettings{Timeout: durationpb.New(12 * time.Second)},
+					Tcp: &configv1.TcpSettings{IdleTimeout: durationpb.New(2 * time.Minute)},
+					Http: &configv1.GatewayHttpSettings{
+						StreamIdleTimeout: durationpb.New(3 * time.Minute),
+						Routing: &configv1.HttpRoutingSettings{
+							Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(12 * time.Second)},
 						},
 					},
 					ConnectRateLimit: &configv1.LocalRateLimitSettings{TokenBucket: &configv1.TokenBucket{

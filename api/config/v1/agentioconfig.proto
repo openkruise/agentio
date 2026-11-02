@@ -76,41 +76,40 @@ message EgressGateway {
   // An explicit provider with an empty service disables ext_proc for this gateway.
   ExtProcProvider ext_proc = 4;
 
-  // Per-gateway connection pool and timeout settings. Controls HCM
-  // StreamIdleTimeout, TCPProxy idle/max-connection-duration, and
-  // per-host HTTP route timeouts. nil means use hardcoded defaults
-  // (StreamIdleTimeout=30min, TCPProxy IdleTimeout=1h).
-  ConnectionPoolSettings connection_pool = 5;
-
   // Per-gateway connect rate limit. Controls the rate at which new
   // H2 CONNECT streams are accepted on the connect_terminate HCM.
   // nil means no rate limiting.
-  LocalRateLimitSettings connect_rate_limit = 6;
+  LocalRateLimitSettings connect_rate_limit = 5;
 
   // External services whose DNS result is overridden at this gateway. The
   // original request port and detected protocol are preserved; only the
   // upstream address is replaced by the configured endpoint.
-  repeated EgressServiceEntry service_entries = 7;
-
-  // TLS settings for connections originated to destinations and HTTPS proxies.
-  // Unset fields use the built-in upstream defaults; certificate verification
-  // and session cache behavior are not configurable here.
-  UpstreamTlsSettings upstream_tls = 8;
+  repeated EgressServiceEntry service_entries = 6;
 
   // Format of this gateway's built-in envoy access-log provider on stdout.
   // Applies to HTTP, TCP, CONNECT failures, and listener failures. Omitted or
   // empty means the built-in JSON format. Telemetry still controls log enablement
   // and filtering; explicitly overridden providers keep their own formats.
-  AccessLogFormat access_log_format = 9;
+  AccessLogFormat access_log_format = 7;
 
   // Shapes TCP payload bytes on the CONNECT termination chain, independently
   // of connect_rate_limit (which counts new CONNECT streams). Requires the
   // community gateway image containing the bandwidth dynamic module.
-  BandwidthLimitSettings bandwidth_limit = 10;
+  BandwidthLimitSettings bandwidth_limit = 8;
 
   // Limits active TCP CONNECT streams by trusted filter state, independently
   // of creation rate and byte bandwidth. Requires the community gateway image.
-  ConnectConcurrencyLimitSettings connect_concurrency_limit = 11;
+  ConnectConcurrencyLimitSettings connect_concurrency_limit = 9;
+
+  // Business HTTP protocol settings, including HTTP after TLS termination.
+  // Does not configure the outer HTTP/2 CONNECT tunnel.
+  GatewayHttpSettings http = 10;
+
+  // TCP forwarding connection timeouts, including the TLS termination relay.
+  TcpSettings tcp = 11;
+
+  // TLS origination settings. TLS interception remains in tls_termination.
+  GatewayTlsSettings tls = 12;
 }
 
 // CONNECT admission limits shared across workers/connections in one process.
@@ -345,16 +344,6 @@ message ProcessingModeOptions {
     repeated string attributes = 2;
 }
 
-// ConnectionPoolSettings controls TCP and HTTP connection management for the
-// sandbox egress path.
-message ConnectionPoolSettings {
-  // TCP-level connection pool settings.
-  TcpSettings tcp = 1;
-
-  // HTTP-level connection pool and route settings.
-  ConnectionPoolHttpSettings http = 2;
-}
-
 // TcpSettings configures TCP connection timeouts and limits for the
 // sandbox egress TCPProxy filters and passthrough path.
 message TcpSettings {
@@ -368,22 +357,16 @@ message TcpSettings {
   google.protobuf.Duration max_connection_duration = 2;
 }
 
-// ConnectionPoolHttpSettings configures HTTP connection manager and
-// route-level settings for the sandbox egress HCM.
-message ConnectionPoolHttpSettings {
-  // Maximum time a stream (including upgraded WebSocket/SSE) can be idle
-  // before Envoy closes it. Applies to the HCM StreamIdleTimeout.
-  // Default 30min.
-  google.protobuf.Duration stream_idle_timeout = 1;
-
-  // Default route settings applied to the fallback wildcard ("*")
-  // VirtualHost. If nil, route timeout is 0 (disabled).
-  HttpRouteSettings default_route = 2;
+// HttpRoutingSettings configures host-specific HTTP timeout and retry policies.
+message HttpRoutingSettings {
+  // Settings for the fallback wildcard ("*") VirtualHost. Host overrides do
+  // not inherit these settings. If nil, route timeout is 0 (disabled).
+  HttpRouteSettings fallback = 1;
 
   // Per-host route overrides. Each entry generates a dedicated VirtualHost
   // with the specified hosts as domains. Evaluated by Envoy's domain
   // matching (exact > suffix > prefix > wildcard).
-  repeated HttpRouteOverride route_overrides = 3;
+  repeated HttpRouteOverride host_overrides = 2;
 }
 
 // HttpRouteOverride binds HTTP route settings to a set of destination hosts.
@@ -472,4 +455,25 @@ message RateLimitEntry {
   //   filter_state["downstream_peer"].namespace
   //   filter_state["agentio.peer.principal"]
   string cel = 3;
+}
+
+// GatewayHttpSettings configures the gateway's business HTTP listeners.
+message GatewayHttpSettings {
+  // Accept HTTP/1.0 requests. Defaults to true; explicitly false rejects them.
+  // Requests still require a Host header; no default host is configured.
+  optional bool accept_http_10 = 1 [json_name = "acceptHttp10"];
+
+  // Maximum time a stream (including upgraded WebSocket/SSE) can be idle.
+  // Defaults to 30min; explicitly 0 disables the timeout.
+  google.protobuf.Duration stream_idle_timeout = 2;
+
+  // Timeout and retry settings selected by the destination host.
+  HttpRoutingSettings routing = 3;
+}
+
+// GatewayTlsSettings configures outgoing business TLS connections.
+message GatewayTlsSettings {
+  // TLS settings for connections to destinations and HTTPS proxies.
+  // Omitted fields use the built-in upstream defaults.
+  UpstreamTlsSettings origination = 1;
 }

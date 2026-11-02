@@ -15,6 +15,7 @@
 package kubernetes
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -22,20 +23,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-func TestDecodeEgressGatewayReusesTransferSchema(t *testing.T) {
-	config, err := decodeEgressGateway(`
+func TestGatewayConfigurationProtocolSettings(t *testing.T) {
+	const content = `
 tlsTermination:
   includeHosts: ["*.example.com"]
 extProc:
   service: gateway-ext-proc.agentio-system.svc.cluster.local
   port: 9003
-connectionPool:
-  http:
-    streamIdleTimeout: 90s
+http:
+  acceptHttp10: false
+  streamIdleTimeout: 90s
+  routing:
+    fallback: {timeout: 45s}
+    hostOverrides:
+    - hosts: [api.example.com]
+      settings: {timeout: 10s, retries: {attempts: 2}}
+tcp:
+  idleTimeout: 120s
+  maxConnectionDuration: 600s
+tls:
+  origination:
+    minProtocolVersion: TLSV1_2
+    maxProtocolVersion: TLSV1_3
 connectRateLimit:
   tokenBucket:
     maxTokens: 20
@@ -45,29 +59,85 @@ serviceEntries:
 - hosts: [" API.Example.COM. "]
   endpoints:
   - address: " 10.10.20.30 "
-`)
-	if err != nil {
-		t.Fatalf("decodeEgressGateway(): %v", err)
+`
+	for name, decode := range map[string]func() (*configv1.EgressGateway, error){
+		"AgentioConfig": func() (*configv1.EgressGateway, error) {
+			got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+
+				strings.ReplaceAll(strings.TrimSpace(content), "\n", "\n  "), nil)
+			if err != nil {
+				return nil, err
+			}
+			return got.GetEgressGateways()[0], nil
+		},
+		"Gateway API parameters": func() (*configv1.EgressGateway, error) {
+			return decodeEgressGateway(content)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config, err := decode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := config.GetTlsTermination().GetIncludeHosts(); len(got) != 1 || got[0] != "*.example.com" {
+				t.Fatalf("TLS termination hosts = %v", got)
+			}
+			if http := config.GetHttp(); http == nil || http.AcceptHttp_10 == nil || http.GetAcceptHttp_10() {
+				t.Fatalf("explicit HTTP/1.0 disable lost: %v", http)
+			}
+			if config.GetExtProc().GetService() != "gateway-ext-proc.agentio-system.svc.cluster.local" ||
+				config.GetExtProc().GetPort() != 9003 {
+				t.Fatalf("ext_proc = %+v", config.GetExtProc())
+			}
+			if got := config.GetHttp().GetStreamIdleTimeout().AsDuration(); got != 90*time.Second {
+				t.Fatalf("stream idle timeout = %s", got)
+			}
+			if routing := config.GetHttp().GetRouting(); routing.GetFallback().GetTimeout().AsDuration() != 45*time.Second ||
+				len(routing.GetHostOverrides()) != 1 {
+				t.Fatalf("HTTP routing = %v", routing)
+			}
+			override := config.GetHttp().GetRouting().GetHostOverrides()[0]
+			if len(override.GetHosts()) != 1 || override.GetHosts()[0] != "api.example.com" ||
+				override.GetSettings().GetTimeout().AsDuration() != 10*time.Second ||
+				override.GetSettings().GetRetries().GetAttempts() != 2 {
+				t.Fatalf("host override = %v", override)
+			}
+			if tcp := config.GetTcp(); tcp.GetIdleTimeout().AsDuration() != 120*time.Second ||
+				tcp.GetMaxConnectionDuration().AsDuration() != 600*time.Second {
+				t.Fatalf("TCP timeouts = %v", tcp)
+			}
+			if tls := config.GetTls().GetOrigination(); tls.GetMinProtocolVersion() != configv1.UpstreamTlsSettings_TLSV1_2 ||
+				tls.GetMaxProtocolVersion() != configv1.UpstreamTlsSettings_TLSV1_3 {
+				t.Fatalf("TLS origination = %v", tls)
+			}
+			if got := config.GetConnectRateLimit().GetTokenBucket().GetMaxTokens(); got != 20 {
+				t.Fatalf("connect rate max tokens = %d", got)
+			}
+			entry := config.GetServiceEntries()[0]
+			if got := entry.GetHosts()[0]; got != "api.example.com" {
+				t.Fatalf("static service host = %q, want canonical host", got)
+			}
+			if got := entry.GetEndpoints()[0].GetAddress(); got != "10.10.20.30" {
+				t.Fatalf("static endpoint address = %q, want canonical IPv4 address", got)
+			}
+		})
 	}
-	if got := config.GetTlsTermination().GetIncludeHosts(); len(got) != 1 || got[0] != "*.example.com" {
-		t.Fatalf("TLS termination hosts = %v", got)
-	}
-	if config.GetExtProc().GetService() != "gateway-ext-proc.agentio-system.svc.cluster.local" ||
-		config.GetExtProc().GetPort() != 9003 {
-		t.Fatalf("ext_proc = %+v", config.GetExtProc())
-	}
-	if got := config.GetConnectionPool().GetHttp().GetStreamIdleTimeout().AsDuration(); got != 90*time.Second {
-		t.Fatalf("stream idle timeout = %s", got)
-	}
-	if got := config.GetConnectRateLimit().GetTokenBucket().GetMaxTokens(); got != 20 {
-		t.Fatalf("connect rate max tokens = %d", got)
-	}
-	entry := config.GetServiceEntries()[0]
-	if got := entry.GetHosts()[0]; got != "api.example.com" {
-		t.Fatalf("static service host = %q, want canonical host", got)
-	}
-	if got := entry.GetEndpoints()[0].GetAddress(); got != "10.10.20.30" {
-		t.Fatalf("static endpoint address = %q, want canonical IPv4 address", got)
+}
+
+func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
+	for _, content := range []string{
+		"connectionPool: {tcp: {idleTimeout: 30s}}",
+		"upstreamTls: {minProtocolVersion: TLSV1_2}",
+		"http: {defaultRoute: {timeout: 30s}}",
+		"http: {routeOverrides: []}",
+	} {
+		t.Run(content, func(t *testing.T) {
+			if _, err := decodeEgressGateway(content); err == nil {
+				t.Fatal("Gateway API parameters accepted a removed path")
+			}
+			if _, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+content, nil); err == nil {
+				t.Fatal("AgentioConfig accepted a removed path")
+			}
+		})
 	}
 }
 

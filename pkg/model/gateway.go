@@ -77,14 +77,14 @@ func (g Gateway) ValidateForUse() error {
 	if err := ValidateExtProcTLS(g.Config.GetExtProc().GetTls()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
-	if err := ValidateUpstreamTLS(g.Config.GetUpstreamTls()); err != nil {
+	if err := ValidateUpstreamTLS(g.Config.GetTls().GetOrigination()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
 	if err := ValidateAccessLogFormat(g.Config.GetAccessLogFormat()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
 	overrideHosts := make(map[string]bool)
-	for _, override := range g.Config.GetConnectionPool().GetHttp().GetRouteOverrides() {
+	for _, override := range g.Config.GetHttp().GetRouting().GetHostOverrides() {
 		for _, host := range override.GetHosts() {
 			key := strings.ToLower(host)
 			if overrideHosts[key] {

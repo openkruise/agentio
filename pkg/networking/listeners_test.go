@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	configv1 "github.com/openkruise/agentio/api/config/v1"
-
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -40,9 +38,63 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"istio.io/istio/pkg/test"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestGatewayHTTP10(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		accept  bool
+	}{
+		{name: "default", content: "{}", accept: true},
+		{name: "empty-http", content: "http: {}", accept: true},
+		{name: "enabled", content: "http: {acceptHttp10: true}", accept: true},
+		{name: "disabled", content: "http: {acceptHttp10: false}", accept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway, err := config.Apply(tc.content, &configv1.EgressGateway{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, legacy := range []bool{false, true} {
+				resources, err := Build(Inputs{
+					LegacyGateway:    legacy,
+					DiscoveryAddress: "agentiod.agentio-system.svc:15012",
+					TrustDomain:      "cluster.local",
+					Gateway:          testGateway(gateway),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener {
+					return &listenerv3.Listener{}
+				})
+				for _, name := range []string{MainInternal, MainForward} {
+					matcher := listeners[name].GetFilterChainMatcher()
+					if name == MainInternal {
+						matcher = matcher.GetOnNoMatch().GetMatcher()
+					}
+					if chain := matcher.GetMatcherTree().GetExactMatchMap().GetMap()["'http/1.0'"].
+						GetAction().GetName(); chain != forwardHTTPChain {
+						t.Errorf("legacy=%v listener=%s: HTTP/1.0 routes to %q, want HTTP enforcement", legacy, name, chain)
+					}
+					options := findHCM(t, listeners[name]).GetHttpProtocolOptions()
+					if options.GetAcceptHttp_10() != tc.accept || options.GetDefaultHostForHttp_10() != "" {
+						t.Errorf("legacy=%v listener=%s: HTTP/1 options = %v, want acceptHttp10=%v without default host",
+							legacy, name, options, tc.accept)
+					}
+				}
+				if findHCM(t, listeners[ConnectTerminate]).GetHttpProtocolOptions().GetAcceptHttp_10() {
+					t.Errorf("legacy=%v: HTTP/1.0 enabled on outer CONNECT listener", legacy)
+				}
+			}
+		})
+	}
+}
 
 func TestConnectRateLimitPreservesDescriptorGroupsAndValues(t *testing.T) {
 	b := &resourceBuilder{}
@@ -499,7 +551,9 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 				LegacyGateway:    tc.legacyGateway,
 				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 				TrustDomain:      "cluster.local",
-				Gateway:          testGateway(&configv1.EgressGateway{TlsTermination: tc.tlsTermination}),
+				Gateway: testGateway(&configv1.EgressGateway{
+					TlsTermination: tc.tlsTermination,
+				}),
 			})
 			if err != nil {
 				t.Fatal(err)

@@ -50,9 +50,8 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
-      connectionPool:
-        http:
-          streamIdleTimeout: 600s
+      http:
+        streamIdleTimeout: 600s
 `)
 
 		waitForGatewayConfig(t, environment, 200*time.Millisecond, func(dump string) error {
@@ -83,10 +82,9 @@ data:
       tlsTermination:
         includeHosts:
         - "*.example.com"
-      connectionPool:
-        tcp:
-          idleTimeout: 1800s
-          maxConnectionDuration: 7200s
+      tcp:
+        idleTimeout: 1800s
+        maxConnectionDuration: 7200s
 `)
 
 		waitForGatewayConfig(t, environment, 200*time.Millisecond, func(dump string) error {
@@ -117,10 +115,10 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
-      connectionPool:
-        http:
-          streamIdleTimeout: 600s
-          defaultRoute:
+      http:
+        streamIdleTimeout: 600s
+        routing:
+          fallback:
             timeout: 30s
             retries:
               attempts: 3
@@ -154,12 +152,12 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
-      connectionPool:
-        http:
-          streamIdleTimeout: 600s
-          defaultRoute:
+      http:
+        streamIdleTimeout: 600s
+        routing:
+          fallback:
             timeout: 30s
-          routeOverrides:
+          hostOverrides:
           - hosts:
             - "api.example.com"
             - "*.api.example.com"
@@ -208,17 +206,17 @@ data:
       tlsTermination:
         includeHosts:
         - "*.example.com"
-      connectionPool:
-        tcp:
-          idleTimeout: 3600s
-          maxConnectionDuration: 14400s
-        http:
-          streamIdleTimeout: 900s
-          defaultRoute:
+      tcp:
+        idleTimeout: 3600s
+        maxConnectionDuration: 14400s
+      http:
+        streamIdleTimeout: 900s
+        routing:
+          fallback:
             timeout: 60s
             retries:
               attempts: 2
-          routeOverrides:
+          hostOverrides:
           - hosts:
             - "slow.example.com"
             settings:
@@ -300,10 +298,10 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
-      connectionPool:
-        http:
-          streamIdleTimeout: 600s
-          routeOverrides:
+      http:
+        streamIdleTimeout: 600s
+        routing:
+          hostOverrides:
           - hosts:
             - "{{ .TargetHost }}"
             settings:

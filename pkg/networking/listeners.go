@@ -231,7 +231,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		},
 	}
 
-	connectionPool := config.gateway.GetConnectionPool()
+	tcpSettings := config.gateway.GetTcp()
 	internalChains := []*listenerv3.FilterChain{
 		{
 			Name: forwardHTTPChain,
@@ -239,7 +239,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 				networkFilter("envoy.filters.network.http_connection_manager", b.pack(httpInternal)),
 			},
 		},
-		{Name: forwardTCPChain, Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, connectionPool)},
+		{Name: forwardTCPChain, Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, tcpSettings)},
 	}
 	internalChainMatcher := b.protocolMatcher(b.toChain(forwardTCPChain))
 	if features.EnableSNITrafficPolicy {
@@ -262,7 +262,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		}
 		denyFilters = append(denyFilters, networkFilter("envoy.filters.network.tcp_proxy", b.pack(denyProxy)))
 		internalChains = append(internalChains,
-			b.buildTLSTerminateChain(connectionPool),
+			b.buildTLSTerminateChain(tcpSettings),
 			&listenerv3.FilterChain{
 				Name:    sniDenyChain,
 				Filters: denyFilters,
@@ -272,7 +272,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 			b.sniTrafficPolicyMatcher(config.gateway.GetTlsTermination().GetExcludeHosts()),
 		))
 	} else if tlsTermination := config.gateway.GetTlsTermination(); tlsTermination != nil {
-		internalChains = append(internalChains, b.buildTLSTerminateChain(connectionPool))
+		internalChains = append(internalChains, b.buildTLSTerminateChain(tcpSettings))
 		internalChainMatcher = b.staticSNIMatcher(tlsTermination)
 	}
 	mainInternal := &listenerv3.Listener{
@@ -314,7 +314,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 					config,
 					[]*listenerv3.Filter{tcpTLSIdentityFilter},
 					TLSProxyOriginate,
-					connectionPool,
+					tcpSettings,
 				),
 			},
 		},
@@ -456,8 +456,12 @@ func (b *resourceBuilder) buildForwardHCM(
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{})))
 	streamIdle := durationpb.New(30 * time.Minute)
-	if configured := config.gateway.GetConnectionPool().GetHttp().GetStreamIdleTimeout(); configured != nil {
+	if configured := config.gateway.GetHttp().GetStreamIdleTimeout(); configured != nil {
 		streamIdle = configured
+	}
+	acceptHTTP10 := true
+	if settings := config.gateway.GetHttp(); settings != nil && settings.AcceptHttp_10 != nil {
+		acceptHTTP10 = settings.GetAcceptHttp_10()
 	}
 	hcm := &hcmv3.HttpConnectionManager{
 		StatPrefix:                   forwardHCMStatPrefix,
@@ -468,6 +472,7 @@ func (b *resourceBuilder) buildForwardHCM(
 		PathWithEscapedSlashesAction: hcmv3.HttpConnectionManager_KEEP_UNCHANGED,
 		UseRemoteAddress:             wrapperspb.Bool(false),
 		StreamIdleTimeout:            streamIdle,
+		HttpProtocolOptions:          &corev3.Http1ProtocolOptions{AcceptHttp_10: acceptHTTP10},
 		HttpFilters:                  filters,
 		UpgradeConfigs:               []*hcmv3.HttpConnectionManager_UpgradeConfig{{UpgradeType: "websocket"}},
 		Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
@@ -789,7 +794,7 @@ func (b *resourceBuilder) workloadDownstreamTLS(trustDomain string) *corev3.Tran
 	}
 }
 
-func (b *resourceBuilder) buildTLSTerminateChain(pool *configv1.ConnectionPoolSettings) *listenerv3.FilterChain {
+func (b *resourceBuilder) buildTLSTerminateChain(tcpSettings *configv1.TcpSettings) *listenerv3.FilterChain {
 	selector := b.pack(&ondemandv3.Config{
 		ConfigSource: adsConfigSource(),
 		CertificateMapper: typedCoreExtension(
@@ -822,7 +827,7 @@ func (b *resourceBuilder) buildTLSTerminateChain(pool *configv1.ConnectionPoolSe
 		Filters: []*listenerv3.Filter{
 			capture,
 			relay,
-			b.tcpProxy(MainForward, pool, nil),
+			b.tcpProxy(MainForward, tcpSettings, nil),
 		},
 	}
 }
@@ -1103,19 +1108,19 @@ func runtimePercent() *corev3.RuntimeFractionalPercent {
 
 func (b *resourceBuilder) tcpProxy(
 	cluster string,
-	pool *configv1.ConnectionPoolSettings,
+	tcpSettings *configv1.TcpSettings,
 	accessLogs []*accesslogv3.AccessLog,
 ) *listenerv3.Filter {
 	config := &tcpproxyv3.TcpProxy{
 		StatPrefix:       cluster,
 		ClusterSpecifier: &tcpproxyv3.TcpProxy_Cluster{Cluster: cluster},
 	}
-	if pool.GetTcp().GetIdleTimeout() != nil {
-		config.IdleTimeout = pool.GetTcp().GetIdleTimeout()
+	if tcpSettings.GetIdleTimeout() != nil {
+		config.IdleTimeout = tcpSettings.GetIdleTimeout()
 	} else {
 		config.IdleTimeout = durationpb.New(time.Hour)
 	}
-	config.MaxDownstreamConnectionDuration = pool.GetTcp().GetMaxConnectionDuration()
+	config.MaxDownstreamConnectionDuration = tcpSettings.GetMaxConnectionDuration()
 	for _, accessLog := range accessLogs {
 		config.AccessLog = append(config.AccessLog, proto.Clone(accessLog).(*accesslogv3.AccessLog))
 	}
@@ -1126,14 +1131,14 @@ func (b *resourceBuilder) applicationTCPFilters(
 	config effectiveConfig,
 	prefix []*listenerv3.Filter,
 	cluster string,
-	pool *configv1.ConnectionPoolSettings,
+	tcpSettings *configv1.TcpSettings,
 ) []*listenerv3.Filter {
 	result := append([]*listenerv3.Filter{}, prefix...)
 	var accessLogs []*accesslogv3.AccessLog
 	if config.telemetry != nil {
 		accessLogs = config.telemetry.TCPAccessLogs
 	}
-	return append(result, b.tcpProxy(cluster, pool, accessLogs))
+	return append(result, b.tcpProxy(cluster, tcpSettings, accessLogs))
 }
 
 // sniTrafficPolicyMatcher preserves gateway exclusions before consulting the
@@ -1202,7 +1207,9 @@ func (b *resourceBuilder) protocolMatcher(tls *xdsmatcherv3.Matcher_OnMatch) *xd
 
 func (b *resourceBuilder) applicationMatcher() *xdsmatcherv3.Matcher {
 	return exactMatcher(applicationProtocolInput, map[string]*xdsmatcherv3.Matcher_OnMatch{
-		"'h2c'":      b.toChain(forwardHTTPChain),
+		"'h2c'": b.toChain(forwardHTTPChain),
+		// Disabled HTTP/1.0 must be rejected by the HCM, not bypass it as TCP.
+		"'http/1.0'": b.toChain(forwardHTTPChain),
 		"'http/1.1'": b.toChain(forwardHTTPChain),
 	}, b.toChain(forwardTCPChain))
 }

@@ -474,7 +474,7 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 		{"duplicate", "{cipherSuites: [AES128-GCM-SHA256, AES128-GCM-SHA256]}", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			config := "egressGateways:\n- name: egress-gw\n  namespace: agentio-system\n  upstreamTls: " + tt.settings
+			config := "egressGateways:\n- name: egress-gw\n  namespace: agentio-system\n  tls:\n    origination: " + tt.settings
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
 				"AgentioConfig": func() (*configv1.EgressGateway, error) {
 					got, err := applyAgentioConfig(config, defaultAgentioConfiguration())
@@ -484,7 +484,7 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 					return got.GetEgressGateways()[0], nil
 				},
 				"Gateway API parameters": func() (*configv1.EgressGateway, error) {
-					return decodeEgressGateway("upstreamTls: " + tt.settings)
+					return decodeEgressGateway("tls:\n  origination: " + tt.settings)
 				},
 			} {
 				t.Run(name, func(t *testing.T) {
@@ -492,7 +492,7 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 					if (err != nil) != tt.invalid {
 						t.Fatalf("config error = %v, want invalid=%v", err, tt.invalid)
 					}
-					if !tt.invalid && got.GetUpstreamTls() == nil {
+					if !tt.invalid && got.GetTls().GetOrigination() == nil {
 						t.Fatal("missing upstream TLS settings")
 					}
 				})

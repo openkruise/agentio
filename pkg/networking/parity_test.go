@@ -710,17 +710,17 @@ func buildGatewayGraph(t *testing.T, legacy bool) []model.Resource {
 					IncludeHosts: []string{"*.example.com"},
 					ExcludeHosts: []string{"legacy.example.com"},
 				},
-				ConnectionPool: &configv1.ConnectionPoolSettings{
-					Tcp: &configv1.TcpSettings{
-						IdleTimeout:           durationpb.New(2 * time.Minute),
-						MaxConnectionDuration: durationpb.New(10 * time.Minute),
-					},
-					Http: &configv1.ConnectionPoolHttpSettings{
-						StreamIdleTimeout: durationpb.New(3 * time.Minute),
-						DefaultRoute: &configv1.HttpRouteSettings{
+				Tcp: &configv1.TcpSettings{
+					IdleTimeout:           durationpb.New(2 * time.Minute),
+					MaxConnectionDuration: durationpb.New(10 * time.Minute),
+				},
+				Http: &configv1.GatewayHttpSettings{
+					StreamIdleTimeout: durationpb.New(3 * time.Minute),
+					Routing: &configv1.HttpRoutingSettings{
+						Fallback: &configv1.HttpRouteSettings{
 							Timeout: durationpb.New(12 * time.Second),
 						},
-						RouteOverrides: []*configv1.HttpRouteOverride{{
+						HostOverrides: []*configv1.HttpRouteOverride{{
 							Hosts: []string{"api.example.com", "*.api.example.com"},
 							Settings: &configv1.HttpRouteSettings{
 								Timeout: durationpb.New(4 * time.Second),
@@ -903,6 +903,22 @@ func TestLegacyGatewayGraphParity(t *testing.T) {
 	for _, name := range []string{MainInternal, MainForward} {
 		listener := want[gatewayResourceKey(model.ListenerType, name)].(*listenerv3.Listener)
 		listener.ContinueOnListenerFiltersTimeout = false
+		application := listener.GetFilterChainMatcher().GetOnNoMatch().GetMatcher().GetMatcherTree().GetExactMatchMap().GetMap()
+		application["'http/1.0'"] = proto.Clone(application["'http/1.1'"]).(*xdsmatcherv3.Matcher_OnMatch)
+		// HTTP/1.0 is now enabled by default on business HTTP listeners.
+		for _, chain := range listener.GetFilterChains() {
+			for _, filter := range chain.GetFilters() {
+				if filter.GetName() != "envoy.filters.network.http_connection_manager" {
+					continue
+				}
+				manager := &hcmv3.HttpConnectionManager{}
+				if err := filter.GetTypedConfig().UnmarshalTo(manager); err != nil {
+					t.Fatal(err)
+				}
+				manager.HttpProtocolOptions = &corev3.Http1ProtocolOptions{AcceptHttp_10: true}
+				filter.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: mustPack(manager)}
+			}
+		}
 	}
 	forward := want[gatewayResourceKey(model.ListenerType, MainForward)].(*listenerv3.Listener)
 	forward.ListenerFilters = slices.DeleteFunc(forward.ListenerFilters, func(filter *listenerv3.ListenerFilter) bool {
