@@ -139,6 +139,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 		"agentio.connect_workload",
 		"agentio.connect_sni_policy",
 		"envoy.filters.http.local_ratelimit",
+		concurrencyFilterName, bandwidthFilterName,
 		"envoy.filters.http.router",
 	}; !equalStrings(got, want) {
 		t.Fatalf("CONNECT filter order = %v, want %v", got, want)

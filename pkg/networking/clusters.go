@@ -155,12 +155,8 @@ func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.Upstr
 		},
 	})
 	cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{httpProtocolOptionsType: options}
-	// Multiple SNI hostnames share this context. Disable session reuse until
-	// Envoy scopes its upstream session cache by SNI, otherwise a resumed
-	// session can carry another hostname's certificate and fail SAN validation.
-	// See https://github.com/envoyproxy/envoy/pull/45982.
+	// Envoy 1.40+ scopes the default upstream session cache by effective SNI.
 	tlsConfig := b.pack(&tlsv3.UpstreamTlsContext{
-		MaxSessionKeys: wrapperspb.UInt32(0),
 		CommonTlsContext: &tlsv3.CommonTlsContext{
 			TlsParams: upstreamTLSParameters(settings),
 			ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
@@ -232,12 +228,8 @@ func (b *resourceBuilder) buildDFPCluster(
 		},
 	})
 	cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{httpProtocolOptionsType: opts}
-	// Multiple SNI hostnames share this context. Disable session reuse until
-	// Envoy scopes its upstream session cache by SNI, otherwise a resumed
-	// session can carry another hostname's certificate and fail SAN validation.
-	// See https://github.com/envoyproxy/envoy/pull/45982.
+	// Envoy 1.40+ scopes the default upstream session cache by effective SNI.
 	tlsConfig := b.pack(&tlsv3.UpstreamTlsContext{
-		MaxSessionKeys: wrapperspb.UInt32(0),
 		CommonTlsContext: &tlsv3.CommonTlsContext{
 			TlsParams: upstreamTLSParameters(settings),
 			ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{

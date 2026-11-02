@@ -366,8 +366,7 @@
                 "h2",
                 "http/1.1"
               ]
-            },
-            "maxSessionKeys": 0
+            }
           }
         }
       }
@@ -427,8 +426,7 @@
                   "filename": "/etc/ssl/cert.pem"
                 }
               }
-            },
-            "maxSessionKeys": 0
+            }
           }
         }
       }
@@ -1095,6 +1093,32 @@
                               }
                             ]
                           }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "agentio.connect_concurrency",
+                      "disabled": true,
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+                        ]
+                      }
+                    },
+                    {
+                      "name": "agentio.bandwidth",
+                      "disabled": true,
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
                         ]
                       }
                     },

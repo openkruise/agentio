@@ -26,18 +26,28 @@ struct Queue {
 }
 
 impl Queue {
-    fn insert(&mut self, id: u64, due: Instant, task: Task) {
+    // Only an earlier deadline needs to interrupt the timer thread's current wait.
+    fn insert(&mut self, id: u64, due: Instant, task: Task) -> bool {
+        if self.pending.get(&id) == Some(&due) {
+            return false;
+        }
+        let wake = self
+            .deadlines
+            .first_key_value()
+            .is_none_or(|((first, _), _)| due < *first);
         if let Some(old) = self.pending.insert(id, due) {
             self.deadlines.remove(&(old, id));
         }
         self.deadlines.insert((due, id), task);
+        wake
     }
 
-    fn reap_at(&mut self, id: u64, due: Instant, ledger: Arc<Mutex<Ledger>>) {
+    fn reap_at(&mut self, id: u64, due: Instant, ledger: Arc<Mutex<Ledger>>) -> bool {
         // An earlier alarm safely rechecks the ledger; stale updates must not postpone cleanup.
         if self.pending.get(&id).is_none_or(|old| due < *old) {
-            self.insert(id, due, Task::Reap(ledger));
+            return self.insert(id, due, Task::Reap(ledger));
         }
+        false
     }
 }
 
@@ -109,17 +119,22 @@ impl Timer {
     }
 
     pub fn reap_at(&self, id: u64, due: Instant, ledger: Arc<Mutex<Ledger>>) {
-        self.inner.0.lock().unwrap().reap_at(id, due, ledger);
-        self.inner.1.notify_one();
+        let wake = self.inner.0.lock().unwrap().reap_at(id, due, ledger);
+        if wake {
+            self.inner.1.notify_one();
+        }
     }
 
     pub fn schedule(&self, id: u64, due: Instant, scheduler: Arc<dyn EnvoyHttpFilterScheduler>) {
-        self.inner
+        let wake = self
+            .inner
             .0
             .lock()
             .unwrap()
             .insert(id, due, Task::Resume(scheduler));
-        self.inner.1.notify_one();
+        if wake {
+            self.inner.1.notify_one();
+        }
     }
 
     pub fn cancel(&self, id: u64) {

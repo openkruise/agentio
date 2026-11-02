@@ -78,6 +78,7 @@ func TestSandboxOnDemandCARotation(t *testing.T) {
 	if _, err := environment.Kube.WaitReadyPods(ctx, namespace, "app=upstream-tls", 1); err != nil {
 		t.Fatal(err)
 	}
+	// Isolate certificate convergence from EPE availability during issuer changes.
 	rig.ApplyConfig(t, scope, map[string]any{"Namespace": namespace, "Host": host}, `
 apiVersion: v1
 kind: ConfigMap
@@ -92,6 +93,7 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
+      extProc: {}
       tlsTermination:
         includeHosts: ["{{ .Host }}"]
 `)

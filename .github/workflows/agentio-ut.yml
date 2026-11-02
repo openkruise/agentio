@@ -114,6 +114,21 @@ jobs:
           docker build --target runtime -t agentio-network-limits:test extensions/envoy/network-limits
           ./bin/test_network_limits.sh agentio-network-limits:test
 
+      - name: Test scenario runner and network stability smoke profile
+        run: |
+          SCENARIO_TEST_IMAGE=agentio-network-limits:test go test -v ./bench/scenario
+          go run ./bench/connect/scenarios \
+            -image agentio-network-limits:test \
+            -profile smoke \
+            -output "$RUNNER_TEMP/network-limits-scenarios"
+      - name: Upload network stability evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: network-limits-scenarios
+          path: ${{ runner.temp }}/network-limits-scenarios
+          if-no-files-found: ignore
+
   gateway-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 20

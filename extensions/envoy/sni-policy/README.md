@@ -15,7 +15,7 @@ cd extensions/envoy/sni-policy
 bash build.sh
 ```
 
-The build downloads the required subtree from pinned Envoy SDK commit `b579d07d3ad7ee11d32b105e91a5a39ad24718d7`, checks formatting, runs unit tests and builds `target/release/libenvoy_agentio_sni_policy.so`. The SDK cache is ignored; remove `.envoy-sdk` when changing the SDK pin.
+The build downloads the required subtree from pinned Envoy SDK tag `v1.40.2`, checks formatting, runs unit tests and builds `target/release/libenvoy_agentio_sni_policy.so`. The SDK cache is ignored; remove `.envoy-sdk` when changing the SDK pin.
 
 The standalone smoke fixture uses test headers, static certificates and local origins to isolate module behavior. It exercises real TLS termination and relay, ordered matching, wildcard boundaries, normalization, denial, absent/invalid policies, cleartext, alternating policies and conflicting actions. Production HBONE, Porter discovery and on-demand SDS require the integrated gateway test as well.
 
