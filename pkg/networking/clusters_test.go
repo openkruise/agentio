@@ -67,7 +67,7 @@ func TestGatewayClustersUseConfiguredConnectTimeoutAndRootCA(t *testing.T) {
 	}
 }
 
-func TestGatewayTLSOriginationDisablesSharedSessionCache(t *testing.T) {
+func TestGatewayTLSOriginationUsesDefaultSessionCache(t *testing.T) {
 	resources, err := Build(Inputs{
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 		TrustDomain:      "cluster.local",
@@ -85,8 +85,8 @@ func TestGatewayTLSOriginationDisablesSharedSessionCache(t *testing.T) {
 				t.Fatalf("decode TLS context: %v", err)
 			}
 			// An absent wrapper enables Envoy's default session cache.
-			if keys := context.GetMaxSessionKeys(); keys == nil || keys.GetValue() != 0 {
-				t.Fatalf("max session keys = %v, want explicit zero to prevent cross-SNI session reuse", keys)
+			if keys := context.GetMaxSessionKeys(); keys != nil {
+				t.Fatalf("max session keys = %v, want Envoy's default SNI-scoped session cache", keys)
 			}
 			if got := context.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename(); got != features.ResolveGatewayRootCAPath() {
 				t.Fatalf("trusted CA = %q, want configured roots", got)
@@ -215,8 +215,8 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 					if params.GetTlsMinimumProtocolVersion() != minVersion || params.GetTlsMaximumProtocolVersion() != maxVersion || !slices.Equal(params.GetCipherSuites(), ciphers) {
 						t.Fatalf("gateway %s cluster %s TLS parameters = %v, want %v–%v and %v", current.Name, name, params, minVersion, maxVersion, ciphers)
 					}
-					if ctx.GetMaxSessionKeys() == nil || ctx.GetMaxSessionKeys().GetValue() != 0 || ctx.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename() != features.ResolveGatewayRootCAPath() {
-						t.Fatalf("cluster %s lost CA validation or disabled session cache: %v", name, ctx)
+					if ctx.GetMaxSessionKeys() != nil || ctx.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename() != features.ResolveGatewayRootCAPath() {
+						t.Fatalf("cluster %s lost CA validation or default session cache: %v", name, ctx)
 					}
 					if name == TLSConnectOriginate {
 						options := &httpupstreamv3.HttpProtocolOptions{}
@@ -278,6 +278,9 @@ func TestExtProcWorkloadMTLS(t *testing.T) {
 	cfg := &tlsv3.UpstreamTlsContext{}
 	if err := clusters[ExtProcCluster].GetTransportSocket().GetTypedConfig().UnmarshalTo(cfg); err != nil {
 		t.Fatal(err)
+	}
+	if keys := cfg.GetMaxSessionKeys(); keys == nil || keys.GetValue() != 0 {
+		t.Fatalf("EPE mTLS must disable session resumption across trust rotations, got %v", keys)
 	}
 	common := cfg.GetCommonTlsContext()
 	identity := common.GetTlsCertificateSdsSecretConfigs()

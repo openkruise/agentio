@@ -366,7 +366,7 @@ The Secret coordinates and gateway namespace must be consistent. See [MITM certi
 
 When the sandbox egress gateway originates TLS to a destination or an HTTPS proxy, it explicitly allows TLS 1.2 through TLS 1.3. Its TLS 1.2 cipher list contains the six ECDHE AES-GCM and ChaCha20-Poly1305 suites, followed by `AES128-GCM-SHA256` and `AES256-GCM-SHA384` for older public servers without ECDHE support. Connections negotiating these two RSA suites do not provide forward secrecy. TLS 1.3 cipher suites are managed separately by Envoy.
 
-Upstream CA and hostname verification remain enabled, and the shared upstream TLS session cache remains disabled to prevent cross-host session reuse. These settings do not change downstream TLS termination or connections forwarded without termination.
+Upstream CA and hostname verification remain enabled. Destination and HTTPS proxy TLS origination use Envoy 1.40.2's default session cache, scoped by the effective SNI to prevent cross-host session reuse. Keep `envoy.reloadable_features.scope_upstream_tls_session_cache_by_sni` enabled. Session resumption remains disabled for EPE mTLS and downstream TLS termination. These settings do not change connections forwarded without termination.
 
 Override the upstream defaults per gateway with `tls.origination`:
 

@@ -106,16 +106,14 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			cfg.GetDnsCacheConfig().ResolvedAddressFilter = nil
 			cluster.GetClusterType().TypedConfig = mustGatewayAny(t, cfg)
 		}
-		// The legacy oracle predates disabling the shared cross-SNI session
-		// cache and explicit compatible TLS defaults. Both are covered by the
-		// TLS origination regression tests.
+		// The legacy oracle predates explicit compatible TLS defaults, which
+		// are covered by the TLS origination regression tests.
 		if cluster, ok := message.(*clusterv3.Cluster); ok &&
 			(cluster.GetName() == TLSConnectOriginate || cluster.GetName() == TLSProxyOriginate) {
 			context := &tlsv3.UpstreamTlsContext{}
 			if err := cluster.GetTransportSocket().GetTypedConfig().UnmarshalTo(context); err != nil {
 				t.Fatalf("decode TLS context: %v", err)
 			}
-			context.MaxSessionKeys = nil
 			context.CommonTlsContext.TlsParams.TlsMaximumProtocolVersion = tlsv3.TlsParameters_TLS_AUTO
 			context.CommonTlsContext.TlsParams.CipherSuites = nil
 			// HTTP ALPN now comes from the HTTP pool so this cluster also supports TCP.
@@ -911,6 +909,16 @@ func displayGatewayResourceKey(key string) string {
 func TestLegacyGatewayGraphParity(t *testing.T) {
 	got := normalizeGatewayResources(buildGatewayGraph(t, true))
 	want := readNormalizedGatewayGolden(t, "testdata/agentio-supported-gateway.json")
+	// Envoy 1.40+ scopes upstream sessions by SNI; the frozen oracle disabled caching.
+	for _, name := range []string{TLSConnectOriginate, TLSProxyOriginate} {
+		cluster := want[gatewayResourceKey(model.ClusterType, name)].(*clusterv3.Cluster)
+		context := &tlsv3.UpstreamTlsContext{}
+		if err := cluster.GetTransportSocket().GetTypedConfig().UnmarshalTo(context); err != nil {
+			t.Fatal(err)
+		}
+		context.MaxSessionKeys = nil
+		cluster.TransportSocket.ConfigType = &corev3.TransportSocket_TypedConfig{TypedConfig: mustPack(context)}
+	}
 	// Timeout now closes connections for legacy gateways too; keep the frozen oracle intact.
 	for _, name := range []string{MainInternal, MainForward} {
 		listener := want[gatewayResourceKey(model.ListenerType, name)].(*listenerv3.Listener)
