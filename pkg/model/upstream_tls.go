@@ -25,7 +25,7 @@ import (
 // ValidateUpstreamTLS checks the common TLS configuration accepted by both
 // AgentioConfig and Gateway API parameters, without changing caller-owned data.
 func ValidateUpstreamTLS(settings *configv1.UpstreamTlsSettings) error {
-	const field = "upstreamTls"
+	const field = "tls.origination"
 	minVersion, maxVersion := settings.GetMinProtocolVersion(), settings.GetMaxProtocolVersion()
 	if minVersion < configv1.UpstreamTlsSettings_DEFAULT || minVersion > configv1.UpstreamTlsSettings_TLSV1_3 {
 		return fmt.Errorf("%s.minProtocolVersion must be DEFAULT, TLSV1_2, or TLSV1_3", field)

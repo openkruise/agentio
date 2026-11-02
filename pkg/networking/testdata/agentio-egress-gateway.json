@@ -1379,7 +1379,10 @@
                     {
                       "upgradeType": "websocket"
                     }
-                  ]
+                  ],
+                  "httpProtocolOptions": {
+                    "acceptHttp10": true
+                  }
                 }
               }
             ],
@@ -1750,6 +1753,15 @@
                       }
                     },
                     "'http/1.1'": {
+                      "action": {
+                        "name": "forward-http",
+                        "typedConfig": {
+                          "@type": "type.googleapis.com/google.protobuf.StringValue",
+                          "value": "forward-http"
+                        }
+                      }
+                    },
+                    "'http/1.0'": {
                       "action": {
                         "name": "forward-http",
                         "typedConfig": {
@@ -2294,7 +2306,10 @@
                     {
                       "upgradeType": "websocket"
                     }
-                  ]
+                  ],
+                  "httpProtocolOptions": {
+                    "acceptHttp10": true
+                  }
                 }
               }
             ],
@@ -2362,6 +2377,15 @@
                   }
                 },
                 "'http/1.1'": {
+                  "action": {
+                    "name": "forward-http",
+                    "typedConfig": {
+                      "@type": "type.googleapis.com/google.protobuf.StringValue",
+                      "value": "forward-http"
+                    }
+                  }
+                },
+                "'http/1.0'": {
                   "action": {
                     "name": "forward-http",
                     "typedConfig": {

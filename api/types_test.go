@@ -61,16 +61,6 @@ func TestWireMessageNamesAndTypeURLs(t *testing.T) {
 	}
 }
 
-func TestEgressServiceEntriesKeepUpstreamWireFieldNumber(t *testing.T) {
-	field := (&configv1.EgressGateway{}).ProtoReflect().Descriptor().Fields().ByName("service_entries")
-	if field == nil {
-		t.Fatal("EgressGateway.service_entries descriptor not found")
-	}
-	if got, want := field.Number(), int32(7); int32(got) != want {
-		t.Fatalf("EgressGateway.service_entries field number = %d, want %d", got, want)
-	}
-}
-
 // The Authorization descriptor extends Istio's istio.security namespace with
 // Agentio fields, so it lives in agentio.security to avoid a protobuf
 // global-registry conflict with upstream istio.io/istio (see

@@ -57,8 +57,8 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildPassthroughCluster(),
 		buildBlackHoleCluster(),
 		b.buildDFPCluster(HTTPDynamicForwardProxy, true, false, nil),
-		b.buildDFPCluster(TLSConnectOriginate, false, true, config.gateway.GetUpstreamTls()),
-		b.buildTLSProxyOriginateCluster(config.gateway.GetUpstreamTls()),
+		b.buildDFPCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
+		b.buildTLSProxyOriginateCluster(config.gateway.GetTls().GetOrigination()),
 	}
 	if !b.legacyGateway {
 		cluster := b.buildExtProcCluster(&configv1.ExtProcProvider{Service: "127.0.0.1", Port: 9002}, PorterCluster)

@@ -182,11 +182,13 @@ func TestGatewayAPIParameterUpdatePublishesIncrementalRoutesWithLegacyPolicyRefe
 			Namespace: "agentio-system",
 			Name:      "egress",
 			Source:    model.GatewaySourceGatewayAPI,
-			Config: &configv1.EgressGateway{ConnectionPool: &configv1.ConnectionPoolSettings{
-				Http: &configv1.ConnectionPoolHttpSettings{
-					DefaultRoute: &configv1.HttpRouteSettings{Timeout: durationpb.New(timeout)},
+			Config: &configv1.EgressGateway{
+				Http: &configv1.GatewayHttpSettings{
+					Routing: &configv1.HttpRoutingSettings{
+						Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(timeout)},
+					},
 				},
-			}},
+			},
 		}
 	}
 	gatewayAPI.ConditionalUpdateObject(gatewayWithTimeout(7 * time.Second))

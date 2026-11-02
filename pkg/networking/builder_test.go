@@ -51,11 +51,11 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 	test.SetForTest(t, &features.EnableSNITrafficPolicy, true)
 	resources, err := Build(Inputs{
 		Gateway: testGateway(&configv1.EgressGateway{
-			ConnectionPool: &configv1.ConnectionPoolSettings{
-				Tcp: &configv1.TcpSettings{IdleTimeout: durationpb.New(2 * time.Minute)},
-				Http: &configv1.ConnectionPoolHttpSettings{
-					StreamIdleTimeout: durationpb.New(3 * time.Minute),
-					RouteOverrides: []*configv1.HttpRouteOverride{{
+			Tcp: &configv1.TcpSettings{IdleTimeout: durationpb.New(2 * time.Minute)},
+			Http: &configv1.GatewayHttpSettings{
+				StreamIdleTimeout: durationpb.New(3 * time.Minute),
+				Routing: &configv1.HttpRoutingSettings{
+					HostOverrides: []*configv1.HttpRouteOverride{{
 						Hosts:    []string{"api.example.com"},
 						Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(4 * time.Second)},
 					}},
@@ -243,12 +243,14 @@ func TestBuildStaticEgressServiceEntriesPreserveDestinationPort(t *testing.T) {
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 		TrustDomain:      "cluster.local",
 		Gateway: testGateway(&configv1.EgressGateway{
-			ConnectionPool: &configv1.ConnectionPoolSettings{Http: &configv1.ConnectionPoolHttpSettings{
-				RouteOverrides: []*configv1.HttpRouteOverride{{
-					Hosts:    []string{"api.example.com", "other.example.com"},
-					Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(17 * time.Second)},
-				}},
-			}},
+			Http: &configv1.GatewayHttpSettings{
+				Routing: &configv1.HttpRoutingSettings{
+					HostOverrides: []*configv1.HttpRouteOverride{{
+						Hosts:    []string{"api.example.com", "other.example.com"},
+						Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(17 * time.Second)},
+					}},
+				},
+			},
 			ServiceEntries: []*configv1.EgressServiceEntry{
 				{
 					Hosts: []string{"api.example.com"},

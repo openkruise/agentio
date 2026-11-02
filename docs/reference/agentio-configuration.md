@@ -63,9 +63,8 @@ agentiod:
       egressGateways:
         - name: agentio-egress
           namespace: agentio-system
-          connectionPool:
-            tcp:
-              idleTimeout: 30m
+          tcp:
+            idleTimeout: 30m
 ```
 
 Render the generated base before applying it:
@@ -112,7 +111,7 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `additionalExtProcs` | `ExtProcProvider[]` | Empty | Ordered processors appended after the effective sandbox provider. Disabled when that provider is absent or explicitly disabled. |
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from sandbox workload metadata to reduce xDS size. |
-| `egressGateways` | `EgressGateway[]` | Empty | Per-gateway TLS termination, `ext_proc`, connection pool, and CONNECT rate-limit settings. |
+| `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
 
 ## Egress policies
 
@@ -242,13 +241,36 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `tlsTermination.includeHosts` | `string[]` | Empty | SNI host patterns selected for TLS termination. Wildcards such as `*.example.com` are supported. On-demand certificate issuance is authorized by gateway identity, not by this list. |
 | `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. |
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
-| `upstreamTls` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
-| `connectionPool` | `ConnectionPoolSettings` | See below | TCP and HTTP connection and route timeouts. |
+| `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
+| `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
+| `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
+| `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
 | `connectRateLimit` | `LocalRateLimitSettings` | Unset | Local token-bucket limit for new HTTP/2 CONNECT streams. |
 | `connectConcurrencyLimit` | `ConnectConcurrencyLimitSettings` | Unset | Shared limits on active TCP CONNECT streams, grouped by trusted filter state. |
 | `bandwidthLimit` | `BandwidthLimitSettings` | Unset | Per-filter-state TCP byte shaping on CONNECT, shared across connections/workers in one community gateway process. |
 | `serviceEntries` | `EgressServiceEntry[]` | Empty | Static upstream endpoints that override DNS resolution for exact destination hosts at this gateway. |
 | `accessLogFormat` | `AccessLogFormat` | Built-in JSON | Format of the built-in `envoy` access-log provider on stdout for this gateway. See below. |
+
+### HTTP protocol
+
+Business HTTP listeners accept HTTP/1.0 by default, both for plaintext traffic
+and HTTP after TLS termination. Set `egressGateways[].http.acceptHttp10: false`
+to reject HTTP/1.0 on a particular gateway:
+
+```yaml
+egressGateways:
+- name: agentio-egress
+  namespace: agentio-system
+  http:
+    acceptHttp10: false
+```
+
+Omitting `http`, using `http: {}`, or setting `acceptHttp10: true` enables
+HTTP/1.0. Requests still require a valid authority, supplied by a `Host` header
+or extracted from an absolute request URL; no default host is configured.
+This setting also applies to Gateway API `parametersRef` configuration. It does
+not change the outer HTTP/2 CONNECT tunnel or TLS passthrough traffic. Preserve
+other gateway entries and settings when updating the `egressGateways` list.
 
 ### Gateway protocol names
 
@@ -346,7 +368,7 @@ When the sandbox egress gateway originates TLS to a destination or an HTTPS prox
 
 Upstream CA and hostname verification remain enabled, and the shared upstream TLS session cache remains disabled to prevent cross-host session reuse. These settings do not change downstream TLS termination or connections forwarded without termination.
 
-Override the upstream defaults per gateway with `upstreamTls`:
+Override the upstream defaults per gateway with `tls.origination`:
 
 ```yaml
 agentiod:
@@ -355,16 +377,17 @@ agentiod:
       egressGateways:
       - name: agentio-egress
         namespace: agentio-system
-        upstreamTls:
-          minProtocolVersion: TLSV1_2
-          maxProtocolVersion: TLSV1_3
-          cipherSuites:
-          - ECDHE-ECDSA-AES128-GCM-SHA256
-          - ECDHE-RSA-AES128-GCM-SHA256
-          - ECDHE-ECDSA-AES256-GCM-SHA384
-          - ECDHE-RSA-AES256-GCM-SHA384
-          - ECDHE-ECDSA-CHACHA20-POLY1305
-          - ECDHE-RSA-CHACHA20-POLY1305
+        tls:
+          origination:
+            minProtocolVersion: TLSV1_2
+            maxProtocolVersion: TLSV1_3
+            cipherSuites:
+            - ECDHE-ECDSA-AES128-GCM-SHA256
+            - ECDHE-RSA-AES128-GCM-SHA256
+            - ECDHE-ECDSA-AES256-GCM-SHA384
+            - ECDHE-RSA-AES256-GCM-SHA384
+            - ECDHE-ECDSA-CHACHA20-POLY1305
+            - ECDHE-RSA-CHACHA20-POLY1305
 ```
 
 This example removes RSA key-exchange suites. For a raw ConfigMap `data.config`, start at `egressGateways` without the Helm `agentiod.config.values` wrapper. Preserve the other gateway fields and gateway entries when replacing the list.
@@ -379,19 +402,21 @@ This example removes RSA key-exchange suites. For a raw ConfigMap `data.config`,
 
 The override applies to both destination and HTTPS proxy TLS origination on the matching gateway. CA verification, hostname verification, and session cache behavior cannot be disabled through this API. Domain-specific TLS overrides are not currently supported; `tlsTermination.excludeHosts` selects TLS passthrough.
 
-Gateway API `parametersRef` ConfigMaps accept the same `upstreamTls` block in `data.config`, alongside `tlsTermination`, without an `egressGateways` wrapper or embedded gateway name and namespace. Invalid parameter updates retain the last successfully applied parameters.
+Gateway API `parametersRef` ConfigMaps accept the same `tls.origination` block in `data.config`, alongside `tlsTermination`, without an `egressGateways` wrapper or embedded gateway name and namespace. Invalid parameter updates retain the last successfully applied parameters.
 
-### Connection pool and route settings
+### HTTP routing and TCP timeouts
+
+All paths below are relative to an `egressGateways[]` entry. `http.routing.fallback` applies only when no host override matches; overrides replace the complete timeout/retry policy and do not inherit missing fields from the fallback. An override for `*` replaces the fallback policy.
 
 | Field | Default | Description |
 | --- | --- | --- |
 | `tcp.idleTimeout` | `1h` | Closes an idle TCP connection. |
 | `tcp.maxConnectionDuration` | Unset | Absolute lifetime of a downstream TCP connection. |
 | `http.streamIdleTimeout` | `30m` | Closes an idle HTTP stream, including WebSocket and server-sent event streams. |
-| `http.defaultRoute.timeout` | `0s` | Total timeout for the fallback route. `0s` disables the timeout. |
-| `http.defaultRoute.retries` | Unset | Retry policy using Istio's [`HTTPRetry`](https://istio.io/latest/docs/reference/config/networking/virtual-service/#HTTPRetry) fields. |
-| `http.routeOverrides[].hosts` | Empty | Exact or wildcard destination host patterns, matched independently of the request port. `*` overrides the default route settings; duplicate patterns across or within overrides are rejected case-insensitively. |
-| `http.routeOverrides[].settings` | Unset | `timeout` and `retries` applied to the matching hosts. |
+| `http.routing.fallback.timeout` | `0s` | Total timeout for the fallback route. `0s` disables the timeout. |
+| `http.routing.fallback.retries` | Unset | Retry policy using Istio's [`HTTPRetry`](https://istio.io/latest/docs/reference/config/networking/virtual-service/#HTTPRetry) fields. |
+| `http.routing.hostOverrides[].hosts` | Empty | Exact or wildcard destination host patterns, matched independently of the request port. `*` overrides the default route settings; duplicate patterns across or within overrides are rejected case-insensitively. |
+| `http.routing.hostOverrides[].settings` | Unset | `timeout` and `retries` applied to the matching hosts. |
 
 ### CONNECT rate limiting
 
@@ -545,7 +570,7 @@ For enforcement, configure the EPE provider's request header mode as `SEND` (the
 
 Static entries apply to ordinary HTTP requests, including HTTPS selected for TLS termination. Application-level CONNECT requests are forwarded to the original upstream proxy through a separate route and do not use these entries. A routed HTTPS connection that is not terminated stays on the TCP forwarding chain and still uses DNS resolution.
 
-Hosts are normalized to lowercase without a trailing dot. Route settings still follow the [connection pool rules](#connection-pool-and-route-settings): the most specific `http.routeOverrides` host pattern matching a static host supplies its `timeout` and `retries`, otherwise `http.defaultRoute` applies. An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer, and Agentio retains the last successfully applied configuration.
+Hosts are normalized to lowercase without a trailing dot. Route settings still follow the [HTTP routing rules](#http-routing-and-tcp-timeouts): the most specific `http.routing.hostOverrides` host pattern matching a static host supplies its `timeout` and `retries`, otherwise `http.routing.fallback` applies. An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer, and Agentio retains the last successfully applied configuration.
 
 ```yaml
 egressGateways:
@@ -558,6 +583,32 @@ egressGateways:
           - address: 203.0.113.10
           - address: 203.0.113.11
 ```
+
+## Gateway configuration migration
+
+The gateway configuration is grouped by protocol. The old fields are removed;
+update the complete gateway entries in both AgentioConfig sources and Gateway
+API `parametersRef` ConfigMaps:
+
+| Removed path | New path |
+| --- | --- |
+| `connectionPool.tcp` | `tcp` |
+| `connectionPool.http.streamIdleTimeout` | `http.streamIdleTimeout` |
+| `connectionPool.http.defaultRoute` | `http.routing.fallback` |
+| `connectionPool.http.routeOverrides` | `http.routing.hostOverrides` |
+| `upstreamTls` | `tls.origination` |
+
+`tlsTermination` retains its location, fields, and behavior. The moved timeout,
+retry, and TLS settings retain their defaults and matching semantics. HTTP/1.0
+is now enabled by default; set `http.acceptHttp10: false` to disable it. Both
+values route HTTP/1.0 through the HTTP filter chain; disabling it rejects the
+request instead of forwarding it as opaque TCP.
+
+Old paths are configuration errors, not aliases. Invalid updates retain the
+last effective configuration. Migrate the configuration when deploying the new
+control plane; retained configuration does not survive a process restart.
+External processor `clusterSettings` and EPE HTTP-callout `connectionPool`
+settings are separate APIs and are unchanged.
 
 ## Inspect configuration sources
 

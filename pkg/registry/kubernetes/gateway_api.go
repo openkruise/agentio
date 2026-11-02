@@ -58,7 +58,7 @@ func decodeEgressGateway(content string) (*configv1.EgressGateway, error) {
 	if service := value.GetExtProc().GetService(); service != "" && strings.TrimSpace(service) == "" {
 		return nil, fmt.Errorf("ext_proc service must not be whitespace-only")
 	}
-	if err := model.ValidateUpstreamTLS(value.GetUpstreamTls()); err != nil {
+	if err := model.ValidateUpstreamTLS(value.GetTls().GetOrigination()); err != nil {
 		return nil, err
 	}
 	if err := model.ValidateAccessLogFormat(value.GetAccessLogFormat()); err != nil {

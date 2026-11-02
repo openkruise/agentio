@@ -95,10 +95,10 @@ data:
 		tls13, ecdhe, rsa128, rsa256 string
 	}{
 		{"compatible defaults", "", "tls13", "ecdhe", "rsa128", "rsa256"},
-		{"maximum TLS 1.2", "upstreamTls: {maxProtocolVersion: TLSV1_2}", "503", "ecdhe", "rsa128", "rsa256"},
-		{"ECDHE list replaces defaults", "upstreamTls: {cipherSuites: [ECDHE-RSA-AES128-GCM-SHA256]}", "tls13", "ecdhe", "503", "503"},
-		{"minimum TLS 1.3", "upstreamTls: {minProtocolVersion: TLSV1_3}", "tls13", "503", "503", "503"},
-		{"empty list restores defaults", "upstreamTls: {cipherSuites: []}", "tls13", "ecdhe", "rsa128", "rsa256"},
+		{"maximum TLS 1.2", "tls: {origination: {maxProtocolVersion: TLSV1_2}}", "503", "ecdhe", "rsa128", "rsa256"},
+		{"ECDHE list replaces defaults", "tls: {origination: {cipherSuites: [ECDHE-RSA-AES128-GCM-SHA256]}}", "tls13", "ecdhe", "503", "503"},
+		{"minimum TLS 1.3", "tls: {origination: {minProtocolVersion: TLSV1_3}}", "tls13", "503", "503", "503"},
+		{"empty list restores defaults", "tls: {origination: {cipherSuites: []}}", "tls13", "ecdhe", "rsa128", "rsa256"},
 		{"omitted settings restore defaults", "", "tls13", "ecdhe", "rsa128", "rsa256"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

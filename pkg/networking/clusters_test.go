@@ -180,7 +180,11 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 		{"replace ciphers in order", &configv1.UpstreamTlsSettings{CipherSuites: replacement}, tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, replacement},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			gateway := testGateway(&configv1.EgressGateway{UpstreamTls: tt.settings})
+			gateway := testGateway(&configv1.EgressGateway{
+				Tls: &configv1.GatewayTlsSettings{
+					Origination: tt.settings,
+				},
+			})
 			before := proto.Clone(gateway.Config)
 			for _, selected := range []bool{true, false} {
 				current := gateway
@@ -241,7 +245,11 @@ func TestGatewayBuildRejectsInvalidUpstreamTLS(t *testing.T) {
 		_, err := Build(Inputs{
 			DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 			TrustDomain:      "cluster.local",
-			Gateway:          testGateway(&configv1.EgressGateway{UpstreamTls: settings}),
+			Gateway: testGateway(&configv1.EgressGateway{
+				Tls: &configv1.GatewayTlsSettings{
+					Origination: settings,
+				},
+			}),
 		})
 		if err == nil {
 			t.Fatalf("Build accepted invalid upstream TLS settings: %v", settings)
