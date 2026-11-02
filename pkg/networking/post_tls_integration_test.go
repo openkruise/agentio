@@ -72,7 +72,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	roots.AppendCertsFromPEM(ca.CertificatePEM())
 	certificates := map[string]tls.Certificate{}
 	leaves := map[string]pki.IssuedCertificate{}
-	for _, name := range []string{upstreamHost, "inner.invalid"} {
+	for _, name := range []string{upstreamHost, "localhost", "inner.invalid"} {
 		leaf, err := ca.GenerateRSA(t.Context(), pki.LeafOptions{
 			DNSNames:    []string{name},
 			Server:      true,
@@ -97,6 +97,10 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	for _, mode := range []string{"tcp", "nested_tls", "bad_certificate", "idle", "http1", "http2", "loopback_http1", "loopback_http2", "connect_http1", "connect_http2"} {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
+			serverName := upstreamHost
+			if strings.HasPrefix(mode, "loopback") {
+				serverName = "localhost"
+			}
 			closeResource := func(resource io.Closer) {
 				if err := resource.Close(); err != nil {
 					t.Logf("close test transport: %v", err)
@@ -104,7 +108,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			var handshakes atomic.Int32
 			upstreamTLS := &tls.Config{
-				Certificates: []tls.Certificate{certificates[upstreamHost]},
+				Certificates: []tls.Certificate{certificates[serverName]},
 				MinVersion:   tls.VersionTLS12,
 			}
 			if mode == "bad_certificate" {
@@ -112,8 +116,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			upstreamTLS.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 				handshakes.Add(1)
-				if hello.ServerName != upstreamHost {
-					return nil, fmt.Errorf("upstream SNI = %q, want outer %s", hello.ServerName, upstreamHost)
+				if hello.ServerName != serverName {
+					return nil, fmt.Errorf("upstream SNI = %q, want outer %s", hello.ServerName, serverName)
 				}
 				if !isHTTP && len(hello.SupportedProtos) != 0 {
 					return nil, fmt.Errorf("TCP advertised ALPN %v", hello.SupportedProtos)
@@ -149,7 +153,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					}
 				}))
 				closeResource(origin.Listener)
-				origin.Listener, err = net.Listen("tcp4", net.JoinHostPort(upstreamHost, "0"))
+				origin.Listener, err = net.Listen("tcp4", net.JoinHostPort(serverName, "0"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -198,8 +202,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					completed <- err
 				}()
 			}
-			address := startPostTLSEnvoy(t, binary, upstreamAddress, leaves[upstreamHost])
-			clientTLS := &tls.Config{RootCAs: roots, ServerName: upstreamHost, MinVersion: tls.VersionTLS12}
+			address := startPostTLSEnvoy(t, binary, upstreamAddress, leaves[serverName])
+			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
 			if mode == "connect_http1" {
 				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
 				if err != nil {
@@ -248,11 +252,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				host := upstreamHost
-				if strings.HasPrefix(mode, "loopback") {
-					host = "localhost"
-				}
-				request, err := http.NewRequest(method, "https://"+net.JoinHostPort(host, port)+"/", nil)
+				request, err := http.NewRequest(method, "https://"+net.JoinHostPort(serverName, port)+"/", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
