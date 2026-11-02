@@ -58,6 +58,12 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	if binary == "" {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
 	}
+	// Docker resolves its hostname to a non-loopback interface address, which
+	// keeps successful DFP requests outside the default denied ranges.
+	upstreamHost, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ca, err := pki.NewSelfSignedCA("post-tls-test", time.Hour, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +72,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	roots.AppendCertsFromPEM(ca.CertificatePEM())
 	certificates := map[string]tls.Certificate{}
 	leaves := map[string]pki.IssuedCertificate{}
-	for _, name := range []string{"localhost", "inner.invalid"} {
+	for _, name := range []string{upstreamHost, "localhost", "inner.invalid"} {
 		leaf, err := ca.GenerateRSA(t.Context(), pki.LeafOptions{
 			DNSNames:    []string{name},
 			Server:      true,
@@ -88,9 +94,13 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	}
 	test.SetForTest(t, &features.GatewayRootCAPath, rootPath)
 	payload := []byte("\x00opaque application bytes after TLS termination")
-	for _, mode := range []string{"tcp", "nested_tls", "bad_certificate", "idle", "http1", "http2", "connect_http1", "connect_http2"} {
+	for _, mode := range []string{"tcp", "nested_tls", "bad_certificate", "idle", "http1", "http2", "loopback_http1", "loopback_http2", "connect_http1", "connect_http2"} {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
+			serverName := upstreamHost
+			if strings.HasPrefix(mode, "loopback") {
+				serverName = "localhost"
+			}
 			closeResource := func(resource io.Closer) {
 				if err := resource.Close(); err != nil {
 					t.Logf("close test transport: %v", err)
@@ -98,7 +108,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			var handshakes atomic.Int32
 			upstreamTLS := &tls.Config{
-				Certificates: []tls.Certificate{certificates["localhost"]},
+				Certificates: []tls.Certificate{certificates[serverName]},
 				MinVersion:   tls.VersionTLS12,
 			}
 			if mode == "bad_certificate" {
@@ -106,8 +116,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			upstreamTLS.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 				handshakes.Add(1)
-				if hello.ServerName != "localhost" {
-					return nil, fmt.Errorf("upstream SNI = %q, want outer localhost", hello.ServerName)
+				if hello.ServerName != serverName {
+					return nil, fmt.Errorf("upstream SNI = %q, want outer %s", hello.ServerName, serverName)
 				}
 				if !isHTTP && len(hello.SupportedProtos) != 0 {
 					return nil, fmt.Errorf("TCP advertised ALPN %v", hello.SupportedProtos)
@@ -142,6 +152,11 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 						t.Errorf("HTTP origin: %v", err)
 					}
 				}))
+				closeResource(origin.Listener)
+				origin.Listener, err = net.Listen("tcp4", net.JoinHostPort(serverName, "0"))
+				if err != nil {
+					t.Fatal(err)
+				}
 				origin.EnableHTTP2 = strings.HasSuffix(mode, "http2")
 				origin.TLS = upstreamTLS
 				origin.StartTLS()
@@ -187,8 +202,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					completed <- err
 				}()
 			}
-			address := startPostTLSEnvoy(t, binary, upstreamAddress, leaves["localhost"])
-			clientTLS := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}
+			address := startPostTLSEnvoy(t, binary, upstreamAddress, leaves[serverName])
+			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
 			if mode == "connect_http1" {
 				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
 				if err != nil {
@@ -237,7 +252,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				request, err := http.NewRequest(method, "https://localhost:"+port+"/", nil)
+				request, err := http.NewRequest(method, "https://"+net.JoinHostPort(serverName, port)+"/", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -252,6 +267,20 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				protocol := "HTTP/1.1"
 				if strings.HasSuffix(mode, "http2") {
 					protocol = "HTTP/2.0"
+				}
+				if strings.HasPrefix(mode, "loopback") {
+					body, err := io.ReadAll(response.Body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if response.StatusCode != http.StatusServiceUnavailable ||
+						!strings.Contains(string(body), "DNS resolution failure") {
+						t.Fatalf("denied destination response = %s %q", response.Status, body)
+					}
+					if handshakes.Load() != 0 {
+						t.Fatal("denied destination opened an upstream TLS connection")
+					}
+					return
 				}
 				body := make([]byte, len(method+" "+protocol))
 				if _, err := io.ReadFull(response.Body, body); err != nil {

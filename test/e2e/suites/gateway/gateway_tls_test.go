@@ -77,7 +77,6 @@ data:
 
 func TestSandboxOnDemandCert(t *testing.T) {
 	_, scope := rig.BeginScenario(t)
-	applyGatewayTLSTerminationProfile(t, scope, "example.com")
 
 	curl := func() (string, string, error) {
 		ctx, cancel := e2e.Context(t, 15*time.Second)
@@ -118,6 +117,7 @@ data:
 	})
 
 	t.Run("https to example.com with tls termination requires insecure", func(t *testing.T) {
+		applyGatewayTLSTerminationProfile(t, scope, "example.com")
 		rig.ApplyConfig(t, scope, map[string]any{
 			"Namespace": resolvedAgentioConfig.Namespace,
 		}, `
