@@ -80,12 +80,22 @@ func TestGatewayHTTP10(t *testing.T) {
 					}
 					if chain := matcher.GetMatcherTree().GetExactMatchMap().GetMap()["'http/1.0'"].
 						GetAction().GetName(); chain != forwardHTTPChain {
-						t.Errorf("legacy=%v listener=%s: HTTP/1.0 routes to %q, want HTTP enforcement", legacy, name, chain)
+						t.Errorf(
+							"legacy=%v listener=%s: HTTP/1.0 routes to %q, want HTTP enforcement",
+							legacy,
+							name,
+							chain,
+						)
 					}
 					options := findHCM(t, listeners[name]).GetHttpProtocolOptions()
 					if options.GetAcceptHttp_10() != tc.accept || options.GetDefaultHostForHttp_10() != "" {
-						t.Errorf("legacy=%v listener=%s: HTTP/1 options = %v, want acceptHttp10=%v without default host",
-							legacy, name, options, tc.accept)
+						t.Errorf(
+							"legacy=%v listener=%s: HTTP/1 options = %v, want acceptHttp10=%v without default host",
+							legacy,
+							name,
+							options,
+							tc.accept,
+						)
 					}
 				}
 				if findHCM(t, listeners[ConnectTerminate]).GetHttpProtocolOptions().GetAcceptHttp_10() {

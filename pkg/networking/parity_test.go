@@ -903,7 +903,12 @@ func TestLegacyGatewayGraphParity(t *testing.T) {
 	for _, name := range []string{MainInternal, MainForward} {
 		listener := want[gatewayResourceKey(model.ListenerType, name)].(*listenerv3.Listener)
 		listener.ContinueOnListenerFiltersTimeout = false
-		application := listener.GetFilterChainMatcher().GetOnNoMatch().GetMatcher().GetMatcherTree().GetExactMatchMap().GetMap()
+		application := listener.GetFilterChainMatcher().
+			GetOnNoMatch().
+			GetMatcher().
+			GetMatcherTree().
+			GetExactMatchMap().
+			GetMap()
 		application["'http/1.0'"] = proto.Clone(application["'http/1.1'"]).(*xdsmatcherv3.Matcher_OnMatch)
 		// HTTP/1.0 is now enabled by default on business HTTP listeners.
 		for _, chain := range listener.GetFilterChains() {

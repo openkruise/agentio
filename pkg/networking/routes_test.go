@@ -138,7 +138,10 @@ func TestGatewayRoutesUseSupportedAgentioRetries(t *testing.T) {
 					HostOverrides: []*configv1.HttpRouteOverride{{
 						Hosts: []string{"api.example.com"},
 						Settings: &configv1.HttpRouteSettings{
-							Retries: &networkingv1alpha3.HTTPRetry{Attempts: 3, RetryOn: "connect-failure,refused-stream"},
+							Retries: &networkingv1alpha3.HTTPRetry{
+								Attempts: 3,
+								RetryOn:  "connect-failure,refused-stream",
+							},
 						},
 					}},
 				},

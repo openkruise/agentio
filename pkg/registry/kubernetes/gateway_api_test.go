@@ -91,7 +91,8 @@ serviceEntries:
 			if got := config.GetHttp().GetStreamIdleTimeout().AsDuration(); got != 90*time.Second {
 				t.Fatalf("stream idle timeout = %s", got)
 			}
-			if routing := config.GetHttp().GetRouting(); routing.GetFallback().GetTimeout().AsDuration() != 45*time.Second ||
+			routing := config.GetHttp().GetRouting()
+			if routing.GetFallback().GetTimeout().AsDuration() != 45*time.Second ||
 				len(routing.GetHostOverrides()) != 1 {
 				t.Fatalf("HTTP routing = %v", routing)
 			}
@@ -105,7 +106,8 @@ serviceEntries:
 				tcp.GetMaxConnectionDuration().AsDuration() != 600*time.Second {
 				t.Fatalf("TCP timeouts = %v", tcp)
 			}
-			if tls := config.GetTls().GetOrigination(); tls.GetMinProtocolVersion() != configv1.UpstreamTlsSettings_TLSV1_2 ||
+			tls := config.GetTls().GetOrigination()
+			if tls.GetMinProtocolVersion() != configv1.UpstreamTlsSettings_TLSV1_2 ||
 				tls.GetMaxProtocolVersion() != configv1.UpstreamTlsSettings_TLSV1_3 {
 				t.Fatalf("TLS origination = %v", tls)
 			}
@@ -134,7 +136,10 @@ func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
 			if _, err := decodeEgressGateway(content); err == nil {
 				t.Fatal("Gateway API parameters accepted a removed path")
 			}
-			if _, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+content, nil); err == nil {
+			if _, err := applyAgentioConfig(
+				"egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+content,
+				nil,
+			); err == nil {
 				t.Fatal("AgentioConfig accepted a removed path")
 			}
 		})
