@@ -16,16 +16,77 @@ package xds
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"math"
 	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	agentlog "github.com/openkruise/agentio/pkg/log"
-	"github.com/openkruise/agentio/pkg/model"
-	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
+
+var errRequestRateLimited = errors.New("request rate limit exceeded")
+
+type flowControlConfig struct {
+	concurrency      int
+	requestRateLimit float64
+	requestWait      time.Duration
+	sendTimeout      time.Duration
+	ackTimeout       time.Duration
+}
+
+func defaultFlowControlConfig(concurrency int, requestRateLimit float64) flowControlConfig {
+	return flowControlConfig{
+		concurrency:      concurrency,
+		requestRateLimit: requestRateLimit,
+		requestWait:      time.Second,
+		sendTimeout:      5 * time.Second,
+		ackTimeout:       5 * time.Second,
+	}
+}
+
+// One server owns these pools; each stream owns its response lease.
+type flowController struct {
+	config       flowControlConfig
+	requestLimit *rate.Limiter
+	initialSlots chan struct{}
+	requestSlots chan struct{}
+	pushSlots    chan struct{}
+}
+
+func newFlowController(config flowControlConfig) *flowController {
+	return &flowController{
+		config:       config,
+		requestLimit: rate.NewLimiter(rate.Limit(config.requestRateLimit), 1),
+		// Responses cannot borrow scheduler capacity: an assigned push may
+		// be waiting for the same stream's request handler to finish.
+		initialSlots: make(chan struct{}, config.concurrency),
+		requestSlots: make(chan struct{}, config.concurrency),
+		pushSlots:    make(chan struct{}, config.concurrency),
+	}
+}
+
+func (f *flowController) newLease(ctx context.Context) *responseLease {
+	return &responseLease{ctx: ctx, wait: f.config.requestWait, timeout: f.config.ackTimeout}
+}
+
+func (f *flowController) acceptRequest(ctx context.Context) error {
+	if f.requestLimit.Limit() == 0 {
+		return nil
+	}
+	wait, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := f.requestLimit.Wait(wait); err != nil {
+		return fmt.Errorf("%w: %w", errRequestRateLimited, err)
+	}
+	return nil
+}
+
+func invalidRequestRateLimit(limit float64) bool {
+	return limit < 0 || math.IsNaN(limit) || math.IsInf(limit, 0)
+}
 
 // A stream reuses one lease across response types so an initial subscription
 // batch never waits for its own ACKs. Send returning only means data was queued.
@@ -109,36 +170,13 @@ func responseAckTimeout() error {
 	return status.Error(codes.DeadlineExceeded, "xDS response acknowledgement timeout")
 }
 
-func (s *Server) requestResponsePool(watches map[string]*watchState) chan struct{} {
+func (f *flowController) requestResponsePool(watches map[string]*watchState) chan struct{} {
 	for _, watch := range watches {
 		if watch.receivedAcknowledgement {
-			return s.requestSlots
+			return f.requestSlots
 		}
 	}
-	return s.initialSlots
-}
-
-func (s *Server) handleClientRequest(
-	stream DeltaStream,
-	scope model.ClientScope,
-	connLog *agentlog.Logger,
-	watches map[string]*watchState,
-	subscription xdsstore.Subscription,
-	request *discoveryv3.DeltaDiscoveryRequest,
-	lease *responseLease,
-) error {
-	watch := watches[request.GetTypeUrl()]
-	pureACK := watch != nil && watch.started && request.GetResponseNonce() != "" &&
-		len(request.GetResourceNamesSubscribe()) == 0 && len(request.GetResourceNamesUnsubscribe()) == 0 &&
-		len(request.GetInitialResourceVersions()) == 0
-	if !pureACK {
-		if err := lease.acquire(s.requestResponsePool(watches)); err != nil {
-			return err
-		}
-	}
-	err := s.handleRequest(stream, scope, connLog, watches, subscription, request)
-	lease.releaseAcknowledged(watches)
-	return err
+	return f.initialSlots
 }
 
 type boundedSendStream struct {

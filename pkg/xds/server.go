@@ -19,16 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
-	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	agentlog "github.com/openkruise/agentio/pkg/log"
 	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/attestation"
@@ -62,20 +61,13 @@ type Server struct {
 	connections   atomic.Uint64
 	pushScheduler *PushScheduler
 	pushesDone    chan struct{}
-	requestLimit  *rate.Limiter
-	initialSlots  chan struct{}
-	requestSlots  chan struct{}
-	pushSlots     chan struct{}
-	requestWait   time.Duration
-	sendTimeout   time.Duration
+	flow          *flowController
 }
 
 type streamRequest struct {
 	request *discoveryv3.DeltaDiscoveryRequest
 	err     error
 }
-
-var errRequestRateLimited = errors.New("request rate limit exceeded")
 
 var clientClasses = [...]model.ClientClass{
 	model.ClientSharedZTunnel,
@@ -85,7 +77,7 @@ var clientClasses = [...]model.ClientClass{
 }
 
 // NewServer builds the Delta ADS server. Admission and the independent push and
-// request-response concurrency limits are process-wide and fixed at construction.
+// request-response concurrency limits are shared by its streams and fixed at construction.
 func NewServer(
 	authenticator attestation.Authenticator,
 	scopeFuncs ScopeFuncs,
@@ -116,7 +108,7 @@ func NewServer(
 		queueSize,
 		generators,
 		NewPushScheduler(pushConcurrency),
-		requestRateLimit,
+		defaultFlowControlConfig(pushConcurrency, requestRateLimit),
 	)
 }
 
@@ -128,7 +120,7 @@ func newServerWithScheduler(
 	queueSize int,
 	generators map[string]ResourceGenerator,
 	pushScheduler *PushScheduler,
-	requestRateLimit float64,
+	flowConfig flowControlConfig,
 ) (*Server, error) {
 	if authenticator == nil || scopeFuncs == nil || nilutil.IsNilInterface(resources) || ready == nil ||
 		pushScheduler == nil {
@@ -139,7 +131,7 @@ func newServerWithScheduler(
 	if queueSize <= 0 {
 		return nil, fmt.Errorf("client queue size must be positive")
 	}
-	if invalidRequestRateLimit(requestRateLimit) {
+	if invalidRequestRateLimit(flowConfig.requestRateLimit) {
 		return nil, fmt.Errorf("request rate limit must be finite and non-negative")
 	}
 	ownedGenerators := make(map[string]ResourceGenerator, len(generators))
@@ -162,21 +154,10 @@ func newServerWithScheduler(
 		defaultGen:    SnapshotGenerator{},
 		pushScheduler: pushScheduler,
 		pushesDone:    make(chan struct{}),
-		requestLimit:  rate.NewLimiter(rate.Limit(requestRateLimit), 1),
-		// Request responses must not borrow scheduler slots: an assigned push
-		// can be waiting for the same stream's request handler to finish.
-		initialSlots: make(chan struct{}, cap(pushScheduler.slots)),
-		requestSlots: make(chan struct{}, cap(pushScheduler.slots)),
-		pushSlots:    make(chan struct{}, cap(pushScheduler.slots)),
-		requestWait:  time.Second,
-		sendTimeout:  5 * time.Second,
+		flow:          newFlowController(flowConfig),
 	}
 	go server.dispatchPushes()
 	return server, nil
-}
-
-func invalidRequestRateLimit(limit float64) bool {
-	return limit < 0 || math.IsNaN(limit) || math.IsInf(limit, 0)
 }
 
 func (s *Server) generator(typeURL string) ResourceGenerator {
@@ -197,14 +178,14 @@ func (s *Server) StreamAggregatedResources(
 func (s *Server) DeltaAggregatedResources(
 	stream discoveryv3.AggregatedDiscoveryService_DeltaAggregatedResourcesServer,
 ) error {
-	return s.serveDelta(&boundedSendStream{DeltaStream: stream, timeout: s.sendTimeout})
+	return s.serveDelta(&boundedSendStream{DeltaStream: stream, timeout: s.flow.config.sendTimeout})
 }
 
 func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	if !s.ready() {
 		return status.Error(codes.Unavailable, "server is not ready")
 	}
-	if err := s.acceptRequest(stream.Context()); err != nil {
+	if err := s.flow.acceptRequest(stream.Context()); err != nil {
 		metrics.Default.RecordXDSRequestRejection()
 		return status.Error(codes.ResourceExhausted, err.Error())
 	}
@@ -275,7 +256,7 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 
 	subscription := s.resources.Subscribe(stream.Context(), scope)
 	watches := make(map[string]*watchState)
-	lease := &responseLease{ctx: stream.Context(), wait: s.requestWait, timeout: s.sendTimeout}
+	lease := s.flow.newLease(stream.Context())
 	defer lease.release()
 	defer func() {
 		if watch := watches[model.SecretType]; watch != nil && watch.sds != nil {
@@ -303,7 +284,7 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		return false, s.handleClientRequest(stream, scope, connLog, watches, subscription, incoming.request, lease)
 	}
 	handleCertificate := func(completion sdsCompletion) error {
-		if err := lease.acquire(s.requestResponsePool(watches)); err != nil {
+		if err := lease.acquire(s.flow.requestResponsePool(watches)); err != nil {
 			return err
 		}
 		if err := s.sendSDSCompletions(stream, connLog, watches[model.SecretType], completion); err != nil {
@@ -386,8 +367,8 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 						s.pushScheduler.Done(push)
 						return err
 					}
-				case s.pushSlots <- struct{}{}:
-					lease.start(s.pushSlots)
+				case s.flow.pushSlots <- struct{}{}:
+					lease.start(s.flow.pushSlots)
 				}
 			}
 			if lease.timedOut() {
@@ -403,6 +384,29 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 			metrics.Default.RecordXDSConvergence(time.Since(push.Started))
 		}
 	}
+}
+
+func (s *Server) handleClientRequest(
+	stream DeltaStream,
+	scope model.ClientScope,
+	connLog *agentlog.Logger,
+	watches map[string]*watchState,
+	subscription xdsstore.Subscription,
+	request *discoveryv3.DeltaDiscoveryRequest,
+	lease *responseLease,
+) error {
+	watch := watches[request.GetTypeUrl()]
+	pureACK := watch != nil && watch.started && request.GetResponseNonce() != "" &&
+		len(request.GetResourceNamesSubscribe()) == 0 && len(request.GetResourceNamesUnsubscribe()) == 0 &&
+		len(request.GetInitialResourceVersions()) == 0
+	if !pureACK {
+		if err := lease.acquire(s.flow.requestResponsePool(watches)); err != nil {
+			return err
+		}
+	}
+	err := s.handleRequest(stream, scope, connLog, watches, subscription, request)
+	lease.releaseAcknowledged(watches)
+	return err
 }
 
 func expectedStreamError(err error) bool {
@@ -425,18 +429,6 @@ func expectedStreamError(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "stream terminated by RST_STREAM with error code: NO_ERROR") ||
 		strings.Contains(message, "received prior goaway: code: NO_ERROR")
-}
-
-func (s *Server) acceptRequest(ctx context.Context) error {
-	if s.requestLimit.Limit() == 0 {
-		return nil
-	}
-	wait, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	if err := s.requestLimit.Wait(wait); err != nil {
-		return fmt.Errorf("%w: %v", errRequestRateLimited, err)
-	}
-	return nil
 }
 
 func (s *Server) dispatchPushes() {

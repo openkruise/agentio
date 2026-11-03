@@ -39,12 +39,12 @@ import (
 func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
 	old := addressResource(t, "cluster//Pod/demo/a", "old")
 	server := newTestServerWithScheduler(t, ztunnelScope(), []model.Resource{old}, nil, NewPushScheduler(1))
-	server.server.requestWait = 50 * time.Millisecond
+	server.server.flow.config.requestWait = 50 * time.Millisecond
 	ctx := t.Context()
 	ready := newFakeStream(ctx, 1)
 	watches := map[string]*watchState{}
 	subscription := server.resources.Subscribe(ctx, server.scope)
-	readyLease := &responseLease{ctx: ctx, wait: server.server.requestWait, timeout: server.server.sendTimeout}
+	readyLease := server.server.flow.newLease(ctx)
 	defer readyLease.release()
 	if err := server.server.handleClientRequest(
 		ready,
@@ -75,7 +75,7 @@ func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
 		close(entered)
 		<-release
 	}
-	blockedLease := &responseLease{ctx: ctx, wait: server.server.requestWait, timeout: server.server.sendTimeout}
+	blockedLease := server.server.flow.newLease(ctx)
 	done := make(chan error, 1)
 	go func() {
 		done <- server.server.handleClientRequest(blocked, server.scope, log, map[string]*watchState{},
@@ -92,7 +92,7 @@ func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
 		t.Fatal("initial response did not enter Send")
 	}
 	second := newFakeStream(ctx, 1)
-	secondLease := &responseLease{ctx: ctx, wait: server.server.requestWait, timeout: server.server.sendTimeout}
+	secondLease := server.server.flow.newLease(ctx)
 	defer secondLease.release()
 	err := server.server.handleClientRequest(second, server.scope, log, map[string]*watchState{},
 		server.resources.Subscribe(ctx, server.scope), nodeRequest(model.AddressType), secondLease)
@@ -110,11 +110,11 @@ func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
 	}
 	// Server pushes have their own scheduler capacity, including while a
 	// client-triggered response is holding every request slot.
-	if err := readyLease.acquire(server.server.pushSlots); err != nil {
+	if err := readyLease.acquire(server.server.flow.pushSlots); err != nil {
 		t.Fatal(err)
 	}
-	if len(server.server.pushSlots) != 1 || len(server.server.initialSlots) != 1 ||
-		len(server.server.requestSlots) != 0 {
+	if len(server.server.flow.pushSlots) != 1 || len(server.server.flow.initialSlots) != 1 ||
+		len(server.server.flow.requestSlots) != 0 {
 		t.Fatal("initial and push response pools are not independent")
 	}
 	if err := server.server.pushUpdate(ready, server.scope, log, watches, updateFromChanges(t, changes)); err != nil {
@@ -127,8 +127,8 @@ func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
 
 func TestRequestSlotWaitHonorsParentCancellation(t *testing.T) {
 	server := newTestServerWithScheduler(t, ztunnelScope(), nil, nil, NewPushScheduler(1))
-	server.server.requestSlots <- struct{}{}
-	defer func() { <-server.server.requestSlots }()
+	server.server.flow.requestSlots <- struct{}{}
+	defer func() { <-server.server.flow.requestSlots }()
 	for _, tc := range []struct {
 		name string
 		code codes.Code
@@ -142,12 +142,12 @@ func TestRequestSlotWaitHonorsParentCancellation(t *testing.T) {
 			if tc.code == codes.Canceled {
 				cancel()
 			}
-			lease := &responseLease{ctx: ctx, wait: server.server.requestWait, timeout: server.server.sendTimeout}
+			lease := server.server.flow.newLease(ctx)
 			defer lease.release()
-			if err := lease.acquire(server.server.requestSlots); status.Code(err) != tc.code {
+			if err := lease.acquire(server.server.flow.requestSlots); status.Code(err) != tc.code {
 				t.Fatalf("acquireRequestSlot = %v, want %v", err, tc.code)
 			}
-			if len(server.server.requestSlots) != 1 {
+			if len(server.server.flow.requestSlots) != 1 {
 				t.Fatal("failed acquisition changed the occupied slot")
 			}
 		})
@@ -157,12 +157,12 @@ func TestRequestSlotWaitHonorsParentCancellation(t *testing.T) {
 func TestRequestCapacityWaitStillExpiresAfterOneSecond(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
-		server.server.requestSlots <- struct{}{}
-		defer func() { <-server.server.requestSlots }()
-		lease := &responseLease{ctx: t.Context(), wait: server.server.requestWait, timeout: server.server.sendTimeout}
+		server.server.flow.requestSlots <- struct{}{}
+		defer func() { <-server.server.flow.requestSlots }()
+		lease := server.server.flow.newLease(t.Context())
 		defer lease.release()
 		started := time.Now()
-		if err := lease.acquire(server.server.requestSlots); status.Code(err) != codes.ResourceExhausted {
+		if err := lease.acquire(server.server.flow.requestSlots); status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("request capacity wait = %v, want ResourceExhausted", err)
 		}
 		if elapsed := time.Since(started); elapsed != time.Second {
@@ -197,22 +197,22 @@ func TestSlowInitialStreamDoesNotBlockEstablishedDemand(t *testing.T) {
 				slow.send(nodeRequest(model.ClusterType))
 				slowDone := server.start(slow)
 				synctest.Wait()
-				if len(slow.sent()) != 1 || len(server.server.initialSlots) != 1 {
+				if len(slow.sent()) != 1 || len(server.server.flow.initialSlots) != 1 {
 					t.Fatal("unconfirmed slow stream did not retain initial capacity")
 				}
-				server.server.pushSlots <- struct{}{}
-				defer func() { <-server.server.pushSlots }()
+				server.server.flow.pushSlots <- struct{}{}
+				defer func() { <-server.server.flow.pushSlots }()
 				healthy.send(request(model.ClusterType))
 				synctest.Wait()
 				responses := healthy.sent()
-				if len(responses) != 2 || len(server.server.requestSlots) != 1 {
+				if len(responses) != 2 || len(server.server.flow.requestSlots) != 1 {
 					t.Fatal("confirmed stream's new query was blocked by initial or push capacity")
 				}
 				healthy.send(
 					&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: responses[1].Nonce},
 				)
 				synctest.Wait()
-				if len(server.server.requestSlots) != 0 || len(server.server.initialSlots) != 1 {
+				if len(server.server.flow.requestSlots) != 0 || len(server.server.flow.initialSlots) != 1 {
 					t.Fatal("established ACK released the wrong response pool")
 				}
 				cancel()
@@ -221,7 +221,7 @@ func TestSlowInitialStreamDoesNotBlockEstablishedDemand(t *testing.T) {
 						t.Fatalf("stream cancellation = %v", err)
 					}
 				}
-				if len(server.server.initialSlots) != 0 {
+				if len(server.server.flow.initialSlots) != 0 {
 					t.Fatal("slow stream cancellation did not release initial capacity")
 				}
 			})
@@ -254,14 +254,14 @@ func TestBackgroundCapacityWaitPreservesEstablishedStreamProgress(t *testing.T) 
 					&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: initial.Nonce},
 				)
 				synctest.Wait()
-				if len(server.server.requestSlots) != 0 {
+				if len(server.server.flow.requestSlots) != 0 {
 					t.Fatal("initial ACK did not release request capacity")
 				}
-				server.server.pushSlots <- struct{}{}
+				server.server.flow.pushSlots <- struct{}{}
 				occupied := true
 				defer func() {
 					if occupied {
-						<-server.server.pushSlots
+						<-server.server.flow.pushSlots
 					}
 				}()
 				if err := server.resources.apply([]model.ResourceChange{{Key: old.Key, New: &updated}}); err != nil {
@@ -279,7 +279,7 @@ func TestBackgroundCapacityWaitPreservesEstablishedStreamProgress(t *testing.T) 
 				}
 				switch outcome {
 				case "capacity released":
-					<-server.server.pushSlots
+					<-server.server.flow.pushSlots
 					occupied = false
 				case "new request":
 					stream.send(request(model.ClusterType))
@@ -309,7 +309,7 @@ func TestBackgroundCapacityWaitPreservesEstablishedStreamProgress(t *testing.T) 
 						stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: typ, ResponseNonce: nonce})
 					}
 					synctest.Wait()
-					if len(server.server.requestSlots) != 0 {
+					if len(server.server.flow.requestSlots) != 0 {
 						t.Fatal("ACK processing stalled after making progress during background wait")
 					}
 					cancel()
@@ -353,7 +353,7 @@ func TestResponseLeaseReusesSlotUntilEveryTypeIsAcknowledged(t *testing.T) {
 			t.Fatalf("second type must reuse the first type's lease: %v", err)
 		}
 	}
-	if len(server.server.initialSlots) != 1 || len(stream.sent()) != 2 {
+	if len(server.server.flow.initialSlots) != 1 || len(stream.sent()) != 2 {
 		t.Fatal("two response types did not share one lease")
 	}
 	responses := stream.sent()
@@ -371,11 +371,11 @@ func TestResponseLeaseReusesSlotUntilEveryTypeIsAcknowledged(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(server.server.initialSlots) != 1 {
+	if len(server.server.flow.initialSlots) != 1 {
 		t.Fatal("ACK for one type released another type's unacknowledged response")
 	}
-	if server.server.requestResponsePool(watches) != server.server.requestSlots ||
-		lease.pool != server.server.initialSlots {
+	if server.server.flow.requestResponsePool(watches) != server.server.flow.requestSlots ||
+		lease.pool != server.server.flow.initialSlots {
 		t.Fatal("first ACK must promote future leases without moving the currently held initial lease")
 	}
 	if err := server.server.handleClientRequest(stream, server.scope, log, watches, subscription,
@@ -389,7 +389,7 @@ func TestResponseLeaseReusesSlotUntilEveryTypeIsAcknowledged(t *testing.T) {
 		}, lease); err != nil {
 		t.Fatal(err)
 	}
-	if len(server.server.initialSlots) != 0 {
+	if len(server.server.flow.initialSlots) != 0 {
 		t.Fatal("ACK plus NACK did not release fully consumed responses")
 	}
 }
@@ -504,11 +504,11 @@ func TestResponseLeaseTracksOldACKWithoutMaskingStalledType(t *testing.T) {
 		if !lease.deadline.Equal(originalDeadline) {
 			t.Fatal("unknown nonce extended response lifetime")
 		}
-		if server.server.requestResponsePool(watches) != server.server.initialSlots {
+		if server.server.flow.requestResponsePool(watches) != server.server.flow.initialSlots {
 			t.Fatal("unknown nonce promoted an unconfirmed client")
 		}
 		send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: older})
-		if server.server.requestResponsePool(watches) != server.server.requestSlots {
+		if server.server.flow.requestResponsePool(watches) != server.server.flow.requestSlots {
 			t.Fatal("older valid ACK did not establish the client")
 		}
 		if watches[model.ClusterType].nonceAcked != "" {
@@ -552,43 +552,43 @@ func TestSDSCompletionAcquiresResponseLease(t *testing.T) {
 		stream.send(nodeRequest(model.SecretType, "one.example.com"))
 		done := server.start(stream)
 		synctest.Wait()
-		if len(server.server.initialSlots) != 0 {
+		if len(server.server.flow.initialSlots) != 0 {
 			t.Fatal("pending signing retained a lease without a response")
 		}
-		server.server.initialSlots <- struct{}{}
+		server.server.flow.initialSlots <- struct{}{}
 		job := <-provider.requests
 		job.result <- testSDSCertificate()
 		synctest.Wait()
 		if len(stream.sent()) != 0 {
 			t.Fatal("SDS completion bypassed occupied response capacity")
 		}
-		<-server.server.initialSlots
+		<-server.server.flow.initialSlots
 		synctest.Wait()
 		responses := stream.sent()
-		if len(responses) != 1 || len(server.server.initialSlots) != 1 {
-			t.Fatalf("SDS responses = %d, leases = %d", len(responses), len(server.server.initialSlots))
+		if len(responses) != 1 || len(server.server.flow.initialSlots) != 1 {
+			t.Fatalf("SDS responses = %d, leases = %d", len(responses), len(server.server.flow.initialSlots))
 		}
 		stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SecretType, ResponseNonce: responses[0].Nonce})
 		synctest.Wait()
-		if len(server.server.initialSlots) != 0 {
+		if len(server.server.flow.initialSlots) != 0 {
 			t.Fatal("SDS ACK did not release response capacity")
 		}
 		// An established SDS stream must keep issuing while unconfirmed clients
 		// occupy all initial-response capacity.
-		server.server.initialSlots <- struct{}{}
-		defer func() { <-server.server.initialSlots }()
+		server.server.flow.initialSlots <- struct{}{}
+		defer func() { <-server.server.flow.initialSlots }()
 		stream.send(request(model.SecretType, "two.example.com"))
 		synctest.Wait()
 		job = <-provider.requests
 		job.result <- testSDSCertificate()
 		synctest.Wait()
 		responses = stream.sent()
-		if len(responses) != 2 || len(server.server.requestSlots) != 1 {
+		if len(responses) != 2 || len(server.server.flow.requestSlots) != 1 {
 			t.Fatal("established SDS completion was blocked by initial response capacity")
 		}
 		stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SecretType, ResponseNonce: responses[1].Nonce})
 		synctest.Wait()
-		if len(server.server.requestSlots) != 0 {
+		if len(server.server.flow.requestSlots) != 0 {
 			t.Fatal("established SDS ACK did not release request capacity")
 		}
 		cancel()
@@ -617,7 +617,8 @@ func TestSendTimeoutCancelsTransportAndReleasesRequestSlot(t *testing.T) {
 		resources = append(resources, gatewayResourceOfType(t, typ, "demo/egress", "large", strings.Repeat("x", 2<<20)))
 	}
 	server := newTestServerWithScheduler(t, gatewayScope(), resources, nil, NewPushScheduler(1))
-	server.server.sendTimeout = 100 * time.Millisecond
+	server.server.flow.config.sendTimeout = 5 * time.Second
+	server.server.flow.config.ackTimeout = 100 * time.Millisecond
 	entered, exited, handlers := make(chan struct{}, 8), make(chan error, 8), make(chan error, 8)
 	transport := grpc.NewServer(
 		grpc.StreamInterceptor(
@@ -680,10 +681,12 @@ func TestSendTimeoutCancelsTransportAndReleasesRequestSlot(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("final buffered response had no ACK deadline")
 	}
-	if len(server.server.initialSlots) != 0 {
+	if len(server.server.flow.initialSlots) != 0 {
 		t.Fatal("unacknowledged final response leaked lease")
 	}
 	cancelBuffered()
+	server.server.flow.config.sendTimeout = 100 * time.Millisecond
+	server.server.flow.config.ackTimeout = 5 * time.Second
 	slow, err := client.DeltaAggregatedResources(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -721,7 +724,7 @@ func TestSendTimeoutCancelsTransportAndReleasesRequestSlot(t *testing.T) {
 	if failedSends == 0 {
 		t.Fatal("timeout did not cancel a blocked underlying SendMsg")
 	}
-	if len(server.server.initialSlots) != 0 {
+	if len(server.server.flow.initialSlots) != 0 {
 		t.Fatal("slow stream leaked its request slot")
 	}
 	healthy, err := client.DeltaAggregatedResources(ctx)

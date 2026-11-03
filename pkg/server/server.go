@@ -377,7 +377,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		Handler:           newMonitoringHandler(ready.Load, debugHandler),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	defer func() { _ = healthServer.Shutdown(context.Background()) }()
+	defer shutdownHTTP(healthServer, 5*time.Second)
 	var injectorServe func() error
 	if features.EnableSidecarInjector {
 		injectorOptions := SidecarInjectorOptions{
@@ -431,7 +431,6 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	for !registry.HasSynced() || !resourceCompiler.HasSynced() {
 		select {
 		case <-ctx.Done():
-			_ = healthServer.Shutdown(context.Background())
 			return nil
 		case err := <-errorsChannel:
 			return err
@@ -474,11 +473,11 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	select {
 	case <-ctx.Done():
 		ready.Store(false)
-		shutdown(grpcServer, healthServer)
+		shutdown(grpcServer)
 		return nil
 	case err := <-errorsChannel:
 		ready.Store(false)
-		shutdown(grpcServer, healthServer)
+		shutdown(grpcServer)
 		if err == nil && ctx.Err() != nil {
 			return nil
 		}
@@ -507,7 +506,7 @@ func newMonitoringHandler(ready func() bool, debugHandler http.Handler) http.Han
 	return mux
 }
 
-func shutdown(grpcServer *grpc.Server, healthServer *http.Server) {
+func shutdown(grpcServer *grpc.Server) {
 	done := make(chan struct{})
 	go func() {
 		grpcServer.GracefulStop()
@@ -518,7 +517,15 @@ func shutdown(grpcServer *grpc.Server, healthServer *http.Server) {
 	case <-time.After(5 * time.Second):
 		grpcServer.Stop()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+func shutdownHTTP(server *http.Server, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_ = healthServer.Shutdown(ctx)
+	if err := server.Shutdown(ctx); err != nil {
+		log.Warn("graceful HTTP shutdown failed; closing connections", "address", server.Addr, "error", err)
+		if err := server.Close(); err != nil {
+			log.Error("close HTTP server", "address", server.Addr, "error", err)
+		}
+	}
 }
