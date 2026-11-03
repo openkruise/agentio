@@ -21,6 +21,8 @@ The chart installs one profile at a time and defaults to `sidecar`. To use the A
 
 If OpenKruise Agents creates the workload, also read [Integrate OpenKruise Agents](integrations/openkruise-agents.md) after installing Agentio. That integration changes the workload source, not the Agentio data-plane profile.
 
+If Istio ambient already captures your workloads, use [Integrate with Istio ambient](integrations/istio-ambient.md) to run an Agentio egress waypoint with the existing Istio CNI, ztunnel, and CA.
+
 ## Continue with policy and egress
 
 Each onboarding guide creates a test workload and exports the variables used by the task pages. Continue with:
