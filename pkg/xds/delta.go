@@ -451,6 +451,7 @@ func (s *Server) sendGeneratedDelta(
 		}
 	}
 	watch.nonceSent = nonce
+	watch.unacknowledged = append(watch.unacknowledged, sentResponse{nonce: nonce, at: time.Now()})
 	return nil
 }
 

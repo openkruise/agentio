@@ -256,9 +256,13 @@ func TestAgentioChartTelemetryCompatibility(t *testing.T) {
 			t.Fatal("Istio stats filter remains")
 		}
 	}
-	if len(connectionManager.AccessLog) != 2 ||
-		connectionManager.AccessLog[0].Name != "envoy.access_loggers.dynamic_modules" {
-		t.Fatalf("chart native metrics/access logs = %v", connectionManager.AccessLog)
+	if connectionManager.HttpFilters[0].Name != "envoy.filters.http.dynamic_modules" ||
+		len(connectionManager.AccessLog) != 1 || connectionManager.AccessLog[0].Name != "envoy.access_loggers.file" {
+		t.Fatalf(
+			"chart native metrics/access logs = %v / %v",
+			connectionManager.HttpFilters,
+			connectionManager.AccessLog,
+		)
 	}
 
 }

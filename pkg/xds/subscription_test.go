@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"testing"
+	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
@@ -248,12 +249,13 @@ func TestGatewayPendingResponseAcknowledgement(t *testing.T) {
 				trackAcks:       true,
 				nonceSent:       response.Nonce,
 				pendingResponse: response,
+				unacknowledged:  []sentResponse{{nonce: response.Nonce, at: time.Now()}},
 				names:           sets.New("a", "b"),
 				sent:            map[string]string{"a": "v1", "b": "v1"},
 				started:         true,
 			}
 			watch.recordAcknowledgement(&discoveryv3.DeltaDiscoveryRequest{ResponseNonce: "unknown"})
-			if watch.pendingResponse != response || watch.pendingAcks != nil {
+			if watch.pendingResponse != response || watch.pendingAcks != nil || watch.receivedAcknowledgement {
 				t.Fatal("unknown nonce changed the outstanding response")
 			}
 			req := &discoveryv3.DeltaDiscoveryRequest{ResponseNonce: response.Nonce}
@@ -267,6 +269,9 @@ func TestGatewayPendingResponseAcknowledgement(t *testing.T) {
 				req.ErrorDetail = &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "invalid a"}
 			}
 			watch.recordAcknowledgement(req)
+			if !watch.receivedAcknowledgement || len(watch.unacknowledged) != 0 {
+				t.Fatal("ACK/NACK did not advance transport progress independently of resource acceptance")
+			}
 			if watch.pendingResponse != nil {
 				t.Fatal("ACK/NACK retained the response payload")
 			}

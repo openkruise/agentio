@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -45,7 +46,11 @@ type Authenticator interface {
 const (
 	tokenReviewCacheTTL     = time.Minute
 	tokenReviewCacheEntries = 4096
+	tokenReviewTimeout      = 5 * time.Second
 )
+
+// ErrTokenReviewUnavailable marks API failures, not rejected credentials.
+var ErrTokenReviewUnavailable = errors.New("Kubernetes token review unavailable")
 
 type tokenReviewEntry struct {
 	caller  model.PeerIdentity
@@ -56,6 +61,7 @@ type TokenReviewer struct {
 	client    kubernetes.Interface
 	audiences []string
 	ttl       time.Duration
+	timeout   time.Duration
 
 	mu    sync.Mutex
 	cache map[string]tokenReviewEntry
@@ -75,6 +81,7 @@ func NewTokenReviewer(client kubernetes.Interface, audiences []string) (*TokenRe
 		client:    client,
 		audiences: append([]string(nil), audiences...),
 		ttl:       tokenReviewCacheTTL,
+		timeout:   tokenReviewTimeout,
 		cache:     make(map[string]tokenReviewEntry),
 	}, nil
 }
@@ -161,11 +168,14 @@ func (a *TokenReviewer) Authenticate(ctx context.Context) (model.PeerIdentity, e
 	if caller, found := a.cached(token, now); found {
 		return caller, nil
 	}
+	// Bound both client-side API throttling and the network call on cache misses.
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
 	review, err := a.client.AuthenticationV1().TokenReviews().Create(ctx, &authenticationv1.TokenReview{
 		Spec: authenticationv1.TokenReviewSpec{Token: token, Audiences: append([]string(nil), a.audiences...)},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return model.PeerIdentity{}, fmt.Errorf("review Kubernetes token: %w", err)
+		return model.PeerIdentity{}, fmt.Errorf("%w: %w", ErrTokenReviewUnavailable, err)
 	}
 	if !review.Status.Authenticated {
 		message := review.Status.Error

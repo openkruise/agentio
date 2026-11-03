@@ -83,9 +83,8 @@ func TestPilotCAConfigMapVariableIsIgnored(t *testing.T) {
 
 func TestPilotRequestRateLimitVariableIsIgnored(t *testing.T) {
 	if os.Getenv("AGENTIO_REQUEST_RATE_HELPER") == "true" {
-		if features.RequestRateLimit != float64(features.PushConcurrency) {
-			t.Fatalf("request rate limit = %v, want derived Agentio default %v",
-				features.RequestRateLimit, features.PushConcurrency)
+		if features.RequestRateLimit != 125 {
+			t.Fatalf("request rate limit = %v, want CPU-budget default 125", features.RequestRateLimit)
 		}
 		return
 	}
@@ -94,11 +93,13 @@ func TestPilotRequestRateLimitVariableIsIgnored(t *testing.T) {
 	command.Env = append(environmentWithout(
 		os.Environ(),
 		"AGENTIO_MAX_REQUESTS_PER_SECOND",
+		"AGENTIO_XDS_CPU_BUDGET",
 		"AGENTIO_PUSH_CONCURRENCY",
 		"PILOT_MAX_REQUESTS_PER_SECOND",
 		"AGENTIO_REQUEST_RATE_HELPER",
 	),
 		"PILOT_MAX_REQUESTS_PER_SECOND=11",
+		"AGENTIO_XDS_CPU_BUDGET=500m",
 		"AGENTIO_REQUEST_RATE_HELPER=true",
 	)
 	if output, err := command.CombinedOutput(); err != nil {

@@ -1403,20 +1403,29 @@ func TestPushConcurrencyIsGloballyScheduled(t *testing.T) {
 	firstDone := server.start(first)
 	secondDone := server.start(second)
 	first.send(nodeRequest(model.AddressType))
+	initial := first.awaitResponses(t, model.AddressType, 1)[0]
+	first.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 	second.send(nodeRequest(model.AddressType))
-	first.awaitResponses(t, model.AddressType, 1)
-	second.awaitResponses(t, model.AddressType, 1)
+	initial = second.awaitResponses(t, model.AddressType, 1)[0]
+	second.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 
 	started := make(chan int, 2)
 	release := make(chan struct{})
-	first.beforeSend = func() { started <- 1; <-release }
-	second.beforeSend = func() { started <- 2; <-release }
+	first.beforeSend = func() {
+		started <- 1
+		<-release
+	}
+	second.beforeSend = func() {
+		started <- 2
+		<-release
+	}
 	if err := server.resources.apply([]model.ResourceChange{{Key: newResource.Key, New: &newResource}}); err != nil {
 		t.Fatal(err)
 	}
 
+	var firstPushed int
 	select {
-	case <-started:
+	case firstPushed = <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no pushed connection entered Send")
 	}
@@ -1426,13 +1435,21 @@ func TestPushConcurrencyIsGloballyScheduled(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(release)
+	consumed := first
+	if firstPushed == 2 {
+		consumed = second
+	}
+	response := consumed.awaitResponses(t, model.AddressType, 2)[1]
+	consumed.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: response.Nonce})
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("second connection did not run after the push slot was released")
 	}
-	first.awaitResponses(t, model.AddressType, 2)
-	second.awaitResponses(t, model.AddressType, 2)
+	for _, stream := range []*fakeStream{first, second} {
+		response := stream.awaitResponses(t, model.AddressType, 2)[1]
+		stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: response.Nonce})
+	}
 
 	if err := server.finish(t, first, firstDone); err != nil {
 		t.Fatalf("first stream: %v", err)

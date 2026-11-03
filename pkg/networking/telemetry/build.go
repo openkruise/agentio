@@ -37,7 +37,7 @@ type Inputs struct {
 }
 
 type Output struct {
-	HTTPMetrics    *accesslogv3.AccessLog
+	HTTPMetrics    *hcmv3.HttpFilter
 	HTTPAccessLogs []*accesslogv3.AccessLog
 	// ConnectHTTPAccessLogs mirror release-0.1 HBONE termination access logs:
 	// attached to the CONNECT termination HCM, filtered to status >= 400.
@@ -70,31 +70,26 @@ func Build(inputs Inputs) (*Output, error) {
 	result := &Output{}
 	usedProviders := map[string]model.TelemetryProvider{}
 
-	// Legacy proxies have no native metrics module. Keep forwarding and logs
-	// available throughout the upgrade without sending unsupported extensions.
-	if !inputs.LegacyGateway {
-		metrics := mergeMetrics(selected, providers.DefaultMetrics)
-		for _, name := range sortedKeys(metrics) {
-			provider, err := requireProvider(providers, name)
-			if err != nil {
-				return nil, err
-			}
-			if !provider.Prometheus {
-				return nil, fmt.Errorf("Telemetry provider %q does not support metrics", name)
-			}
-			logger, err := buildMetricsLogger(metrics[name])
-			if err != nil {
-				return nil, fmt.Errorf("build metrics provider %q: %w", name, err)
-			}
-			if logger != nil {
-				if result.HTTPMetrics != nil {
-					return nil, fmt.Errorf("multiple Prometheus providers would duplicate gateway metrics")
-				}
-				result.HTTPMetrics = logger
-				usedProviders[name] = provider.Clone()
-			}
+	metrics := mergeMetrics(selected, providers.DefaultMetrics)
+	for _, name := range sortedKeys(metrics) {
+		provider, err := requireProvider(providers, name)
+		if err != nil {
+			return nil, err
 		}
-
+		if !provider.Prometheus {
+			return nil, fmt.Errorf("Telemetry provider %q does not support metrics", name)
+		}
+		filter, err := buildMetricsFilter(metrics[name], inputs.LegacyGateway)
+		if err != nil {
+			return nil, fmt.Errorf("build metrics provider %q: %w", name, err)
+		}
+		if filter != nil {
+			if result.HTTPMetrics != nil {
+				return nil, fmt.Errorf("multiple Prometheus providers would duplicate gateway metrics")
+			}
+			result.HTTPMetrics = filter
+			usedProviders[name] = provider.Clone()
+		}
 	}
 	logs := mergeLogs(selected, providers.DefaultAccessLogging)
 	for _, name := range sortedKeys(logs) {
@@ -203,7 +198,9 @@ func validateTelemetryOutput(output *Output) error {
 		),
 	)
 	if output.HTTPMetrics != nil {
-		accessLogs = append(accessLogs, output.HTTPMetrics)
+		if err := output.HTTPMetrics.ValidateAll(); err != nil {
+			return fmt.Errorf("Telemetry metrics filter: %w", err)
+		}
 	}
 	accessLogs = append(accessLogs, output.HTTPAccessLogs...)
 	accessLogs = append(accessLogs, output.ConnectHTTPAccessLogs...)

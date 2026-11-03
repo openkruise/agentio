@@ -118,17 +118,30 @@ impl Processor {
         let principal = attribute(attributes, "filter_state['agentio.peer.principal']");
         let sandbox_id = attribute(attributes, "filter_state['sandbox.id']");
         let request_deadline = tokio::time::Instant::now() + self.timeout;
-        let result = tokio::time::timeout_at(
-            request_deadline,
-            self.resolve(
-                certificate,
-                peer_ip,
-                principal,
-                sandbox_id,
-                (udp, target),
-                request_deadline,
-            ),
-        )
+        let result = tokio::time::timeout_at(request_deadline, async {
+            let mut invalidated = self.client.invalidations();
+            loop {
+                let epoch = *invalidated.borrow_and_update();
+                // A clear invalidates every dependency already held by this
+                // request. Restart resolution under the original deadline.
+                tokio::select! {
+                    biased;
+                    _ = invalidated.changed() => continue,
+                    result = self.resolve(
+                        certificate,
+                        peer_ip,
+                        principal,
+                        sandbox_id,
+                        (udp, target),
+                        request_deadline,
+                    ) => {
+                        if self.client.current_epoch() == epoch {
+                            break result;
+                        }
+                    }
+                }
+            }
+        })
         .await;
         let response = match result {
             Ok(Ok(response)) => Ok(response),

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"istio.io/istio/pkg/env"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var (
@@ -57,18 +58,29 @@ var (
 	PushConcurrency = env.Register(
 		"AGENTIO_PUSH_CONCURRENCY",
 		defaultPushConcurrency(),
-		"Maximum number of client connections generating and sending pushed xDS responses concurrently. "+
+		"Concurrency limit for background pushes and for streams awaiting xDS acknowledgements, with independent initial-response, established-request, and background-response pools. "+
 			"Defaults to min(15 + 5 * GOMAXPROCS, 100).",
 	).Get()
-	RequestRateLimit = effectiveRequestRateLimit(env.Register(
+	XDSCPUBudget = env.Register(
+		"AGENTIO_XDS_CPU_BUDGET",
+		"",
+		"CPU budget for automatic new xDS stream admission, as a positive Kubernetes quantity (for example 500m or 2). "+
+			"The chart uses the CPU limit, falling back to the CPU request. Empty uses min(NumCPU, GOMAXPROCS); "+
+			"an explicit budget is also bounded by that runtime CPU count.",
+	).Get()
+	XDSCPUCores, xdsCPUBudgetErr = xdsCPUCores(XDSCPUBudget, min(runtime.NumCPU(), runtime.GOMAXPROCS(0)))
+	RequestRateLimit             = effectiveRequestRateLimit(env.Register(
 		"AGENTIO_MAX_REQUESTS_PER_SECOND",
 		0.0,
 		"Maximum new xDS streams accepted per second across the process; does not throttle ACKs or server pushes. "+
-			"Zero automatically selects min(15 + 5 * GOMAXPROCS, 100).",
+			"Zero automatically selects min(250 * effective CPU budget, 1000); see AGENTIO_XDS_CPU_BUDGET.",
 	).Get())
 )
 
 func validateXDS() error {
+	if xdsCPUBudgetErr != nil {
+		return xdsCPUBudgetErr
+	}
 	if maxServerConnectionAgeErr != nil {
 		return fmt.Errorf("parse max server connection age: %w", maxServerConnectionAgeErr)
 	}
@@ -109,7 +121,22 @@ func defaultPushConcurrency() int {
 
 func effectiveRequestRateLimit(configured float64) float64 {
 	if configured <= 0 || math.IsNaN(configured) || math.IsInf(configured, 0) {
-		return float64(defaultPushConcurrency())
+		return min(250*XDSCPUCores, 1000)
 	}
 	return configured
+}
+
+func xdsCPUCores(configured string, runtimeCPUs int) (float64, error) {
+	if configured == "" {
+		return float64(runtimeCPUs), nil
+	}
+	budget, err := resource.ParseQuantity(configured)
+	if err != nil {
+		return 0, fmt.Errorf("parse AGENTIO_XDS_CPU_BUDGET: %w", err)
+	}
+	cores := budget.AsApproximateFloat64()
+	if cores <= 0 || math.IsNaN(cores) || math.IsInf(cores, 0) {
+		return 0, fmt.Errorf("AGENTIO_XDS_CPU_BUDGET must be finite and positive")
+	}
+	return min(cores, float64(runtimeCPUs)), nil
 }

@@ -239,7 +239,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `name` | String | Empty | Gateway name and expected ServiceAccount name. |
 | `namespace` | String | Empty | Namespace of the gateway workload. Gateways may run outside `agentio-system`. |
 | `tlsTermination.includeHosts` | `string[]` | Empty | SNI host patterns selected for TLS termination. Wildcards such as `*.example.com` are supported. On-demand certificate issuance is authorized by gateway identity, not by this list. |
-| `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. |
+| `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. In static SNI matching, an identical pattern in both lists belongs to `excludeHosts` (case-insensitive); repeated patterns are registered once. Different overlapping patterns retain Envoy's most-specific-match precedence. |
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |

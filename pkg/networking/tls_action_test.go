@@ -15,7 +15,12 @@
 package networking
 
 import (
+	"reflect"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -127,5 +132,41 @@ func TestLegacyTLSActionIgnoredWithoutSNITrafficPolicy(t *testing.T) {
 	)
 	if _, found := connectAuthorityStates(t, listeners[ConnectTerminate])[tlsActionKey]; found {
 		t.Fatalf("CONNECT captures %s with SNI policy disabled", tlsActionKey)
+	}
+}
+
+func TestStaticSNIOverlapExcludesWin(t *testing.T) {
+	config := &configv1.TlsTerminationConfig{
+		IncludeHosts: []string{"same.test", "SAME.test", "*.overlap.test", "include.test", "include.test"},
+		ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
+	}
+	before := proto.Clone(config)
+	for _, legacy := range []bool{false, true} {
+		b := &resourceBuilder{legacyGateway: legacy}
+		matcher := b.staticSNIMatcher(config)
+		if b.err != nil {
+			t.Fatal(b.err)
+		}
+		domains := &xdsmatcherv3.ServerNameMatcher{}
+		if err := matcher.GetMatcherTree().GetCustomMatch().GetTypedConfig().UnmarshalTo(domains); err != nil {
+			t.Fatal(err)
+		}
+		if len(domains.DomainMatchers) != 2 {
+			t.Fatal(domains)
+		}
+		if !reflect.DeepEqual(domains.DomainMatchers[0].Domains, []string{"same.test", "*.overlap.test"}) ||
+			domains.DomainMatchers[0].OnMatch.GetAction().GetName() != forwardTCPChain {
+			t.Fatal(domains)
+		}
+		if !reflect.DeepEqual(domains.DomainMatchers[1].Domains, []string{"include.test"}) ||
+			domains.DomainMatchers[1].OnMatch.GetAction().GetName() != tlsTerminateChain {
+			t.Fatal(domains)
+		}
+		if matcher.OnNoMatch.GetMatcher() == nil {
+			t.Fatal("protocol fallback lost")
+		}
+	}
+	if !proto.Equal(config, before) {
+		t.Fatal("input configuration mutated")
 	}
 }

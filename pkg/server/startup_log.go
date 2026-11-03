@@ -47,6 +47,8 @@ func logStartup(options Options) {
 		"sandbox_mode", features.SandboxMode,
 		"kubernetes_api_qps", features.KubernetesAPIQPS, "kubernetes_api_burst", features.KubernetesAPIBurst,
 		"xds_request_rate_limit", features.RequestRateLimit, "push_concurrency", features.PushConcurrency,
+		"xds_cpu_budget", features.XDSCPUBudget, "xds_effective_cpu_cores", features.XDSCPUCores,
+		"xds_cpu_runtime_fallback", features.XDSCPUBudget == "",
 		"max_connection_age", features.MaxServerConnectionAge,
 		"krt_debounce", features.KRTDebounceAfter, "krt_debounce_max", features.KRTDebounceMax,
 		"push_debounce", features.PushDebounceAfter, "push_debounce_max", features.PushDebounceMax)

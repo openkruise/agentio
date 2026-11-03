@@ -15,6 +15,7 @@
 package gatewayagent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
@@ -31,18 +32,27 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	configv1 "github.com/openkruise/agentio/api/config/v1"
+	agentiomodel "github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/networking/telemetry"
 )
 
 //go:embed testdata/dynamic-metrics.json
 var dynamicMetricsFixture []byte
 
-func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
+func TestCommunityEnvoyDynamicMetrics(t *testing.T) { testCommunityEnvoyMetrics(t, true) }
+
+func TestCommunityEnvoyHTTPMetrics(t *testing.T) { testCommunityEnvoyMetrics(t, false) }
+
+func testCommunityEnvoyMetrics(t *testing.T, legacy bool) {
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
@@ -57,7 +67,7 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 	c := testConfig(t)
 	c.IP = "127.0.0.1"
 	c.metrics = newAgentMetrics()
-	ports, releasePorts := reservePorts(t, 4)
+	ports, releasePorts := reservePorts(t, 5)
 	c.Proxy.AdminPort = int32(ports[0])
 	metricsPort, statusPort, businessPort := ports[1], ports[2], ports[3]
 	c.PrometheusPort, c.EnvoyStatusPort = metricsPort, statusPort
@@ -124,6 +134,53 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 	accessLog := hcm["access_log"].([]any)[0].(map[string]any)["typed_config"].(map[string]any)
 	accessLog["dynamic_module_config"].(map[string]any)["module"].(map[string]any)["local"].(map[string]any)["filename"] = module
 	resources["listeners"] = append(resources["listeners"].([]any), listener)
+	if !legacy {
+		delete(hcm, "access_log")
+		// Exercise the controller's configuration, including the packaged module path.
+		output, err := telemetry.Build(telemetry.Inputs{
+			Gateway: agentiomodel.Gateway{Namespace: "test", Name: "egress", Config: &configv1.EgressGateway{}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(output.HTTPMetrics)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metricsFilter map[string]any
+		if err := json.Unmarshal(data, &metricsFilter); err != nil {
+			t.Fatal(err)
+		}
+		if os.Getenv("AGENTIO_TEST_METRICS_MODULE") != "" {
+			moduleConfig := metricsFilter["typed_config"].(map[string]any)["dynamic_module_config"].(map[string]any)
+			moduleConfig["module"].(map[string]any)["local"].(map[string]any)["filename"] = module
+		}
+		hcm["http_filters"] = append([]any{metricsFilter}, hcm["http_filters"].([]any)...)
+		// Remove the catch-all direct response so missing routes exercise NR.
+		routes := virtualHost["routes"].([]any)
+		virtualHost["routes"] = append([]any{map[string]any{
+			"match": map[string]any{"path": "/unreachable"},
+			"route": map[string]any{
+				"cluster":      "unreachable",
+				"retry_policy": map[string]any{"retry_on": "connect-failure", "num_retries": 1},
+			},
+		}}, routes[:len(routes)-1]...)
+		// The reserved port is released immediately before Envoy starts; no server listens there.
+		var unreachable map[string]any
+		if err := json.Unmarshal(
+			[]byte(
+				fmt.Sprintf(
+					`{"name":"unreachable","connect_timeout":"1s","type":"STATIC","load_assignment":{"cluster_name":"unreachable","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"127.0.0.1","port_value":%d}}}}]}]}}`,
+					ports[4],
+				),
+			),
+			&unreachable,
+		); err != nil {
+			t.Fatal(err)
+		}
+		resources["clusters"] = append(resources["clusters"].([]any), unreachable)
+	}
+
 	config["stats_flush_on_admin"] = true
 	delete(config, "statsFlushInterval")
 	data, err = json.Marshal(config)
@@ -195,6 +252,39 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 		}
 	}
 
+	if !legacy {
+		// Envoy creates the HTTP filter only after receiving complete headers. The
+		// duration must still include time spent receiving the partial request.
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", businessPort))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			closeResource(conn)
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(conn, "GET /201 HTTP/1.1\r\nHost: test\r\nX-Slow: "); err != nil {
+			closeResource(conn)
+			t.Fatal(err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if _, err := io.WriteString(conn, "done\r\nConnection: close\r\n\r\n"); err != nil {
+			closeResource(conn)
+			t.Fatal(err)
+		}
+		response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			closeResource(conn)
+			t.Fatal(err)
+		}
+		_, err = io.Copy(io.Discard, response.Body)
+		closeResource(response.Body)
+		closeResource(conn)
+		if err != nil || response.StatusCode != 201 {
+			t.Fatalf("partial headers: status %d, error %v", response.StatusCode, err)
+		}
+	}
+
 	connection, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", businessPort))
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +300,26 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 		t.Fatal("upstream never received abort request")
 	}
 	closeResource(connection)
+	if !legacy {
+		response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/missing", businessPort))
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeResource(response.Body)
+		if response.StatusCode != 404 {
+			t.Fatalf("missing route status = %d", response.StatusCode)
+		}
+		response, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/unreachable", businessPort))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.Copy(io.Discard, response.Body)
+		closeResource(response.Body)
+		if err != nil || response.StatusCode != 503 {
+			t.Fatalf("refused upstream: status %d, error %v", response.StatusCode, err)
+		}
+	}
+
 	// Agent endpoints translate and merge; the Envoy port remains usable without the Agent.
 	for _, endpoint := range []struct {
 		url    string
@@ -220,8 +330,42 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 		{url: fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", metricsPort), prefix: "envoy_agentio_gateway_"},
 	} {
 		url := endpoint.url
+		extraRequests := 0
 		if endpoint.prefix != "" {
 			agent.Close()
+			if !legacy {
+				// Eight concurrent clients distribute new connections across both Envoy workers.
+				// No gateway-agent scrape server exists while these observations are recorded.
+				loadClient := &http.Client{
+					Timeout:   3 * time.Second,
+					Transport: &http.Transport{DisableKeepAlives: true},
+				}
+				failures := make(chan error, 8)
+				var workers sync.WaitGroup
+				for range 8 {
+					workers.Go(func() {
+						for range 100 {
+							response, err := loadClient.Get(fmt.Sprintf("http://127.0.0.1:%d/200", businessPort))
+							if err != nil {
+								failures <- err
+								return
+							}
+							_, err = io.Copy(io.Discard, response.Body)
+							closeResource(response.Body)
+							if err != nil || response.StatusCode != 200 {
+								failures <- errors.Join(fmt.Errorf("concurrent request: status %d", response.StatusCode), err)
+								return
+							}
+						}
+					})
+				}
+				workers.Wait()
+				close(failures)
+				for err := range failures {
+					t.Fatal(err)
+				}
+				extraRequests = 800
+			}
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for {
@@ -236,31 +380,82 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 				t.Fatal(err)
 			}
 			counts := map[string]float64{}
+			flagCounts := map[string]float64{}
 			for _, metric := range families[endpoint.prefix+"istio_requests_total"].GetMetric() {
 				if endpoint.prefix == "" && metric.GetCounter().GetValue() == 0 {
 					t.Fatalf("unused response code exported at %s: %v", url, metric)
 				}
+				if !legacy {
+					if len(metric.Label) != 2 {
+						t.Fatalf("unexpected labels: %v", metric.Label)
+					}
+					for _, label := range metric.Label {
+						if label.GetName() == "response_flags" {
+							flagCounts[label.GetValue()] += metric.GetCounter().GetValue()
+						}
+					}
+				}
+
 				for _, label := range metric.GetLabel() {
 					if label.GetName() == "response_code" {
-						counts[label.GetValue()] = metric.GetCounter().GetValue()
+						counts[label.GetValue()] += metric.GetCounter().GetValue()
 					}
 				}
 			}
 			duration := families[endpoint.prefix+"istio_request_duration_milliseconds"]
-			if duration == nil || len(duration.Metric) != 1 {
-				t.Fatal("missing aggregate duration histogram")
+			if duration == nil || len(duration.Metric) == 0 {
+				t.Fatal("missing duration histogram")
+			}
+			var total uint64
+			var slowDuration float64
+			for _, metric := range duration.Metric {
+				total += metric.GetHistogram().GetSampleCount()
+				if !legacy {
+					if len(metric.Label) != 2 {
+						t.Fatalf("unexpected histogram labels: %v", metric.Label)
+					}
+					labels := map[string]string{}
+					for _, label := range metric.Label {
+						labels[label.GetName()] = label.GetValue()
+					}
+					if labels["response_code"] == "201" {
+						slowDuration += metric.GetHistogram().GetSampleSum()
+					}
+					if labels["response_code"] == "" || labels["response_flags"] == "" {
+						t.Fatalf("missing histogram labels: %v", metric.Label)
+					}
+				}
 			}
 			histogram := duration.Metric[0].GetHistogram()
 			// Admin-triggered histogram merging finishes asynchronously on worker threads.
-			if histogram.GetSampleCount() != uint64(len(codes)*3+1) || counts["0"] != 1 {
+			wantTotal := uint64(len(codes)*3 + 1)
+			if !legacy {
+				wantTotal += uint64(3 + extraRequests)
+			}
+			if total != wantTotal || counts["0"] != 1 {
 				if time.Now().After(deadline) {
-					t.Fatalf("histogram count %d, aborted count %v", histogram.GetSampleCount(), counts["0"])
+					t.Fatalf("histogram count %d, aborted count %v", total, counts["0"])
 				}
 				time.Sleep(20 * time.Millisecond)
 				continue
 			}
+			if !legacy &&
+				(flagCounts["-"] != float64(len(codes)*3+1+extraRequests) || flagCounts["NR"] != 1 || flagCounts["DC"] != 1 || flagCounts["UF,URX"] != 1) {
+				t.Fatalf("response_flags counts = %v", flagCounts)
+			}
+
+			if !legacy && slowDuration < 150 {
+				t.Fatalf("partial header receipt missing from duration: %v ms", slowDuration)
+			}
 			for _, code := range codes {
-				if counts[strconv.Itoa(code)] != 3 {
+				want := float64(3)
+				if !legacy && (code == 404 || code == 201 || code == 503) {
+					want++
+				}
+				if code == 200 {
+					want += float64(extraRequests)
+				}
+				if counts[strconv.Itoa(code)] != want {
 					t.Fatalf("%s: code %d count %v", url, code, counts[strconv.Itoa(code)])
 				}
 			}
@@ -304,7 +499,7 @@ func TestCommunityEnvoyDynamicMetrics(t *testing.T) {
 					}
 				}
 			} else {
-				if _, ok := counts["299"]; !ok || counts["299"] != 0 {
+				if _, ok := counts["299"]; legacy && (!ok || counts["299"] != 0) {
 					t.Fatal("raw endpoint must preserve unused response-code counters")
 				}
 				for name := range families {

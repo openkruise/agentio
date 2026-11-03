@@ -63,6 +63,11 @@ type Server struct {
 	pushScheduler *PushScheduler
 	pushesDone    chan struct{}
 	requestLimit  *rate.Limiter
+	initialSlots  chan struct{}
+	requestSlots  chan struct{}
+	pushSlots     chan struct{}
+	requestWait   time.Duration
+	sendTimeout   time.Duration
 }
 
 type streamRequest struct {
@@ -79,8 +84,8 @@ var clientClasses = [...]model.ClientClass{
 	model.ClientAgentioEgress,
 }
 
-// NewServer builds the Delta ADS server. Both limits are process-wide and are
-// fixed for the lifetime of the server.
+// NewServer builds the Delta ADS server. Admission and the independent push and
+// request-response concurrency limits are process-wide and fixed at construction.
 func NewServer(
 	authenticator attestation.Authenticator,
 	scopeFuncs ScopeFuncs,
@@ -158,6 +163,13 @@ func newServerWithScheduler(
 		pushScheduler: pushScheduler,
 		pushesDone:    make(chan struct{}),
 		requestLimit:  rate.NewLimiter(rate.Limit(requestRateLimit), 1),
+		// Request responses must not borrow scheduler slots: an assigned push
+		// can be waiting for the same stream's request handler to finish.
+		initialSlots: make(chan struct{}, cap(pushScheduler.slots)),
+		requestSlots: make(chan struct{}, cap(pushScheduler.slots)),
+		pushSlots:    make(chan struct{}, cap(pushScheduler.slots)),
+		requestWait:  time.Second,
+		sendTimeout:  5 * time.Second,
 	}
 	go server.dispatchPushes()
 	return server, nil
@@ -185,7 +197,7 @@ func (s *Server) StreamAggregatedResources(
 func (s *Server) DeltaAggregatedResources(
 	stream discoveryv3.AggregatedDiscoveryService_DeltaAggregatedResourcesServer,
 ) error {
-	return s.serveDelta(stream)
+	return s.serveDelta(&boundedSendStream{DeltaStream: stream, timeout: s.sendTimeout})
 }
 
 func (s *Server) serveDelta(stream DeltaStream) (err error) {
@@ -198,6 +210,15 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	}
 	caller, err := s.authenticator.Authenticate(stream.Context())
 	if err != nil {
+		if stream.Context().Err() != nil {
+			return status.FromContextError(stream.Context().Err()).Err()
+		}
+		if errors.Is(err, attestation.ErrTokenReviewUnavailable) {
+			return status.Error(codes.Unavailable, err.Error())
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return status.FromContextError(err).Err()
+		}
 		return status.Error(codes.Unauthenticated, err.Error())
 	}
 
@@ -254,6 +275,8 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 
 	subscription := s.resources.Subscribe(stream.Context(), scope)
 	watches := make(map[string]*watchState)
+	lease := &responseLease{ctx: stream.Context(), wait: s.requestWait, timeout: s.sendTimeout}
+	defer lease.release()
 	defer func() {
 		if watch := watches[model.SecretType]; watch != nil && watch.sds != nil {
 			watch.sds.cancel()
@@ -261,7 +284,7 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	}()
 	connection := newPushConnection(stream.Context())
 	defer s.pushScheduler.cancel(connection)
-	if err := s.handleRequest(stream, scope, connLog, watches, subscription, first.request); err != nil {
+	if err := s.handleClientRequest(stream, scope, connLog, watches, subscription, first.request, lease); err != nil {
 		return err
 	}
 	inputClosed := false
@@ -277,14 +300,29 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		if incoming.request == nil {
 			return true, status.Error(codes.InvalidArgument, "empty DeltaDiscoveryRequest")
 		}
-		return false, s.handleRequest(stream, scope, connLog, watches, subscription, incoming.request)
+		return false, s.handleClientRequest(stream, scope, connLog, watches, subscription, incoming.request, lease)
+	}
+	handleCertificate := func(completion sdsCompletion) error {
+		if err := lease.acquire(s.requestResponsePool(watches)); err != nil {
+			return err
+		}
+		if err := s.sendSDSCompletions(stream, connLog, watches[model.SecretType], completion); err != nil {
+			return err
+		}
+		lease.releaseAcknowledged(watches)
+		return nil
 	}
 	for {
+		if lease.timedOut() {
+			return responseAckTimeout()
+		}
 		// Requests are polled first so ACKs and subscription changes keep moving
 		// while waiting for a push slot.
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
+		case <-lease.expired():
+			return responseAckTimeout()
 		case incoming := <-requests:
 			stop, err := handleIncoming(incoming)
 			if stop || err != nil {
@@ -306,19 +344,58 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
+		case <-lease.expired():
+			return responseAckTimeout()
 		case incoming := <-requests:
 			stop, err := handleIncoming(incoming)
 			if stop || err != nil {
 				return err
 			}
 		case completion := <-certificates:
-			if err := s.sendSDSCompletions(stream, connLog, secretWatch, completion); err != nil {
+			if err := handleCertificate(completion); err != nil {
 				return err
 			}
 		case update := <-subscription.Updates():
 			s.pushScheduler.Enqueue(connection, update)
 		case push := <-connection.pushes:
+			// Queued pushes may wait for ACKs without closing an established
+			// stream; fresh demand and certificate results must still progress.
+			for lease.pool == nil {
+				certificates = nil
+				pendingCertificates = false
+				if watch := watches[model.SecretType]; watch != nil && watch.sds != nil {
+					certificates = watch.sds.ready
+					pendingCertificates = len(watch.sds.jobs) > 0
+				}
+				if inputClosed && !pendingCertificates && !hasPendingConfigs(watches) {
+					s.pushScheduler.Done(push)
+					return nil
+				}
+				select {
+				case <-stream.Context().Done():
+					s.pushScheduler.Done(push)
+					return stream.Context().Err()
+				case incoming := <-requests:
+					stop, err := handleIncoming(incoming)
+					if stop || err != nil {
+						s.pushScheduler.Done(push)
+						return err
+					}
+				case completion := <-certificates:
+					if err := handleCertificate(completion); err != nil {
+						s.pushScheduler.Done(push)
+						return err
+					}
+				case s.pushSlots <- struct{}{}:
+					lease.start(s.pushSlots)
+				}
+			}
+			if lease.timedOut() {
+				s.pushScheduler.Done(push)
+				return responseAckTimeout()
+			}
 			err := s.pushUpdate(stream, scope, connLog, watches, push.Update)
+			lease.releaseAcknowledged(watches)
 			s.pushScheduler.Done(push)
 			if err != nil {
 				return err
