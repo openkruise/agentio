@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -34,16 +35,18 @@ import (
 func Watches() []xdsclient.Watch {
 	return []xdsclient.Watch{
 		{
-			TypeURL:  model.WorkloadType,
-			OnDelete: func(string) xdsclient.DeleteAction { return xdsclient.ReleaseSubscription },
+			TypeURL:        model.WorkloadType,
+			ReconnectGrace: 5 * time.Second,
+			OnDelete:       func(string) xdsclient.DeleteAction { return xdsclient.ReleaseSubscription },
 			Transform: func(v *anypb.Any) (any, error) {
 				w := &workload.Workload{}
 				return w, v.UnmarshalTo(w)
 			},
 		},
 		{
-			TypeURL:  model.TrafficPolicyType,
-			OnDelete: func(string) xdsclient.DeleteAction { return xdsclient.ReleaseSubscription },
+			TypeURL:        model.TrafficPolicyType,
+			ReconnectGrace: 5 * time.Second,
+			OnDelete:       func(string) xdsclient.DeleteAction { return xdsclient.ReleaseSubscription },
 			Transform: func(v *anypb.Any) (any, error) {
 				p := &sec.TrafficPolicy{}
 				return p, v.UnmarshalTo(p)
@@ -131,7 +134,7 @@ func (s *Store) Read() store.Batch {
 	}
 	for _, typ := range s.Types() {
 		wire := wireType(typ)
-		batch.Ready = batch.Ready && snapshot.Synced[wire]
+		batch.Ready = batch.Ready && snapshot.Usable(wire)
 		batch.Snapshots[typ] = projectType(snapshot, s.published, typ, s.batch.Snapshots[typ])
 	}
 
@@ -159,7 +162,14 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 		wire := wireType(typ)
 		var resources []store.Resource
 		var err error
-		if !snapshot.Synced[wire] {
+		required := false
+		for _, key := range keys {
+			if key.Type == typ {
+				required = true
+				break
+			}
+		}
+		if required && !snapshot.Usable(wire) {
 			batch.Ready = false
 			err = fmt.Errorf("%s xDS is not synchronized", typ)
 		} else {
@@ -178,15 +188,15 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 
 func projectType(snapshot, prior xdsclient.Snapshot, typ store.Type, previous store.TypeSnapshot) store.TypeSnapshot {
 	wire := wireType(typ)
-	if !snapshot.Synced[wire] {
-		if previous != nil && !prior.Synced[wire] {
+	if !snapshot.Usable(wire) {
+		if previous != nil && !prior.Usable(wire) {
 			return previous
 		}
 		return store.NewDefaultSnapshot(nil, fmt.Errorf("%s xDS is not synchronized", typ))
 	}
 	old, _ := previous.(*store.DefaultSnapshot)
 	priorValues := prior.Resources[wire]
-	if old == nil || !prior.Synced[wire] {
+	if old == nil || !prior.Usable(wire) {
 		old, priorValues = store.NewDefaultSnapshot(nil, nil), nil
 	}
 	var upserts []store.Resource
@@ -212,7 +222,7 @@ func (s *Store) get(key store.Key) (*store.Resource, error) {
 		return nil, nil
 	}
 	snapshot := s.snapshot()
-	if !snapshot.Synced[typeURL] {
+	if !snapshot.Usable(typeURL) {
 		return nil, fmt.Errorf("%s xDS is not synchronized", key.Type)
 	}
 	return toResource(key, snapshot.Resources[typeURL][key.Name]), nil
