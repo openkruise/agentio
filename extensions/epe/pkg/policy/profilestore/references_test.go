@@ -28,7 +28,13 @@ func TestResolveSecurityProfileReferences(t *testing.T) {
 	s.ProfileSet(newTestProfile("a", "ns", map[string]string{"app": "different"}))
 	s.ProfileSet(newTestProfile("b", "ns", map[string]string{"app": "different"}))
 	s.GlobalProfileSet(newTestGlobalProfile("g", nil))
-	subj := subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod", SecurityProfileReferences: []string{"namespaced/ns/b", "global/g", "namespaced/ns/a"}}}
+	subj := subject.Subject{
+		Workload: subject.Workload{
+			Namespace:                 "ns",
+			Name:                      "pod",
+			SecurityProfileReferences: []string{"namespaced/ns/b", "global/g", "namespaced/ns/a"},
+		},
+	}
 	got, err := s.ResolveProfiles(t.Context(), subj)
 	if err != nil || len(got) != 3 || got[0].Meta.Name != "b" || got[1].Meta.Name != "g" || got[2].Meta.Name != "a" {
 		t.Fatalf("ordered references: %v %v", got, err)
@@ -63,7 +69,13 @@ func TestReferencedProfilesRetainSandboxOrdering(t *testing.T) {
 	s.ProfileSet(newTestProfile("admin", "ns", map[string]string{"app": "different"}))
 	sandbox := inlineProfile("pod", "ns", "1")
 	s.applyBatch([]krt.Event[securityprofile.Profile]{{Event: controllers.EventAdd, New: sandbox}})
-	subj := subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod", SecurityProfileReferences: []string{"namespaced/ns/admin"}}}
+	subj := subject.Subject{
+		Workload: subject.Workload{
+			Namespace:                 "ns",
+			Name:                      "pod",
+			SecurityProfileReferences: []string{"namespaced/ns/admin"},
+		},
+	}
 	got, err := s.ResolveProfiles(t.Context(), subj)
 	if err != nil || len(got) != 2 || got[0].Meta.Name != "admin" || got[1] != sandbox {
 		t.Fatalf("sandbox must follow administrator references: %v %v", got, err)

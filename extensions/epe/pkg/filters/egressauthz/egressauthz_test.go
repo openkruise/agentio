@@ -30,7 +30,10 @@ import (
 
 func run(t *testing.T, f authorizeFunc, host string, port int32) *filter.RouteMutation {
 	t.Helper()
-	target, reply, err := f(context.Background(), &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}})
+	target, reply, err := f(
+		context.Background(),
+		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,12 +118,15 @@ func TestInputFailuresDoNotProduceMutations(t *testing.T) {
 		{"scoped IP", NewAggregate(client).Authorize, "fe80::1%eth0", 443, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			target, _, err := tc.input(context.Background(), &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
-				Host:                tc.host,
-				Port:                tc.port,
-				OriginalDestination: netip.MustParseAddrPort("192.0.2.1:443"),
-			}},
-			})
+			target, _, err := tc.input(
+				context.Background(),
+				&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
+					Host:                tc.host,
+					Port:                tc.port,
+					OriginalDestination: netip.MustParseAddrPort("192.0.2.1:443"),
+				}},
+				},
+			)
 			if err == nil || target != nil {
 				t.Fatalf("target=%+v, err=%v", target, err)
 			}
@@ -160,7 +166,10 @@ func TestAuthorizationSelectsAndPinsAllowedCandidate(t *testing.T) {
 
 func assertDenied(t *testing.T, f authorizeFunc, host string, port int32) {
 	t.Helper()
-	target, reply, err := f(context.Background(), &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}})
+	target, reply, err := f(
+		context.Background(),
+		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}},
+	)
 	if err != nil || reply == nil || reply.Status != 403 || reply.Details != "epe_egress_denied" || target != nil {
 		t.Fatalf("target=%v reply=%v err=%v", target, reply, err)
 	}
@@ -208,7 +217,10 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 					},
 				},
 			}
-			stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
+			stream := &filter.Stream{
+				RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}},
+				StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
+			}
 			if tc.original != "" {
 				stream.Request.OriginalDestination = netip.MustParseAddrPort(tc.original)
 			}
@@ -247,7 +259,10 @@ func TestAuthorizationAuditResolutionFailure(t *testing.T) {
 	client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("DNS unavailable")
 	}), time.Second)
-	stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
+	stream := &filter.Stream{
+		RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}},
+		StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
+	}
 	_, _, err := NewAggregate(client).Authorize(t.Context(), stream)
 	if err == nil || stream.Info.Authorization.Action != "error" ||
 		stream.Info.Authorization.Reason != filter.AuthorizationReasonResolutionFailed {
@@ -301,7 +316,10 @@ func TestAggregateIPv4DNSAndDirectIPv6Destinations(t *testing.T) {
 				if tc.denied != "" {
 					cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix(tc.denied)}
 				}
-				stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 443}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
+				stream := &filter.Stream{
+					RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 443}},
+					StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
+				}
 				if tc.upstream != "" {
 					address := netip.MustParseAddrPort(tc.upstream)
 					stream.Upstream = &filter.UpstreamTarget{Address: &address}
@@ -430,7 +448,8 @@ func TestAggregateRandomSelectionPreservesFixedTargets(t *testing.T) {
 					Host:                "multiple.example",
 					Port:                443,
 					OriginalDestination: netip.MustParseAddrPort(tc.original),
-				}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
+				}},
+					StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
 				}
 				if tc.host != "" {
 					stream.Request.Host = tc.host

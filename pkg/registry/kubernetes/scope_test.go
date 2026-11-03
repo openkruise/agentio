@@ -31,8 +31,11 @@ import (
 
 func TestResolveScopeAuthorizesTrustedEPEIdentities(t *testing.T) {
 	for _, tc := range []struct {
-		name, namespace, account, configured string
-		want                                 model.ClientClass
+		name       string
+		namespace  string
+		account    string
+		configured string
+		want       model.ClientClass
 	}{
 		{"authorized", "agentio-system", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientEPE},
 		{"custom namespace", "tenant", "processor", "[spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
@@ -75,7 +78,9 @@ func TestResolveScopeUpdatesTrustedEPEIdentities(t *testing.T) {
 	pod.Spec.ServiceAccountName = "processor"
 	config := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
-		Data:       map[string]string{"config": "trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]"},
+		Data: map[string]string{
+			"config": "trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]",
+		},
 	}
 	r := newTestRegistry(t, t.Context(), []runtime.Object{pod, config}, nil)
 	resolver := r.PodScopeResolver(r.Workloads)
@@ -95,10 +100,16 @@ func TestResolveScopeUpdatesTrustedEPEIdentities(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, time.Second, true, func(context.Context) (bool, error) {
-			scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
-			return scope.Class == update.want, err
-		}); err != nil {
+		if err := wait.PollUntilContextTimeout(
+			t.Context(),
+			10*time.Millisecond,
+			time.Second,
+			true,
+			func(context.Context) (bool, error) {
+				scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
+				return scope.Class == update.want, err
+			},
+		); err != nil {
 			t.Fatalf("scope did not change to %s: %v", update.want, err)
 		}
 	}

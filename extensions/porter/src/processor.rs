@@ -247,18 +247,18 @@ impl Processor {
                     }
                     let evaluation = target
                         .map(|target| traffic::evaluate(sandbox.traffic_policy.iter(), target));
-                    if let (Some(target), Some(evaluation)) = (target, &evaluation) {
-                        if !evaluation.allowed {
-                            log_policy(
-                                &sandbox.workload_uid,
-                                sandbox_id,
-                                target,
-                                "sandbox",
-                                None,
-                                evaluation,
-                            );
-                            return Err(ResolveError::Denied);
-                        }
+                    if let (Some(target), Some(evaluation)) = (target, &evaluation)
+                        && !evaluation.allowed
+                    {
+                        log_policy(
+                            &sandbox.workload_uid,
+                            sandbox_id,
+                            target,
+                            "sandbox",
+                            None,
+                            evaluation,
+                        );
+                        return Err(ResolveError::Denied);
                     }
                     Ok((Some(resource), evaluation))
                 };

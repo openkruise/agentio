@@ -157,7 +157,10 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 	} else {
 		snapshot = s.source.Snapshot()
 	}
-	batch := store.Batch{Status: store.Status{Ready: true, Changed: snapshot.Changed}, Snapshots: map[store.Type]store.TypeSnapshot{}}
+	batch := store.Batch{
+		Status:    store.Status{Ready: true, Changed: snapshot.Changed},
+		Snapshots: map[store.Type]store.TypeSnapshot{},
+	}
 	for _, typ := range s.Types() {
 		wire := wireType(typ)
 		var resources []store.Resource

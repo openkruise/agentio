@@ -111,8 +111,13 @@ func TestEgressEPEFixtureXDSArguments(t *testing.T) {
 				if slices.Contains(args, "--enable-xds-egressauthz") != enabled {
 					t.Fatalf("xds=%t, args=%v", enabled, args)
 				}
-				if !slices.Contains(args, "--xds-address=agentiod.agentio-system.svc:15012") || pod.Spec.ServiceAccountName != "agentio-epe" {
-					t.Fatalf("fixture must always configure EPE WDS: args=%v account=%s", args, pod.Spec.ServiceAccountName)
+				if !slices.Contains(args, "--xds-address=agentiod.agentio-system.svc:15012") ||
+					pod.Spec.ServiceAccountName != "agentio-epe" {
+					t.Fatalf(
+						"fixture must always configure EPE WDS: args=%v account=%s",
+						args,
+						pod.Spec.ServiceAccountName,
+					)
 				}
 			}
 			if !found {

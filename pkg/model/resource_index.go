@@ -121,7 +121,8 @@ func resourceFactKeys(resource Resource) []string {
 		}
 	}
 	for _, key := range resource.Facts.referenceKeys() {
-		if key.TypeURL == TrafficPolicyType && resource.Facts.Workload != nil && slices.Contains(resource.Facts.Workload.TrafficPolicyRefs, key.Name) {
+		if key.TypeURL == TrafficPolicyType && resource.Facts.Workload != nil &&
+			slices.Contains(resource.Facts.Workload.TrafficPolicyRefs, key.Name) {
 			continue
 		}
 		result = append(result, resourceReferenceIndexKey(key))

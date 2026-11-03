@@ -357,7 +357,11 @@ func BenchmarkEvalRequestBody(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			e := NewEngine(regs, 0)
 			ctx := context.Background()
-			prior, err := e.EvalRequestHeaders(ctx, &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}, units)
+			prior, err := e.EvalRequestHeaders(
+				ctx,
+				&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
+				units,
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -386,7 +390,12 @@ func BenchmarkEvalResponseBody(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			e := NewEngine(regs, 0)
 			ctx := context.Background()
-			prior, err := e.EvalResponseHeaders(ctx, &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}, units, ResponseScope{})
+			prior, err := e.EvalResponseHeaders(
+				ctx,
+				&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
+				units,
+				ResponseScope{},
+			)
 			if err != nil {
 				b.Fatal(err)
 			}

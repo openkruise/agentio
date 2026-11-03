@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -37,7 +38,11 @@ import (
 )
 
 func main() {
-	address := flag.String("address", "agentio-epe.agentio-perf:9002", "Plaintext EPE ext_proc endpoint in an isolated test cluster")
+	address := flag.String(
+		"address",
+		"agentio-epe.agentio-perf:9002",
+		"Plaintext EPE ext_proc endpoint in an isolated test cluster",
+	)
 	namespace := flag.String("namespace", "epe-demand-workloads", "Fixture Pod namespace")
 	cluster := flag.String("cluster-id", "Kubernetes", "Workload registry cluster ID")
 	path := flag.String("path", "/block", "HTTP request path")
@@ -51,14 +56,19 @@ func main() {
 	duration := flag.Duration("duration", 5*time.Minute, "Maximum run duration")
 	flag.Parse()
 	if err := run(*address, *namespace, *cluster, *path, *want, *connections, load.Config{
-		Requests: *requests, Identities: *identities, Offset: *offset, Concurrency: *concurrency, Rate: *rate, Duration: *duration,
+		Requests:    *requests,
+		Identities:  *identities,
+		Offset:      *offset,
+		Concurrency: *concurrency,
+		Rate:        *rate,
+		Duration:    *duration,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(address, namespace, cluster, path string, want, connections int, config load.Config) error {
+func run(address, namespace, cluster, path string, want, connections int, config load.Config) (resultErr error) {
 	if connections < 1 {
 		return fmt.Errorf("connections must be positive")
 	}
@@ -68,7 +78,7 @@ func run(address, namespace, cluster, path string, want, connections int, config
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
+		defer func() { resultErr = errors.Join(resultErr, conn.Close()) }()
 		clients[i] = extproc.NewExternalProcessorClient(conn)
 	}
 	var next atomic.Uint64
@@ -98,7 +108,9 @@ func run(address, namespace, cluster, path string, want, connections int, config
 		name := fmt.Sprintf("workload-%05d", index)
 		request := &extproc.ProcessingRequest{
 			Attributes: map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
-				"filter_state['agentio.workload.uid']": structpb.NewStringValue(cluster + "//Pod/" + namespace + "/" + name),
+				"filter_state['agentio.workload.uid']": structpb.NewStringValue(
+					cluster + "//Pod/" + namespace + "/" + name,
+				),
 			}}},
 			Request: &extproc.ProcessingRequest_RequestHeaders{RequestHeaders: &extproc.HttpHeaders{
 				EndOfStream: true,
@@ -133,7 +145,8 @@ func run(address, namespace, cluster, path string, want, connections int, config
 		if want == 0 && response.GetRequestHeaders() != nil {
 			return nil
 		}
-		if immediate := response.GetImmediateResponse(); want != 0 && immediate != nil && int(immediate.GetStatus().GetCode()) == want {
+		if immediate := response.GetImmediateResponse(); want != 0 && immediate != nil &&
+			int(immediate.GetStatus().GetCode()) == want {
 			return nil
 		}
 		return fmt.Errorf("unexpected response for %s: %s", name, response)

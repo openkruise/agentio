@@ -30,9 +30,21 @@ import (
 )
 
 var (
-	xdsCacheIdleTTL      = flag.Duration("xds-cache-idle-ttl", 10*time.Minute, "Idle lifetime of retained Workload and TrafficPolicy subscriptions; zero disables expiry")
-	xdsCacheMaxEntries   = flag.Int("xds-cache-max-entries", 10000, "Maximum retained Workload and TrafficPolicy subscriptions; active resolutions are pinned; zero disables capacity eviction")
-	clusterDomain        = flag.String("domain", "cluster.local", "Kubernetes DNS suffix used in the default ADS node ID")
+	xdsCacheIdleTTL = flag.Duration(
+		"xds-cache-idle-ttl",
+		10*time.Minute,
+		"Idle lifetime of retained Workload and TrafficPolicy subscriptions; zero disables expiry",
+	)
+	xdsCacheMaxEntries = flag.Int(
+		"xds-cache-max-entries",
+		10000,
+		"Maximum retained Workload and TrafficPolicy subscriptions; active resolutions are pinned; zero disables capacity eviction",
+	)
+	clusterDomain = flag.String(
+		"domain",
+		"cluster.local",
+		"Kubernetes DNS suffix used in the default ADS node ID",
+	)
 	enableXDSEgressAuthz = flag.Bool(
 		"enable-xds-egressauthz",
 		false,
@@ -92,7 +104,11 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 	}
 	c, err := xdsclient.New(
 		conn,
-		xdsclient.Config{Node: &core.Node{Id: id, Metadata: metadata}, Watches: xdsstore.Watches(), MetricsRegisterer: metrics.Registry},
+		xdsclient.Config{
+			Node:              &core.Node{Id: id, Metadata: metadata},
+			Watches:           xdsstore.Watches(),
+			MetricsRegisterer: metrics.Registry,
+		},
 	)
 	if err != nil {
 		if closeErr := conn.Close(); closeErr != nil {

@@ -26,9 +26,11 @@ import (
 )
 
 func TestSourceContextWithoutWorkload(t *testing.T) {
-	stream := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{
-		Sandbox: &subject.Sandbox{UID: "kruise:sbx"},
-	}}}}
+	stream := &filter.Stream{
+		RequestContext: filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{
+			Sandbox: &subject.Sandbox{UID: "kruise:sbx"},
+		}}},
+	}
 	if got := sourceContext(stream); !reflect.DeepEqual(got, SourceContext{}) {
 		t.Fatalf("Sandbox identity projected as workload: %+v", got)
 	}
@@ -69,16 +71,17 @@ func testStream() *filter.Stream {
 				"cookie":        "session=abc",
 				"x-request-id":  "req-123",
 			},
-		}}, StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{
-		Status: 201,
-		Headers: map[string]string{
-			"content-type":       "text/plain",
-			"x-upstream":         "demo",
-			"set-cookie":         "session=upstream-minted",
-			"www-authenticate":   `Bearer realm="upstream"`,
-			"proxy-authenticate": `Basic realm="proxy"`,
-		},
-	}},
+		}},
+		StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{
+			Status: 201,
+			Headers: map[string]string{
+				"content-type":       "text/plain",
+				"x-upstream":         "demo",
+				"set-cookie":         "session=upstream-minted",
+				"www-authenticate":   `Bearer realm="upstream"`,
+				"proxy-authenticate": `Basic realm="proxy"`,
+			},
+		}},
 	}
 }
 

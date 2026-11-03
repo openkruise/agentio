@@ -80,8 +80,10 @@ func (s *PodScopeResolver) ResolveScope(peer model.PeerIdentity, nodeName string
 		configuration := s.configurations.GetKey("effective")
 		if slices.Contains(configuration.Value.GetTrustedEpeIdentities(), workload.Principal.String()) {
 			return model.ClientScope{
-				Class: model.ClientEPE, Principal: workload.Principal,
-				WorkloadUID: workload.UID, Source: source,
+				Class:       model.ClientEPE,
+				Principal:   workload.Principal,
+				WorkloadUID: workload.UID,
+				Source:      source,
 			}, nil
 		}
 	}

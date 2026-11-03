@@ -166,7 +166,8 @@ func TestWorkloadStateTLSRelay(t *testing.T) {
 			state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE {
 			t.Errorf("%s must survive TLS termination but stop sharing at main_forward: %v", key, state)
 		}
-		if wantSkip := key != model.FilterStateSandboxUID && key != "sandbox.token"; state.GetSkipIfEmpty() != wantSkip {
+		if wantSkip := key != model.FilterStateSandboxUID &&
+			key != "sandbox.token"; state.GetSkipIfEmpty() != wantSkip {
 			t.Errorf("%s skip_if_empty = %v, want %v", key, state.GetSkipIfEmpty(), wantSkip)
 		}
 	}

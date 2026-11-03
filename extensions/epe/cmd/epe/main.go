@@ -258,7 +258,10 @@ func run() error {
 			setupLog.Error(err, "close xDS connection")
 		}
 	}()
-	nativeStore, err := xdsstore.NewCached(xds, demandcache.Config{IdleTTL: *xdsCacheIdleTTL, MaxEntries: *xdsCacheMaxEntries})
+	nativeStore, err := xdsstore.NewCached(
+		xds,
+		demandcache.Config{IdleTTL: *xdsCacheIdleTTL, MaxEntries: *xdsCacheMaxEntries},
+	)
 	if err != nil {
 		return err
 	}

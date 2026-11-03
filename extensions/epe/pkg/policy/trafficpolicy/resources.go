@@ -19,6 +19,9 @@ import (
 	"errors"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
@@ -26,8 +29,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/model"
 	podsource "github.com/openkruise/agentio/pkg/registry/kubernetes/pod"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // NamedPolicy preserves the resource name and binding order for compilation.
@@ -106,6 +107,8 @@ func lookupBinding(ctx context.Context, source Resources, subj subject.Subject) 
 }
 
 // Build one complete immutable snapshot before any request policy executes.
+//
+//nolint:gocyclo // Keep lease ownership and snapshot retries in one scope.
 func lookup(ctx context.Context, source Resources, subj subject.Subject) (policySnapshot, error) {
 	key, err := workloadKey(source, subj)
 	if err != nil {
@@ -199,7 +202,11 @@ func lookupWorkload(view *store.Snapshot, key store.Key, previous *indexedWorklo
 	if entry.err != nil {
 		return policySnapshot{}, entry.err
 	}
-	return policySnapshot{Workload: resource.Value.(*workload.Workload), TrafficPolicies: entry.named, entry: entry}, nil
+	return policySnapshot{
+		Workload:        resource.Value.(*workload.Workload),
+		TrafficPolicies: entry.named,
+		entry:           entry,
+	}, nil
 }
 
 func references(w *workload.Workload) ([]string, error) {

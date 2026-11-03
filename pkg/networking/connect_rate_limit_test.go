@@ -63,7 +63,10 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 	if len(first) != 2 {
 		t.Fatalf("composite key has %d actions", len(first))
 	}
-	for i, action := range []struct{ descriptor, key string }{
+	for i, action := range []struct {
+		descriptor string
+		key        string
+	}{
 		{"tenant", "tenant.id"},
 		{"sandbox", "agentio.sandbox.uid"},
 	} {
@@ -71,7 +74,8 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 		if err := first[i].GetExtension().GetTypedConfig().UnmarshalTo(expression); err != nil {
 			t.Fatal(err)
 		}
-		if expression.GetDescriptorKey() != action.descriptor || expression.GetText() != `filter_state["`+action.key+`"]` {
+		if expression.GetDescriptorKey() != action.descriptor ||
+			expression.GetText() != `filter_state["`+action.key+`"]` {
 			t.Fatalf("incorrect filter-state action: %v", expression)
 		}
 	}

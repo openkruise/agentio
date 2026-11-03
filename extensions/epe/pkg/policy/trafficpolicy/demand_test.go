@@ -92,15 +92,23 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 				Name:      pod,
 				Namespace: "ns",
 				ClusterId: clusterID,
-				Extensions: []*workload.Extension{{
-					Name: "traffic-policy-reference",
-					Config: pack(&ext.PolicyReference{
-						TypeUrl:       model.TrafficPolicyType,
-						ResourceNames: []string{policy},
-					})}, {
-					Name:   "security-profile-reference",
-					Config: pack(&ext.PolicyReference{TypeUrl: model.SecurityProfileType, ResourceNames: []string{"global/" + policy}}),
-				}},
+				Extensions: []*workload.Extension{
+					{
+						Name: "traffic-policy-reference",
+						Config: pack(&ext.PolicyReference{
+							TypeUrl:       model.TrafficPolicyType,
+							ResourceNames: []string{policy},
+						})},
+					{
+						Name: "security-profile-reference",
+						Config: pack(
+							&ext.PolicyReference{
+								TypeUrl:       model.SecurityProfileType,
+								ResourceNames: []string{"global/" + policy},
+							},
+						),
+					},
+				},
 			}}},
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID:       name,
@@ -216,7 +224,8 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	if err != nil || resolved.UID != uid || len(resolved.SecurityProfileReferences) != 1 {
 		t.Fatalf("cold Workload binding: %+v err=%v", resolved, err)
 	}
-	if snapshot := client.Snapshot(); len(snapshot.Resources[model.WorkloadType]) != 1 || len(snapshot.Resources[model.TrafficPolicyType]) != 0 {
+	if snapshot := client.Snapshot(); len(snapshot.Resources[model.WorkloadType]) != 1 ||
+		len(snapshot.Resources[model.TrafficPolicyType]) != 0 {
 		t.Fatal("SecurityProfile lookup fetched unrelated Workloads or TrafficPolicies")
 	}
 	local := profilestore.MakeFakeStore()
@@ -244,7 +253,9 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	}
 	// Source deletion can precede binding recomputation. Even a cold demand
 	// (capacity one evicts the policy when acquiring the Workload) must still work.
-	if _, err := publications.Apply([]model.ResourceChange{{Key: requestedPolicy.Key, Old: &requestedPolicy}}); err != nil {
+	if _, err := publications.Apply(
+		[]model.ResourceChange{{Key: requestedPolicy.Key, Old: &requestedPolicy}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := publications.Snapshot().Get(requestedPolicy.Key); !exists {
@@ -253,7 +264,9 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	for range 10 {
 		checkAction(egressauthz.Allow)
 	}
-	if _, err := publications.Apply([]model.ResourceChange{{Key: requestedPolicy.Key, New: &requestedPolicy}}); err != nil {
+	if _, err := publications.Apply(
+		[]model.ResourceChange{{Key: requestedPolicy.Key, New: &requestedPolicy}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if capacity == 1 {

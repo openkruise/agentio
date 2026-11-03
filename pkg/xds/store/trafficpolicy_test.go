@@ -100,7 +100,9 @@ func TestDeletionReleasesDependencyChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(initial)
-	if _, err := s.Apply([]model.ResourceChange{{Key: leaf.Key, Old: &leaf}, {Key: parent.Key, Old: &parent}}); err != nil {
+	if _, err := s.Apply(
+		[]model.ResourceChange{{Key: leaf.Key, Old: &leaf}, {Key: parent.Key, Old: &parent}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if s.Snapshot().Len() != 3 || len(s.pendingRemovals) != 2 {
@@ -204,7 +206,9 @@ func TestTrafficPolicyRecreationCancelsDeletion(t *testing.T) {
 				s.Replace(next)
 			} else {
 				// Recreation and the last reference withdrawal may share a batch.
-				if _, err := s.Apply([]model.ResourceChange{{Key: w.Key, Old: &w}, {Key: recreated.Key, New: &recreated}}); err != nil {
+				if _, err := s.Apply(
+					[]model.ResourceChange{{Key: w.Key, Old: &w}, {Key: recreated.Key, New: &recreated}},
+				); err != nil {
 					t.Fatal(err)
 				}
 			}

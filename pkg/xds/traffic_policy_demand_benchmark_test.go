@@ -33,7 +33,14 @@ func BenchmarkTrafficPolicyDemand(b *testing.B) {
 	stream := discardDeltaStream{ctx: b.Context()}
 	sub := server.resources.Subscribe(b.Context(), model.ClientScope{})
 	watches := map[string]*watchState{}
-	if err := server.server.handleRequest(stream, server.scope, log, watches, sub, nodeRequest(model.WorkloadType, "w")); err != nil {
+	if err := server.server.handleRequest(
+		stream,
+		server.scope,
+		log,
+		watches,
+		sub,
+		nodeRequest(model.WorkloadType, "w"),
+	); err != nil {
 		b.Fatal(err)
 	}
 	request := nodeRequest(model.TrafficPolicyType, "p")

@@ -31,15 +31,21 @@ func BenchmarkTrafficPolicyRetention(b *testing.B) {
 			for i := range size {
 				name := fmt.Sprintf("w%d", i)
 				resources = append(resources, model.Resource{
-					Key: model.ResourceKey{TypeURL: model.AddressType, Name: name}, XDSName: name,
-					Hash: name, Value: &anypb.Any{TypeUrl: model.AddressType, Value: []byte(name)},
-					Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: name, TrafficPolicyRefs: refs}},
+					Key:     model.ResourceKey{TypeURL: model.AddressType, Name: name},
+					XDSName: name,
+					Hash:    name,
+					Value:   &anypb.Any{TypeUrl: model.AddressType, Value: []byte(name)},
+					Facts: model.ResourceFacts{
+						Workload: &model.WorkloadResourceFacts{WorkloadUID: name, TrafficPolicyRefs: refs},
+					},
 				})
 			}
 			var deletions []model.ResourceChange
 			for _, name := range refs {
-				p := model.Resource{Key: model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: name}, XDSName: name,
-					Hash: name, Value: &anypb.Any{TypeUrl: model.TrafficPolicyType, Value: []byte(name)}}
+				p := model.Resource{Key: model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: name},
+					XDSName: name,
+					Hash:    name,
+					Value:   &anypb.Any{TypeUrl: model.TrafficPolicyType, Value: []byte(name)}}
 				resources = append(resources, p)
 				deletions = append(deletions, model.ResourceChange{Key: p.Key, Old: &p})
 			}

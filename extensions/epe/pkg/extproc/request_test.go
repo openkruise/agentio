@@ -57,9 +57,15 @@ func TestWorkloadBindingBeforePolicyResolution(t *testing.T) {
 			},
 		})
 		state := newStreamState()
-		responses, err := srv.HandleRequestHeaders(t.Context(), makeRequestHeaders("api.example.com", "/", "GET"), makeAttrsWithLabels("ns", "pod", testLabelsB64), state)
+		responses, err := srv.HandleRequestHeaders(
+			t.Context(),
+			makeRequestHeaders("api.example.com", "/", "GET"),
+			makeAttrsWithLabels("ns", "pod", testLabelsB64),
+			state,
+		)
 		if lookupError != nil {
-			if called || !errors.Is(err, lookupError) || responses[0].GetImmediateResponse().GetDetails() != "epe_policy_unavailable" {
+			if called || !errors.Is(err, lookupError) ||
+				responses[0].GetImmediateResponse().GetDetails() != "epe_policy_unavailable" {
 				t.Fatalf("lookup failure did not fail closed: called=%v err=%v responses=%v", called, err, responses)
 			}
 		} else if !called || err != nil || state.stream.Caller.Subject.Workload.Labels["app"] != "wds" {
@@ -166,7 +172,11 @@ func (p *bodylessDeadlineProbe) OnRequestHeaders(ctx context.Context, _ *filter.
 	return filter.NeedBody(), nil
 }
 
-func (p *bodylessDeadlineProbe) OnRequestBody(ctx context.Context, _ *filter.Stream, _ filter.Body) (filter.Action, error) {
+func (p *bodylessDeadlineProbe) OnRequestBody(
+	ctx context.Context,
+	_ *filter.Stream,
+	_ filter.Body,
+) (filter.Action, error) {
 	p.bodyDeadline, p.bodyHasDeadline = ctx.Deadline()
 	return filter.Continue(), nil
 }
@@ -297,7 +307,8 @@ func TestHandleRequestHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *te
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_request_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_request_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_request_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -341,7 +352,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders: %v", err)
 			}
-			if len(responses) != 1 || responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
+			if len(responses) != 1 ||
+				responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
 				t.Fatalf("request responses = %+v, want response-headers subscription", responses)
 			}
 
@@ -355,7 +367,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_response_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_response_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_response_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -704,7 +717,13 @@ func TestTrailerPassThroughAndBodyOrderValidation(t *testing.T) {
 	srv := NewServer(ServerDeps{})
 	ctx := context.Background()
 
-	if _, err := srv.HandleRequestBody(ctx, &extProcPb.HttpBody{EndOfStream: true}, nil); status.Code(err) != codes.FailedPrecondition {
+	if _, err := srv.HandleRequestBody(
+		ctx,
+		&extProcPb.HttpBody{EndOfStream: true},
+		nil,
+	); status.Code(
+		err,
+	) != codes.FailedPrecondition {
 		t.Errorf("HandleRequestBody without state: err=%v, want FailedPrecondition", err)
 	}
 	if r, err := srv.HandleRequestTrailers(ctx, nil); err != nil || len(r) != 1 {

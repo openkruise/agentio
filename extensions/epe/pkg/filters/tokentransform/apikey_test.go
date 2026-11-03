@@ -63,7 +63,12 @@ func testScopeWithPort(port int32) *inputs.Scope {
 	return inputs.NewScope(inputs.RequestFrom(req), inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil)
 }
 
-func prepareAPIKey(t *testing.T, st *filter.Stream, scope *inputs.Scope, cfg ApiKeyConfig) (PreparedApiKeyConfig, bool, error) {
+func prepareAPIKey(
+	t *testing.T,
+	st *filter.Stream,
+	scope *inputs.Scope,
+	cfg ApiKeyConfig,
+) (PreparedApiKeyConfig, bool, error) {
 	t.Helper()
 	prepared, empty, err := (apiKeySigner{}).Prepare(st, scope, cfg)
 	if err != nil {
@@ -111,10 +116,21 @@ func TestAPIKeyPrepareTargets(t *testing.T) {
 		if err != nil || empty {
 			t.Fatalf("Prepare() = (%#v, %v, %v), want targets", prepared, empty, err)
 		}
-		if got := preparedNames(prepared.Headers); !reflect.DeepEqual(got, []string{"authorization", "x-backend-authorization"}) {
+		if got := preparedNames(
+			prepared.Headers,
+		); !reflect.DeepEqual(
+			got,
+			[]string{"authorization", "x-backend-authorization"},
+		) {
 			t.Fatalf("targets = %q, want canonical configured order", got)
 		}
-		if got := []string{prepared.Headers[0].OriginalValue, prepared.Headers[1].OriginalValue}; !reflect.DeepEqual(got, []string{"caller", ""}) {
+		if got := []string{
+			prepared.Headers[0].OriginalValue,
+			prepared.Headers[1].OriginalValue,
+		}; !reflect.DeepEqual(
+			got,
+			[]string{"caller", ""},
+		) {
 			t.Fatalf("original values = %q, want present and absent snapshot values", got)
 		}
 	})
@@ -272,13 +288,22 @@ func TestAPIKeyPrepareTargets(t *testing.T) {
 	t.Run("all selectors observe the original snapshot", func(t *testing.T) {
 		original := map[string]string{"x-first": "${AGENTIO_TOKEN}", "x-second": "${AGENTIO_TOKEN}"}
 		st, scope := testRequest(original)
-		cfg := mustAPIKeyConfig(t,
+		cfg := mustAPIKeyConfig(
+			t,
 			headerSpec{CEL: ptr.To(`["x-first"]`), Value: valueSourceSpec{Value: ptr.To("first")}},
-			headerSpec{CEL: ptr.To(`request.headers.filter(name, request.headers[name] == "${AGENTIO_TOKEN}")`), Value: valueSourceSpec{Value: ptr.To("second")}},
+			headerSpec{
+				CEL:   new(`request.headers.filter(name, request.headers[name] == "${AGENTIO_TOKEN}")`),
+				Value: valueSourceSpec{Value: new("second")},
+			},
 		)
 		prepared, empty, err := (apiKeySigner{}).Prepare(st, scope, cfg)
 		if err == nil || !strings.Contains(err.Error(), `duplicates header "x-first"`) {
-			t.Fatalf("Prepare() = (%#v, %v, %v), want duplicate proving the second selector saw x-first", prepared, empty, err)
+			t.Fatalf(
+				"Prepare() = (%#v, %v, %v), want duplicate proving the second selector saw x-first",
+				prepared,
+				empty,
+				err,
+			)
 		}
 		wantHeaders := map[string]string{"x-first": "${AGENTIO_TOKEN}", "x-second": "${AGENTIO_TOKEN}"}
 		if !reflect.DeepEqual(st.Request.Headers, wantHeaders) {
@@ -287,7 +312,11 @@ func TestAPIKeyPrepareTargets(t *testing.T) {
 	})
 
 	t.Run("scope snapshot wins over stream and nil scope falls back", func(t *testing.T) {
-		st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Headers: map[string]string{"x-api-key": "stream"}}}}
+		st := &filter.Stream{
+			RequestContext: filter.RequestContext{
+				Request: httpreq.HTTPRequest{Headers: map[string]string{"x-api-key": "stream"}},
+			},
+		}
 		snapshot := httpreq.HTTPRequest{Headers: map[string]string{"x-api-key": "snapshot"}}
 		scope := inputs.NewScope(inputs.RequestFrom(snapshot), inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil)
 		cfg := mustAPIKeyConfig(t, headerSpec{Names: []string{"x-api-key"}, Value: valueSourceSpec{Value: ptr.To("x")}})
@@ -347,10 +376,19 @@ func signPreparedAPIKey(t *testing.T, scope *inputs.Scope, headers ...PreparedHe
 func TestAPIKeySign(t *testing.T) {
 	t.Run("literal template and CEL value sources", func(t *testing.T) {
 		st, scope := testRequest(map[string]string{"x-template": "old", "x-cel": "caller"})
-		cfg := mustAPIKeyConfig(t,
+		cfg := mustAPIKeyConfig(
+			t,
 			headerSpec{Names: []string{"x-literal"}, Value: valueSourceSpec{Value: ptr.To("")}},
-			headerSpec{Names: []string{"x-template"}, Value: valueSourceSpec{Template: ptr.To("Bearer {{ .Token }}:{{ .Header.Value }}")}},
-			headerSpec{Names: []string{"x-cel"}, Value: valueSourceSpec{Cel: ptr.To(`token + ":" + header.name + ":" + header.value + ":" + request.method`)}},
+			headerSpec{
+				Names: []string{"x-template"},
+				Value: valueSourceSpec{Template: new("Bearer {{ .Token }}:{{ .Header.Value }}")},
+			},
+			headerSpec{
+				Names: []string{"x-cel"},
+				Value: valueSourceSpec{
+					Cel: new(`token + ":" + header.name + ":" + header.value + ":" + request.method`),
+				},
+			},
 		)
 		prepared, empty, err := prepareAPIKey(t, st, scope, cfg)
 		if err != nil || empty {
@@ -395,8 +433,12 @@ func TestAPIKeySign(t *testing.T) {
 
 	t.Run("different rules use different values", func(t *testing.T) {
 		st, scope := testRequest(nil)
-		cfg := mustAPIKeyConfig(t,
-			headerSpec{Names: []string{"authorization"}, Value: valueSourceSpec{Template: ptr.To("Bearer {{ .Token }}")}},
+		cfg := mustAPIKeyConfig(
+			t,
+			headerSpec{
+				Names: []string{"authorization"},
+				Value: valueSourceSpec{Template: new("Bearer {{ .Token }}")},
+			},
 			headerSpec{Names: []string{"x-api-key"}, Value: valueSourceSpec{Value: ptr.To("fixed")}},
 		)
 		prepared, _, err := prepareAPIKey(t, st, scope, cfg)
@@ -569,7 +611,14 @@ func TestAPIKeySignerRejectsForeignConfigs(t *testing.T) {
 	if _, _, err := (apiKeySigner{}).Prepare(&filter.Stream{}, nil, "not-mine"); err == nil {
 		t.Fatal("Prepare accepted a foreign config")
 	}
-	if _, err := (apiKeySigner{}).Sign(context.Background(), &filter.Stream{}, nil, nil, Credential{}, "not-mine"); err == nil {
+	if _, err := (apiKeySigner{}).Sign(
+		context.Background(),
+		&filter.Stream{},
+		nil,
+		nil,
+		Credential{},
+		"not-mine",
+	); err == nil {
 		t.Fatal("Sign accepted a foreign config")
 	}
 }

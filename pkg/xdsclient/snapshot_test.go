@@ -19,26 +19,32 @@ import "testing"
 func TestSnapshotForPinsOnlySelectedValuesAndReadiness(t *testing.T) {
 	policyType := testType + "/policy"
 	w, p := &Resource{Value: "workload"}, &Resource{Value: "policy"}
-	c := &Client{connected: true, changed: make(chan struct{}), types: map[string]*typeState{
-		testType:   {synced: true, resources: map[string]*Resource{"wanted": w, "unrelated": {Value: "unused"}}},
-		policyType: {synced: true, resources: map[string]*Resource{"policy": p}},
-	}}
+	c := &Client{connected: true,
+		changed: make(chan struct{}),
+		types: map[string]*typeState{
+			testType:   {synced: true, resources: map[string]*Resource{"wanted": w, "unrelated": {Value: "unused"}}},
+			policyType: {synced: true, resources: map[string]*Resource{"policy": p}},
+		}}
 	selected := map[string][]string{testType: {"wanted", "missing"}, policyType: {"policy"}}
 	view := c.SnapshotFor(selected)
 	if !view.Connected || !view.Synced[testType] || !view.Synced[policyType] ||
-		len(view.Resources[testType]) != 1 || view.Resources[testType]["wanted"] != w || view.Resources[policyType]["policy"] != p {
+		len(
+			view.Resources[testType],
+		) != 1 || view.Resources[testType]["wanted"] != w || view.Resources[policyType]["policy"] != p {
 		t.Fatalf("incorrect selected publication: %+v", view)
 	}
 	c.types[testType].resources["wanted"] = &Resource{Value: "updated"}
 	if view.Resources[testType]["wanted"] != w {
 		t.Fatal("selected snapshot mutated with the source")
 	}
-	if len(c.Snapshot().Resources[testType]) != 2 || len(c.SnapshotFor(map[string][]string{}).Resources[testType]) != 0 {
+	if len(c.Snapshot().Resources[testType]) != 2 ||
+		len(c.SnapshotFor(map[string][]string{}).Resources[testType]) != 0 {
 		t.Fatal("full and empty selection semantics changed")
 	}
 	c.reset()
 	current := c.SnapshotFor(selected)
-	if current.Connected || current.Synced[testType] || current.Synced[policyType] || len(current.Resources[testType]) != 1 {
+	if current.Connected || current.Synced[testType] || current.Synced[policyType] ||
+		len(current.Resources[testType]) != 1 {
 		t.Fatal("disconnect lost retained values or kept stale synchronization")
 	}
 	select {

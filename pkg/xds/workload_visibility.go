@@ -60,7 +60,8 @@ func (v *addressSelection) hasScopedWorkload(references model.WorkloadQuery) boo
 }
 
 func (v *addressSelection) visible(resource model.Resource) bool {
-	if v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress || v.scope.Class == model.ClientEPE {
+	if v.scope.Class == model.ClientEgressGateway || v.scope.Class == model.ClientAgentioEgress ||
+		v.scope.Class == model.ClientEPE {
 		return true
 	}
 	if resource.Facts.GatewayOwner != "" && v.hasScopedWorkload(model.WorkloadQuery{
@@ -94,7 +95,8 @@ func (v *addressSelection) selected(resource model.Resource) bool {
 	if scope.Class != model.ClientSharedZTunnel && len(v.subscription.names) == 0 {
 		return false
 	}
-	if scope.Class != model.ClientEgressGateway && scope.Class != model.ClientAgentioEgress && scope.Class != model.ClientEPE {
+	if scope.Class != model.ClientEgressGateway && scope.Class != model.ClientAgentioEgress &&
+		scope.Class != model.ClientEPE {
 		if resource.Facts.GatewayOwner != "" && v.hasScopedWorkload(model.WorkloadQuery{
 			GatewayReference: resource.Facts.GatewayOwner,
 		}) {

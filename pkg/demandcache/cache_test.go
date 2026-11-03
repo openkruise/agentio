@@ -276,7 +276,8 @@ func TestGetPinsResolvedDependencies(t *testing.T) {
 		}
 		time.Sleep(2 * time.Second)
 		lookup(t, cache, "policy", "c")
-		if cache.Len() != 2 || source.leases[key{"workload", "a"}].released.Load() || source.leases[key{"policy", "b"}].released.Load() {
+		if cache.Len() != 2 || source.leases[key{"workload", "a"}].released.Load() ||
+			source.leases[key{"policy", "b"}].released.Load() {
 			t.Fatal("resolved dependencies were evicted while in use")
 		}
 		releaseA()

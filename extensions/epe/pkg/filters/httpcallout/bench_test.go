@@ -101,7 +101,8 @@ func benchStream(nOperator int) *filter.Stream {
 			Method:   "POST",
 			Scheme:   "https",
 			Headers:  reqHeaders,
-		}}, StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{Status: 200, Headers: respHeaders}},
+		}},
+		StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{Status: 200, Headers: respHeaders}},
 	}
 }
 

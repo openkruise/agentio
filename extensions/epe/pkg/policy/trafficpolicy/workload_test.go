@@ -21,6 +21,9 @@ import (
 	"slices"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
@@ -28,8 +31,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/model"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestWorkloadSecurityProfileBinding(t *testing.T) {
@@ -40,11 +41,24 @@ func TestWorkloadSecurityProfileBinding(t *testing.T) {
 		}
 		return &workload.Extension{Name: name, Config: v}
 	}
-	w := &workload.Workload{Uid: "uid", Namespace: "ns", Name: "pod", Extensions: []*workload.Extension{
-		pack("security-profile-reference", &ext.PolicyReference{TypeUrl: model.SecurityProfileType, ResourceNames: []string{"global/g", "namespaced/ns/a"}}),
-		pack("workload-metadata", &ext.WorkloadMetadata{Labels: map[string]string{"app": "wds"}}),
-	}}
-	f := &fakeStore{types: []store.Type{store.Workload, store.TrafficPolicy}, resources: map[store.Key]store.Resource{}, ready: true}
+	w := &workload.Workload{Uid: "uid",
+		Namespace: "ns",
+		Name:      "pod",
+		Extensions: []*workload.Extension{
+			pack(
+				"security-profile-reference",
+				&ext.PolicyReference{
+					TypeUrl:       model.SecurityProfileType,
+					ResourceNames: []string{"global/g", "namespaced/ns/a"},
+				},
+			),
+			pack("workload-metadata", &ext.WorkloadMetadata{Labels: map[string]string{"app": "wds"}}),
+		}}
+	f := &fakeStore{
+		types:     []store.Type{store.Workload, store.TrafficPolicy},
+		resources: map[store.Key]store.Resource{},
+		ready:     true,
+	}
 	fetches := 0
 	f.fetch = func(key store.Key) {
 		fetches++
@@ -60,7 +74,9 @@ func TestWorkloadSecurityProfileBinding(t *testing.T) {
 	resolve := workloadResolver(aggregate)
 	identity := subject.Workload{UID: "uid", Labels: map[string]string{"app": "untrusted"}}
 	got, err := resolve(t.Context(), identity)
-	if err != nil || got.Name != "pod" || got.Namespace != "ns" || got.Labels["app"] != "wds" || !slices.Equal(got.SecurityProfileReferences, []string{"global/g", "namespaced/ns/a"}) || fetches != 1 {
+	if err != nil || got.Name != "pod" || got.Namespace != "ns" || got.Labels["app"] != "wds" ||
+		!slices.Equal(got.SecurityProfileReferences, []string{"global/g", "namespaced/ns/a"}) ||
+		fetches != 1 {
 		t.Fatalf("cold binding: %+v %v fetches=%d", got, err, fetches)
 	}
 	if _, err := resolve(t.Context(), identity); err != nil || fetches != 1 {
@@ -70,10 +86,13 @@ func TestWorkloadSecurityProfileBinding(t *testing.T) {
 		t.Fatal("cold lookup rebuilt the global index")
 	}
 	w = proto.Clone(w).(*workload.Workload)
-	w.Extensions = []*workload.Extension{pack("security-profile-reference", &ext.PolicyReference{TypeUrl: model.SecurityProfileType})}
+	w.Extensions = []*workload.Extension{
+		pack("security-profile-reference", &ext.PolicyReference{TypeUrl: model.SecurityProfileType}),
+	}
 	f.put(store.Workload, "uid", w)
 	got, err = resolve(t.Context(), identity)
-	if err != nil || got.SecurityProfileReferences == nil || len(got.SecurityProfileReferences) != 0 || len(got.Labels) != 0 {
+	if err != nil || got.SecurityProfileReferences == nil || len(got.SecurityProfileReferences) != 0 ||
+		len(got.Labels) != 0 {
 		t.Fatalf("empty binding: %+v %v", got, err)
 	}
 	if _, err := resolve(t.Context(), subject.Workload{UID: "missing", Name: "pod", Namespace: "ns"}); err == nil {
@@ -131,7 +150,8 @@ func TestCallerSnapshotSurvivesCacheChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caller.Caller.Token != input.Caller.Token || caller.Caller.Subject.Workload.IP != input.Caller.Subject.Workload.IP {
+	if caller.Caller.Token != input.Caller.Token ||
+		caller.Caller.Subject.Workload.IP != input.Caller.Subject.Workload.IP {
 		t.Fatal("snapshot lost request identity or credentials")
 	}
 	f.put(store.Workload, "uid", snapshotWorkload(t, "deny", "new"))
@@ -183,13 +203,25 @@ func TestCallerSnapshotRebuildsDuringColdDiscovery(t *testing.T) {
 					f.put(store.TrafficPolicy, "allow", &sec.TrafficPolicy{})
 				}
 			}
-			caller, err := NewContextResolver(testAggregate(f), true)(t.Context(), filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}}})
+			caller, err := NewContextResolver(
+				testAggregate(f),
+				true,
+			)(
+				t.Context(),
+				filter.RequestContext{
+					Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}},
+				},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			stream := &filter.Stream{RequestContext: caller, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
+			stream := &filter.Stream{
+				RequestContext: caller,
+				StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
+			}
 			allowed, err := NewAuthorizer().Authorize(t.Context(), stream, []netip.AddrPort{netip.MustParseAddrPort("203.0.113.7:443")})
-			if err != nil || len(allowed) != 0 || fetches != 1 || caller.Caller.Subject.Workload.Labels["version"] != "new" ||
+			if err != nil || len(allowed) != 0 || fetches != 1 ||
+				caller.Caller.Subject.Workload.Labels["version"] != "new" ||
 				!slices.Equal(caller.Caller.Subject.Workload.SecurityProfileReferences, []string{"namespaced/ns/new"}) {
 				t.Fatalf("mixed snapshot: %+v allowed=%v err=%v fetches=%d", caller, allowed, err, fetches)
 			}
@@ -198,7 +230,12 @@ func TestCallerSnapshotRebuildsDuringColdDiscovery(t *testing.T) {
 }
 
 func TestAuthorizerRequiresPreparedSnapshot(t *testing.T) {
-	stream := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
+	stream := &filter.Stream{
+		RequestContext: filter.RequestContext{
+			Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}},
+		},
+		StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
+	}
 	if _, err := NewAuthorizer().Authorize(t.Context(), stream, []netip.AddrPort{netip.MustParseAddrPort("203.0.113.7:443")}); err == nil {
 		t.Fatal("identified request without policy snapshot was accepted")
 	}
@@ -207,9 +244,20 @@ func TestAuthorizerRequiresPreparedSnapshot(t *testing.T) {
 func TestCallerPreparationRequiresProfileBindingWithNativePolicies(t *testing.T) {
 	f := testStore()
 	w := proto.Clone(f.resources[store.Key{Type: store.Workload, Name: "uid"}].Value.(*workload.Workload)).(*workload.Workload)
-	w.Extensions = slices.DeleteFunc(w.Extensions, func(e *workload.Extension) bool { return e.Name == "security-profile-reference" })
+	w.Extensions = slices.DeleteFunc(
+		w.Extensions,
+		func(e *workload.Extension) bool { return e.Name == "security-profile-reference" },
+	)
 	f.put(store.Workload, "uid", w)
-	caller, err := NewContextResolver(testAggregate(f), true)(t.Context(), filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}}})
+	caller, err := NewContextResolver(
+		testAggregate(f),
+		true,
+	)(
+		t.Context(),
+		filter.RequestContext{
+			Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{UID: "uid"}}},
+		},
+	)
 	if err == nil || caller.Policies.DestinationAuthorizer != nil {
 		t.Fatalf("native policy prepared without profile binding: caller=%+v err=%v", caller, err)
 	}

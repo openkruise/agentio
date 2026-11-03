@@ -65,12 +65,19 @@ func TestLoadCountsUnexpectedResponses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer output.Close()
+	defer func() {
+		if err := output.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	old := os.Stdout
 	os.Stdout = output
 	defer func() { os.Stdout = old }()
 	err = run(listener.Addr().String(), "ns", "Kubernetes", "/block", 453, 2, load.Config{
-		Requests: 8, Identities: 2, Concurrency: 4, Duration: time.Second,
+		Requests:    8,
+		Identities:  2,
+		Concurrency: 4,
+		Duration:    time.Second,
 	})
 	if err == nil {
 		t.Fatal("unexpected statuses did not fail the run")
@@ -87,7 +94,8 @@ func TestLoadCountsUnexpectedResponses(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Operations != 8 || result.Errors != 4 || result.Connections != 2 || result.Responses["http_453"] != 4 || result.Responses["http_503"] != 4 {
+	if result.Operations != 8 || result.Errors != 4 || result.Connections != 2 || result.Responses["http_453"] != 4 ||
+		result.Responses["http_503"] != 4 {
 		t.Fatalf("incorrect error accounting: %+v", result)
 	}
 }

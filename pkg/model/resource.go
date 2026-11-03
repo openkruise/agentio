@@ -79,6 +79,7 @@ type ResourceFacts struct {
 	AgentioEgress bool
 }
 
+// ResourceReferences records dependencies that must remain published with their referrers.
 type ResourceReferences struct {
 	Keys []ResourceKey
 }
@@ -160,7 +161,8 @@ func (r Resource) ReferencedResources() iter.Seq[ResourceKey] {
 			}
 		}
 		for _, key := range r.Facts.referenceKeys() {
-			if key.TypeURL == TrafficPolicyType && r.Facts.Workload != nil && slices.Contains(r.Facts.Workload.TrafficPolicyRefs, key.Name) {
+			if key.TypeURL == TrafficPolicyType && r.Facts.Workload != nil &&
+				slices.Contains(r.Facts.Workload.TrafficPolicyRefs, key.Name) {
 				continue
 			}
 			if !yield(key) {
@@ -170,6 +172,7 @@ func (r Resource) ReferencedResources() iter.Seq[ResourceKey] {
 	}
 }
 
+// ReferencesResource reports whether this resource depends on key.
 func (r Resource) ReferencesResource(key ResourceKey) bool {
 	for reference := range r.ReferencedResources() {
 		if reference == key {

@@ -61,7 +61,9 @@ func TestSnapshotFromStream_CarriesWireQueryVerbatim(t *testing.T) {
 
 // With no query at all there is nothing to carry.
 func TestSnapshotFromStream_EmptyQuery(t *testing.T) {
-	st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Method: "GET", Path: "/obj"}}}
+	st := &filter.Stream{
+		RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Method: "GET", Path: "/obj"}},
+	}
 	if snap := snapshotFromStream(st); snap.RawQuery != "" {
 		t.Errorf("RawQuery = %q, want empty", snap.RawQuery)
 	}

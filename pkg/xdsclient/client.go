@@ -148,7 +148,8 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Client, error) {
 		wake:    make(chan struct{}, 1),
 	}
 	for _, w := range cfg.Watches {
-		if w.TypeURL == "" || c.types[w.TypeURL] != nil || w.ReconnectGrace < 0 || (w.Wildcard && w.ReconnectGrace != 0) {
+		if w.TypeURL == "" || c.types[w.TypeURL] != nil || w.ReconnectGrace < 0 ||
+			(w.Wildcard && w.ReconnectGrace != 0) {
 			return nil, fmt.Errorf("invalid or duplicate watch %q", w.TypeURL)
 		}
 		c.types[w.TypeURL] = &typeState{

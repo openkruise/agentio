@@ -179,8 +179,11 @@ func (s *Server) handleRequest(
 		}
 	}
 	return s.generateAndSend(stream, connLog, watch, GenerationRequest{
-		Scope: scope, TypeURL: typeURL, Snapshot: snapshot,
-		Subscription: newSubscriptionView(watch), Full: true,
+		Scope:           scope,
+		TypeURL:         typeURL,
+		Snapshot:        snapshot,
+		Subscription:    newSubscriptionView(watch),
+		Full:            true,
 		SubscribedNames: append([]string(nil), request.GetResourceNamesSubscribe()...),
 	}, true, watches[model.WorkloadType])
 }
@@ -338,12 +341,16 @@ func (s *Server) generateAndSend(
 		logPushFailure(connLog, "generate", request.TypeURL, started, err)
 		return err
 	}
-	if request.TypeURL == model.TrafficPolicyType && len(delta.Removed) > 0 && workloadWatch != nil && workloadWatch.started {
+	if request.TypeURL == model.TrafficPolicyType && len(delta.Removed) > 0 && workloadWatch != nil &&
+		workloadWatch.started {
 		// A demand can overtake a queued push. Send current bindings before
 		// reporting a missing policy, using the same publication for both.
 		if err := s.generateAndSend(stream, connLog, workloadWatch, GenerationRequest{
-			Scope: request.Scope, TypeURL: model.WorkloadType, Snapshot: request.Snapshot,
-			Subscription: newSubscriptionView(workloadWatch), Full: true,
+			Scope:        request.Scope,
+			TypeURL:      model.WorkloadType,
+			Snapshot:     request.Snapshot,
+			Subscription: newSubscriptionView(workloadWatch),
+			Full:         true,
 		}, false, nil); err != nil {
 			return err
 		}

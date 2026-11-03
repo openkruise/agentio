@@ -54,7 +54,8 @@ func TestReconnectGraceDoesNotReplayIdleSubscriptions(t *testing.T) {
 		c.reset()
 		sent := map[string]map[string]*subscription{}
 		initial := c.initialRequests(sent)
-		if !slices.Equal(initial[0].ResourceNamesSubscribe, []string{"*"}) || !slices.Equal(initial[0].ResourceNamesUnsubscribe, []string{"*"}) {
+		if !slices.Equal(initial[0].ResourceNamesSubscribe, []string{"*"}) ||
+			!slices.Equal(initial[0].ResourceNamesUnsubscribe, []string{"*"}) {
 			t.Fatalf("replayed idle resources: %v", initial)
 		}
 		// An empty initial response acknowledges the type, not all retained names.
@@ -97,7 +98,10 @@ func TestReconnectGraceDoesNotReplayIdleSubscriptions(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		done := make(chan error, 1)
-		go func() { _, err := leases[1].Demand(ctx); done <- err }()
+		go func() {
+			_, err := leases[1].Demand(ctx)
+			done <- err
+		}()
 		synctest.Wait()
 		requests = c.pendingRequests(sent)
 		if len(requests) != 1 || !slices.Equal(requests[0].ResourceNamesSubscribe, []string{"workload-00001"}) {
@@ -153,32 +157,40 @@ func TestReconnectGraceDeadlineSurvivesPartialSyncAndRetries(t *testing.T) {
 }
 
 func TestReconnectGraceDeletionNeverFallsBack(t *testing.T) {
-	withSubscriptionClient(t, Watch{TypeURL: testType, ReconnectGrace: 5 * time.Second, OnDelete: func(string) DeleteAction { return ReleaseSubscription }}, func(t *testing.T, c *Client) {
-		lease := acquire(t, c, "a")
-		defer lease.Release()
-		publishString(t, c, "a", "old", "alias")
-		c.reset()
-		removeNames(t, c, "a")
-		if _, err := lease.Demand(t.Context()); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("deleted generation: %v", err)
-		}
-		view := c.Snapshot()
-		if view.Resources[testType]["a"] != nil || c.types[testType].aliases["alias"] != "" {
-			t.Fatal("deletion retained stale value or alias")
-		}
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
-		done := beginDemand(ctx, c, "a")
-		select {
-		case err := <-done:
-			t.Fatalf("new demand reused deleted value: %v", err)
-		default:
-		}
-		publishString(t, c, "a", "recreated")
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-	})
+	withSubscriptionClient(
+		t,
+		Watch{
+			TypeURL:        testType,
+			ReconnectGrace: 5 * time.Second,
+			OnDelete:       func(string) DeleteAction { return ReleaseSubscription },
+		},
+		func(t *testing.T, c *Client) {
+			lease := acquire(t, c, "a")
+			defer lease.Release()
+			publishString(t, c, "a", "old", "alias")
+			c.reset()
+			removeNames(t, c, "a")
+			if _, err := lease.Demand(t.Context()); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("deleted generation: %v", err)
+			}
+			view := c.Snapshot()
+			if view.Resources[testType]["a"] != nil || c.types[testType].aliases["alias"] != "" {
+				t.Fatal("deletion retained stale value or alias")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			done := beginDemand(ctx, c, "a")
+			select {
+			case err := <-done:
+				t.Fatalf("new demand reused deleted value: %v", err)
+			default:
+			}
+			publishString(t, c, "a", "recreated")
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		},
+	)
 }
 
 func TestReconnectGracePreservesPendingWaiters(t *testing.T) {

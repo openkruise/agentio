@@ -137,7 +137,12 @@ func (s *Store) Apply(changes []model.ResourceChange) (Publication, error) {
 
 // Check only deleted resources and withdrawn references. The immutable reverse
 // index supplies liveness; no per-client graph or full pending-resource scan is needed.
-func (s *Store) retainReferencedResources(next model.ResourceSet, changes []model.ResourceChange) (model.ResourceSet, []model.ResourceChange, error) {
+//
+//nolint:gocyclo,funlen // Keep dependency restoration and cascading deletion in one publication.
+func (s *Store) retainReferencedResources(
+	next model.ResourceSet,
+	changes []model.ResourceChange,
+) (model.ResourceSet, []model.ResourceChange, error) {
 	var candidates map[model.ResourceKey]bool
 	consider := func(key model.ResourceKey, deleted bool) {
 		if candidates == nil {

@@ -64,8 +64,9 @@ func TestAgentioConfigStartsFromDefaults(t *testing.T) {
 
 func TestAgentioConfigTrustedEPEIdentities(t *testing.T) {
 	for _, tc := range []struct {
-		name, yaml string
-		invalid    bool
+		name    string
+		yaml    string
+		invalid bool
 	}{
 		{"omitted", "{}", false},
 		{"empty", "trustedEPEIdentities: []", false},

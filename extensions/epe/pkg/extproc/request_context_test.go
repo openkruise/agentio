@@ -62,7 +62,9 @@ func TestRequestContextPinsPoliciesAndProfileInputs(t *testing.T) {
 		}
 		value := in["routing"].(map[string]string)["target"]
 		seen = append(seen, phase+"/"+scope.Profile().Name+"/"+value)
-		if len(st.Policies.FilterRules) != 2 || st.Policies.DestinationAuthorizer == nil || st.Caller.Subject.Workload.Labels["version"] != scope.Pod().Labels["version"] || st.Request.Host != scope.Request().Host {
+		if len(st.Policies.FilterRules) != 2 || st.Policies.DestinationAuthorizer == nil ||
+			st.Caller.Subject.Workload.Labels["version"] != scope.Pod().Labels["version"] ||
+			st.Request.Host != scope.Request().Host {
 			t.Fatalf("filter received inconsistent context: %+v", st.RequestContext)
 		}
 	}
@@ -83,8 +85,16 @@ func TestRequestContextPinsPoliciesAndProfileInputs(t *testing.T) {
 			store.ProfileSet(&agents.SecurityProfile{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
 				Spec: agents.SecurityProfileSpec{
-					Inputs: []agents.SecurityProfileInput{{Name: "routing", Inline: map[string]string{"target": name + "-" + version}}},
-					Rules:  []agents.SecurityRule{{Name: "probe", Match: []agents.RuleMatch{{Domains: []string{"*"}}}, Actions: agents.SecurityRuleActions{Block: &agents.BlockAction{StatusCode: 451}}}},
+					Inputs: []agents.SecurityProfileInput{
+						{Name: "routing", Inline: map[string]string{"target": name + "-" + version}},
+					},
+					Rules: []agents.SecurityRule{
+						{
+							Name:    "probe",
+							Match:   []agents.RuleMatch{{Domains: []string{"*"}}},
+							Actions: agents.SecurityRuleActions{Block: &agents.BlockAction{StatusCode: 451}},
+						},
+					},
 				},
 			})
 		}
@@ -113,17 +123,32 @@ func TestRequestContextPinsPoliciesAndProfileInputs(t *testing.T) {
 	install("new")
 	version = "new"
 	native = &egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}
-	if _, err := srv.HandleResponseHeaders(t.Context(), &extproc.HttpHeaders{Headers: &core.HeaderMap{Headers: []*core.HeaderValue{{Key: ":status", Value: "200"}}}, EndOfStream: true}, state); err != nil {
+	if _, err := srv.HandleResponseHeaders(
+		t.Context(),
+		&extproc.HttpHeaders{
+			Headers:     &core.HeaderMap{Headers: []*core.HeaderValue{{Key: ":status", Value: "200"}}},
+			EndOfStream: true,
+		},
+		state,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if state.stream.Policies.DestinationAuthorizer != pinnedNative || state.stream.Caller.Subject.Workload.Labels["version"] != "old" {
+	if state.stream.Policies.DestinationAuthorizer != pinnedNative ||
+		state.stream.Caller.Subject.Workload.Labels["version"] != "old" {
 		t.Fatal("source update replaced in-flight snapshot")
 	}
 	responses, err := srv.HandleRequestHeaders(t.Context(), headers, attrs, newStreamState())
 	if err != nil || responses[0].GetImmediateResponse().GetStatus().GetCode() != 403 {
 		t.Fatalf("new request did not use updated native policy: %v %v", responses, err)
 	}
-	want := []string{"request/a/a-old", "request/b/b-old", "response/a/a-old", "response/b/b-old", "request/a/a-new", "request/b/b-new"}
+	want := []string{
+		"request/a/a-old",
+		"request/b/b-old",
+		"response/a/a-old",
+		"response/b/b-old",
+		"request/a/a-new",
+		"request/b/b-new",
+	}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("scopes mixed across profiles or requests: got %v want %v", seen, want)
 	}
