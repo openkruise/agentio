@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
@@ -71,11 +72,49 @@ func lookup(ctx context.Context, source Resources, subj subject.Subject) (policy
 	if err != nil {
 		return policySnapshot{}, err
 	}
+	for {
+		result, err := lookupPolicies(ctx, source, key)
+		missing, ok := errors.AsType[*store.MissingResource](err)
+		if !ok || missing.Key.Type != store.TrafficPolicy || result.Workload == nil {
+			return result, err
+		}
+		// A request can hold an old Workload across a binding update and policy removal.
+		current, release, readErr := source.Acquire(ctx, key)
+		if release != nil {
+			release()
+		}
+		if readErr != nil {
+			return policySnapshot{}, readErr
+		}
+		if current == nil {
+			return policySnapshot{}, &store.MissingResource{Key: key}
+		}
+		if current.Value == result.Workload {
+			return result, err
+		}
+		oldRefs, oldErr := references(result.Workload)
+		newRefs, newErr := references(current.Value.(*workload.Workload))
+		if oldErr != nil {
+			return policySnapshot{}, oldErr
+		}
+		if newErr != nil {
+			return policySnapshot{}, newErr
+		}
+		if slices.Equal(oldRefs, newRefs) {
+			return result, err
+		}
+	}
+}
+
+func lookupPolicies(ctx context.Context, source Resources, key store.Key) (result policySnapshot, err error) {
 	held := map[store.Key]bool{}
 	var keys []store.Key
 	var currentWorkload *store.Resource
 	var releases []func()
 	defer func() {
+		if err != nil && currentWorkload != nil {
+			result.Workload = currentWorkload.Value.(*workload.Workload)
+		}
 		for _, release := range releases {
 			release()
 		}

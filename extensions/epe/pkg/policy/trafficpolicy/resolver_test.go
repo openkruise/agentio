@@ -570,6 +570,67 @@ func TestLookupAcquisitionFailure(t *testing.T) {
 	}
 }
 
+func TestLookupRefreshesRemovedPolicyBinding(t *testing.T) {
+	for _, hot := range []bool{false, true} {
+		for _, binding := range []string{"empty", "deny", "unchanged", "evicted"} {
+			t.Run(fmt.Sprintf("hot=%v/%s", hot, binding), func(t *testing.T) {
+				f := testStore()
+				policyKey := store.Key{Type: store.TrafficPolicy, Name: "allow"}
+				if !hot {
+					delete(f.resources, policyKey)
+				}
+				a := testAggregate(f)
+				calls := 0
+				source := overrideAcquire{Resources: a, acquire: func(_ context.Context, key store.Key) (*store.Resource, error) {
+					calls++
+					if key == policyKey {
+						delete(f.resources, policyKey)
+						switch binding {
+						case "empty", "evicted":
+							f.bind()
+							if binding == "evicted" {
+								workloadKey := store.Key{Type: store.Workload, Name: "uid"}
+								current := f.resources[workloadKey]
+								delete(f.resources, workloadKey)
+								f.fetch = func(key store.Key) {
+									if key == workloadKey {
+										f.put(key.Type, key.Name, current.Value)
+									}
+								}
+							}
+						case "deny":
+							f.bind("deny")
+							f.put(store.TrafficPolicy, "deny", &sec.TrafficPolicy{Egress: &sec.TrafficPolicy_RuleSet{}})
+						case "unchanged":
+							f.bind("allow")
+						}
+					}
+					return f.Get(key)
+				}}
+				result, err := lookup(t.Context(), source, subject.Subject{Workload: subject.Workload{UID: "uid"}})
+				if binding == "unchanged" {
+					if _, ok := errors.AsType[*store.MissingResource](err); !ok || calls != 1 {
+						t.Fatalf("missing policy did not fail closed: %v calls=%d", err, calls)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (binding == "empty" || binding == "evicted") && len(result.TrafficPolicies) != 0 {
+					t.Fatal("removed binding still used")
+				}
+				if binding == "deny" && (len(result.TrafficPolicies) != 1 || result.TrafficPolicies[0].Name != "deny") {
+					t.Fatal("replacement binding was not resolved")
+				}
+				if a.Snapshot().Query(store.Workload).(*queryIndex).byUID["uid"].workload.Value == result.Workload {
+					t.Fatal("retry used the stale published Workload")
+				}
+			})
+		}
+	}
+}
+
 func TestAuthorizerRecordsUnavailablePolicy(t *testing.T) {
 	source := testStore()
 	source.err = errors.New("xDS unavailable")

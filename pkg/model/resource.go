@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"iter"
 	"slices"
 	"sort"
 	"strings"
@@ -58,6 +59,9 @@ const (
 // matching the resource's type; other resource types leave all four nil.
 // GatewayOwner may be set independently for any gateway-owned resource.
 type ResourceFacts struct {
+	// References declares acyclic dependencies whose bodies must outlive this resource.
+	// Optional indirection keeps reference-free publication entries compact.
+	References *ResourceReferences
 	// SourceIdentity identifies the source of a complete Sandbox publication,
 	// independently of its payload version. Other resource families leave it empty.
 	SourceIdentity SourceIdentity
@@ -73,6 +77,17 @@ type ResourceFacts struct {
 	GatewayOwner string
 	// AgentioEgress distinguishes agentio egress resources from the upgrade-compatible legacy graph.
 	AgentioEgress bool
+}
+
+type ResourceReferences struct {
+	Keys []ResourceKey
+}
+
+func (facts ResourceFacts) referenceKeys() []ResourceKey {
+	if facts.References == nil {
+		return nil
+	}
+	return facts.References.Keys
 }
 
 type WorkloadResourceFacts struct {
@@ -131,6 +146,37 @@ type ResourceKey struct {
 
 func (k ResourceKey) String() string {
 	return k.TypeURL + "/" + k.Name
+}
+
+// ReferencedResources includes the existing Workload selection metadata without
+// allocating a second TrafficPolicy reference list or reverse index.
+func (r Resource) ReferencedResources() iter.Seq[ResourceKey] {
+	return func(yield func(ResourceKey) bool) {
+		if w := r.Facts.Workload; w != nil {
+			for _, name := range w.TrafficPolicyRefs {
+				if !yield(ResourceKey{TypeURL: TrafficPolicyType, Name: name}) {
+					return
+				}
+			}
+		}
+		for _, key := range r.Facts.referenceKeys() {
+			if key.TypeURL == TrafficPolicyType && r.Facts.Workload != nil && slices.Contains(r.Facts.Workload.TrafficPolicyRefs, key.Name) {
+				continue
+			}
+			if !yield(key) {
+				return
+			}
+		}
+	}
+}
+
+func (r Resource) ReferencesResource(key ResourceKey) bool {
+	for reference := range r.ReferencedResources() {
+		if reference == key {
+			return true
+		}
+	}
+	return false
 }
 
 // ResourceChange is the immutable boundary between the KRT resource graph and
@@ -209,6 +255,11 @@ func validateResource(resource Resource) error {
 }
 
 func validateResourceFacts(key ResourceKey, facts ResourceFacts) error {
+	for _, reference := range facts.referenceKeys() {
+		if strings.TrimSpace(reference.TypeURL) == "" || strings.TrimSpace(reference.Name) == "" {
+			return fmt.Errorf("resource %s has an empty reference key", key)
+		}
+	}
 	families := 0
 	if facts.Sandbox != nil {
 		families++
@@ -352,6 +403,9 @@ func cloneResourceFacts(facts ResourceFacts) ResourceFacts {
 		GatewayOwner:   facts.GatewayOwner,
 		AgentioEgress:  facts.AgentioEgress,
 	}
+	if len(facts.referenceKeys()) > 0 {
+		result.References = &ResourceReferences{Keys: slices.Clone(facts.References.Keys)}
+	}
 	if facts.Sandbox != nil {
 		sandbox := *facts.Sandbox
 		result.Sandbox = &sandbox
@@ -376,6 +430,16 @@ func cloneResourceFacts(facts ResourceFacts) ResourceFacts {
 }
 
 func normalizeResourceFacts(facts *ResourceFacts) {
+	if facts.References != nil {
+		keys := facts.References.Keys
+		slices.SortFunc(keys, func(a, b ResourceKey) int {
+			if order := strings.Compare(a.TypeURL, b.TypeURL); order != 0 {
+				return order
+			}
+			return strings.Compare(a.Name, b.Name)
+		})
+		facts.References.Keys = slices.Compact(keys)
+	}
 	if facts.Workload == nil {
 		return
 	}
@@ -396,6 +460,10 @@ func hashResourceFacts(hasher hash.Hash, facts ResourceFacts) {
 		hasher.Write([]byte(tag))
 		hasher.Write([]byte{0})
 		hasher.Write([]byte(value))
+	}
+	for _, reference := range facts.referenceKeys() {
+		write("reference-type", reference.TypeURL)
+		write("reference-name", reference.Name)
 	}
 	if facts.SourceIdentity != (SourceIdentity{}) {
 		write("source-uid", facts.SourceIdentity.UID)
@@ -443,6 +511,7 @@ func hashResourceFacts(hasher hash.Hash, facts ResourceFacts) {
 
 func (facts ResourceFacts) Equal(other ResourceFacts) bool {
 	if facts.SourceIdentity != other.SourceIdentity || facts.GatewayOwner != other.GatewayOwner ||
+		!slices.Equal(facts.referenceKeys(), other.referenceKeys()) ||
 		facts.AgentioEgress != other.AgentioEgress ||
 		(facts.Workload == nil) != (other.Workload == nil) ||
 		(facts.Sandbox == nil) != (other.Sandbox == nil) ||

@@ -34,9 +34,11 @@ type Publication struct {
 
 // Store publishes immutable resource snapshots and notifies interested subscribers.
 type Store struct {
-	mu          sync.RWMutex
-	current     model.ResourceSet
-	subscribers map[uint64]*subscriber
+	mu      sync.RWMutex
+	current model.ResourceSet
+	// Source deletions wait until all published references have been withdrawn.
+	pendingRemovals sets.Set[model.ResourceKey]
+	subscribers     map[uint64]*subscriber
 	// subscribersByType indexes subscribers by watched type.
 	subscribersByType            map[string]map[uint64]*subscriber
 	sandboxSubscribersByWorkload map[string]map[uint64]*subscriber
@@ -66,7 +68,17 @@ func (s *Store) Replace(snapshot model.ResourceSet) Publication {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	before := s.current
+	for key := range s.pendingRemovals {
+		if _, exists := snapshot.Get(key); exists {
+			s.pendingRemovals.Delete(key)
+		}
+	}
 	changes := before.Diff(snapshot)
+	var err error
+	snapshot, changes, err = s.retainReferencedResources(snapshot, changes)
+	if err != nil {
+		panic(err) // Both snapshots contain already validated resources.
+	}
 	if len(changes) == 0 {
 		return Publication{Snapshot: s.current, SubscriberCount: len(s.subscribers)}
 	}
@@ -87,13 +99,20 @@ func (s *Store) Apply(changes []model.ResourceChange) (Publication, error) {
 	}
 	before := s.current
 	next, changed, err := before.Apply(coalesced)
-	if err != nil || !changed {
+	if err != nil || (!changed && len(s.pendingRemovals) == 0) {
+		return Publication{Snapshot: before, SubscriberCount: len(s.subscribers)}, err
+	}
+	next, coalesced, err = s.retainReferencedResources(next, coalesced)
+	if err != nil {
 		return Publication{Snapshot: before, SubscriberCount: len(s.subscribers)}, err
 	}
 	effective := make([]model.ResourceChange, 0, len(coalesced))
 	for _, requested := range coalesced {
 		oldResource, hadOld := before.Get(requested.Key)
 		newResource, hasNew := next.Get(requested.Key)
+		if !hadOld && !hasNew {
+			continue
+		}
 		if hadOld && hasNew && oldResource.Hash == newResource.Hash {
 			continue
 		}
@@ -114,6 +133,118 @@ func (s *Store) Apply(changes []model.ResourceChange) (Publication, error) {
 	s.current = next
 	s.notifyLocked(updateBetween(before, next, effective))
 	return Publication{Changed: true, Snapshot: next, SubscriberCount: len(s.subscribers)}, nil
+}
+
+// Check only deleted resources and withdrawn references. The immutable reverse
+// index supplies liveness; no per-client graph or full pending-resource scan is needed.
+func (s *Store) retainReferencedResources(next model.ResourceSet, changes []model.ResourceChange) (model.ResourceSet, []model.ResourceChange, error) {
+	var candidates map[model.ResourceKey]bool
+	consider := func(key model.ResourceKey, deleted bool) {
+		if candidates == nil {
+			candidates = make(map[model.ResourceKey]bool)
+		}
+		candidates[key] = deleted
+	}
+	for _, change := range changes {
+		if change.New == nil || s.pendingRemovals.Contains(change.Key) {
+			consider(change.Key, change.New == nil)
+		}
+		if len(s.pendingRemovals) == 0 {
+			continue
+		}
+		old, ok := s.current.Get(change.Key)
+		if !ok || (change.New != nil && old.Facts.Equal(change.New.Facts)) {
+			continue
+		}
+		for key := range old.ReferencedResources() {
+			if s.pendingRemovals.Contains(key) && (change.New == nil || !change.New.ReferencesResource(key)) {
+				// A same-batch recreation cancels deferred deletion.
+				if _, seen := candidates[key]; !seen {
+					consider(key, true)
+				}
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return next, changes, nil
+	}
+	var adjustments []model.ResourceChange
+	for key, deleted := range candidates {
+		if !deleted {
+			continue
+		}
+		old, hadOld := s.current.Get(key)
+		_, hasNew := next.Get(key)
+		// Restore dependencies together before testing liveness, including chains
+		// whose intermediate resource is itself waiting for deletion.
+		if hadOld && !hasNew && (s.current.HasReference(key) || next.HasReference(key)) {
+			adjustments = append(adjustments, model.ResourceChange{Key: key, New: &old})
+		}
+	}
+	if len(adjustments) > 0 {
+		var err error
+		next, _, err = next.Apply(adjustments)
+		if err != nil {
+			return model.ResourceSet{}, nil, err
+		}
+	}
+	pending := func(key model.ResourceKey) bool {
+		if retained, known := candidates[key]; known {
+			return retained
+		}
+		return s.pendingRemovals.Contains(key)
+	}
+	for checks := candidates; len(checks) > 0; {
+		var further map[model.ResourceKey]bool
+		var removals []model.ResourceChange
+		for key := range checks {
+			if !pending(key) {
+				continue
+			}
+			old, exists := next.Get(key)
+			if !exists {
+				candidates[key] = false
+				continue
+			}
+			candidates[key] = next.HasReference(key)
+			if candidates[key] {
+				continue
+			}
+			removals = append(removals, model.ResourceChange{Key: key, Old: &old})
+			for reference := range old.ReferencedResources() {
+				if pending(reference) {
+					if further == nil {
+						further = make(map[model.ResourceKey]bool)
+					}
+					further[reference] = true
+				}
+			}
+		}
+		if len(removals) == 0 {
+			break
+		}
+		var err error
+		next, _, err = next.Apply(removals)
+		if err != nil {
+			return model.ResourceSet{}, nil, err
+		}
+		adjustments = append(adjustments, removals...)
+		checks = further
+	}
+	if len(adjustments) > 0 {
+		changes = coalesceChanges(append(changes, adjustments...))
+	}
+	for key, retain := range candidates {
+		if retain {
+			if s.pendingRemovals == nil {
+				s.pendingRemovals = sets.New[model.ResourceKey]()
+			}
+			s.pendingRemovals.Insert(key)
+		} else {
+			s.pendingRemovals.Delete(key)
+		}
+	}
+	return next, changes, nil
 }
 
 // Notify wakes subscribers when a dynamic resource outside the immutable

@@ -783,6 +783,64 @@ async fn connect_authority_and_udp_protocol_reach_the_evaluator() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn removed_policy_refreshes_binding_and_identity() {
+    for replacement in ["empty", "allow", "deny", "different-identity", "unchanged"] {
+        let p = processor();
+        let c = &p.client;
+        seed(
+            c,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            workload(Some(&["old"])),
+        );
+        let mut pending = Box::pin(p.handle(request("", false)));
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        let refs: &[&str] = match replacement {
+            "empty" | "different-identity" => &[],
+            "unchanged" => &["old"],
+            _ => &["new"],
+        };
+        let mut current = workload(Some(refs));
+        if replacement == "different-identity" {
+            let mut w = Workload::decode(current.value.as_slice()).unwrap();
+            w.service_account = "other".into();
+            current = any(view::WORKLOAD, w);
+        }
+        seed(c, ResourceKind::Workload, "/10.0.0.1", current);
+        c.apply(
+            ResourceKind::TrafficPolicy,
+            &Response {
+                type_url: view::TRAFFIC_POLICY.into(),
+                removed_resources: vec!["old".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if matches!(replacement, "allow" | "deny") {
+            assert!(futures_util::poll!(&mut pending).is_pending());
+            seed(
+                c,
+                ResourceKind::TrafficPolicy,
+                "new",
+                any(
+                    view::TRAFFIC_POLICY,
+                    policy(if replacement == "allow" {
+                        proto::Action::Allow
+                    } else {
+                        proto::Action::Deny
+                    }),
+                ),
+            );
+        }
+        assert_eq!(
+            allowed(pending.await.unwrap()),
+            matches!(replacement, "empty" | "allow"),
+            "{replacement}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn policy_not_found_timeout_update_and_reconnect() {
     let p = processor();
     let c = &p.client;

@@ -74,10 +74,18 @@ const (
 	resourceFactGatewayOwner
 	resourceFactAuthorizationGlobal
 	resourceFactAuthorizationNamespace
+	resourceFactReference
 )
 
 func resourceFactIndexKey(kind resourceFactKind, key string) string {
 	return string([]byte{byte(kind)}) + "\x00" + key
+}
+
+func resourceReferenceIndexKey(key ResourceKey) string {
+	if key.TypeURL == TrafficPolicyType {
+		return resourceFactIndexKey(resourceFactTrafficPolicyReference, key.Name)
+	}
+	return resourceFactIndexKey(resourceFactReference, key.TypeURL+"\x00"+key.Name)
 }
 
 func resourceFactKeys(resource Resource) []string {
@@ -111,6 +119,12 @@ func resourceFactKeys(resource Resource) []string {
 		for _, key := range workload.TrafficPolicyRefs {
 			add(resourceFactTrafficPolicyReference, key)
 		}
+	}
+	for _, key := range resource.Facts.referenceKeys() {
+		if key.TypeURL == TrafficPolicyType && resource.Facts.Workload != nil && slices.Contains(resource.Facts.Workload.TrafficPolicyRefs, key.Name) {
+			continue
+		}
+		result = append(result, resourceReferenceIndexKey(key))
 	}
 	if sandbox := resource.Facts.Sandbox; sandbox != nil {
 		add(resourceFactAttesterWorkloadUID, sandbox.AttesterWorkloadUID)

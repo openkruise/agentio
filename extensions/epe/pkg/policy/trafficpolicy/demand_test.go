@@ -242,6 +242,20 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	if aggregate.Snapshot() != beforeDemand {
 		t.Fatal("cold dependency resolution rebuilt the global index")
 	}
+	// Source deletion can precede binding recomputation. Even a cold demand
+	// (capacity one evicts the policy when acquiring the Workload) must still work.
+	if _, err := publications.Apply([]model.ResourceChange{{Key: requestedPolicy.Key, Old: &requestedPolicy}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := publications.Snapshot().Get(requestedPolicy.Key); !exists {
+		t.Fatal("policy body disappeared before its Workload binding")
+	}
+	for range 10 {
+		checkAction(egressauthz.Allow)
+	}
+	if _, err := publications.Apply([]model.ResourceChange{{Key: requestedPolicy.Key, New: &requestedPolicy}}); err != nil {
+		t.Fatal(err)
+	}
 	if capacity == 1 {
 		// A Workload plus its policy exceed the target; both remain pinned
 		// until the compiled view has been read, including concurrent readers.
