@@ -67,6 +67,11 @@ This is a rendered-manifest installation, not a Helm release. Keep `control-plan
 
 ## Connect the waypoint to Istiod
 
+Before applying `manifests/examples/istio-ambient/waypoint.yaml`, check its parameters ConfigMap:
+
+- The CA endpoint defaults to `istiod.istio-system.svc:15012`. For a revisioned installation, update `CA_ADDR` and `AGENTIO_CA_SERVER_NAME`. The TLS server name must match the Istiod serving certificate.
+- The projected CA token audience defaults to `istio-ca`. Adjust it if your Istio installation accepts another audience.
+
 Copy the public Istio CA bundle into the Agentio namespace. Adjust the source ConfigMap name if your distribution publishes the mesh trust bundle elsewhere:
 
 ```sh
@@ -88,7 +93,7 @@ kubectl wait gateways.gateway.networking.k8s.io/agentio-egress \
 kubectl rollout status deployment/agentio-egress -n agentio-istio-system --timeout=5m
 ```
 
-The manifest defaults to `istiod.istio-system.svc:15012`. For a revisioned installation, edit `CA_ADDR` and `AGENTIO_CA_SERVER_NAME` in the parameters ConfigMap before applying it. The TLS server name must match the Istiod serving certificate. Keep the copied CA bundle synchronized with Istio's trust bundle when roots rotate.
+Keep the copied CA bundle synchronized with Istio's trust bundle when roots rotate.
 
 The gateway uses separate CA and configuration credentials:
 
@@ -100,11 +105,13 @@ The gateway uses separate CA and configuration credentials:
 | `AGENTIO_ROOT_CA` | Istio mesh roots for verifying incoming HBONE peers |
 | `AGENTIO_XDS_ROOT_CA` | Agentiod roots for gateway ADS; the existing `agentio-ca` audience token remains unchanged |
 
-Adjust the projected CA token audience if your Istio installation uses another value. With the default trust domain, Istiod issues the gateway identity `spiffe://cluster.local/ns/agentio-istio-system/sa/agentio-egress`.
+With the default trust domain, Istiod issues the gateway identity `spiffe://cluster.local/ns/agentio-istio-system/sa/agentio-egress`.
 
 The Gateway publishes a Service hostname using `networking.istio.io/address-type: Hostname` and permits waypoint attachment from `agentio-istio-demo` through `allowedRoutes`.
 
 ## Deploy the application and bind its Service
+
+The client namespace has `istio.io/dataplane-mode: ambient`. If your Istio revision requires an `istio.io/rev` namespace label, set it on `agentio-istio-demo` before creating the application Pods below. The origin Pod opts out of capture, so it acts as an ordinary HTTP server behind the gateway. All example Pods disable sidecar injection.
 
 ```sh
 kubectl apply -f manifests/examples/istio-ambient/workloads.yaml
@@ -112,8 +119,6 @@ kubectl rollout status deployment/curl -n agentio-istio-demo --timeout=3m
 kubectl rollout status deployment/origin -n agentio-istio-demo --timeout=3m
 kubectl apply -f manifests/examples/istio-ambient/service.yaml
 ```
-
-The client namespace has `istio.io/dataplane-mode: ambient`. The origin Pod opts out of capture, so it acts as an ordinary HTTP server behind the gateway. All example Pods disable sidecar injection. If your Istio revision requires an `istio.io/rev` namespace label, set it before creating the application Pods.
 
 The origin Service selects the Agentio gateway through these labels:
 
@@ -193,4 +198,4 @@ Leave shared Agentio and Gateway API CRDs installed.
 
 - [Customize Gateway resources](../tasks/customize-gateway-resources.md)
 - [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md)
-- [Get started with EPE](../getting-started/epe.md)
+- [Get started with EPE](../getting-started/epe.md) for Agentio Helm installations; its deployment commands do not apply to this rendered-manifest setup
