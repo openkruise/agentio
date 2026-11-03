@@ -13,13 +13,13 @@ FROM rust:1.93.0-bookworm AS sni-builder
 RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY extensions/envoy/sni-policy/ ./
-RUN rustup component add rustfmt && bash build.sh
+RUN bash build.sh --build-only
 
 FROM sni-builder AS network-limits-builder
 WORKDIR /network-limits
 COPY --from=sni-builder /src/.envoy-sdk/ ./.envoy-sdk/
 COPY extensions/envoy/network-limits/ ./
-RUN bash build.sh
+RUN bash build.sh --build-only
 
 FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
 WORKDIR /src
