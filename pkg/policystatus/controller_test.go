@@ -161,9 +161,13 @@ func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
 		t.Run(s.Kind, func(t *testing.T) {
 			c, _ := testController(t, false)
 			sources := krt.NewMutableCollection(nil, []source{s}, krt.WithStop(t.Context().Done()))
-			profiles := krt.NewCollection(sources.AsCollection(), func(_ krt.HandlerContext, s source) *compiledProfile {
-				return c.compileProfile(s)
-			}, krt.WithStop(t.Context().Done()))
+			profiles := krt.NewCollection(
+				sources.AsCollection(),
+				func(_ krt.HandlerContext, s source) *compiledProfile {
+					return c.compileProfile(s)
+				},
+				krt.WithStop(t.Context().Done()),
+			)
 			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
 			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
 
