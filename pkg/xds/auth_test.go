@@ -107,6 +107,16 @@ func TestStandaloneSNIPolicyTypeIsUnknown(t *testing.T) {
 	}
 }
 
+func TestEPETypeAccess(t *testing.T) {
+	for _, typ := range []string{model.WorkloadType, model.TrafficPolicyType, model.AddressType, model.SandboxType, model.SecretType, model.ClusterType, model.ListenerType} {
+		known, allowed := typeAccess(model.ClientEPE, typ)
+		want := typ == model.WorkloadType || typ == model.TrafficPolicyType
+		if !known || allowed != want {
+			t.Fatalf("EPE access to %s: known=%v allowed=%v", typ, known, allowed)
+		}
+	}
+}
+
 func TestWorkloadTypeIsGatewayOnly(t *testing.T) {
 	for _, class := range []model.ClientClass{
 		model.ClientSharedZTunnel,

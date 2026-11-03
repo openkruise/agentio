@@ -179,6 +179,12 @@ func (c *Client) Observe(types ...string) (<-chan struct{}, bool) {
 
 // Snapshot copies the publication maps; resource values are shared and read-only.
 func (c *Client) Snapshot() Snapshot {
+	return c.SnapshotFor(nil)
+}
+
+// SnapshotFor captures only the named resources under one lock. A nil selection
+// captures all resources; an empty selection captures only synchronization state.
+func (c *Client) SnapshotFor(names map[string][]string) Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Snapshot{
@@ -189,7 +195,17 @@ func (c *Client) Snapshot() Snapshot {
 	}
 	for typ, st := range c.types {
 		s.Synced[typ] = st.synced
-		s.Resources[typ] = maps.Clone(st.resources)
+		if names == nil {
+			s.Resources[typ] = maps.Clone(st.resources)
+			continue
+		}
+		values := make(map[string]*Resource, len(names[typ]))
+		for _, name := range names[typ] {
+			if resource := st.resources[name]; resource != nil {
+				values[name] = resource
+			}
+		}
+		s.Resources[typ] = values
 	}
 	return s
 }

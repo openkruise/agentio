@@ -125,7 +125,7 @@ func TestConcurrencyValidationAtBothConfigEntrypoints(t *testing.T) {
 	valid := `connectConcurrencyLimit:
   rateLimits:
   - actions:
-    - filterState: {key: sandbox.id, descriptorKey: sandbox}
+    - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - genericKey: {descriptorKey: class, descriptorValue: default}
   descriptors:
   - entries: [{key: sandbox}, {key: class, value: default}]
@@ -139,7 +139,7 @@ func TestConcurrencyValidationAtBothConfigEntrypoints(t *testing.T) {
 		{"valid", valid, true},
 		{"zero rate", strings.Replace(valid, "maxConcurrentStreams: 100", "maxConcurrentStreams: 0", 1), false},
 		{"missing rate", strings.Replace(valid, "maxConcurrentStreams: 100", "", 1), false},
-		{"empty source", strings.Replace(valid, "key: sandbox.id", `key: ""`, 1), false},
+		{"empty source", strings.Replace(valid, "key: agentio.sandbox.uid", `key: ""`, 1), false},
 		{"wrong order", strings.Replace(valid, "[{key: sandbox}, {key: class, value: default}]", "[{key: class, value: default}, {key: sandbox}]", 1), false},
 		{"two sources", strings.Replace(valid, "    - genericKey:", "      genericKey:", 1), false},
 		{"zero capacity", valid + "  maxDynamicBuckets: 0\n", false},

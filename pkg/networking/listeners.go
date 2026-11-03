@@ -615,9 +615,9 @@ func (b *resourceBuilder) extProcFilter(
 		statPrefix = name
 	}
 	attributes := append([]string(nil), provider.GetRequest().GetAttributes()...)
-	for _, attribute := range []string{model.AttributeWorkloadName, model.AttributeWorkloadNamespace, model.AttributeWorkloadLabels, "filter_state['sandbox.labels']", "source.address", "destination.address", "destination.port"} {
+	for _, attribute := range []string{model.AttributeWorkloadName, model.AttributeWorkloadNamespace, model.AttributeWorkloadUID, "filter_state['sandbox.labels']", "source.address", "destination.address", "destination.port"} {
 		if b.legacyGateway &&
-			(attribute == model.AttributeWorkloadLabels || attribute == "filter_state['sandbox.labels']") {
+			(attribute == model.AttributeWorkloadUID || attribute == "filter_state['sandbox.labels']") {
 			continue
 		}
 		found := false
@@ -669,7 +669,7 @@ func (b *resourceBuilder) connectExtProcFilter() *hcmv3.HttpFilter {
 			ResponseTrailerMode: extprocv3.ProcessingMode_SKIP,
 		},
 		RequestAttributes: []string{
-			model.AttributeSandboxID,
+			model.AttributeSandboxUID,
 			model.AttributePeerIP,
 			model.AttributePeerPrincipal,
 			model.AttributePeerCertificate,
@@ -692,6 +692,7 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 	}{
 		{"name", model.FilterStateWorkloadName},
 		{"namespace", model.FilterStateWorkloadNamespace},
+		{"uid", model.FilterStateWorkloadUID},
 	} {
 		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
 			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},
@@ -710,10 +711,7 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 		metadata string
 		factory  string
 	}{
-		// Concurrent CONNECTs can share a pool while carrying different label snapshots.
-		{model.FilterStateWorkloadLabels, "workload_labels", "envoy.hashable_string"},
-		// Keep the old output while older EPE instances are still deployed.
-		{"sandbox.labels", "workload_labels", "envoy.string"},
+		{"agentio.workload.instance", "workload_instance", "envoy.hashable_string"},
 	} {
 		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
 			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},
@@ -892,8 +890,8 @@ func buildConnectAuthorityFilter(factory, peerPrincipal, localPrincipal string, 
 			setstatecommonv3.FilterStateValue_TRANSITIVE,
 		),
 		value(
-			model.FilterStateSandboxID,
-			"%REQ(X-AGENTIO-SANDBOX-ID)%",
+			model.FilterStateSandboxUID,
+			"%REQ(X-AGENTIO-SANDBOX-UID)%",
 			"envoy.string",
 			setstatecommonv3.FilterStateValue_TRANSITIVE,
 		),
@@ -919,7 +917,7 @@ func buildConnectAuthorityFilter(factory, peerPrincipal, localPrincipal string, 
 			switch state.GetObjectKey() {
 			case "sandbox.labels", model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace:
 				continue
-			case model.FilterStateSandboxID, "sandbox.token":
+			case model.FilterStateSandboxUID, "sandbox.token":
 				// Share identity only across internal hops, not with the external pool.
 				state.FactoryKey = factory
 				state.SharedWithUpstream = setstatecommonv3.FilterStateValue_ONCE
@@ -980,18 +978,14 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 	if factory == "envoy.hashable_string" {
 		// TLS termination adds one internal hop; stop sharing again at main_forward.
 		for _, key := range []string{
-			model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
+			model.FilterStateSandboxUID, "sandbox.token", "agentio.sandbox.metadata",
 			model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
-			model.FilterStateWorkloadLabels, "sandbox.labels",
+			model.FilterStateWorkloadUID,
 		} {
-			stateFactory := factory
-			if key == "sandbox.labels" {
-				stateFactory = "envoy.string"
-			}
 			downstreamRelayKeys = append(downstreamRelayKeys, struct {
 				key     string
 				factory string
-			}{key: key, factory: stateFactory})
+			}{key: key, factory: factory})
 		}
 	}
 	values := make([]*setstatecommonv3.FilterStateValue, 0, len(downstreamRelayKeys))
@@ -1003,7 +997,7 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 				FormatString: formatString(fmt.Sprintf("%%FILTER_STATE(%s:PLAIN)%%", relay.key)),
 			},
 			SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
-			SkipIfEmpty:        relay.key != model.FilterStateSandboxID && relay.key != "sandbox.token",
+			SkipIfEmpty:        relay.key != model.FilterStateSandboxUID && relay.key != "sandbox.token",
 		})
 	}
 	name := "connect_downstream_peer"

@@ -112,6 +112,23 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from sandbox workload metadata to reduce xDS size. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
+| `trustedEPEIdentities` | `string[]` | Empty; Helm adds the managed EPE identity | Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy discovery. Empty disables EPE access. |
+
+## Trusted EPE identities
+
+Register every EPE discovery client in the effective AgentioConfig. EPE always requires WDS access to resolve Workload SecurityProfile references, including when TrafficPolicy authorization is disabled:
+
+```yaml
+trustedEPEIdentities:
+  - spiffe://cluster.local/ns/agentio-system/sa/agentio-epe
+  - spiffe://cluster.local/ns/custom-system/sa/custom-ext-proc
+```
+
+The trust domain must match the client's verified workload principal. Agentiod validates a Pod-bound ServiceAccount token through TokenReview and checks its active Pod binding before matching the workload principal exactly against this list. The client must also use the `epe` node type. Node metadata cannot declare a trusted identity, and wildcards are not supported. Authorized EPE clients can discover Workloads and TrafficPolicies, not gateway configuration or secrets.
+
+Helm adds the managed EPE's identity using `global.trustDomain`, the release namespace, and `epe.serviceAccount.name`. For external EPE deployments, configure `agentiod.config.values.trustedEPEIdentities` explicitly. A supplied list replaces the generated list, so include every EPE identity that should retain access. Set `trustedEPEIdentities: []` to disable access.
+
+Updates apply to newly established discovery streams without restarting Agentiod. Removing an identity does not immediately terminate an existing stream; it is checked again when the client reconnects. This setting governs access to Agentiod, independently of the gateway-to-ext_proc TLS settings.
 
 ## Egress policies
 
@@ -274,7 +291,7 @@ other gateway entries and settings when updating the `egressGateways` list.
 
 ### Gateway protocol names
 
-Native `agentio-egress` gateways capture TLS termination SNI in `agentio.tls.outer_sni`, log policy denials from `agentio.egress.denial_reason`, and store CONNECT authority in `agentio.connect.authority`. Native CONNECT filter instances use the `agentio.` prefix. Workload, peer, route, and SNI-policy fields retain their existing `agentio.*` names. Sandbox context retains `sandbox.id` and `sandbox.token`; the gateway writes resolved workload labels to both `agentio.workload.labels` and `sandbox.labels` and exports both to EPE. Configured ext_proc attribute names are passed through unchanged. Additional ext_proc filters, clusters, and statistics retain `agentio.additional-ext-proc.<name>`.
+Native `agentio-egress` gateways capture TLS termination SNI in `agentio.tls.outer_sni`, log policy denials from `agentio.egress.denial_reason`, and store CONNECT authority in `agentio.connect.authority`. Native CONNECT filter instances use the `agentio.` prefix. Workload, peer, route, and SNI-policy fields retain their existing `agentio.*` names. Sandbox context retains `agentio.sandbox.uid` and `sandbox.token`; native gateways pass the verified Workload UID in `agentio.workload.uid`, along with its name and namespace. Porter does not pass labels. EPE obtains metadata and SecurityProfile references from WDS. Legacy gateways retain `sandbox.labels` from `X-AGENTIO-SANDBOX-LABELS`, but production WDS resolution replaces those labels. Configured ext_proc attribute names are passed through unchanged. Additional ext_proc filters, clusters, and statistics retain `agentio.additional-ext-proc.<name>`.
 
 Legacy waypoint gateways retain their existing keys, filter names, and default log expressions, including `io.kruise.outer_sni`, `io.kruise.egress_denial_reason`, and `io.istio.connect_authority`. Custom CEL expressions, log formats, and filter-name patches must use the names for the target gateway. Envoy built-in keys, HTTP headers, Kubernetes API domains, and protobuf type URLs retain their protocol names.
 
@@ -428,7 +445,7 @@ Use the same `rateLimits[].actions[]` and `descriptors[].entries[]` grouping for
 connectRateLimit:
   rateLimits:
     - actions:
-        - filterState: {key: sandbox.id, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -438,7 +455,7 @@ connectRateLimit:
       tokenBucket: {maxTokens: 100, tokensPerFill: 20, fillInterval: 1s}
 ```
 
-Only the configuration grouping is shared: CONNECT rate limiting still uses Envoy's native local rate limit filter, including its matching and bucket lifecycle. Filter-state actions compile to native CEL descriptor expressions; evaluation errors retain the native skip behavior rather than the dynamic modules' missing-identity 403. Supply identity in a preceding trusted filter. Legacy `entries[].cel` configurations remain accepted when `rateLimits` is omitted; combining the two forms is rejected. To migrate a string lookup such as `cel: 'filter_state["sandbox.id"]'`, move its source into a `filterState` action and leave just `key`/`value` in the descriptor entry.
+Only the configuration grouping is shared: CONNECT rate limiting still uses Envoy's native local rate limit filter, including its matching and bucket lifecycle. Filter-state actions compile to native CEL descriptor expressions; evaluation errors retain the native skip behavior rather than the dynamic modules' missing-identity 403. Supply identity in a preceding trusted filter. Legacy `entries[].cel` configurations remain accepted when `rateLimits` is omitted; combining the two forms is rejected. To migrate a string lookup such as `cel: 'filter_state["agentio.sandbox.uid"]'`, move its source into a `filterState` action and leave just `key`/`value` in the descriptor entry.
 
 Burst is already supported through `maxTokens`: for example, `maxTokens: 100`, `tokensPerFill: 10`, `fillInterval: 1s` permits an initial burst of 100 attempts and replenishes 10 tokens per second. No separate burst field is needed. Keep `perDownstreamConnection: false` for a shared gateway budget.
 
@@ -464,7 +481,7 @@ Burst is already supported through `maxTokens`: for example, `maxTokens: 100`, `
 connectConcurrencyLimit:
   rateLimits:
     - actions:
-        - filterState: {key: sandbox.id, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -509,7 +526,7 @@ egressGateways:
       rateLimits:
         - actions:
             - filterState:
-                key: sandbox.id
+                key: agentio.sandbox.uid
                 descriptorKey: sandbox
       descriptors:
         - entries:

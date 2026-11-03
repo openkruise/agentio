@@ -164,7 +164,7 @@ func (s *Server) handleRequest(
 		return nil
 	}
 	if !initial && !watch.wildcard &&
-		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress) {
+		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress || scope.Class == model.ClientEPE) {
 		snapshot := s.resources.Snapshot()
 		if view, ok := demandReconciliationView(snapshot, typeURL, scope, watch,
 			request.GetResourceNamesSubscribe(), request.GetResourceNamesUnsubscribe()); ok {

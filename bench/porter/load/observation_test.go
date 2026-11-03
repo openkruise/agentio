@@ -35,7 +35,7 @@ func TestObservedRevision(t *testing.T) {
 	}
 	_, err = observedWorkload(
 		anyOf(
-			&workload.Address{Type: &workload.Address_Workload{Workload: &workload.Workload{Name: "workload-23456"}}},
+			&workload.Address{Type: &workload.Address_Workload{Workload: &workload.Workload{Uid: uid(23456), Name: "workload-23456-r7"}}},
 		),
 	)
 	if err == nil {

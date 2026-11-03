@@ -105,6 +105,14 @@ func (s *Server) HandleRequestHeaders(
 
 	// Resolve identity-dependent profiles only when a source identity is known.
 	// Empty resolution still passes through the independent authorizer below.
+	if caller.Subject.Workload.HasIdentity() && s.resolveWorkload != nil {
+		resolved, err := s.resolveWorkload(ctx, caller.Subject.Workload)
+		if err != nil {
+			return policyUnavailableDeny, err
+		}
+		caller.Subject.Workload = resolved
+		st.Caller = caller
+	}
 	var res engine.Resolution
 	if caller.Subject.HasIdentity() {
 		res, err = s.resolve(ctx, caller.Subject, &req)

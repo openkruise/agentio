@@ -31,7 +31,7 @@ func concurrencyConfig(t *testing.T, l object, combined bool) {
 		"budget_name":         "concurrency-test",
 		"max_dynamic_buckets": 8,
 		"rate_limits": []any{
-			object{"actions": []any{object{"filter_state": object{"key": "sandbox.id", "descriptor_key": "sandbox"}}}},
+			object{"actions": []any{object{"filter_state": object{"key": "agentio.sandbox.uid", "descriptor_key": "sandbox"}}}},
 			object{
 				"actions": []any{
 					object{"generic_key": object{"descriptor_key": "scope", "descriptor_value": "gateway"}},

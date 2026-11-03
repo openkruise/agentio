@@ -44,7 +44,7 @@ func observedWorkload(value *anypb.Any) (any, error) {
 		return nil, err
 	}
 	w := address.GetWorkload()
-	index, err := strconv.Atoi(strings.TrimPrefix(w.GetName(), "workload-"))
+	index, err := strconv.Atoi(strings.TrimPrefix(w.GetUid(), "Kubernetes//Pod/perf/workload-"))
 	if err != nil {
 		return nil, err
 	}

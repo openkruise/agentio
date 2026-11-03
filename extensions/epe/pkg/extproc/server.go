@@ -30,6 +30,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
+	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
 // Server implements the Envoy external processing server.
@@ -38,6 +39,7 @@ type Server struct {
 	authorizeRequest engine.RequestAuthorizer
 	pluginBudget     time.Duration
 	resolve          engine.Resolver
+	resolveWorkload  subject.WorkloadResolver
 	eng              *engine.Engine
 	loggers          []filter.StreamLogger
 	// failClosedOnMissingIdentity denies requests when the source workload or Sandbox
@@ -49,7 +51,8 @@ type Server struct {
 // ServerDeps holds the dependencies needed by the ext-proc server.
 type ServerDeps struct {
 	// Resolve maps request identity to applicable units. Required.
-	Resolve engine.Resolver
+	Resolve         engine.Resolver
+	ResolveWorkload subject.WorkloadResolver
 	// AuthorizeRequest optionally authorizes the final request target outside the rule chain.
 	AuthorizeRequest engine.RequestAuthorizer
 	// Registrations is the action order applied inside every rule.
@@ -78,6 +81,7 @@ func NewServer(deps ServerDeps) *Server {
 	loggers = append(loggers, deps.StreamLoggers...)
 	return &Server{
 		resolve:                     deps.Resolve,
+		resolveWorkload:             deps.ResolveWorkload,
 		authorizeRequest:            deps.AuthorizeRequest,
 		pluginBudget:                deps.PluginBudget,
 		eng:                         engine.NewEngine(deps.Registrations, deps.PluginBudget),

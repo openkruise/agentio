@@ -456,6 +456,8 @@ func TestManagedEPE(t *testing.T) {
 		"- -grpc-port=9002",
 		"- -grpc-health-port=9003",
 		"- -metrics-port=9090",
+		"--xds-cache-idle-ttl=10m",
+		"--xds-cache-max-entries=10000",
 		"- -audit-webhook-insecure-skip-verify=false",
 		"livenessProbe:",
 		"readinessProbe:",
@@ -473,6 +475,42 @@ func TestManagedEPECanExplicitlySkipAuditWebhookTLSVerification(t *testing.T) {
 	)
 	requireContains(t, manifest, "- -audit-webhook-insecure-skip-verify=true")
 	requireNotContains(t, manifest, "- -audit-webhook-insecure-skip-verify=false")
+}
+
+func TestTrustedEPEIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name, values string
+		want         []string
+	}{
+		{"managed", "epe.mode=managed", []string{"spiffe://cluster.local/ns/agentio-system/sa/agentio-epe"}},
+		{"custom identity", "epe.mode=managed,global.trustDomain=example.org,epe.serviceAccount.name=processor", []string{"spiffe://example.org/ns/agentio-system/sa/processor"}},
+		{"disabled", "epe.mode=disabled", nil},
+		{"external", "epe.mode=external,epe.external.address=epe.example.org", nil},
+		{"override", "epe.mode=managed,agentiod.config.values.trustedEPEIdentities={spiffe://example.org/ns/custom/sa/processor}", []string{"spiffe://example.org/ns/custom/sa/processor"}},
+		{"clear", "epe.mode=managed,agentiod.config.values.trustedEPEIdentities=[]", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"--set", tc.values, "--show-only", "templates/agentiod/configmaps.yaml"}
+			// --set-json preserves an explicit empty list instead of a string.
+			if tc.name == "clear" {
+				args = []string{"--set", "epe.mode=managed", "--set-json", "agentiod.config.values.trustedEPEIdentities=[]", "--show-only", "templates/agentiod/configmaps.yaml"}
+			}
+			manifest := renderAgentio(t, args...)
+			var cm corev1.ConfigMap
+			if err := yaml.Unmarshal([]byte(strings.Split(manifest, "\n---")[0]), &cm); err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				TrustedEPEIdentities []string `json:"trustedEPEIdentities"`
+			}
+			if err := yaml.Unmarshal([]byte(cm.Data["config"]), &config); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(config.TrustedEPEIdentities, tc.want) {
+				t.Fatalf("trustedEPEIdentities=%v, want %v", config.TrustedEPEIdentities, tc.want)
+			}
+		})
+	}
 }
 
 func TestImmutableImageDigests(t *testing.T) {
@@ -788,13 +826,15 @@ func TestEPEWorkloadMTLS(t *testing.T) {
 		"secretName: epe-server", "name: epe-client-ca",
 		"mountPath: /custom/tls", "mountPath: /custom/trust",
 	)
-	requireNotContains(t, manifest, "workload-root", "workload-token", "-ca-address")
+	requireNotContains(t, manifest, "-ca-address")
+	requireContains(t, manifest, "workload-root", "workload-token", "--xds-address=agentiod.agentio-system.svc.cluster.local:15012")
 
 	// User-provided mounts also serve outbound provider files with inbound TLS off.
 	plain := renderAgentio(t, "-f", valuesFile, "--set", "epe.tls.enabled=false",
 		"--show-only", "templates/epe/deployment.yaml")
 	requireContains(t, plain, "secretName: epe-server", "mountPath: /custom/trust")
-	requireNotContains(t, plain, "-tls-source=", "-tls-cert-path=", "workload-root", "workload-token")
+	requireNotContains(t, plain, "-tls-source=", "-tls-cert-path=")
+	requireContains(t, plain, "workload-root", "workload-token", "--xds-address=agentiod.agentio-system.svc.cluster.local:15012")
 
 	for _, overrides := range []string{
 		"epe.tls.certificateSource.file.certificateFile=/cert.pem",

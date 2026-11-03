@@ -119,7 +119,7 @@
                             }
                           },
                           {
-                            "object_key": "sandbox.id",
+                            "object_key": "agentio.sandbox.uid",
                             "factory_key": "envoy.hashable_string",
                             "skip_if_empty": true,
                             "format_string": {
@@ -165,7 +165,7 @@
                                     },
                                     {
                                       "filter_state": {
-                                        "key": "sandbox.id",
+                                        "key": "agentio.sandbox.uid",
                                         "descriptor_key": "sandbox"
                                       }
                                     }

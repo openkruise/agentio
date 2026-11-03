@@ -432,7 +432,7 @@ func epePinnedAddress(response *extprocv3.ProcessingResponse) string {
 		GetFields()["upstream"].GetStructValue().GetFields()["address"].GetStringValue()
 }
 
-// The fixture uses the gateway identity for ADS and the EPE roles for Kubernetes watches.
+// The fixture uses the EPE identity for ADS and Kubernetes watches.
 const egressEPEYAML = `
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -444,7 +444,7 @@ roleRef:
   name: agentio-epe-{{ .Namespace }}
 subjects:
 - kind: ServiceAccount
-  name: egress-gateway
+  name: agentio-epe
   namespace: {{ .Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -458,7 +458,7 @@ roleRef:
   name: agentio-epe
 subjects:
 - kind: ServiceAccount
-  name: egress-gateway
+  name: agentio-epe
   namespace: {{ .Namespace }}
 ---
 apiVersion: v1
@@ -476,9 +476,8 @@ metadata:
   labels:
     app: epe-egressauthz
     agentio.kruise.io/dataplane-mode: none
-    gateway.networking.k8s.io/gateway-name: egress-gateway
 spec:
-  serviceAccountName: egress-gateway
+  serviceAccountName: agentio-epe
   containers:
   - name: epe
     image: {{ .Image }}
@@ -488,10 +487,10 @@ spec:
     - --namespace={{ .Namespace }}
     {{- if .EnableXDS }}
     - --enable-xds-egressauthz
+    {{- end }}
     - --xds-address=agentiod.{{ .Namespace }}.svc:15012
     - --xds-root-path=/var/run/xds-root/root-cert.pem
     - --xds-token-path=/var/run/xds-token/token
-    {{- end }}
     env:
     - name: POD_NAME
       valueFrom: {fieldRef: {fieldPath: metadata.name}}

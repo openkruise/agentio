@@ -15,6 +15,7 @@
 package trafficpolicy
 
 import (
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +38,8 @@ type compiledConfig struct {
 	err    error
 }
 type indexedWorkload struct {
+	binding           subject.Workload
+	bindingErr        error
 	workload          *store.Resource
 	workloadResources []store.Resource
 	dependencies      []*store.Resource
@@ -98,11 +101,15 @@ func (b queryBuilder) build(view *store.Snapshot, previous store.Query) store.Qu
 }
 
 func buildWorkload(view *store.Snapshot, resource *store.Resource, previous *indexedWorkload) *indexedWorkload {
-	if previous != nil && previous.err == nil && previous.workload == resource {
-		unchanged := true
+	if previous != nil && previous.workload.Value == resource.Value {
+		unchanged := previous.err == nil
+		if missing, ok := errors.AsType[*store.MissingResource](previous.err); ok {
+			current, err := view.Get(missing.Key)
+			unchanged = err == nil && current == nil
+		}
 		for _, dependency := range previous.dependencies {
 			current, err := view.Get(dependency.Key)
-			if err != nil || current != dependency {
+			if err != nil || current == nil || current.Value != dependency.Value {
 				unchanged = false
 				break
 			}
@@ -113,6 +120,11 @@ func buildWorkload(view *store.Snapshot, resource *store.Resource, previous *ind
 	}
 	w := resource.Value.(*workload.Workload)
 	entry := &indexedWorkload{workload: resource, workloadResources: []store.Resource{*resource}}
+	if previous != nil && previous.workload.Value == resource.Value {
+		entry.binding, entry.bindingErr = previous.binding, previous.bindingErr
+	} else {
+		entry.binding, entry.bindingErr = workloadBinding(w)
+	}
 	refs, err := references(w)
 	if err != nil {
 		entry.err = err

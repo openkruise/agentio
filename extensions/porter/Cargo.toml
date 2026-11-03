@@ -8,7 +8,6 @@ rust-version = "1.93"
 anyhow = "1"
 axum = "0.8"
 async-stream = "0.3"
-base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
 humantime = "2"
@@ -40,6 +39,7 @@ tikv-jemallocator = "0.6"
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+base64 = "0.22"
 tempfile = "3"
 rcgen = "0.14"
 

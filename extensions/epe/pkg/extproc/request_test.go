@@ -38,8 +38,37 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
+func TestWorkloadBindingBeforePolicyResolution(t *testing.T) {
+	for _, lookupError := range []error{nil, context.DeadlineExceeded} {
+		called := false
+		srv := NewServer(ServerDeps{
+			ResolveWorkload: func(_ context.Context, w subject.Workload) (subject.Workload, error) {
+				w.Labels = map[string]string{"app": "wds"}
+				w.SecurityProfileReferences = []string{"global/profile"}
+				return w, lookupError
+			},
+			Resolve: func(_ context.Context, s subject.Subject, _ *httpreq.HTTPRequest) (engine.Resolution, error) {
+				called = true
+				if s.Workload.Labels["app"] != "wds" || len(s.Workload.SecurityProfileReferences) != 1 {
+					t.Fatal("policy did not receive WDS bindings")
+				}
+				return engine.Resolution{}, nil
+			},
+		})
+		state := newStreamState()
+		responses, err := srv.HandleRequestHeaders(t.Context(), makeRequestHeaders("api.example.com", "/", "GET"), makeAttrsWithLabels("ns", "pod", testLabelsB64), state)
+		if lookupError != nil {
+			if called || !errors.Is(err, lookupError) || responses[0].GetImmediateResponse().GetDetails() != "epe_policy_unavailable" {
+				t.Fatalf("lookup failure did not fail closed: called=%v err=%v responses=%v", called, err, responses)
+			}
+		} else if !called || err != nil || state.stream.Caller.Subject.Workload.Labels["app"] != "wds" {
+			t.Fatalf("resolved caller not retained: called=%v err=%v", called, err)
+		}
+	}
+}
+
 func TestUIDOnlyIdentityReachesResolver(t *testing.T) {
-	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxID} {
+	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxUID} {
 		t.Run(attribute, func(t *testing.T) {
 			called := false
 			unavailable := errors.New("binding unavailable")
@@ -209,7 +238,7 @@ func makeAttrsWithLabels(namespace, name, labelsB64 string) map[string]*structpb
 	inner, _ := structpb.NewStruct(map[string]interface{}{
 		attributes.FilterStateDownstreamPeerNamespace: namespace,
 		attributes.FilterStateDownstreamPeerName:      name,
-		attributes.FilterStateWorkloadLabels:          labelsB64,
+		attributes.FilterStateSandboxLabels:           labelsB64,
 	})
 	return map[string]*structpb.Struct{
 		attributes.ExtProcAttrsKey: inner,

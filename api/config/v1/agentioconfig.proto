@@ -50,6 +50,11 @@ message AgentioConfig {
   // Names must be unique DNS labels. Empty lists remove all additional processors.
   repeated ExtProcProvider additional_ext_procs = 5;
 
+  // Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy
+  // discovery. Empty disables EPE access. Clients must authenticate and use
+  // the epe node type; declaring an identity in node metadata is not sufficient.
+  repeated string trusted_epe_identities = 6 [json_name = "trustedEPEIdentities"];
+
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same

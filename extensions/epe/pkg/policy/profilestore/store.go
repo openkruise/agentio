@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // Package profilestore provides an in-memory store for SecurityProfiles.
-// Profile matching uses an immutable label index to select candidates from workload
-// labels extracted from Envoy filter_state, then evaluates each candidate's
-// complete Kubernetes selector at request time.
+// Production requests look up the ordered SecurityProfile references from WDS.
+// An immutable label index supports selector queries for admin and test callers.
 //
 // The store is a materialized view of a krt compiled-profile collection: it
 // uses a copy-on-write strategy with atomic.Pointer for lock-free reads, and
@@ -46,8 +45,8 @@ const (
 )
 
 // Store is a thread-safe in-memory store for SecurityProfiles and
-// GlobalSecurityProfiles. It maintains a simple profile index and performs
-// dynamic label-based matching at request time via ProfilesFor.
+// GlobalSecurityProfiles. It indexes profile references and retains selector
+// matching for admin queries via ProfilesFor.
 //
 // Cluster-scoped GlobalSecurityProfiles are stored under an empty-namespace
 // key and, unlike namespace-scoped SecurityProfiles, match workloads in every
@@ -181,6 +180,7 @@ func (set installedSet) len() int { return len(set.selector) + len(set.sandbox) 
 type profileSnapshot struct {
 	installed     installedSet
 	selectorIndex map[string]profileIndex
+	references    map[string]*securityprofile.Profile
 }
 
 func newEmptySnapshot() *profileSnapshot {
@@ -354,21 +354,30 @@ func (s *store) ResolveProfiles(ctx context.Context, subject subject.Subject) ([
 		return nil, fmt.Errorf("local profile lookup requires workload namespace and name")
 	}
 	if s.sandbox == nil || subject.Workload.Name == "" {
-		return s.ProfilesFor(subject), nil
+		snap := s.snapshot.Load()
+		matched, err := boundProfilesFor(snap, w)
+		if err != nil {
+			return nil, err
+		}
+		return appendSandboxProfile(matched, snap, subject), nil
 	}
 	for {
 		snap := s.snapshot.Load()
+		matched, err := boundProfilesFor(snap, w)
+		if err != nil {
+			return nil, err
+		}
 		source, found, err := s.sandbox(ctx, subject)
 		if err != nil {
 			return nil, fmt.Errorf("look up sandbox for workload %s: %w", w.String(), err)
 		}
 		if !found {
-			return selectorProfilesFor(snap, subject.Workload), nil
+			return matched, nil
 		}
 		if profile := snap.installed.sandbox[source.name]; profile != nil &&
 			profile.Meta.SourceIdentity == source.identity &&
 			(subject.Sandbox == nil || profile.Meta.SandboxUID == subject.Sandbox.UID) {
-			return append(selectorProfilesFor(snap, w), profile), nil
+			return append(matched, profile), nil
 		}
 		if err := s.waitForProfileChange(ctx, source.name, snap); err != nil {
 			return nil, fmt.Errorf("wait for sandbox %s policy: %w", source.name, err)
@@ -378,6 +387,26 @@ func (s *store) ResolveProfiles(ctx context.Context, subject subject.Subject) ([
 
 func profilesFor(snap *profileSnapshot, subject subject.Subject) []*securityprofile.Profile {
 	return appendSandboxProfile(selectorProfilesFor(snap, subject.Workload), snap, subject)
+}
+
+func boundProfilesFor(snap *profileSnapshot, workload subject.Workload) ([]*securityprofile.Profile, error) {
+	if workload.SecurityProfileReferences == nil {
+		return selectorProfilesFor(snap, workload), nil
+	}
+	matched := make([]*securityprofile.Profile, 0, len(workload.SecurityProfileReferences))
+	seen := make(map[string]bool, len(workload.SecurityProfileReferences))
+	for _, name := range workload.SecurityProfileReferences {
+		if name == "" || seen[name] {
+			return nil, fmt.Errorf("invalid SecurityProfile reference %q", name)
+		}
+		seen[name] = true
+		profile := snap.references[name]
+		if profile == nil {
+			return nil, fmt.Errorf("referenced SecurityProfile %q is unavailable", name)
+		}
+		matched = append(matched, profile)
+	}
+	return matched, nil
 }
 
 func selectorProfilesFor(snap *profileSnapshot, workload subject.Workload) []*securityprofile.Profile {
@@ -425,7 +454,7 @@ func appendSandboxProfile(
 // snapshot is made of: a field added there must be handled here too, and a
 // compiler error is easier to notice than a silently zero field.
 func reuseSnapshot(old *profileSnapshot, installed installedSet) *profileSnapshot {
-	return &profileSnapshot{installed: installed, selectorIndex: old.selectorIndex}
+	return &profileSnapshot{installed: installed, selectorIndex: old.selectorIndex, references: old.references}
 }
 
 // buildSnapshot takes ownership of installed and derives the label index from
@@ -434,8 +463,11 @@ func reuseSnapshot(old *profileSnapshot, installed installedSet) *profileSnapsho
 // two lookups exist to prevent.
 func buildSnapshot(installed installedSet) *profileSnapshot {
 	profilesByNamespace := make(map[string][]*securityprofile.Profile)
+	references := make(map[string]*securityprofile.Profile, len(installed.selector))
 	for nn, sp := range installed.selector {
 		profilesByNamespace[nn.Namespace] = append(profilesByNamespace[nn.Namespace], sp)
+		name := (model.SecurityProfile{Name: sp.Meta.Name, Namespace: sp.Meta.Namespace, Global: sp.Meta.Namespace == ""}).ResourceName()
+		references[name] = sp
 	}
 
 	selectorIndex := make(map[string]profileIndex, len(profilesByNamespace))
@@ -444,5 +476,5 @@ func buildSnapshot(installed installedSet) *profileSnapshot {
 		selectorIndex[namespace] = buildProfileIndex(profiles)
 	}
 
-	return &profileSnapshot{installed: installed, selectorIndex: selectorIndex}
+	return &profileSnapshot{installed: installed, selectorIndex: selectorIndex, references: references}
 }

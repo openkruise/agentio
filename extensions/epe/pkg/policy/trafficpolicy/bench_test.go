@@ -41,6 +41,10 @@ type benchSource struct {
 }
 
 func (s *benchSource) Snapshot() xdsclient.Snapshot {
+	return s.SnapshotFor(nil)
+}
+
+func (s *benchSource) SnapshotFor(names map[string][]string) xdsclient.Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := xdsclient.Snapshot{
@@ -49,7 +53,17 @@ func (s *benchSource) Snapshot() xdsclient.Snapshot {
 		Resources: map[string]map[string]*xdsclient.Resource{},
 	}
 	for typ, resources := range s.snapshot.Resources {
-		result.Resources[typ] = maps.Clone(resources)
+		if names == nil {
+			result.Resources[typ] = maps.Clone(resources)
+			continue
+		}
+		selected := map[string]*xdsclient.Resource{}
+		for _, name := range names[typ] {
+			if resource := resources[name]; resource != nil {
+				selected[name] = resource
+			}
+		}
+		result.Resources[typ] = selected
 	}
 	return result
 }

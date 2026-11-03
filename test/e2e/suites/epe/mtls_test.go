@@ -207,7 +207,7 @@ data:
       messageTimeout: 5s
       request:
         attributes:
-        - filter_state['sandbox.id']
+        - filter_state['agentio.sandbox.uid']
         - filter_state['agentio.workload.name']
         - filter_state['agentio.workload.namespace']
         - filter_state['downstream_peer'].name
@@ -625,7 +625,19 @@ spec:
     - -ca-address=agentiod.{{ .Namespace }}.svc:15012
     - -tls-spiffe-id=spiffe://cluster.local/ns/{{ .Namespace }}/sa/agentio-epe
     - -tls-cert-lifetime=20s
-    env: [{name: CREDENTIAL_PROVIDER_MTLS_SOURCE, value: none}]
+    - --xds-address=agentiod.{{ .Namespace }}.svc:15012
+    - --xds-root-path=/var/run/secrets/agentio/root-cert.pem
+    - --xds-token-path=/var/run/secrets/tokens/agentio-token
+    env:
+    - {name: CREDENTIAL_PROVIDER_MTLS_SOURCE, value: none}
+    - name: POD_NAME
+      valueFrom: {fieldRef: {fieldPath: metadata.name}}
+    - name: POD_NAMESPACE
+      valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+    - name: POD_UID
+      valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+    - name: POD_IP
+      valueFrom: {fieldRef: {fieldPath: status.podIP}}
     readinessProbe:
       grpc: {port: 9003, service: readiness}
       periodSeconds: 1

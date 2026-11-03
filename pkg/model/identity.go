@@ -27,6 +27,7 @@ const (
 	ProxyTypeWaypoint      = "waypoint"
 	ProxyTypeAgentioEgress = "agentio-egress"
 	ProxyTypeAgentioPorter = "agentio-porter"
+	ProxyTypeEPE           = "epe"
 )
 
 type ClientClass string
@@ -36,6 +37,7 @@ const (
 	ClientDedicatedZTunnel ClientClass = "dedicated-ztunnel"
 	ClientEgressGateway    ClientClass = "egress-gateway"
 	ClientAgentioEgress    ClientClass = "agentio-egress"
+	ClientEPE              ClientClass = "epe"
 )
 
 // Principal is a canonical SPIFFE URI. Its zero value represents no identity.
@@ -148,7 +150,7 @@ func (s ClientScope) Validate() error {
 		if strings.TrimSpace(s.NodeName) == "" {
 			return fmt.Errorf("shared ztunnel scope requires node name")
 		}
-	case ClientDedicatedZTunnel:
+	case ClientDedicatedZTunnel, ClientEPE:
 		if strings.TrimSpace(s.WorkloadUID) == "" || s.Source.Validate() != nil {
 			return fmt.Errorf("dedicated ztunnel scope requires Workload UID and source reference")
 		}

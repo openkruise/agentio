@@ -19,7 +19,7 @@ import (
 	"strings"
 )
 
-// ParseSandboxLabels decodes the base64-encoded workload labels string and returns
+// ParseSandboxLabels decodes the legacy sandbox.labels Base64 string and returns
 // the resulting label map.
 //
 // The encoded string follows the Kubernetes label format: "key1=value1,key2=value2"

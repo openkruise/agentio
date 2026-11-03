@@ -116,7 +116,7 @@ impl Processor {
         let certificate = attribute(attributes, "filter_state['agentio.peer.certificate']");
         let peer_ip = attribute(attributes, "filter_state['agentio.downstream.ip']");
         let principal = attribute(attributes, "filter_state['agentio.peer.principal']");
-        let sandbox_id = attribute(attributes, "filter_state['sandbox.id']");
+        let sandbox_id = attribute(attributes, "filter_state['agentio.sandbox.uid']");
         let request_deadline = tokio::time::Instant::now() + self.timeout;
         let result = tokio::time::timeout_at(request_deadline, async {
             let mut invalidated = self.client.invalidations();
@@ -339,13 +339,10 @@ impl Processor {
         metadata.insert(
             "workload".into(),
             view::object([
+                ("uid".into(), view::string(&workload.uid)),
                 ("name".into(), view::string(&workload.name)),
                 ("namespace".into(), view::string(&workload.namespace)),
             ]),
-        );
-        metadata.insert(
-            "workload_labels".into(),
-            view::string(&workload.encoded_labels),
         );
         if let Some(instance) = instance {
             metadata.insert("workload_instance".into(), view::string(instance));

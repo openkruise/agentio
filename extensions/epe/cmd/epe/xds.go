@@ -18,16 +18,21 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
 
 var (
+	xdsCacheIdleTTL      = flag.Duration("xds-cache-idle-ttl", 10*time.Minute, "Idle lifetime of retained Workload and TrafficPolicy subscriptions; zero disables expiry")
+	xdsCacheMaxEntries   = flag.Int("xds-cache-max-entries", 10000, "Maximum retained Workload and TrafficPolicy subscriptions; active resolutions are pinned; zero disables capacity eviction")
+	clusterDomain        = flag.String("domain", "cluster.local", "Kubernetes DNS suffix used in the default ADS node ID")
 	enableXDSEgressAuthz = flag.Bool(
 		"enable-xds-egressauthz",
 		false,
@@ -36,13 +41,13 @@ var (
 	xdsAddress = flag.String(
 		"xds-address",
 		"",
-		"Agentiod TLS ADS endpoint (host:port); required with --enable-xds-egressauthz",
+		"Agentiod TLS ADS endpoint (host:port); required for Workload SecurityProfile bindings",
 	)
 	xdsRootPath  = flag.String("xds-root-path", "", "PEM trust bundle for Agentiod ADS")
 	xdsTokenPath = flag.String(
 		"xds-token-path",
 		"/var/run/secrets/kubernetes.io/serviceaccount/token",
-		"Projected Pod-bound token for ADS (requires an authorized gateway Pod)",
+		"Projected Pod-bound token for ADS (requires an identity listed in AgentioConfig.trustedEPEIdentities)",
 	)
 	xdsClusterID = flag.String(
 		"xds-cluster-id",
@@ -52,11 +57,14 @@ var (
 	xdsNodeID = flag.String(
 		"xds-node-id",
 		"",
-		"ADS node ID; defaults to waypoint~POD_IP~POD_NAME.POD_NAMESPACE~POD_NAMESPACE.svc.cluster.local",
+		"ADS node ID; defaults to epe~POD_IP~POD_NAME.POD_NAMESPACE~POD_NAMESPACE.svc.<domain>",
 	)
 )
 
 func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
+	if *xdsAddress == "" {
+		return nil, nil, fmt.Errorf("--xds-address is required for Workload SecurityProfile bindings")
+	}
 	if *xdsClusterID == "" {
 		return nil, nil, fmt.Errorf("--xds-cluster-id must not be empty")
 	}
@@ -66,7 +74,7 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 		if name == "" || ns == "" {
 			return nil, nil, fmt.Errorf("POD_NAME and POD_NAMESPACE or --xds-node-id are required")
 		}
-		id = "waypoint~" + os.Getenv("POD_IP") + "~" + name + "." + ns + "~" + ns + ".svc.cluster.local"
+		id = "epe~" + os.Getenv("POD_IP") + "~" + name + "." + ns + "~" + ns + ".svc." + *clusterDomain
 	}
 	metadata, err := structpb.NewStruct(
 		map[string]any{
@@ -84,7 +92,7 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 	}
 	c, err := xdsclient.New(
 		conn,
-		xdsclient.Config{Node: &core.Node{Id: id, Metadata: metadata}, Watches: xdsstore.Watches()},
+		xdsclient.Config{Node: &core.Node{Id: id, Metadata: metadata}, Watches: xdsstore.Watches(), MetricsRegisterer: metrics.Registry},
 	)
 	if err != nil {
 		if closeErr := conn.Close(); closeErr != nil {

@@ -18,9 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
@@ -39,7 +36,8 @@ type NamedPolicy struct {
 // Resources is the request-side store contract; backend transport is not exposed.
 type Resources interface {
 	Snapshot() *store.Snapshot
-	Fetch(context.Context, store.Key) (*store.Resource, error)
+	SnapshotFor([]store.Key) *store.Snapshot
+	Acquire(context.Context, store.Key) (*store.Resource, func(), error)
 }
 
 type policySnapshot struct {
@@ -48,68 +46,116 @@ type policySnapshot struct {
 	entry           *indexedWorkload
 }
 
-// lookup holds one view. Only an unresolved dependency requires another view,
-// after Fetch has immediately published the newly acquired resource.
-func lookup(ctx context.Context, source Resources, subject subject.Subject) (policySnapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return policySnapshot{}, err
+func workloadKey(source Resources, subj subject.Subject) (store.Key, error) {
+	view := source.Snapshot()
+	if !view.Ready() {
+		return store.Key{}, fmt.Errorf("resource store is not synchronized")
 	}
-	result, err := lookupSnapshot(source.Snapshot(), subject)
-	if err == nil {
-		return result, nil
+	if subj.Workload.UID != "" {
+		return store.Key{Type: store.Workload, Name: subj.Workload.UID}, nil
 	}
-	var missing *store.MissingResource
-	if !errors.As(err, &missing) {
-		return policySnapshot{}, err
+	resources, err := view.ResourcesFor(store.Workload, subj)
+	if missing, ok := errors.AsType[*store.MissingResource](err); ok {
+		return missing.Key, nil
 	}
-	err = wait.PollUntilContextTimeout(
-		ctx,
-		10*time.Millisecond,
-		time.Second,
-		true,
-		func(ctx context.Context) (bool, error) {
-			for {
-				if err := ctx.Err(); err != nil {
-					return false, err
-				}
-				key := missing.Key
-				resource, err := source.Fetch(ctx, key)
-				if err != nil {
-					return false, err
-				}
-				if resource == nil {
-					return false, missing
-				}
-				result, err = lookupSnapshot(source.Snapshot(), subject)
-				if !errors.As(err, &missing) {
-					return err == nil, err
-				}
-				// Fetch publishes synchronously. Resolve the next dependency
-				// immediately, but retain polling if deletion or publication
-				// races leave the same resource missing.
-				if missing.Key == key {
-					return false, nil
-				}
-			}
-		},
-	)
-	return result, err
+	if err != nil {
+		return store.Key{}, err
+	}
+	return resources[0].Key, nil
 }
 
-func lookupSnapshot(view *store.Snapshot, subject subject.Subject) (policySnapshot, error) {
-	if !view.Ready() {
-		return policySnapshot{}, fmt.Errorf("egress resources are not synchronized")
-	}
-	index := view.Query(store.TrafficPolicy).(*queryIndex)
-	entry, err := index.forSubject(subject)
+// Hold the Workload and all referenced policies until the compiled view is read,
+// even when one request's dependency set exceeds the cache capacity.
+func lookup(ctx context.Context, source Resources, subj subject.Subject) (policySnapshot, error) {
+	key, err := workloadKey(source, subj)
 	if err != nil {
 		return policySnapshot{}, err
 	}
-	return policySnapshot{
-		Workload:        entry.workload.Value.(*workload.Workload),
-		TrafficPolicies: entry.named,
-		entry:           entry,
-	}, nil
+	held := map[store.Key]bool{}
+	var keys []store.Key
+	var currentWorkload *store.Resource
+	var releases []func()
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	acquire := func(key store.Key) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		resource, release, err := source.Acquire(ctx, key)
+		if release != nil {
+			releases = append(releases, release)
+		}
+		if err != nil {
+			return err
+		}
+		if resource == nil {
+			return &store.MissingResource{Key: key}
+		}
+		held[key] = true
+		keys = append(keys, key)
+		if key.Type == store.Workload {
+			currentWorkload = resource
+		}
+		return nil
+	}
+	if err := acquire(key); err != nil {
+		return policySnapshot{}, err
+	}
+	// Hot dependency sets need only one selected snapshot after all leases are pinned.
+	previous := source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name]
+	if previous != nil && previous.workload.Value == currentWorkload.Value {
+		for _, dependency := range previous.dependencies {
+			if err := acquire(dependency.Key); err != nil {
+				return policySnapshot{}, err
+			}
+		}
+	}
+	for {
+		view := source.SnapshotFor(keys)
+		result, err := lookupWorkload(view, key, source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name])
+		if missing, ok := errors.AsType[*store.MissingResource](err); ok && !held[missing.Key] {
+			if err := acquire(missing.Key); err != nil {
+				return policySnapshot{}, err
+			}
+			continue
+		}
+		if err != nil {
+			return policySnapshot{}, err
+		}
+		refreshed := false
+		for _, dependency := range result.entry.dependencies {
+			if !held[dependency.Key] {
+				if err := acquire(dependency.Key); err != nil {
+					return policySnapshot{}, err
+				}
+				refreshed = true
+			}
+		}
+		if !refreshed {
+			return result, nil
+		}
+	}
+}
+
+func lookupWorkload(view *store.Snapshot, key store.Key, previous *indexedWorkload) (policySnapshot, error) {
+	if !view.Ready() {
+		return policySnapshot{}, fmt.Errorf("egress resources are not synchronized")
+	}
+	resource, err := view.Get(key)
+	if err != nil {
+		return policySnapshot{}, err
+	}
+	if resource == nil {
+		return policySnapshot{}, &store.MissingResource{Key: key}
+	}
+	entry := buildWorkload(view, resource, previous)
+	if entry.err != nil {
+		return policySnapshot{}, entry.err
+	}
+	return policySnapshot{Workload: resource.Value.(*workload.Workload), TrafficPolicies: entry.named, entry: entry}, nil
 }
 
 func references(w *workload.Workload) ([]string, error) {

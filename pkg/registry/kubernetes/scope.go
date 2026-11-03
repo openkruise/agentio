@@ -16,6 +16,7 @@ package kubernetes
 
 import (
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -28,6 +29,7 @@ import (
 type PodScopeResolver struct {
 	pods                  krt.Collection[*corev1.Pod]
 	workloads             krt.Collection[model.Workload]
+	configurations        krt.Collection[model.AgentioConfiguration]
 	clusterID             string
 	rootNamespace         string
 	ztunnelServiceAccount string
@@ -38,6 +40,7 @@ func (r *Registry) PodScopeResolver(workloads krt.Collection[model.Workload]) *P
 	return &PodScopeResolver{
 		pods:                  r.Pods,
 		workloads:             workloads,
+		configurations:        r.AgentioConfig,
 		clusterID:             r.options.ClusterID,
 		rootNamespace:         r.options.RootNamespace,
 		ztunnelServiceAccount: r.options.ZTunnelServiceAccount,
@@ -72,6 +75,13 @@ func (s *PodScopeResolver) ResolveScope(peer model.PeerIdentity, nodeName string
 				WorkloadUID: workload.UID,
 				Source:      source,
 				GatewayKey:  workload.GatewayKey,
+			}, nil
+		}
+		configuration := s.configurations.GetKey("effective")
+		if slices.Contains(configuration.Value.GetTrustedEpeIdentities(), workload.Principal.String()) {
+			return model.ClientScope{
+				Class: model.ClientEPE, Principal: workload.Principal,
+				WorkloadUID: workload.UID, Source: source,
 			}, nil
 		}
 	}

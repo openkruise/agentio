@@ -70,7 +70,7 @@ func BenchmarkExtract(b *testing.B) {
 	base := map[string]any{
 		FilterStateDownstreamPeerNamespace: "default",
 		FilterStateDownstreamPeerName:      "agent-pod-abc123",
-		FilterStateWorkloadLabels:          b64("app=agent,tier=web,version=v2"),
+		FilterStateSandboxLabels:           b64("app=agent,tier=web,version=v2"),
 		AttrSourceAddress:                  "10.244.1.37:43210",
 		AttrDestinationPort:                8443,
 	}
@@ -170,7 +170,7 @@ func BenchmarkExtractFilterStateString(b *testing.B) {
 	attrs := makeAttrs(b, map[string]any{
 		FilterStateDownstreamPeerNamespace: "default",
 		FilterStateDownstreamPeerName:      "agent-pod-abc123",
-		FilterStateWorkloadLabels:          b64("app=agent,tier=web,version=v2"),
+		FilterStateSandboxLabels:           b64("app=agent,tier=web,version=v2"),
 		AttrSourceAddress:                  "10.244.1.37:43210",
 		AttrDestinationPort:                8443,
 	})

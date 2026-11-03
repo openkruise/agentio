@@ -449,6 +449,47 @@ func TestLookupFetchesAllMissingPolicies(t *testing.T) {
 	})
 }
 
+func TestUnchangedMissingDependencyReusesIndex(t *testing.T) {
+	f := testStore()
+	f.bind("missing")
+	aggregate := testAggregate(f, &fakeStore{types: []store.Type{store.Workload}, ready: true})
+	before := aggregate.Snapshot().Query(store.Workload).(*queryIndex).byUID["uid"]
+	unrelated := proto.Clone(before.workload.Value.(*workload.Workload)).(*workload.Workload)
+	unrelated.Uid, unrelated.Name = "unrelated", "unrelated"
+	f.put(store.Workload, "unrelated", unrelated)
+	aggregate.Refresh()
+	after := aggregate.Snapshot().Query(store.Workload).(*queryIndex).byUID["uid"]
+	if after != before {
+		t.Fatal("unrelated Workload forced unresolved bindings to be decoded again")
+	}
+	f.put(store.TrafficPolicy, "missing", &sec.TrafficPolicy{})
+	aggregate.Refresh()
+	resolved := aggregate.Snapshot().Query(store.Workload).(*queryIndex).byUID["uid"]
+	if resolved == before || resolved.err != nil || len(resolved.named) != 1 {
+		t.Fatal("newly available dependency was not resolved")
+	}
+}
+
+func TestLookupReadsUnpublishedPolicyUpdates(t *testing.T) {
+	f := testStore()
+	aggregate := testAggregate(f)
+	before := aggregate.Snapshot()
+	previous := before.Query(store.Workload).(*queryIndex).byUID["uid"]
+	f.put(store.TrafficPolicy, "allow", &sec.TrafficPolicy{Egress: &sec.TrafficPolicy_RuleSet{}})
+	result, err := lookup(t.Context(), aggregate, subject.Subject{Workload: subject.Workload{UID: "uid"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := netip.MustParseAddrPort("203.0.113.7:443")
+	if result.entry.compiled.config.Evaluate(target).Action != egressauthz.Deny ||
+		previous.compiled.config.Evaluate(target).Action != egressauthz.Allow {
+		t.Fatal("unpublished update reused an old policy or mutated its compiled view")
+	}
+	if aggregate.Snapshot() != before {
+		t.Fatal("request synchronously rebuilt the global index")
+	}
+}
+
 func TestLookupStopsFetchingWhenCanceled(t *testing.T) {
 	f := testStore()
 	f.bind("first", "second")
@@ -466,18 +507,30 @@ func TestLookupStopsFetchingWhenCanceled(t *testing.T) {
 	}
 }
 
-// overrideFetch leaves the published snapshot unchanged to exercise a Fetch
+func TestLookupRejectsUnsynchronizedStoreBeforeDemand(t *testing.T) {
+	f := &fakeStore{types: []store.Type{store.Workload, store.TrafficPolicy}, resources: map[store.Key]store.Resource{}}
+	f.fetch = func(store.Key) { t.Fatal("unsynchronized request started discovery") }
+	if _, err := lookup(t.Context(), testAggregate(f), subject.Subject{Workload: subject.Workload{UID: "uid"}}); err == nil {
+		t.Fatal("unsynchronized request accepted")
+	}
+}
+
+// overrideAcquire leaves the published snapshot unchanged to exercise a lookup
 // result racing with publication or deletion.
-type overrideFetch struct {
+type overrideAcquire struct {
 	Resources
-	fetch func(context.Context, store.Key) (*store.Resource, error)
+	acquire func(context.Context, store.Key) (*store.Resource, error)
 }
 
-func (s overrideFetch) Fetch(ctx context.Context, key store.Key) (*store.Resource, error) {
-	return s.fetch(ctx, key)
+func (s overrideAcquire) Acquire(ctx context.Context, key store.Key) (*store.Resource, func(), error) {
+	if key.Type == store.Workload {
+		return s.Resources.Acquire(ctx, key)
+	}
+	r, err := s.acquire(ctx, key)
+	return r, func() {}, err
 }
 
-func TestLookupPollTermination(t *testing.T) {
+func TestLookupAcquisitionFailure(t *testing.T) {
 	fetchErr := errors.New("fetch failed")
 	for _, tc := range []struct {
 		name     string
@@ -487,15 +540,15 @@ func TestLookupPollTermination(t *testing.T) {
 	}{
 		{name: "not found"},
 		{name: "fetch failure", fetchErr: fetchErr, want: fetchErr},
-		{name: "unchanged snapshot", resource: &store.Resource{Key: store.Key{Type: store.TrafficPolicy, Name: "missing"}}, want: context.DeadlineExceeded},
+		{name: "unchanged snapshot", resource: &store.Resource{Key: store.Key{Type: store.TrafficPolicy, Name: "missing"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := testStore()
 			f.bind("missing")
 			calls := 0
-			source := overrideFetch{
+			source := overrideAcquire{
 				Resources: testAggregate(f),
-				fetch: func(context.Context, store.Key) (*store.Resource, error) {
+				acquire: func(context.Context, store.Key) (*store.Resource, error) {
 					calls++
 					return tc.resource, tc.fetchErr
 				},
@@ -510,12 +563,8 @@ func TestLookupPollTermination(t *testing.T) {
 			} else if !errors.Is(err, tc.want) {
 				t.Fatalf("error=%v, want %v", err, tc.want)
 			}
-			if tc.resource == nil && calls != 1 {
-				t.Fatalf("terminal Fetch retried %d times", calls)
-			}
-			// Leave margin for timer scheduling while detecting the former busy loop.
-			if calls > 10 {
-				t.Fatalf("polling spun without waiting: %d fetches in 50ms", calls)
+			if calls != 1 {
+				t.Fatalf("terminal acquisition retried %d times", calls)
 			}
 		})
 	}

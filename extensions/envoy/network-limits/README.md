@@ -37,7 +37,7 @@ budget_name: sandbox-bandwidth
 rate_limits:
   - actions:
       - filter_state: {key: tenant.id, descriptor_key: tenant}
-      - filter_state: {key: sandbox.id, descriptor_key: sandbox}
+      - filter_state: {key: agentio.sandbox.uid, descriptor_key: sandbox}
 descriptors:
   - entries:
       - {key: tenant}
