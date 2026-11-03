@@ -66,6 +66,12 @@ Unset `spec.infrastructure.labels` and `spec.infrastructure.annotations` inherit
 
 The same ConfigMap may also contain `data.config` for Envoy's xDS settings or `data["config.yaml"]` for native agentgateway configuration. These keys are excluded from resource patching. Envoy resource-only ConfigMaps may omit `config` to use default proxy settings; an explicitly empty or invalid `config` retains the last valid proxy configuration. Native agentgateway still requires `config.yaml`; see [Deploy agentgateway](deploy-agentgateway.md).
 
+## Use separate CA and ADS credentials
+
+The Envoy gateway agent uses `AGENTIO_TOKEN_FILE` for ADS authentication. Set `AGENTIO_CA_TOKEN_FILE` to a separate projected ServiceAccount token when the certificate authority requires a different audience. If unset or empty, it uses `AGENTIO_TOKEN_FILE`, preserving the existing shared-token setup. The CA token file is read again on each signing attempt, including certificate renewal.
+
+Use a `deployment` patch to mount the additional projected token and set `AGENTIO_CA_TOKEN_FILE` in `agentio-proxy`. Choose the token audience accepted by the CA. `CA_ADDR`, `AGENTIO_CA_SERVER_NAME`, and `AGENTIO_CA_ROOT_CA` configure the CA connection independently of `AGENTIO_XDS_ADDRESS`, `AGENTIO_XDS_SERVER_NAME`, and `AGENTIO_XDS_ROOT_CA` for ADS.
+
 ## Set GatewayClass defaults
 
 Create a ConfigMap in the control-plane namespace (`agentio-system` by default) with the `gateway.agentio.kruise.io/defaults-for-class` label:
@@ -91,6 +97,18 @@ data:
 Class defaults apply first; the Gateway's `parametersRef` patches apply afterward. If multiple class-default ConfigMaps match, the oldest is selected, breaking timestamp ties by name. Class-default ConfigMaps accept only the five resource patch keys; proxy configuration remains per Gateway.
 
 HPA and PDB are generated only when their respective patch key is present in the selected class defaults or per-Gateway ConfigMap. An empty `{}` patch also enables the resource with its template defaults. Removing the key stops applying that resource but does not delete an existing HPA or PDB.
+
+## Gateway addresses
+
+Once the generated Deployment is available and its managed Service exists, the deployer publishes `Gateway.status.addresses` using the following rules:
+
+- Service external IPs and LoadBalancer ingress IPs or hostnames take precedence.
+- Without external addresses, `agentio-egress` reports both ClusterIPs and the Service hostname. `agentio-agentgateway` reports the hostname by default.
+- The `networking.istio.io/address-type` Gateway annotation selects `IPAddress` or `Hostname` for internal addresses. It does not filter external addresses.
+
+The internal hostname has the form `<service>.<namespace>.svc.<cluster-domain>` and uses the configured cluster domain, defaulting to `cluster.local`. A headless Service contributes no ClusterIP.
+
+While a LoadBalancer Service has no external address, its internal hostname is omitted and `Programmed` is false with reason `AddressNotAssigned`; eligible internal IPs can still be reported. If no new address can be reported, an already published address is retained. Addresses are also retained while the Deployment is pending or rolling out and when native agentgateway configuration is invalid. Read the `Programmed` condition to distinguish availability from the retained discovery address.
 
 ## Updates and errors
 

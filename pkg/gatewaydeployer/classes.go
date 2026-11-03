@@ -30,6 +30,7 @@ type classInfo struct {
 	templateName       string
 	defaultServiceType corev1.ServiceType
 	disableNameSuffix  bool
+	addressType        gatewayv1.AddressType
 }
 
 // builtinClasses is keyed by GatewayClass name. controllerLabel is the dash
@@ -43,6 +44,7 @@ var builtinClasses = map[string]classInfo{
 		templateName:       agentgatewayTemplateName,
 		defaultServiceType: corev1.ServiceTypeClusterIP,
 		disableNameSuffix:  true,
+		addressType:        gatewayv1.HostnameAddressType,
 	},
 	"agentio-egress": {
 		controller:         "agentio.kruise.io/egress-gateway-controller",
@@ -51,6 +53,9 @@ var builtinClasses = map[string]classInfo{
 		templateName:       "egress-gateway",
 		defaultServiceType: corev1.ServiceTypeClusterIP,
 		disableNameSuffix:  true,
+		// Report IPs and hostnames so
+		// consumers across Istio versions can choose the address they support.
+		addressType: "",
 	},
 }
 

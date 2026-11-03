@@ -54,6 +54,7 @@ type Config struct {
 	ClusterID                   string
 	TrustDomain                 string
 	TokenFile                   string
+	CATokenFile                 string
 	RootCertFile                string
 	CARootCertFile              string
 	CAAddress                   string

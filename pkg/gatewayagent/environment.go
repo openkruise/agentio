@@ -45,6 +45,7 @@ var (
 		"Projected service account token path.",
 	)
 	caAddressEnv     = env.Register("CA_ADDR", "", "Certificate authority address; empty uses AGENTIO_XDS_ADDRESS.")
+	caTokenFileEnv   = env.Register("AGENTIO_CA_TOKEN_FILE", "", "Projected CA token path; empty uses AGENTIO_TOKEN_FILE.")
 	xdsServerNameEnv = env.Register("AGENTIO_XDS_SERVER_NAME", "", "TLS server name for ADS.")
 	caServerNameEnv  = env.Register("AGENTIO_CA_SERVER_NAME", "", "TLS server name for the certificate authority.")
 	caRootCAEnv      = env.Register(
