@@ -959,3 +959,149 @@ async fn hot_dependency_batch_preserves_order_metrics_ttl_and_invalidation() {
             .is_none()
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn connect_revalidates_old_workload_across_reconnect_or_grace_expiry() {
+    for clear in ["reconnect", "expiry", "late-expiry"] {
+        for sandbox in [false, true] {
+            let mut p = processor();
+            p.timeout = Duration::from_secs(4);
+            let c = &p.client;
+            seed(
+                c,
+                ResourceKind::Workload,
+                "/10.0.0.1",
+                workload(Some(if sandbox { &[] } else { &["allow"] })),
+            );
+            c.disconnected();
+            tokio::time::advance(Duration::from_secs(2)).await;
+            let mut pending =
+                Box::pin(p.handle(request(if sandbox { "sandbox" } else { "" }, false)));
+            assert!(futures_util::poll!(&mut pending).is_pending());
+            // This request has consumed the old Workload and is awaiting a
+            // Sandbox or policy. Clear while that Arc remains in its future.
+            if clear == "reconnect" {
+                c.established();
+            } else {
+                tokio::time::advance(Duration::from_secs(3)).await;
+                if clear == "expiry" {
+                    c.expire_disconnected();
+                }
+                // late-expiry deliberately leaves the timer unpolled. A ready
+                // resolve branch must check the deadline before returning ALLOW.
+            }
+            if sandbox {
+                seed(
+                    c,
+                    ResourceKind::Sandbox,
+                    "sandbox",
+                    any(
+                        view::SANDBOX,
+                        Sandbox {
+                            uid: "sandbox".into(),
+                            attester: Some(Attester {
+                                workload_uid: UID.into(),
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                );
+            } else {
+                seed(
+                    c,
+                    ResourceKind::TrafficPolicy,
+                    "allow",
+                    any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+                );
+            }
+            assert!(
+                futures_util::poll!(&mut pending).is_pending(),
+                "old Workload must not allow after cache invalidation"
+            );
+            // The replacement Workload no longer has a valid binding. It must
+            // determine the decision, even though the old dependencies allow.
+            seed(c, ResourceKind::Workload, "/10.0.0.1", workload(None));
+            assert_denied(pending.await.unwrap());
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconnect_and_expiry_do_not_restart_the_four_second_connect_budget() {
+    for expires in [false, true] {
+        let mut p = processor();
+        p.timeout = Duration::from_secs(4);
+        let c = &p.client;
+        seed(
+            c,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            workload(Some(&["pending"])),
+        );
+        c.disconnected();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        let mut pending = Box::pin(p.handle(request("", false)));
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        tokio::time::advance(Duration::from_secs(3)).await;
+        if expires {
+            c.expire_disconnected();
+        } else {
+            c.established();
+        }
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let std::task::Poll::Ready(result) = futures_util::poll!(&mut pending) else {
+            panic!("cache invalidation extended the four-second request budget");
+        };
+        assert!(result.unwrap_err().message().contains("deadline exceeded"));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn complete_dependency_cache_serves_connect_only_within_disconnect_grace() {
+    let p = processor();
+    let c = &p.client;
+    seed(
+        c,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["allow"])),
+    );
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "allow",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    seed(
+        c,
+        ResourceKind::Sandbox,
+        "sandbox",
+        any(
+            view::SANDBOX,
+            Sandbox {
+                uid: "sandbox".into(),
+                attester: Some(Attester {
+                    workload_uid: UID.into(),
+                }),
+                traffic_policy: Some(policy(proto::Action::Allow)),
+                ..Default::default()
+            },
+        ),
+    );
+    c.disconnected();
+    tokio::time::advance(Duration::from_millis(4999)).await;
+    for udp in [false, true] {
+        assert!(allowed(p.handle(request("sandbox", udp)).await.unwrap()));
+    }
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let mut pending = Box::pin(p.handle(request("sandbox", false)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    let state = c.state.lock().unwrap();
+    assert!(
+        state
+            .types
+            .iter()
+            .all(|kind| kind.resources.is_empty() && kind.aliases.is_empty())
+    );
+}

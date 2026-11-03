@@ -18,18 +18,17 @@ package telemetry
 import (
 	"fmt"
 
-	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
-	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
-	"google.golang.org/protobuf/types/known/structpb"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	dynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
+	dynamicfilterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+	"istio.io/api/envoy/extensions/stats"
 
 	"github.com/openkruise/agentio/pkg/util/protoutil"
 )
 
-const metricsLoggerName = "envoy.access_loggers.dynamic_modules"
-
-// The gateway module exposes request count by response_code and aggregate duration.
-// Other request/TCP statistics remain available through Envoy's native metrics.
-func buildMetricsLogger(configuration metricsConfig) (*accesslogv3.AccessLog, error) {
+func buildMetricsFilter(configuration metricsConfig, legacy bool) (*hcmv3.HttpFilter, error) {
 	if configuration.ServerMetrics.Disabled {
 		return nil, nil
 	}
@@ -41,22 +40,13 @@ func buildMetricsLogger(configuration metricsConfig) (*accesslogv3.AccessLog, er
 		case "REQUEST_DURATION":
 			duration = !override.Disabled
 		default:
-			// Removing absent dimensions/metrics is harmless during migration.
-			if override.Disabled {
-				continue
-			}
-			for _, tag := range override.Tags {
-				if !tag.Remove {
-					return nil, fmt.Errorf("metric %s does not support dimension %s", override.Name, tag.Name)
-				}
-			}
 			continue
 		}
 		if override.Disabled {
 			continue
 		}
 		for _, tag := range override.Tags {
-			if !tag.Remove || (override.Name == "REQUEST_COUNT" && tag.Name == "response_code") {
+			if !tag.Remove || tag.Name == "response_code" || tag.Name == "response_flags" {
 				return nil, fmt.Errorf("metric %s does not support overriding dimension %s", override.Name, tag.Name)
 			}
 		}
@@ -64,37 +54,88 @@ func buildMetricsLogger(configuration metricsConfig) (*accesslogv3.AccessLog, er
 	if !requests && !duration {
 		return nil, nil
 	}
+	if legacy {
+		return buildLegacyMetricsFilter(requests, duration)
+	}
 	selection := ""
-	if !requests {
-		selection = "duration"
-	} else if !duration {
+	if !duration {
 		selection = "requests"
+	} else if !requests {
+		selection = "duration"
 	}
-	// The pinned Go API predates the native access logger; TypedStruct lets Envoy
-	// decode its current schema without coupling control-plane upgrades to the SDK.
-	fields, err := structpb.NewStruct(map[string]any{
-		"dynamic_module_config": map[string]any{
-			"name": "agentio_gateway_metrics",
-			"module": map[string]any{
-				"local": map[string]any{"filename": "/usr/local/lib/libagentio_gateway_metrics.so"},
-			},
-			"metrics_namespace": "agentio_gateway",
+	config, err := protoutil.MarshalAny(wrapperspb.String(selection))
+	if err != nil {
+		return nil, err
+	}
+	typed, err := protoutil.MarshalAny(&dynamicfilterv3.DynamicModuleFilter{
+		DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+			Name:             "agentio_gateway_metrics",
+			MetricsNamespace: "agentio_gateway",
+			Module: &corev3.AsyncDataSource{Specifier: &corev3.AsyncDataSource_Local{
+				Local: &corev3.DataSource{Specifier: &corev3.DataSource_Filename{
+					Filename: "/usr/local/lib/libagentio_gateway_metrics.so",
+				}},
+			}},
 		},
-		"logger_name":   "metrics",
-		"logger_config": map[string]any{"@type": "type.googleapis.com/google.protobuf.StringValue", "value": selection},
+		FilterName:   "agentio_gateway_metrics",
+		FilterConfig: config,
 	})
 	if err != nil {
 		return nil, err
 	}
-	typed, err := protoutil.MarshalAny(&udpatypev1.TypedStruct{
-		TypeUrl: "type.googleapis.com/envoy.extensions.access_loggers.dynamic_modules.v3.DynamicModuleAccessLog",
-		Value:   fields,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &accesslogv3.AccessLog{
-		Name:       metricsLoggerName,
-		ConfigType: &accesslogv3.AccessLog_TypedConfig{TypedConfig: typed},
+	return &hcmv3.HttpFilter{
+		Name:       "envoy.filters.http.dynamic_modules",
+		ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: typed},
 	}, nil
+}
+
+// Keep the legacy Istio extension on the same two-metric, two-dimension contract.
+func buildLegacyMetricsFilter(requests, duration bool) (*hcmv3.HttpFilter, error) {
+	config := &stats.PluginConfig{
+		DisableHostHeaderFallback: true,
+		Reporter:                  stats.Reporter_SERVER_GATEWAY,
+		Metrics: []*stats.MetricConfig{
+			{TagsToRemove: []string{
+				"reporter",
+				"source_principal",
+				"source_app",
+				"source_workload",
+				"source_workload_namespace",
+				"source_version",
+				"source_cluster",
+				"source_canonical_service",
+				"source_canonical_revision",
+				"destination_workload",
+				"destination_workload_namespace",
+				"destination_principal",
+				"destination_app",
+				"destination_version",
+				"destination_service",
+				"destination_service_name",
+				"destination_service_namespace",
+				"destination_namespace",
+				"destination_port",
+				"destination_cluster",
+				"destination_canonical_service",
+				"destination_canonical_revision",
+				"connection_security_policy",
+				"request_operation",
+				"request_protocol",
+				"grpc_response_status",
+			}},
+			{Name: "requests_total", Drop: !requests},
+			{Name: "request_duration_milliseconds", Drop: !duration},
+		},
+	}
+	for _, name := range []string{
+		"request_bytes", "response_bytes", "request_messages_total", "response_messages_total",
+		"tcp_connections_opened_total", "tcp_connections_closed_total", "tcp_received_bytes_total", "tcp_sent_bytes_total",
+	} {
+		config.Metrics = append(config.Metrics, &stats.MetricConfig{Name: name, Drop: true})
+	}
+	typed, err := protoutil.MarshalAny(config)
+	if err != nil {
+		return nil, err
+	}
+	return &hcmv3.HttpFilter{Name: "istio.stats", ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: typed}}, nil
 }

@@ -18,6 +18,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/grpc/codes"
@@ -38,6 +39,11 @@ type watchState struct {
 	nonceSent   string
 	nonceAcked  string
 	nonceNacked string
+	// Flow-control progress also accepts older, actually sent nonces. A busy
+	// stream can acknowledge a response after a newer version has been sent.
+	unacknowledged []sentResponse
+	// A real ACK/NACK separates established clients from unresponsive starters.
+	receivedAcknowledgement bool
 	// A later send leaves the previous rejection available until a matching ACK.
 	// nonceNacked == nonceSent identifies a rejection of the latest response.
 	lastError     string
@@ -54,6 +60,11 @@ type watchState struct {
 	pending sets.Set[string]
 }
 
+type sentResponse struct {
+	nonce string
+	at    time.Time
+}
+
 // recordAcknowledgement resolves outstanding resource deliveries and only lets
 // the latest response update acknowledgement diagnostics. Subscription changes
 // are handled independently.
@@ -61,6 +72,17 @@ func (watch *watchState) recordAcknowledgement(request *discoveryv3.DeltaDiscove
 	nonce := request.GetResponseNonce()
 	if nonce == "" {
 		return false
+	}
+	for i, response := range watch.unacknowledged {
+		if response.nonce == nonce {
+			watch.receivedAcknowledgement = true
+			clear(watch.unacknowledged[:i+1])
+			watch.unacknowledged = watch.unacknowledged[i+1:]
+			if len(watch.unacknowledged) == 0 {
+				watch.unacknowledged = nil
+			}
+			break
+		}
 	}
 	if response := watch.pendingResponse; response != nil && response.Nonce == nonce {
 		if request.GetErrorDetail() == nil {

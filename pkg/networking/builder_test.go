@@ -392,11 +392,11 @@ func TestBuildGatewayFormatWithoutTelemetryInputs(t *testing.T) {
 		func() *listenerv3.Listener { return &listenerv3.Listener{} },
 	)
 	logs := findHCM(t, listeners[MainForward]).GetAccessLog()
-	if len(logs) != 2 {
-		t.Fatalf("HTTP logs = %d, want 2", len(logs))
+	if len(logs) != 1 {
+		t.Fatalf("HTTP logs = %d, want 1", len(logs))
 	}
 	fileLog := &fileaccesslogv3.FileAccessLog{}
-	if err := logs[1].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
+	if err := logs[0].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
 		t.Fatal(err)
 	}
 	if got := fileLog.GetLogFormat().GetTextFormatSource().GetInlineString(); got != format+"\n" {
@@ -428,7 +428,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 		}
 	}
 	connect := findHCM(t, listeners[ConnectTerminate])
-	if slices.Contains(httpFilterNames(connect), "istio.stats") {
+	if slices.Contains(httpFilterNames(connect), "istio.stats") ||
+		slices.Contains(httpFilterNames(connect), "envoy.filters.http.dynamic_modules") {
 		t.Fatalf("CONNECT Telemetry filters = %v", httpFilterNames(connect))
 	}
 	// CONNECT termination mirrors release-0.1 setHboneTerminationAccessLog: a
@@ -446,8 +447,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 		hcm := findHCM(t, listeners[listenerName])
 		filters := httpFilterNames(hcm)
 		routerIndex := slices.Index(filters, "envoy.filters.http.router")
-		if slices.Contains(filters, "istio.stats") || routerIndex != len(filters)-1 || len(hcm.GetAccessLog()) != 2 ||
-			hcm.GetAccessLog()[0].Name != "envoy.access_loggers.dynamic_modules" {
+		if slices.Contains(filters, "istio.stats") || routerIndex != len(filters)-1 || len(hcm.GetAccessLog()) != 1 ||
+			filters[0] != "envoy.filters.http.dynamic_modules" {
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
 		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-1 {
@@ -467,8 +468,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 		if err := chain.Filters[proxyIndex].GetTypedConfig().UnmarshalTo(proxy); err != nil {
 			t.Fatal(err)
 		}
-		if len(proxy.GetAccessLog()) != 1 {
-			t.Fatalf("%s TCP access logs = %d", listenerName, len(proxy.GetAccessLog()))
+		if len(proxy.GetAccessLog()) != 1 || proxy.GetAccessLogOptions() != nil {
+			t.Fatalf("%s TCP access logs must remain terminal-only without periodic metrics: %v", listenerName, proxy)
 		}
 	}
 
@@ -1084,5 +1085,38 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		if key == "agentio.sandbox.metadata" && !state.GetSkipIfEmpty() {
 			t.Error("absent metadata must not mask a legacy sandbox token")
 		}
+	}
+}
+
+func TestBuildLegacyGatewayInstallsHTTPMetrics(t *testing.T) {
+	resources, err := Build(Inputs{
+		LegacyGateway:          true,
+		DiscoveryAddress:       "agentiod.agentio-system.svc:15012",
+		TrustDomain:            "cluster.local",
+		Gateway:                testGateway(nil),
+		TelemetryRootNamespace: "agentio-system",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listeners := messagesOf(
+		t,
+		resources,
+		model.ListenerType,
+		func() *listenerv3.Listener { return &listenerv3.Listener{} },
+	)
+	for _, name := range []string{MainInternal, MainForward} {
+		hcm := findHCM(t, listeners[name])
+		filters := httpFilterNames(hcm)
+		if filters[0] != "istio.stats" || slices.Contains(filters[1:], "istio.stats") ||
+			slices.Contains(filters, "envoy.filters.http.dynamic_modules") {
+			t.Fatalf("%s: legacy metrics missing, duplicated, or using the native module: %v", name, filters)
+		}
+		if len(hcm.AccessLog) != 1 {
+			t.Fatalf("%s: access logging lost", name)
+		}
+	}
+	if slices.Contains(httpFilterNames(findHCM(t, listeners[ConnectTerminate])), "istio.stats") {
+		t.Fatal("CONNECT tunnel must not add business observations")
 	}
 }

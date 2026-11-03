@@ -410,7 +410,7 @@ func newTestServerWithScheduler(
 			16,
 			generators,
 			pushScheduler,
-			0,
+			defaultFlowControlConfig(cap(pushScheduler.slots), 0),
 		)
 	}
 	if err != nil {

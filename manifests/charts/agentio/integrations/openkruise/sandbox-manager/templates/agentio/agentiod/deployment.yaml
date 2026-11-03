@@ -76,6 +76,11 @@ spec:
           securityContext:
             {{- toYaml .Values.agentio.agentiod.containerSecurityContext | nindent 12 }}
           env:
+            {{- $cpuBudget := coalesce (dig "limits" "cpu" "" .Values.agentio.agentiod.resources) (dig "requests" "cpu" "" .Values.agentio.agentiod.resources) }}
+            {{- if and $cpuBudget (not (hasKey .Values.agentio.agentiod.env "AGENTIO_XDS_CPU_BUDGET")) }}
+            - name: AGENTIO_XDS_CPU_BUDGET
+              value: {{ $cpuBudget | quote }}
+            {{- end }}
             - name: AGENTIO_SANDBOX_MODE
               value: {{ .Values.agentio.sandbox.enabled | quote }}
 

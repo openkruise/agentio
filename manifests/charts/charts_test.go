@@ -845,3 +845,56 @@ func TestEPECustomCAPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentiodXDSCPUBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+		args []string
+	}{
+		{"default request", "500m", nil},
+		{"CPU limit preferred", "2", []string{"--set", "agentiod.resources.limits.cpu=2"}},
+		{"explicit budget", "750m", []string{"--set", "agentiod.resources.limits.cpu=2", "--set-string", "agentiod.env.AGENTIO_XDS_CPU_BUDGET=750m"}},
+		{"explicit empty fallback", "", []string{"--set-string", "agentiod.env.AGENTIO_XDS_CPU_BUDGET="}},
+		{"no CPU resources", "", []string{"--set", "agentiod.resources.requests.cpu=null"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := renderAgentio(t, tc.args...)
+			found := false
+			for document := range strings.SplitSeq(manifest, "\n---") {
+				var object renderedObject
+				if err := yaml.Unmarshal([]byte(document), &object); err != nil {
+					t.Fatal(err)
+				}
+				if object.Kind != "Deployment" || object.Metadata.Name != "agentiod" {
+					continue
+				}
+				found = true
+				var deployment appsv1.Deployment
+				if err := yaml.Unmarshal([]byte(document), &deployment); err != nil {
+					t.Fatal(err)
+				}
+				count := 0
+				for _, variable := range deployment.Spec.Template.Spec.Containers[0].Env {
+					if variable.Name != "AGENTIO_XDS_CPU_BUDGET" {
+						continue
+					}
+					count++
+					if variable.Value != tc.want {
+						t.Fatalf("budget = %q, want %q", variable.Value, tc.want)
+					}
+				}
+				wantCount := 1
+				if tc.name == "no CPU resources" {
+					wantCount = 0
+				}
+				if count != wantCount {
+					t.Fatalf("budget entries = %d, want %d", count, wantCount)
+				}
+			}
+			if !found {
+				t.Fatal("agentiod deployment missing")
+			}
+		})
+	}
+}

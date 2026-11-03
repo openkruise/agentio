@@ -17,16 +17,24 @@ package attestation
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/util/flowcontrol"
 
 	"google.golang.org/grpc/metadata"
 
@@ -128,8 +136,126 @@ func TestAuthenticateRejectedBearerIsHardFailure(t *testing.T) {
 	if errors.Is(err, ErrUnsupportedCredentials) {
 		t.Fatalf("Authenticate() error = %v, want a hard rejection", err)
 	}
+	if errors.Is(err, ErrTokenReviewUnavailable) {
+		t.Fatalf("rejected token classified as unavailable: %v", err)
+	}
 	if got := counter.reviews(); got != 1 {
 		t.Fatalf("TokenReviews = %d, want 1", got)
+	}
+}
+
+func TestTokenReviewCancelsNetworkAndDoesNotCacheFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		reviewTimeout time.Duration
+		callerTimeout time.Duration
+		cancelOnStart bool
+		want          error
+	}{
+		{name: "review timeout", reviewTimeout: 100 * time.Millisecond, callerTimeout: 5 * time.Second, want: context.DeadlineExceeded},
+		{name: "shorter caller timeout", reviewTimeout: 5 * time.Second, callerTimeout: 100 * time.Millisecond, want: context.DeadlineExceeded},
+		{name: "caller cancellation", reviewTimeout: 5 * time.Second, callerTimeout: 5 * time.Second, cancelOnStart: true, want: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := expiringToken("app", time.Now().Add(time.Hour))
+			ctx, cancel := context.WithTimeout(bearerContext(token), tc.callerTimeout)
+			defer cancel()
+			var requests atomic.Int32
+			canceled := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, err := io.Copy(io.Discard, r.Body); err != nil {
+					t.Errorf("read TokenReview: %v", err)
+					return
+				}
+				if requests.Add(1) == 1 {
+					if tc.cancelOnStart {
+						cancel()
+					}
+					<-r.Context().Done()
+					close(canceled)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(&authenticationv1.TokenReview{
+					Status: authenticatedAs("system:serviceaccount:demo:app"),
+				}); err != nil {
+					t.Errorf("write TokenReview: %v", err)
+				}
+			}))
+			defer server.Close()
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewer, err := NewTokenReviewer(client, []string{"agentio-ca"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewer.timeout = tc.reviewTimeout
+			_, err = reviewer.Authenticate(ctx)
+			if !errors.Is(err, ErrTokenReviewUnavailable) || !errors.Is(err, tc.want) {
+				t.Fatalf("Authenticate() error = %v, want unavailable and %v", err, tc.want)
+			}
+			select {
+			case <-canceled:
+			case <-time.After(time.Second):
+				t.Fatal("TokenReview HTTP request was not canceled")
+			}
+			if _, found := reviewer.cached(token, time.Now()); found {
+				t.Fatal("canceled review was cached")
+			}
+			reviewer.timeout = tokenReviewTimeout
+			for range 2 {
+				if _, err := reviewer.Authenticate(bearerContext(token)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := requests.Load(); got != 2 {
+				t.Fatalf("HTTP requests = %d, want canceled request, retry, then cache hit", got)
+			}
+		})
+	}
+}
+
+func TestTokenReviewBoundsClientThrottleAndBypassesItOnCacheHit(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	limiter := flowcontrol.NewTokenBucketRateLimiter(1, 1)
+	if !limiter.TryAccept() {
+		t.Fatal("could not exhaust initial API burst")
+	}
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL, RateLimiter: limiter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer, err := NewTokenReviewer(client, []string{"agentio-ca"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer.timeout = 50 * time.Millisecond
+	token := expiringToken("app", time.Now().Add(time.Hour))
+	started := time.Now()
+	_, err = reviewer.Authenticate(bearerContext(token))
+	if !errors.Is(err, ErrTokenReviewUnavailable) {
+		t.Fatalf("Authenticate() error = %v, want unavailable", err)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatal("TokenReview waited for an API token beyond its budget")
+	}
+	if _, found := reviewer.cached(token, time.Now()); found {
+		t.Fatal("throttled review was cached")
+	}
+	caller := model.PeerIdentity{AttestedBy: model.AttestationKubernetes}
+	reviewer.remember(token, caller, time.Now())
+	got, err := reviewer.Authenticate(bearerContext(token))
+	if err != nil || got.AttestedBy != caller.AttestedBy {
+		t.Fatalf("cache hit = %v, %v", got, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("HTTP requests = %d, want none while throttled or cached", got)
 	}
 }
 

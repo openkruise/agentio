@@ -643,3 +643,135 @@ async fn reconnect_preserves_shared_waiters_and_cancellation() {
         ["sandbox"]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn disconnect_grace_expires_without_reads_and_retries_do_not_extend_it() {
+    let c = client(100, Duration::from_secs(600));
+    let mut warm = Box::pin(c.demand(ResourceKind::Workload, "alias", None));
+    assert!(futures_util::poll!(&mut warm).is_pending());
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("old", &["alias"])], &[]),
+    )
+    .unwrap();
+    warm.await.unwrap();
+    let mut pending = Box::pin(c.demand(ResourceKind::Workload, "pending", None));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    let generation = c.state.lock().unwrap().types[0].entries["pending"]
+        .generation
+        .id;
+    let stop = CancellationToken::new();
+    let expiry = tokio::spawn(c.clone().expire(stop.clone()));
+    c.disconnected();
+    let deadline = c.state.lock().unwrap().grace_deadline;
+    tokio::time::advance(Duration::from_secs(3)).await;
+    c.disconnected();
+    assert_eq!(c.state.lock().unwrap().grace_deadline, deadline);
+    assert!(
+        matches!(c.demand(ResourceKind::Workload, "alias", None).await.unwrap().as_ref(), View::Workload(w) if w.uid == "old")
+    );
+    // No access after this point: the expiry worker must physically drop idle state.
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    {
+        let state = c.state.lock().unwrap();
+        assert!(state.idle.is_empty());
+        assert!(state.types[0].resources.is_empty());
+        assert!(state.types[0].aliases.is_empty());
+        assert_eq!(state.types[0].entries.len(), 1);
+        assert_eq!(state.types[0].entries["pending"].generation.id, generation);
+        assert!(state.grace_deadline.is_none());
+    }
+    let epoch = c.current_epoch();
+    c.disconnected();
+    assert!(c.state.lock().unwrap().grace_deadline.is_none());
+    assert_eq!(c.current_epoch(), epoch);
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("pending", &[])], &[]),
+    )
+    .unwrap();
+    pending.await.unwrap();
+    stop.cancel();
+    expiry.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconnect_handshake_only_subscribes_waiters_then_clears_cached_values() {
+    let c = client(100, Duration::from_secs(600));
+    let mut warm = Box::pin(c.demand(ResourceKind::Workload, "warm", None));
+    assert!(futures_util::poll!(&mut warm).is_pending());
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("old", &["warm", "other-alias"])], &[]),
+    )
+    .unwrap();
+    warm.await.unwrap();
+    c.disconnected();
+    let mut pending = Box::pin(c.demand(ResourceKind::Workload, "pending", None));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    let mut sent = Default::default();
+    let initial = c.initial(&Node::default(), &mut sent);
+    assert_eq!(initial[0].resource_names_subscribe, ["pending"]);
+    let generation = sent[0]["pending"];
+    // A newly acquired alias can hit the grace cache, but must not leak through
+    // outgoing() while the initial RPC is still awaiting response headers.
+    c.demand(ResourceKind::Workload, "other-alias", None)
+        .await
+        .unwrap();
+    assert!(c.outgoing(&mut sent).is_empty());
+    let mut later = Box::pin(c.demand(ResourceKind::Workload, "later", None));
+    assert!(futures_util::poll!(&mut later).is_pending());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    c.established();
+    {
+        let state = c.state.lock().unwrap();
+        assert!(state.types[0].resources.is_empty());
+        assert!(state.types[0].aliases.is_empty());
+        assert!(!state.types[0].entries.contains_key("warm"));
+        assert!(!state.types[0].entries.contains_key("other-alias"));
+        assert_eq!(state.types[0].entries["pending"].generation.id, generation);
+    }
+    assert_eq!(c.outgoing(&mut sent)[0].resource_names_subscribe, ["later"]);
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("pending", &[])], &[]),
+    )
+    .unwrap();
+    pending.await.unwrap();
+    // A later, genuinely new disconnection gets its own five-second grace.
+    c.disconnected();
+    assert_eq!(
+        c.state.lock().unwrap().grace_deadline,
+        Some(Instant::now() + DISCONNECT_GRACE)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn grace_never_revives_an_explicitly_deleted_generation() {
+    let c = client(100, Duration::from_secs(600));
+    let lease = c.acquire(ResourceKind::Workload, "alias").unwrap();
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("old", &["alias"])], &[]),
+    )
+    .unwrap();
+    c.apply(ResourceKind::Workload, &response(vec![], &["old"]))
+        .unwrap();
+    c.disconnected();
+    let mut next = Box::pin(c.demand(ResourceKind::Workload, "alias", None));
+    assert!(futures_util::poll!(&mut next).is_pending());
+    c.established();
+    c.apply(
+        ResourceKind::Workload,
+        &response(vec![resource("new", &["alias"])], &[]),
+    )
+    .unwrap();
+    assert!(matches!(next.await.unwrap().as_ref(), View::Workload(w) if w.uid == "new"));
+    assert!(matches!(
+        c.current(&lease.generation.value.borrow()),
+        Outcome::Missing
+    ));
+}

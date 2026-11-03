@@ -109,10 +109,10 @@ func TestRequestRateLimitRejectsBeforeQueueGrowth(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := server.acceptRequest(ctx); err != nil {
+	if err := server.flow.acceptRequest(ctx); err != nil {
 		t.Fatalf("first request rejected: %v", err)
 	}
-	if err := server.acceptRequest(ctx); !errors.Is(err, errRequestRateLimited) {
+	if err := server.flow.acceptRequest(ctx); !errors.Is(err, errRequestRateLimited) {
 		t.Fatalf("second acceptRequest() error = %v, want errRequestRateLimited", err)
 	}
 	stream := newFakeStream(ctx, 1)

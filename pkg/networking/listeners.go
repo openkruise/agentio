@@ -17,6 +17,7 @@ package networking
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
@@ -409,7 +410,10 @@ func (b *resourceBuilder) buildForwardHCM(
 	config effectiveConfig,
 	terminatedTLS bool,
 ) (*hcmv3.HttpConnectionManager, error) {
-	filters := make([]*hcmv3.HttpFilter, 0, 4)
+	filters := make([]*hcmv3.HttpFilter, 0, 5)
+	if config.telemetry != nil && config.telemetry.HTTPMetrics != nil {
+		filters = append(filters, proto.Clone(config.telemetry.HTTPMetrics).(*hcmv3.HttpFilter))
+	}
 	if terminatedTLS {
 		// Reject an inner authority that differs from the ClientHello SNI before
 		// ext_proc or DFP can observe or resolve the attacker-controlled host.
@@ -482,9 +486,6 @@ func (b *resourceBuilder) buildForwardHCM(
 		},
 	}
 	if config.telemetry != nil {
-		if config.telemetry.HTTPMetrics != nil {
-			hcm.AccessLog = append(hcm.AccessLog, proto.Clone(config.telemetry.HTTPMetrics).(*accesslogv3.AccessLog))
-		}
 		for _, accessLog := range config.telemetry.HTTPAccessLogs {
 			hcm.AccessLog = append(hcm.AccessLog, proto.Clone(accessLog).(*accesslogv3.AccessLog))
 		}
@@ -829,7 +830,7 @@ func (b *resourceBuilder) buildTLSTerminateChain(tcpSettings *configv1.TcpSettin
 		Filters: []*listenerv3.Filter{
 			capture,
 			relay,
-			b.tcpProxy(MainForward, tcpSettings, nil),
+			networkFilter("envoy.filters.network.tcp_proxy", b.pack(b.tcpProxy(MainForward, tcpSettings, nil))),
 		},
 	}
 }
@@ -1112,7 +1113,7 @@ func (b *resourceBuilder) tcpProxy(
 	cluster string,
 	tcpSettings *configv1.TcpSettings,
 	accessLogs []*accesslogv3.AccessLog,
-) *listenerv3.Filter {
+) *tcpproxyv3.TcpProxy {
 	config := &tcpproxyv3.TcpProxy{
 		StatPrefix:       cluster,
 		ClusterSpecifier: &tcpproxyv3.TcpProxy_Cluster{Cluster: cluster},
@@ -1126,7 +1127,7 @@ func (b *resourceBuilder) tcpProxy(
 	for _, accessLog := range accessLogs {
 		config.AccessLog = append(config.AccessLog, proto.Clone(accessLog).(*accesslogv3.AccessLog))
 	}
-	return networkFilter("envoy.filters.network.tcp_proxy", b.pack(config))
+	return config
 }
 
 func (b *resourceBuilder) applicationTCPFilters(
@@ -1140,7 +1141,8 @@ func (b *resourceBuilder) applicationTCPFilters(
 	if config.telemetry != nil {
 		accessLogs = config.telemetry.TCPAccessLogs
 	}
-	return append(result, b.tcpProxy(cluster, tcpSettings, accessLogs))
+	tcp := b.tcpProxy(cluster, tcpSettings, accessLogs)
+	return append(result, networkFilter("envoy.filters.network.tcp_proxy", b.pack(tcp)))
 }
 
 // sniTrafficPolicyMatcher preserves gateway exclusions before consulting the
@@ -1171,6 +1173,7 @@ func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string) *xdsmat
 
 func (b *resourceBuilder) staticSNIMatcher(config *configv1.TlsTerminationConfig) *xdsmatcherv3.Matcher {
 	domainMatchers := make([]*xdsmatcherv3.ServerNameMatcher_DomainMatcher, 0, 2)
+	seen := make(map[string]bool)
 	for _, match := range []struct {
 		domains []string
 		onMatch *xdsmatcherv3.Matcher_OnMatch
@@ -1178,9 +1181,18 @@ func (b *resourceBuilder) staticSNIMatcher(config *configv1.TlsTerminationConfig
 		{domains: config.GetExcludeHosts(), onMatch: b.toChain(forwardTCPChain)},
 		{domains: config.GetIncludeHosts(), onMatch: b.toChain(tlsTerminateChain)},
 	} {
-		if len(match.domains) > 0 {
+		// Exclusions come first; Envoy rejects a domain registered more than once.
+		domains := make([]string, 0, len(match.domains))
+		for _, domain := range match.domains {
+			key := strings.ToLower(domain)
+			if !seen[key] {
+				seen[key] = true
+				domains = append(domains, domain)
+			}
+		}
+		if len(domains) > 0 {
 			domainMatchers = append(domainMatchers, &xdsmatcherv3.ServerNameMatcher_DomainMatcher{
-				Domains: match.domains,
+				Domains: domains,
 				OnMatch: match.onMatch,
 			})
 		}

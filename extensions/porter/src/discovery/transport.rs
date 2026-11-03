@@ -33,7 +33,11 @@ pub struct TransportConfig {
 }
 
 impl Client {
-    async fn stream(self: &Arc<Self>, transport: &TransportConfig) -> Result<()> {
+    async fn stream(
+        self: &Arc<Self>,
+        transport: &TransportConfig,
+        received: &mut bool,
+    ) -> Result<()> {
         let roots = tokio::fs::read(&transport.root_path)
             .await
             .with_context(|| format!("read ADS roots {}", transport.root_path))?;
@@ -56,8 +60,8 @@ impl Client {
         let cancel = CancellationToken::new();
         let _guard = cancel.clone().drop_guard();
         let outbound = async_stream::stream! {
-            // Construct retained subscriptions when the request body is polled,
-            // instead of preparing them before initiating the RPC.
+            // The RPC polls this body before confirming the stream. Only pending
+            // demands may be sent while the old cache is still in its grace period.
             let mut sent_generations = Default::default();
             for request in client.initial(&node, &mut sent_generations) {
                 yield request;
@@ -90,13 +94,15 @@ impl Client {
             .await
             .context("establish ADS stream")?
             .into_inner();
-        self.metrics.connected.set(1);
+        self.established();
         info!("ADS stream established");
         while let Some(response) = responses.message().await.context("receive ADS response")? {
             let Some(kind) = ResourceKind::from_type_url(&response.type_url) else {
                 bail!("unexpected discovery type {}", response.type_url);
             };
-            let error = self.apply(kind, &response).err().map(|error| {
+            let applied = self.apply(kind, &response);
+            *received |= applied.is_ok();
+            let error = applied.err().map(|error| {
                 self.metrics
                     .nacks
                     .get_or_create(&ResourceType {
@@ -135,18 +141,14 @@ impl Client {
             connection_id += 1;
             let span = info_span!("xds", connection_id, address = %transport.address);
             let started = Instant::now();
+            // Cached sync state may belong to the previous stream during grace.
+            // Only accepted responses on this attempt can reset its backoff.
+            let mut received = false;
             let result = tokio::select! {
                 _ = stop.cancelled() => break,
-                result = self.stream(&transport).instrument(span.clone()) => result,
+                result = self.stream(&transport, &mut received).instrument(span.clone()) => result,
             };
-            let received = self
-                .state
-                .lock()
-                .unwrap()
-                .types
-                .iter()
-                .any(|type_state| type_state.synced);
-            self.reset();
+            self.disconnected();
             if received && started.elapsed() > Duration::from_secs(1) {
                 delay = INITIAL_BACKOFF;
             }

@@ -105,6 +105,83 @@ func TestRunStopsWhenContextIsCanceled(t *testing.T) {
 	}
 }
 
+func TestShutdownHTTPBoundsActiveRequests(t *testing.T) {
+	for _, graceful := range []bool{true, false} {
+		name := "forced"
+		if graceful {
+			name = "graceful"
+		}
+		t.Run(name, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{}, 1)
+			handlerDone := make(chan bool, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				close(entered)
+				select {
+				case <-release:
+					response.WriteHeader(http.StatusNoContent)
+				case <-request.Context().Done():
+				}
+				handlerDone <- request.Context().Err() != nil
+			}))
+			defer server.Close()
+			defer close(release)
+			shutdownStarted := make(chan struct{})
+			server.Config.RegisterOnShutdown(func() { close(shutdownStarted) })
+			clientDone := make(chan error, 1)
+			go func() {
+				response, err := server.Client().Get(server.URL)
+				if err == nil {
+					err = response.Body.Close()
+					if response.StatusCode != http.StatusNoContent {
+						err = errors.New("unexpected response status")
+					}
+				}
+				clientDone <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("HTTP request did not enter handler")
+			}
+			shutdownDone := make(chan struct{})
+			go func() {
+				shutdownHTTP(server.Config, 100*time.Millisecond)
+				close(shutdownDone)
+			}()
+			if graceful {
+				select {
+				case <-shutdownStarted:
+					release <- struct{}{}
+				case <-time.After(time.Second):
+					t.Fatal("HTTP shutdown did not start")
+				}
+			}
+			select {
+			case <-shutdownDone:
+			case <-time.After(time.Second):
+				t.Fatal("HTTP shutdown exceeded its grace period")
+			}
+			select {
+			case canceled := <-handlerDone:
+				if canceled == graceful {
+					t.Fatalf("request context canceled = %v, want %v", canceled, !graceful)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("HTTP handler did not finish after shutdown")
+			}
+			select {
+			case err := <-clientDone:
+				if (err == nil) != graceful {
+					t.Fatalf("HTTP client error = %v, graceful = %v", err, graceful)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("HTTP client did not finish after shutdown")
+			}
+		})
+	}
+}
+
 func TestGRPCServerKeepaliveUsesConfiguredMaxConnectionAge(t *testing.T) {
 	test.SetForTest(t, &features.MaxServerConnectionAge, 47*time.Minute)
 	parameters := grpcServerKeepaliveParameters()

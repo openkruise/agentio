@@ -29,6 +29,8 @@ use crate::{
     wire::ads::{self, DeltaDiscoveryRequest as Request, DeltaDiscoveryResponse as Response, Node},
 };
 
+const DISCONNECT_GRACE: Duration = Duration::from_secs(5);
+
 mod transport;
 pub use transport::TransportConfig;
 
@@ -145,6 +147,8 @@ struct State {
     types: [TypeState; ResourceKind::ALL.len()],
     idle: LruCache<ResourceKey, Instant>,
     next_generation: u64,
+    disconnected: bool,
+    grace_deadline: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -165,6 +169,7 @@ impl Default for CacheConfig {
 pub struct Client {
     state: Mutex<State>,
     epoch: AtomicU64,
+    invalidated: watch::Sender<u64>,
     config: CacheConfig,
     wake: Notify,
     expiry: Notify,
@@ -179,8 +184,11 @@ impl Client {
                 types: Default::default(),
                 idle: LruCache::unbounded(),
                 next_generation: 0,
+                disconnected: false,
+                grace_deadline: None,
             }),
             epoch: AtomicU64::new(0),
+            invalidated: watch::channel(0).0,
             config,
             wake: Notify::new(),
             expiry: Notify::new(),
@@ -191,6 +199,15 @@ impl Client {
 
     pub fn readiness(&self) -> watch::Receiver<bool> {
         self.ready.subscribe()
+    }
+
+    pub(crate) fn invalidations(&self) -> watch::Receiver<u64> {
+        self.invalidated.subscribe()
+    }
+
+    pub(crate) fn current_epoch(&self) -> u64 {
+        self.expire_disconnected();
+        self.epoch.load(Ordering::Acquire)
     }
 
     fn size(state: &State) -> usize {
@@ -248,6 +265,7 @@ impl Client {
         if name.is_empty() || name == "*" {
             return Err(DemandError::InvalidName);
         }
+        self.expire_disconnected();
         let key = ResourceKey {
             kind,
             name: name.into(),
@@ -374,6 +392,7 @@ impl Client {
     }
 
     fn cached_many(&self, kind: ResourceKind, names: &[String]) -> Option<Vec<Arc<View>>> {
+        self.expire_disconnected();
         let now = Instant::now();
         let mut state = self.state.lock().unwrap();
         self.prune(&mut state, now);
@@ -416,17 +435,19 @@ impl Client {
 
     pub async fn expire(self: Arc<Self>, stop: CancellationToken) {
         loop {
+            self.expire_disconnected();
             let deadline = {
                 let mut state = self.state.lock().unwrap();
                 self.prune(&mut state, Instant::now());
-                if self.config.idle_ttl.is_zero() {
+                let idle = if self.config.idle_ttl.is_zero() {
                     None
                 } else {
                     state
                         .idle
                         .peek_lru()
                         .map(|(_, t)| *t + self.config.idle_ttl)
-                }
+                };
+                idle.into_iter().chain(state.grace_deadline).min()
             };
             tokio::select! {
                 _ = stop.cancelled() => break,
@@ -441,32 +462,82 @@ impl Client {
         }
     }
 
+    fn disconnected(&self) {
+        let mut state = self.state.lock().unwrap();
+        if !state.disconnected {
+            state.disconnected = true;
+            state.grace_deadline = Some(Instant::now() + DISCONNECT_GRACE);
+        }
+        self.metrics.connected.set(0);
+        self.ready.send_replace(false);
+        self.expiry.notify_one();
+    }
+
+    fn expire_disconnected(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state
+            .grace_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            let retired = self.reset_locked(&mut state);
+            drop(state);
+            drop(retired);
+        }
+    }
+
+    fn established(&self) {
+        self.reset();
+        self.state.lock().unwrap().disconnected = false;
+        self.metrics.connected.set(1);
+    }
+
     fn reset(&self) {
         let started = Instant::now();
         let mut state = self.state.lock().unwrap();
+        let retired = self.reset_locked(&mut state);
+        drop(state);
+        // Resource views and idle generations can be large; release them without
+        // holding the mutex needed by newly arriving demands.
+        drop(retired);
+        tracing::debug!(
+            reset_us = started.elapsed().as_micros() as u64,
+            "invalidated ADS cache"
+        );
+    }
+
+    fn reset_locked(
+        &self,
+        state: &mut State,
+    ) -> (
+        [TypeState; ResourceKind::ALL.len()],
+        LruCache<ResourceKey, Instant>,
+    ) {
         let mut retired_types = std::mem::take(&mut state.types);
         let retired_idle = std::mem::replace(&mut state.idle, LruCache::unbounded());
+        let epoch = self.epoch.fetch_add(1, Ordering::Release) + 1;
         for (type_state, retired) in state.types.iter_mut().zip(&mut retired_types) {
             // Preserve generations owned by waiting callers. Idle interests are
             // rediscovered on demand instead of replaying the historical cache.
             type_state
                 .entries
                 .extend(retired.entries.extract_if(|_, entry| entry.users > 0));
+            for entry in type_state.entries.values() {
+                entry
+                    .generation
+                    .value
+                    .send_replace((epoch, Outcome::Pending));
+            }
+            // Demands arriving after initial() must also reach the new stream.
+            type_state.dirty.extend(type_state.entries.keys().cloned());
         }
-        self.epoch.fetch_add(1, Ordering::Release);
-        self.publish_size(&state);
+        state.grace_deadline = None;
+        self.invalidated.send_replace(epoch);
+        self.wake.notify_one();
+        self.publish_size(state);
         self.metrics.connected.set(0);
         self.ready.send_replace(false);
-        drop(state);
-        // Resource views and idle generations can be large; release them without
-        // holding the mutex needed by newly arriving demands.
-        drop(retired_types);
-        drop(retired_idle);
         self.expiry.notify_one();
-        tracing::debug!(
-            reset_us = started.elapsed().as_micros() as u64,
-            "invalidated ADS cache"
-        );
+        (retired_types, retired_idle)
     }
 
     fn initial(
@@ -485,6 +556,16 @@ impl Client {
                     ..Default::default()
                 };
                 for (name, entry) in &type_state.entries {
+                    // The body is polled before the RPC succeeds. Keep cached
+                    // values usable during the handshake, but never replay them.
+                    if entry.users == 0
+                        || !matches!(
+                            self.current(&entry.generation.value.borrow()),
+                            Outcome::Pending
+                        )
+                    {
+                        continue;
+                    }
                     request.resource_names_subscribe.push(name.clone());
                     sent_generations[kind.index()].insert(name.clone(), entry.generation.id);
                 }
@@ -505,6 +586,7 @@ impl Client {
     ) -> Vec<Request> {
         let mut state = self.state.lock().unwrap();
         let mut requests = Vec::new();
+        let handshaking = state.disconnected;
         for kind in ResourceKind::ALL {
             let type_state = &mut state.types[kind.index()];
             let mut request = Request {
@@ -514,8 +596,14 @@ impl Client {
             for name in std::mem::take(&mut type_state.dirty) {
                 match type_state.entries.get(&name) {
                     Some(entry)
-                        if sent_generations[kind.index()].get(&name)
-                            != Some(&entry.generation.id) =>
+                        if (!handshaking
+                            || (entry.users > 0
+                                && matches!(
+                                    self.current(&entry.generation.value.borrow()),
+                                    Outcome::Pending
+                                )))
+                            && sent_generations[kind.index()].get(&name)
+                                != Some(&entry.generation.id) =>
                     {
                         sent_generations[kind.index()].insert(name.clone(), entry.generation.id);
                         request.resource_names_subscribe.push(name);

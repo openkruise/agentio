@@ -265,7 +265,14 @@ func configureStatsMatcher(stats map[string]any, c Config) error {
 	patterns := []any{}
 	// Retain lifecycle signals regardless of the user's selection.
 	prefixes := append(
-		[]string{"cluster_manager", "listener_manager", "server", "cluster.xds-grpc", "wasm", "agentio_gateway."},
+		[]string{
+			"cluster_manager",
+			"listener_manager",
+			"server",
+			"cluster.xds-grpc",
+			"wasm",
+			"agentio_gateway.",
+		},
 		matcher.InclusionPrefixes...)
 	groups := map[string][]string{
 		"prefix": prefixes,
