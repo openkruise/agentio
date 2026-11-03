@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: origin
+  namespace: agentio-istio-demo
+  labels:
+    istio.io/use-waypoint: agentio-egress
+    istio.io/use-waypoint-namespace: agentio-istio-system
+spec:
+  selector:
+    app: istio-demo-origin
+  ports:
+  - name: http
+    port: 18082
+    targetPort: http

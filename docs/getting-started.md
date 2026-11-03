@@ -21,6 +21,8 @@ The standalone chart defaults to `profile: sidecar`; set `profile: ambient` for 
 
 If OpenKruise Agents creates the workload, start with [Integrate OpenKruise Agents](integrations/openkruise-agents.md) instead. Its embedded installation runs Agentio in the sandbox-manager release and uses sandbox-controller's traffic-proxy injection.
 
+If Istio ambient already captures your workloads, use [Integrate with Istio ambient](integrations/istio-ambient.md) to run an Agentio egress waypoint with the existing Istio CNI, ztunnel, and CA.
+
 ## Continue with policy and egress
 
 Each onboarding guide creates a test workload and exports the variables used by the task pages. Continue with:
