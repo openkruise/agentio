@@ -36,93 +36,80 @@ import (
 	"github.com/openkruise/agentio/pkg/security/attestation"
 )
 
-func TestRequestSlotsBoundInitialSendWithoutBlockingACKOrPush(t *testing.T) {
-	old := addressResource(t, "cluster//Pod/demo/a", "old")
-	server := newTestServerWithScheduler(t, ztunnelScope(), []model.Resource{old}, nil, NewPushScheduler(1))
-	server.server.flow.config.requestWait = 50 * time.Millisecond
-	ctx := t.Context()
-	ready := newFakeStream(ctx, 1)
-	watches := map[string]*watchState{}
-	subscription := server.resources.Subscribe(ctx, server.scope)
-	readyLease := server.server.flow.newLease(ctx)
-	defer readyLease.release()
-	if err := server.server.handleClientRequest(
-		ready,
-		server.scope,
-		log,
-		watches,
-		subscription,
-		nodeRequest(model.AddressType),
-		readyLease,
-	); err != nil {
-		t.Fatal(err)
-	}
-	nonce := ready.sent()[0].Nonce
-	if err := server.server.handleClientRequest(
-		ready,
-		server.scope,
-		log,
-		watches,
-		subscription,
-		&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: nonce},
-		readyLease,
-	); err != nil {
-		t.Fatal(err)
-	}
-	entered, release := make(chan struct{}), make(chan struct{})
-	blocked := newFakeStream(ctx, 1)
-	blocked.beforeSend = func() {
-		close(entered)
-		<-release
-	}
-	blockedLease := server.server.flow.newLease(ctx)
-	done := make(chan error, 1)
-	go func() {
-		done <- server.server.handleClientRequest(blocked, server.scope, log, map[string]*watchState{},
-			server.resources.Subscribe(ctx, server.scope), nodeRequest(model.AddressType), blockedLease)
-	}()
-	t.Cleanup(func() {
-		close(release)
-		<-done
-		blockedLease.release()
+func TestSessionInitialCapacityPreservesEstablishedRequestsAndPushes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		old := addressResource(t, "cluster//Pod/demo/a", "old")
+		server := newTestServerWithScheduler(t, ztunnelScope(), []model.Resource{old}, nil, NewPushScheduler(1))
+		ready := newFakeStream(ctx, 4)
+		ready.send(nodeRequest(model.AddressType))
+		readyDone := server.start(ready)
+		synctest.Wait()
+		ready.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: ready.sent()[0].Nonce})
+		synctest.Wait()
+
+		// This unconfirmed stream holds initial capacity without subscribing to updates.
+		blockedCtx, cancelBlocked := context.WithCancel(ctx)
+		defer cancelBlocked()
+		blocked := newFakeStream(blockedCtx, 1)
+		blocked.send(nodeRequest("type.example/hold"))
+		blockedDone := server.start(blocked)
+		synctest.Wait()
+		if len(blocked.sent()) != 1 {
+			t.Fatal("unconfirmed stream did not receive its initial response")
+		}
+		second := newFakeStream(ctx, 1)
+		second.send(nodeRequest(model.AddressType))
+		secondDone := server.start(second)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case err := <-secondDone:
+			if status.Code(err) != codes.ResourceExhausted || len(second.sent()) != 0 {
+				t.Fatalf("second initial request = %v, responses = %d", err, len(second.sent()))
+			}
+		default:
+			t.Fatal("initial capacity wait exceeded one second")
+		}
+
+		ready.send(request(model.AddressType))
+		synctest.Wait()
+		if len(ready.sent()) != 2 {
+			t.Fatal("established demand was blocked by occupied initial capacity")
+		}
+		ready.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: ready.sent()[1].Nonce})
+		synctest.Wait()
+		updated := addressResource(t, old.Key.Name, "updated")
+		if err := server.resources.apply([]model.ResourceChange{{Key: old.Key, New: &updated}}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if len(ready.sent()) != 3 || ready.sent()[2].Resources[0].Version == ready.sent()[0].Resources[0].Version {
+			t.Fatal("background update was blocked by occupied initial capacity")
+		}
+		ready.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: ready.sent()[2].Nonce})
+		synctest.Wait()
+		ready.closeRequests()
+		if err := <-readyDone; err != nil {
+			t.Fatalf("established stream = %v", err)
+		}
+		cancelBlocked()
+		if err := <-blockedDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("unconfirmed stream cancellation = %v", err)
+		}
+		recovered := newFakeStream(ctx, 1)
+		recovered.send(nodeRequest(model.AddressType))
+		recoveredDone := server.start(recovered)
+		synctest.Wait()
+		if len(recovered.sent()) != 1 {
+			t.Fatal("new stream could not reuse released initial capacity")
+		}
+		recovered.closeRequests()
+		if err := <-recoveredDone; err != nil {
+			t.Fatal(err)
+		}
 	})
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("initial response did not enter Send")
-	}
-	second := newFakeStream(ctx, 1)
-	secondLease := server.server.flow.newLease(ctx)
-	defer secondLease.release()
-	err := server.server.handleClientRequest(second, server.scope, log, map[string]*watchState{},
-		server.resources.Subscribe(ctx, server.scope), nodeRequest(model.AddressType), secondLease)
-	if status.Code(err) != codes.ResourceExhausted || len(second.sent()) != 0 {
-		t.Fatalf("second initial request = %v, responses = %d", err, len(second.sent()))
-	}
-	if err := server.server.handleClientRequest(ready, server.scope, log, watches, subscription,
-		&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: nonce}, readyLease); err != nil {
-		t.Fatalf("pure ACK consumed an occupied request slot: %v", err)
-	}
-	updated := addressResource(t, old.Key.Name, "updated")
-	changes := []model.ResourceChange{{Key: old.Key, New: &updated}}
-	if err := server.resources.apply(changes); err != nil {
-		t.Fatal(err)
-	}
-	// Server pushes have their own scheduler capacity, including while a
-	// client-triggered response is holding every request slot.
-	if err := readyLease.acquire(server.server.flow.pushSlots); err != nil {
-		t.Fatal(err)
-	}
-	if len(server.server.flow.pushSlots) != 1 || len(server.server.flow.initialSlots) != 1 ||
-		len(server.server.flow.requestSlots) != 0 {
-		t.Fatal("initial and push response pools are not independent")
-	}
-	if err := server.server.pushUpdate(ready, server.scope, log, watches, updateFromChanges(t, changes)); err != nil {
-		t.Fatalf("push blocked by occupied request slot: %v", err)
-	}
-	if len(ready.sent()) != 2 {
-		t.Fatalf("responses = %d, want initial plus push (ACK sends nothing)", len(ready.sent()))
-	}
 }
 
 func TestRequestSlotWaitHonorsParentCancellation(t *testing.T) {
@@ -330,68 +317,64 @@ func TestBackgroundCapacityWaitPreservesEstablishedStreamProgress(t *testing.T) 
 	}
 }
 
-func TestResponseLeaseReusesSlotUntilEveryTypeIsAcknowledged(t *testing.T) {
-	server := newTestServerWithScheduler(t, gatewayScope(), []model.Resource{
-		gatewayResource(t, "demo/egress", "cluster", "payload"),
-	}, nil, NewPushScheduler(1))
-	ctx := t.Context()
-	stream := newFakeStream(ctx, 1)
-	watches := map[string]*watchState{}
-	subscription := server.resources.Subscribe(ctx, server.scope)
-	lease := &responseLease{ctx: ctx, wait: time.Second, timeout: 5 * time.Second}
-	defer lease.release()
-	for _, typ := range []string{model.ClusterType, model.ListenerType} {
-		if err := server.server.handleClientRequest(
-			stream,
-			server.scope,
-			log,
-			watches,
-			subscription,
-			nodeRequest(typ),
-			lease,
-		); err != nil {
-			t.Fatalf("second type must reuse the first type's lease: %v", err)
+func TestSessionSharesResponseCapacityAcrossTypes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		server := newTestServerWithScheduler(t, gatewayScope(), []model.Resource{
+			gatewayResource(t, "demo/egress", "cluster", "payload"),
+		}, nil, NewPushScheduler(1))
+		stream := newFakeStream(ctx, 4)
+		stream.send(nodeRequest(model.ClusterType))
+		stream.send(request(model.ListenerType))
+		done := server.start(stream)
+		synctest.Wait()
+		responses := stream.sent()
+		if len(responses) != 2 {
+			t.Fatalf("two response types must share one lease: responses = %d", len(responses))
 		}
-	}
-	if len(server.server.flow.initialSlots) != 1 || len(stream.sent()) != 2 {
-		t.Fatal("two response types did not share one lease")
-	}
-	responses := stream.sent()
-	if err := server.server.handleClientRequest(
-		stream,
-		server.scope,
-		log,
-		watches,
-		subscription,
-		&discoveryv3.DeltaDiscoveryRequest{
-			TypeUrl:       model.ClusterType,
-			ResponseNonce: responses[0].Nonce,
-		},
-		lease,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if len(server.server.flow.initialSlots) != 1 {
-		t.Fatal("ACK for one type released another type's unacknowledged response")
-	}
-	if server.server.flow.requestResponsePool(watches) != server.server.flow.requestSlots ||
-		lease.pool != server.server.flow.initialSlots {
-		t.Fatal("first ACK must promote future leases without moving the currently held initial lease")
-	}
-	if err := server.server.handleClientRequest(stream, server.scope, log, watches, subscription,
-		&discoveryv3.DeltaDiscoveryRequest{
+		stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: responses[0].Nonce})
+		synctest.Wait()
+
+		probe := newFakeStream(ctx, 1)
+		probe.send(nodeRequest(model.ClusterType))
+		probeDone := server.start(probe)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case err := <-probeDone:
+			if status.Code(err) != codes.ResourceExhausted || len(probe.sent()) != 0 {
+				t.Fatalf(
+					"ACK for one type released initial capacity: error = %v, responses = %d",
+					err,
+					len(probe.sent()),
+				)
+			}
+		default:
+			t.Fatal("initial capacity wait exceeded one second")
+		}
+		stream.send(&discoveryv3.DeltaDiscoveryRequest{
 			TypeUrl:       model.ListenerType,
 			ResponseNonce: responses[1].Nonce,
-			ErrorDetail: &rpcstatus.Status{
-				Code:    int32(codes.InvalidArgument),
-				Message: "rejected",
-			},
-		}, lease); err != nil {
-		t.Fatal(err)
-	}
-	if len(server.server.flow.initialSlots) != 0 {
-		t.Fatal("ACK plus NACK did not release fully consumed responses")
-	}
+			ErrorDetail:   &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "rejected"},
+		})
+		synctest.Wait()
+		recovered := newFakeStream(ctx, 1)
+		recovered.send(nodeRequest(model.ClusterType))
+		recoveredDone := server.start(recovered)
+		synctest.Wait()
+		if len(recovered.sent()) != 1 {
+			t.Fatal("ACK plus NACK did not release fully consumed initial capacity")
+		}
+		for _, current := range []*fakeStream{stream, recovered} {
+			current.closeRequests()
+		}
+		for _, result := range []<-chan error{done, recoveredDone} {
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestResponseLeaseDeadlineIsNotExtendedByMoreResponses(t *testing.T) {
@@ -413,133 +396,128 @@ func TestResponseLeaseDeadlineIsNotExtendedByMoreResponses(t *testing.T) {
 	})
 }
 
-func TestResponseLeaseAllowsContinuousAcknowledgementProgress(t *testing.T) {
+func TestSessionContinuousAcknowledgementsKeepStreamAlive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 		server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
-		ctx := t.Context()
-		stream := newFakeStream(ctx, 1)
-		watches := map[string]*watchState{}
-		subscription := server.resources.Subscribe(ctx, server.scope)
-		lease := &responseLease{ctx: ctx, wait: time.Second, timeout: 5 * time.Second}
-		defer lease.release()
+		stream := newFakeStream(ctx, 4)
 		types := []string{model.ClusterType, model.ListenerType}
-		for _, typ := range types {
-			if err := server.server.handleClientRequest(
-				stream,
-				server.scope,
-				log,
-				watches,
-				subscription,
-				nodeRequest(typ),
-				lease,
-			); err != nil {
-				t.Fatal(err)
-			}
-		}
-		// Every response is consumed within two seconds, but alternating types
-		// means the stream always has one outstanding response.
-		for range 3 {
+		stream.send(nodeRequest(types[0]))
+		stream.send(request(types[1]))
+		done := server.start(stream)
+		synctest.Wait()
+		// Each response is consumed within two seconds while another type stays outstanding.
+		for round := range 3 {
 			time.Sleep(2 * time.Second)
 			for _, typ := range types {
-				if err := server.server.handleClientRequest(
-					stream,
-					server.scope,
-					log,
-					watches,
-					subscription,
-					&discoveryv3.DeltaDiscoveryRequest{
-						TypeUrl:       typ,
-						ResponseNonce: watches[typ].nonceSent,
-					},
-					lease,
-				); err != nil {
-					t.Fatal(err)
+				responses := stream.responsesFor(typ)
+				if len(responses) != round+1 {
+					t.Fatalf("%s responses = %d, want %d", typ, len(responses), round+1)
 				}
-				if err := server.server.handleClientRequest(
-					stream,
-					server.scope,
-					log,
-					watches,
-					subscription,
-					request(typ),
-					lease,
-				); err != nil {
-					t.Fatalf("healthy stream making ACK progress was disconnected: %v", err)
-				}
+				stream.send(
+					&discoveryv3.DeltaDiscoveryRequest{TypeUrl: typ, ResponseNonce: responses[len(responses)-1].Nonce},
+				)
+				stream.send(request(typ))
+				synctest.Wait()
 			}
+			select {
+			case err := <-done:
+				t.Fatalf("healthy stream making ACK progress was disconnected: %v", err)
+			default:
+			}
+		}
+		for _, typ := range types {
+			responses := stream.responsesFor(typ)
+			if len(responses) != 4 {
+				t.Fatalf("%s responses = %d, want 4", typ, len(responses))
+			}
+			stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: typ, ResponseNonce: responses[3].Nonce})
+		}
+		stream.closeRequests()
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
 	})
 }
 
-func TestResponseLeaseTracksOldACKWithoutMaskingStalledType(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
-		ctx := t.Context()
-		stream := newFakeStream(ctx, 1)
-		watches := map[string]*watchState{}
-		subscription := server.resources.Subscribe(ctx, server.scope)
-		lease := &responseLease{ctx: ctx, wait: time.Second, timeout: 5 * time.Second}
-		defer lease.release()
-		send := func(req *discoveryv3.DeltaDiscoveryRequest) {
-			t.Helper()
-			if err := server.server.handleClientRequest(
-				stream,
-				server.scope,
-				log,
-				watches,
-				subscription,
-				req,
-				lease,
-			); err != nil {
-				t.Fatal(err)
-			}
-		}
-		send(nodeRequest(model.ClusterType))
-		older := watches[model.ClusterType].nonceSent
-		time.Sleep(2 * time.Second)
-		send(request(model.ClusterType))
-		time.Sleep(2 * time.Second)
-		originalDeadline := lease.deadline
-		send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: "not-sent"})
-		if !lease.deadline.Equal(originalDeadline) {
-			t.Fatal("unknown nonce extended response lifetime")
-		}
-		if server.server.flow.requestResponsePool(watches) != server.server.flow.initialSlots {
-			t.Fatal("unknown nonce promoted an unconfirmed client")
-		}
-		send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: older})
-		if server.server.flow.requestResponsePool(watches) != server.server.flow.requestSlots {
-			t.Fatal("older valid ACK did not establish the client")
-		}
-		if watches[model.ClusterType].nonceAcked != "" {
-			t.Fatal("old ACK changed latest-response acknowledgement semantics")
-		}
-		time.Sleep(2 * time.Second)
-		if lease.timedOut() {
-			t.Fatal("old but valid ACK failed to advance transport progress")
-		}
-		send(nodeRequest(model.ListenerType))
-		send(
-			&discoveryv3.DeltaDiscoveryRequest{
-				TypeUrl:       model.ClusterType,
-				ResponseNonce: watches[model.ClusterType].nonceSent,
-			},
-		)
-		for range 2 {
-			time.Sleep(2 * time.Second)
-			send(request(model.ClusterType))
-			send(
-				&discoveryv3.DeltaDiscoveryRequest{
-					TypeUrl:       model.ClusterType,
-					ResponseNonce: watches[model.ClusterType].nonceSent,
-				},
-			)
-		}
-		time.Sleep(time.Second)
-		if !lease.timedOut() {
-			t.Fatal("CDS ACK progress masked an unacknowledged LDS response")
-		}
-	})
+func TestSessionAcknowledgementProgressUsesSentNonces(t *testing.T) {
+	for _, confirmation := range []string{"unknown nonce", "older valid ACK"} {
+		t.Run(confirmation, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
+				stream := newFakeStream(ctx, 4)
+				stream.send(nodeRequest(model.ClusterType))
+				done := server.start(stream)
+				synctest.Wait()
+				older := stream.sent()[0].Nonce
+				time.Sleep(2 * time.Second)
+				stream.send(request(model.ClusterType))
+				synctest.Wait()
+				time.Sleep(2 * time.Second)
+				stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: "not-sent"})
+				synctest.Wait()
+				if confirmation == "older valid ACK" {
+					stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: older})
+					synctest.Wait()
+					time.Sleep(2 * time.Second)
+					select {
+					case err := <-done:
+						t.Fatalf("old valid ACK failed to advance transport progress: %v", err)
+					default:
+					}
+					stream.send(request(model.ListenerType))
+					stream.send(
+						&discoveryv3.DeltaDiscoveryRequest{
+							TypeUrl:       model.ClusterType,
+							ResponseNonce: stream.responsesFor(model.ClusterType)[1].Nonce,
+						},
+					)
+					synctest.Wait()
+					if len(stream.responsesFor(model.ListenerType)) != 1 {
+						t.Fatal("stream could not send another type after old ACK progress")
+					}
+					for range 2 {
+						time.Sleep(2 * time.Second)
+						stream.send(request(model.ClusterType))
+						synctest.Wait()
+						responses := stream.responsesFor(model.ClusterType)
+						stream.send(
+							&discoveryv3.DeltaDiscoveryRequest{
+								TypeUrl:       model.ClusterType,
+								ResponseNonce: responses[len(responses)-1].Nonce,
+							},
+						)
+						synctest.Wait()
+					}
+				}
+				time.Sleep(time.Second)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					if status.Code(err) != codes.DeadlineExceeded ||
+						!strings.Contains(err.Error(), "acknowledgement timeout") {
+						t.Fatalf("%s: stream = %v, want acknowledgement timeout", confirmation, err)
+					}
+				default:
+					t.Fatalf("%s extended the oldest unacknowledged response deadline", confirmation)
+				}
+				recovered := newFakeStream(ctx, 1)
+				recovered.send(nodeRequest(model.ClusterType))
+				recoveredDone := server.start(recovered)
+				synctest.Wait()
+				if len(recovered.sent()) != 1 {
+					t.Fatal("timed-out stream did not release initial capacity")
+				}
+				recovered.closeRequests()
+				if err := <-recoveredDone; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
 }
 
 func TestSDSCompletionAcquiresResponseLease(t *testing.T) {
