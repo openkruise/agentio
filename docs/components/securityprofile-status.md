@@ -6,10 +6,13 @@ agentiod validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and Glo
 | --- | --- | --- | --- |
 | `Accepted` | The production compilers accepted the configuration. | Compilation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed validation is available yet. |
 | `ResolvedRefs` | All inspectable references resolved. | A referenced object is absent from a synchronized, in-scope cache. | A cache is not synchronized, a reference is outside the watch scope, runtime resolution is required, DNS has no addresses yet, or validation failed before reference checks. |
+| `Programmed` (SecurityProfiles only) | The configuration compiled successfully and is eligible for data-plane distribution. | Compilation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed compilation is available yet. |
 
 A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also retain their existing `status.observedGeneration`; TrafficPolicies use the generation in each condition. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` changes only when the condition's True/False/Unknown value changes.
 
-The controller writes only `Accepted` and `ResolvedRefs`. It does not write `Programmed`: successful validation cannot confirm data-plane loading or runtime success. Other controllers may own separate condition types, but must not compete for these two types.
+For SecurityProfile and GlobalSecurityProfile, `Programmed` follows the compilation result reported by `Accepted`. It does not wait for data-plane acknowledgements or confirm that EPE has loaded the configuration. Reference checks remain separate: missing or runtime-resolved references affect `ResolvedRefs`, not `Programmed`.
+
+The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on SecurityProfiles, and only `Accepted` and `ResolvedRefs` on TrafficPolicies. Other controllers may own separate condition types, but must not compete for these types.
 
 ## Enable or disable
 
@@ -42,5 +45,9 @@ Inspect a policy with:
 
 ```sh
 kubectl get securityprofile -n demo example -o yaml
+kubectl get securityprofile -n demo
+kubectl get securityprofile -n demo -o wide
 kubectl get trafficpolicy -n demo example -o jsonpath='{.status.conditions}'
 ```
+
+SecurityProfile and GlobalSecurityProfile list output shows `Programmed` and `Age`. Use `-o wide` to also show `Accepted` and `ResolvedRefs`.

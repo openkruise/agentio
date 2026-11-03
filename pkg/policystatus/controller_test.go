@@ -93,7 +93,20 @@ func awaitResult(
 		return got != nil && got.Conditions[0].Status == accepted &&
 			got.Conditions[1].Status == refs && got.Conditions[1].Reason == reason
 	}, true)
-	assert.Equal(t, len(got.Conditions), 2)
+	if got.Source.Profile != nil {
+		assert.Equal(t, len(got.Conditions), 3)
+		programmed := got.Conditions[2]
+		assert.Equal(t, programmed.Type, "Programmed")
+		assert.Equal(t, programmed.Status, accepted)
+		if accepted == metav1.ConditionTrue {
+			assert.Equal(t, programmed.Reason, "Programmed")
+		} else {
+			assert.Equal(t, programmed.Reason, got.Conditions[0].Reason)
+			assert.Equal(t, programmed.Message, got.Conditions[0].Message)
+		}
+	} else {
+		assert.Equal(t, len(got.Conditions), 2)
+	}
 	for _, condition := range got.Conditions {
 		assert.Equal(t, got.Source.Metadata.Generation, condition.ObservedGeneration)
 	}
@@ -144,6 +157,33 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
 	maps.DeleteObject("demo/config")
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ConfigMapNotFound")
+}
+
+func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
+	for _, namespace := range []string{"demo", ""} {
+		s := profileSource(t, `{}`, namespace)
+		t.Run(s.Kind, func(t *testing.T) {
+			c, _ := testController(t, false)
+			sources := krt.NewMutableCollection(nil, []source{s}, krt.WithStop(t.Context().Done()))
+			profiles := krt.NewCollection(sources.AsCollection(), func(_ krt.HandlerContext, s source) *compiledProfile {
+				return c.compileProfile(s)
+			}, krt.WithStop(t.Context().Done()))
+			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+
+			invalid := s
+			invalid.Profile = s.Profile.DeepCopy()
+			priority := int32(-1)
+			invalid.Profile.Priority = &priority
+			invalid.Metadata.Generation++
+			sources.UpdateObject(invalid)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+
+			s.Metadata.Generation = invalid.Metadata.Generation + 1
+			sources.UpdateObject(s)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+		})
+	}
 }
 
 func TestUnobservableProfileReferences(t *testing.T) {
