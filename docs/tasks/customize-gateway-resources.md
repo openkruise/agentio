@@ -100,9 +100,15 @@ HPA and PDB are generated only when their respective patch key is present in the
 
 ## Gateway addresses
 
-Once the generated Deployment is available and its Service exists, the deployer publishes that Service's DNS name in `Gateway.status.addresses` with type `Hostname`. The address has the form `<service>.<namespace>.svc.<cluster-domain>` and uses the configured cluster domain, defaulting to `cluster.local`.
+Once the generated Deployment is available and its managed Service exists, the deployer publishes `Gateway.status.addresses` using the address-selection rules from `release-0.1`:
 
-An already published address is retained while the Deployment is pending or rolling out. Read the `Programmed` condition to distinguish availability from the retained discovery address.
+- Service external IPs and LoadBalancer ingress IPs or hostnames take precedence.
+- Without external addresses, `agentio-egress` reports both ClusterIPs and the Service hostname, as the waypoint class does in `release-0.1`. `agentio-agentgateway` reports the hostname by default.
+- The `networking.istio.io/address-type` Gateway annotation selects `IPAddress` or `Hostname` for internal addresses. It does not filter external addresses.
+
+The internal hostname has the form `<service>.<namespace>.svc.<cluster-domain>` and uses the configured cluster domain, defaulting to `cluster.local`. A headless Service contributes no ClusterIP.
+
+While a LoadBalancer Service has no external address, its internal hostname is omitted and `Programmed` is false with reason `AddressNotAssigned`; eligible internal IPs can still be reported. If no new address can be reported, an already published address is retained. Addresses are also retained while the Deployment is pending or rolling out and when native agentgateway configuration is invalid. Read the `Programmed` condition to distinguish availability from the retained discovery address.
 
 ## Updates and errors
 

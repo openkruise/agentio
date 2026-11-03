@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,6 +53,7 @@ const (
 	serviceTypeAnnotation    = "gateway.agentio.kruise.io/service-type"
 	nameOverrideAnnotation   = "gateway.agentio.kruise.io/name-override"
 	serviceAccountAnnotation = "gateway.agentio.kruise.io/service-account"
+	addressTypeOverride      = "networking.istio.io/address-type"
 )
 
 // dataplaneModeLabel, dataplaneModeNone, and networkLabel back setLabelOverrides.
@@ -400,7 +403,7 @@ func (d *DeploymentController) configureGateway(gw gatewayv1.Gateway, ci classIn
 			return fmt.Errorf("apply failed: %w", err)
 		}
 	}
-	if err := d.setGatewayStatus(gw, input); err != nil {
+	if err := d.setGatewayStatus(gw, input, ci); err != nil {
 		return fmt.Errorf("update gateway status: %w", err)
 	}
 	return nil
@@ -508,7 +511,7 @@ func (d *DeploymentController) setGatewayControllerVersion(gw gatewayv1.Gateway)
 	return d.clients.Patcher(gatewayGVR, gw.GetName(), gw.GetNamespace(), patch, "status")
 }
 
-func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input TemplateInput) error {
+func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input TemplateInput, ci classInfo) error {
 	programmedStatus := metav1.ConditionFalse
 	programmedReason := string(gatewayv1.GatewayReasonPending)
 	programmedMessage := "Waiting for gateway Deployment to become available"
@@ -525,12 +528,6 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 			}
 		}
 	}
-	conditions := []metav1.Condition{
-		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionAccepted), metav1.ConditionTrue,
-			gw.Generation, string(gatewayv1.GatewayReasonAccepted), "Resource accepted"),
-		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionProgrammed), programmedStatus,
-			gw.Generation, programmedReason, programmedMessage),
-	}
 	// Preserve the published address while a gateway is rolling out or temporarily unavailable.
 	addresses := gw.Status.Addresses
 	if programmedStatus == metav1.ConditionTrue {
@@ -539,10 +536,20 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 			if domain == "" {
 				domain = "cluster.local"
 			}
-			addressType := gatewayv1.HostnameAddressType
-			addresses = []gatewayv1.GatewayStatusAddress{{Type: &addressType,
-				Value: service.Name + "." + service.Namespace + ".svc." + domain}}
+			var pending bool
+			addresses, pending = gatewayAddresses(gw, service, ci, domain)
+			if pending {
+				programmedStatus = metav1.ConditionFalse
+				programmedReason = string(gatewayv1.GatewayReasonAddressNotAssigned)
+				programmedMessage = fmt.Sprintf("Address pending for service %s/%s", service.Namespace, service.Name)
+			}
 		}
+	}
+	conditions := []metav1.Condition{
+		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionAccepted), metav1.ConditionTrue,
+			gw.Generation, string(gatewayv1.GatewayReasonAccepted), "Resource accepted"),
+		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionProgrammed), programmedStatus,
+			gw.Generation, programmedReason, programmedMessage),
 	}
 	// Retain the controller-version annotation owned by the same SSA field manager.
 	patch := struct {
@@ -564,6 +571,60 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 		return err
 	}
 	return d.clients.Patcher(gatewayGVR, gw.Name, gw.Namespace, data, "status")
+}
+
+// Adapted from release-0.1 gateway.reportGatewayStatus. The generated Service
+// supplies the addresses directly instead of resolving them through Pilot's PushContext.
+func gatewayAddresses(gw gatewayv1.Gateway, service *corev1.Service, ci classInfo, domain string) ([]gatewayv1.GatewayStatusAddress, bool) {
+	external := slices.Clone(service.Spec.ExternalIPs)
+	for _, ingress := range service.Status.LoadBalancer.Ingress {
+		if ingress.IP != "" {
+			external = append(external, ingress.IP)
+		}
+		if ingress.Hostname != "" {
+			external = append(external, ingress.Hostname)
+		}
+	}
+	slices.Sort(external)
+	external = slices.Compact(external)
+	pending := service.Spec.Type == corev1.ServiceTypeLoadBalancer && len(external) == 0
+
+	addressesToReport := external
+	if len(addressesToReport) == 0 {
+		wantAddressType := ci.addressType
+		if override, ok := gw.Annotations[addressTypeOverride]; ok {
+			wantAddressType = gatewayv1.AddressType(override)
+		}
+		if wantAddressType != gatewayv1.HostnameAddressType {
+			internalIP := service.Spec.ClusterIPs
+			if len(internalIP) == 0 {
+				internalIP = []string{service.Spec.ClusterIP}
+			}
+			for _, ip := range internalIP {
+				if ip != "" && ip != corev1.ClusterIPNone {
+					addressesToReport = append(addressesToReport, ip)
+				}
+			}
+			slices.Sort(addressesToReport)
+			addressesToReport = slices.Compact(addressesToReport)
+		}
+		if wantAddressType != gatewayv1.IPAddressType && !pending {
+			addressesToReport = append(addressesToReport, service.Name+"."+service.Namespace+".svc."+domain)
+		}
+	}
+	// Do not report an address until we are ready. But once we are ready, never remove the address.
+	if len(addressesToReport) == 0 {
+		return gw.Status.Addresses, pending
+	}
+	addresses := make([]gatewayv1.GatewayStatusAddress, 0, len(addressesToReport))
+	for _, addr := range addressesToReport {
+		addrType := gatewayv1.HostnameAddressType
+		if _, err := netip.ParseAddr(addr); err == nil {
+			addrType = gatewayv1.IPAddressType
+		}
+		addresses = append(addresses, gatewayv1.GatewayStatusAddress{Value: addr, Type: &addrType})
+	}
+	return addresses, pending
 }
 
 func gatewayCondition(existing []metav1.Condition, conditionType string, status metav1.ConditionStatus,
