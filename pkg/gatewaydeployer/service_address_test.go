@@ -29,11 +29,21 @@ func TestReadyGatewayPublishesServiceAddress(t *testing.T) {
 	for _, domain := range []string{"cluster.local", "example.internal", ""} {
 		t.Run("domain="+domain, func(t *testing.T) {
 			gw := egressGatewayFixture("egress", "agentio-system")
-			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: gw.Namespace,
-				Labels: map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
-				Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}}}
-			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: gw.Namespace,
-				Labels: map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "egress",
+					Namespace: gw.Namespace,
+					Labels:    map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
+				Status: appsv1.DeploymentStatus{
+					Conditions: []appsv1.DeploymentCondition{
+						{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name:      "egress",
+				Namespace: gw.Namespace,
+				Labels:    map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
 				Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.10"}}
 			rig := newControllerTestRig(t, gw, deployment, service)
 			defer rig.close()
@@ -53,8 +63,12 @@ func TestReadyGatewayPublishesServiceAddress(t *testing.T) {
 				if err := json.Unmarshal(patch.data, &result); err != nil {
 					t.Fatal(err)
 				}
-				if len(result.Status.Addresses) == 2 && result.Status.Addresses[0].Value == "10.0.0.10" && result.Status.Addresses[1].Value == "egress.agentio-system.svc."+domain {
-					if result.Status.Addresses[0].Type == nil || *result.Status.Addresses[0].Type != gatewayv1.IPAddressType || result.Status.Addresses[1].Type == nil || *result.Status.Addresses[1].Type != gatewayv1.HostnameAddressType {
+				if len(result.Status.Addresses) == 2 && result.Status.Addresses[0].Value == "10.0.0.10" &&
+					result.Status.Addresses[1].Value == "egress.agentio-system.svc."+domain {
+					if result.Status.Addresses[0].Type == nil ||
+						*result.Status.Addresses[0].Type != gatewayv1.IPAddressType ||
+						result.Status.Addresses[1].Type == nil ||
+						*result.Status.Addresses[1].Type != gatewayv1.HostnameAddressType {
 						t.Fatal("gateway address must identify the Service hostname")
 					}
 					return
@@ -68,7 +82,9 @@ func TestReadyGatewayPublishesServiceAddress(t *testing.T) {
 func TestPendingGatewayRetainsPublishedAddress(t *testing.T) {
 	gw := egressGatewayFixture("egress", "agentio-system")
 	addressType := gatewayv1.HostnameAddressType
-	gw.Status.Addresses = []gatewayv1.GatewayStatusAddress{{Type: &addressType, Value: "egress.agentio-system.svc.cluster.local"}}
+	gw.Status.Addresses = []gatewayv1.GatewayStatusAddress{
+		{Type: &addressType, Value: "egress.agentio-system.svc.cluster.local"},
+	}
 	rig := newControllerTestRig(t, gw)
 	defer rig.close()
 	if err := rig.newController().Reconcile(namespacedNameOf(gw)); err != nil {
@@ -96,7 +112,9 @@ func TestPendingGatewayRetainsPublishedAddress(t *testing.T) {
 func TestInvalidGatewayConfigRetainsPublishedAddress(t *testing.T) {
 	gw, cm := agentgatewayFixture()
 	addressType := gatewayv1.HostnameAddressType
-	gw.Status.Addresses = []gatewayv1.GatewayStatusAddress{{Type: &addressType, Value: "agentgateway.demo.svc.cluster.local"}}
+	gw.Status.Addresses = []gatewayv1.GatewayStatusAddress{
+		{Type: &addressType, Value: "agentgateway.demo.svc.cluster.local"},
+	}
 	cm.Data[agentgatewayConfigKey] = "binds: ["
 	rig := newControllerTestRig(t, gw, cm)
 	defer rig.close()
@@ -120,9 +138,15 @@ func TestInvalidGatewayConfigRetainsPublishedAddress(t *testing.T) {
 
 func TestGatewayDoesNotPublishUnmanagedServiceAddress(t *testing.T) {
 	gw := egressGatewayFixture("egress", "agentio-system")
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: gw.Namespace,
-		Labels: map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
-		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}}}
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "egress",
+			Namespace: gw.Namespace,
+			Labels:    map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}},
+		},
+	}
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: gw.Namespace}}
 	rig := newControllerTestRig(t, gw, deployment, service)
 	defer rig.close()
@@ -176,12 +200,24 @@ func TestGatewayAddressSelection(t *testing.T) {
 				typeHostname := gatewayv1.HostnameAddressType
 				gw.Status.Addresses = []gatewayv1.GatewayStatusAddress{{Type: &typeHostname, Value: tc.previous}}
 			}
-			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace,
-				Labels: map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
-				Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}}}
-			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace,
-				Labels: map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}}, Spec: tc.service,
-				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: tc.ingress}}}
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      gw.Name,
+					Namespace: gw.Namespace,
+					Labels:    map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
+				Status: appsv1.DeploymentStatus{
+					Conditions: []appsv1.DeploymentCondition{
+						{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name:      gw.Name,
+				Namespace: gw.Namespace,
+				Labels:    map[string]string{managedLabel: "agentio.kruise.io-egress-gateway-controller"}},
+				Spec:   tc.service,
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: tc.ingress}},
+			}
 			rig := newControllerTestRig(t, gw, deployment, service)
 			defer rig.close()
 			if err := rig.newController().Reconcile(namespacedNameOf(gw)); err != nil {
@@ -234,13 +270,22 @@ func TestAgentgatewayAddressDefaultIsHostname(t *testing.T) {
 	gw := egressGatewayFixture("egress", "agentio-system")
 	gw.Spec.GatewayClassName = "agentio-agentgateway"
 	ci := builtinClasses["agentio-agentgateway"]
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
-		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}}}
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace,
-		Labels: map[string]string{managedLabel: ci.controllerLabel}}, Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.10"}}
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}},
+		},
+	}
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name:      gw.Name,
+		Namespace: gw.Namespace,
+		Labels:    map[string]string{managedLabel: ci.controllerLabel}},
+		Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.10"},
+	}
 	rig := newControllerTestRig(t, gw, deployment, service)
 	defer rig.close()
-	if err := rig.newController().setGatewayStatus(*gw, TemplateInput{DeploymentName: gw.Name, ControllerLabel: ci.controllerLabel}, ci); err != nil {
+	if err := rig.newController().
+		setGatewayStatus(*gw, TemplateInput{DeploymentName: gw.Name, ControllerLabel: ci.controllerLabel}, ci); err != nil {
 		t.Fatal(err)
 	}
 	patch := rig.patcher.find("gateways")
@@ -251,7 +296,8 @@ func TestAgentgatewayAddressDefaultIsHostname(t *testing.T) {
 	if err := json.Unmarshal(patch.data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Status.Addresses) != 1 || result.Status.Addresses[0].Value != "egress.agentio-system.svc.cluster.local" {
+	if len(result.Status.Addresses) != 1 ||
+		result.Status.Addresses[0].Value != "egress.agentio-system.svc.cluster.local" {
 		t.Fatalf("agentgateway addresses = %+v", result.Status.Addresses)
 	}
 }

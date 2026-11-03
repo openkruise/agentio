@@ -500,9 +500,13 @@ func managedGatewayControllerVersion(gw gatewayv1.Gateway) (existing string, tak
 // annotation through the status subresource.
 func (d *DeploymentController) setGatewayControllerVersion(gw gatewayv1.Gateway) error {
 	patch, err := json.Marshal(map[string]any{
-		"apiVersion": gatewayv1.GroupVersion.String(), "kind": "Gateway",
-		"metadata": metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace,
-			Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)}},
+		"apiVersion": gatewayv1.GroupVersion.String(),
+		"kind":       "Gateway",
+		"metadata": metav1.ObjectMeta{
+			Name:        gw.Name,
+			Namespace:   gw.Namespace,
+			Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)},
+		},
 		"status": map[string]any{"addresses": gw.Status.Addresses},
 	})
 	if err != nil {
@@ -518,7 +522,8 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 	if deployment := d.clients.Deployments.Get(input.DeploymentName, gw.Namespace); !controllers.IsNil(deployment) {
 		for _, condition := range deployment.Status.Conditions {
 			if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
-				if input.AgentgatewayConfigHash != "" && !agentgatewayRolloutReady(deployment, input.AgentgatewayConfigHash) {
+				if input.AgentgatewayConfigHash != "" &&
+					!agentgatewayRolloutReady(deployment, input.AgentgatewayConfigHash) {
 					break
 				}
 				programmedStatus = metav1.ConditionTrue
@@ -531,7 +536,11 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 	// Preserve the published address while a gateway is rolling out or temporarily unavailable.
 	addresses := gw.Status.Addresses
 	if programmedStatus == metav1.ConditionTrue {
-		if service := d.clients.Services.Get(input.DeploymentName, gw.Namespace); !controllers.IsNil(service) && service.Labels[managedLabel] == input.ControllerLabel {
+		if service := d.clients.Services.Get(
+			input.DeploymentName,
+			gw.Namespace,
+		); !controllers.IsNil(service) &&
+			service.Labels[managedLabel] == input.ControllerLabel {
 			domain := nestedString(d.renderer.state.Load().values, "global", "proxy", "clusterDomain")
 			if domain == "" {
 				domain = "cluster.local"
@@ -575,7 +584,12 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 
 // gatewayAddresses selects external or internal Service addresses and retains
 // previously published addresses when no new address can be reported.
-func gatewayAddresses(gw gatewayv1.Gateway, service *corev1.Service, ci classInfo, domain string) ([]gatewayv1.GatewayStatusAddress, bool) {
+func gatewayAddresses(
+	gw gatewayv1.Gateway,
+	service *corev1.Service,
+	ci classInfo,
+	domain string,
+) ([]gatewayv1.GatewayStatusAddress, bool) {
 	external := slices.Clone(service.Spec.ExternalIPs)
 	for _, ingress := range service.Status.LoadBalancer.Ingress {
 		if ingress.IP != "" {
