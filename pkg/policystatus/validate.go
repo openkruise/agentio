@@ -73,13 +73,18 @@ func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {
 		"Traffic rules and binding metadata compiled successfully", s.Metadata.Generation)
 	resolved := condition("ResolvedRefs", metav1.ConditionUnknown, "NotChecked",
 		"Reference checks require a valid configuration", s.Metadata.Generation)
+	programmed := accepted
+	programmed.Type = "Programmed"
 	if err != nil {
 		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, "InvalidConfiguration", err.Error()
+		programmed.Status, programmed.Reason, programmed.Message = accepted.Status, accepted.Reason, accepted.Message
 	} else {
 		resolved = c.trafficRefs(ctx, s)
+		programmed.Reason = "Programmed"
+		programmed.Message = "Configuration compiled successfully and is eligible for data-plane distribution"
 	}
 	return &result{Source: s,
-		Conditions: []metav1.Condition{accepted, resolved}}
+		Conditions: []metav1.Condition{accepted, resolved, programmed}}
 }
 
 func (c *Controller) profileStatus(ctx krt.HandlerContext, p compiledProfile) *result {

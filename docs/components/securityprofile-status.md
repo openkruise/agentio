@@ -6,13 +6,13 @@ agentiod validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and Glo
 | --- | --- | --- | --- |
 | `Accepted` | The production compilers accepted the configuration. | Compilation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed validation is available yet. |
 | `ResolvedRefs` | All inspectable references resolved. | A referenced object is absent from a synchronized, in-scope cache. | A cache is not synchronized, a reference is outside the watch scope, runtime resolution is required, DNS has no addresses yet, or validation failed before reference checks. |
-| `Programmed` (SecurityProfiles only) | The configuration compiled successfully and is eligible for data-plane distribution. | Compilation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed compilation is available yet. |
+| `Programmed` | The configuration compiled successfully and is eligible for data-plane distribution. | Compilation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed compilation is available yet. |
 
 A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also retain their existing `status.observedGeneration`; TrafficPolicies use the generation in each condition. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` changes only when the condition's True/False/Unknown value changes.
 
-For SecurityProfile and GlobalSecurityProfile, `Programmed` follows the compilation result reported by `Accepted`. It does not wait for data-plane acknowledgements or confirm that EPE has loaded the configuration. Reference checks remain separate: missing or runtime-resolved references affect `ResolvedRefs`, not `Programmed`.
+For all four policy kinds, `Programmed` follows the compilation result reported by `Accepted`. It does not wait for data-plane acknowledgements or confirm that the data plane has loaded the configuration. Reference checks remain separate: missing or runtime-resolved references affect `ResolvedRefs`, not `Programmed`.
 
-The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on SecurityProfiles, and only `Accepted` and `ResolvedRefs` on TrafficPolicies. Other controllers may own separate condition types, but must not compete for these types.
+The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on all four policy kinds. Other controllers may own separate condition types, but must not compete for these types.
 
 ## Enable or disable
 
@@ -48,6 +48,8 @@ kubectl get securityprofile -n demo example -o yaml
 kubectl get securityprofile -n demo
 kubectl get securityprofile -n demo -o wide
 kubectl get trafficpolicy -n demo example -o jsonpath='{.status.conditions}'
+kubectl get trafficpolicy -n demo
+kubectl get trafficpolicy -n demo -o wide
 ```
 
-SecurityProfile and GlobalSecurityProfile list output shows `Programmed` and `Age`. Use `-o wide` to also show `Accepted` and `ResolvedRefs`.
+SecurityProfile and GlobalSecurityProfile list output shows `Programmed` and `Age`. TrafficPolicy and GlobalTrafficPolicy also retain their `Priority` column. Use `-o wide` to also show `Accepted` and `ResolvedRefs` for all four policy kinds.
