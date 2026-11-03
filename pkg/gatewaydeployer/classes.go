@@ -53,7 +53,7 @@ var builtinClasses = map[string]classInfo{
 		templateName:       "egress-gateway",
 		defaultServiceType: corev1.ServiceTypeClusterIP,
 		disableNameSuffix:  true,
-		// Like the release-0.1 waypoint class, report IPs and hostnames so
+		// Report IPs and hostnames so
 		// consumers across Istio versions can choose the address they support.
 		addressType: "",
 	},

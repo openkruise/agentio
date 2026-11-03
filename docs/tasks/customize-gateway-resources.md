@@ -100,10 +100,10 @@ HPA and PDB are generated only when their respective patch key is present in the
 
 ## Gateway addresses
 
-Once the generated Deployment is available and its managed Service exists, the deployer publishes `Gateway.status.addresses` using the address-selection rules from `release-0.1`:
+Once the generated Deployment is available and its managed Service exists, the deployer publishes `Gateway.status.addresses` using the following rules:
 
 - Service external IPs and LoadBalancer ingress IPs or hostnames take precedence.
-- Without external addresses, `agentio-egress` reports both ClusterIPs and the Service hostname, as the waypoint class does in `release-0.1`. `agentio-agentgateway` reports the hostname by default.
+- Without external addresses, `agentio-egress` reports both ClusterIPs and the Service hostname. `agentio-agentgateway` reports the hostname by default.
 - The `networking.istio.io/address-type` Gateway annotation selects `IPAddress` or `Hostname` for internal addresses. It does not filter external addresses.
 
 The internal hostname has the form `<service>.<namespace>.svc.<cluster-domain>` and uses the configured cluster domain, defaulting to `cluster.local`. A headless Service contributes no ClusterIP.

@@ -143,7 +143,7 @@ func TestGatewayDoesNotPublishUnmanagedServiceAddress(t *testing.T) {
 	}
 }
 
-func TestGatewayAddressSelectionMatchesRelease(t *testing.T) {
+func TestGatewayAddressSelection(t *testing.T) {
 	const hostname = "egress.agentio-system.svc.cluster.local"
 	for _, tc := range []struct {
 		name        string

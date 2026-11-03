@@ -573,8 +573,8 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 	return d.clients.Patcher(gatewayGVR, gw.Name, gw.Namespace, data, "status")
 }
 
-// Adapted from release-0.1 gateway.reportGatewayStatus. The generated Service
-// supplies the addresses directly instead of resolving them through Pilot's PushContext.
+// gatewayAddresses selects external or internal Service addresses and retains
+// previously published addresses when no new address can be reported.
 func gatewayAddresses(gw gatewayv1.Gateway, service *corev1.Service, ci classInfo, domain string) ([]gatewayv1.GatewayStatusAddress, bool) {
 	external := slices.Clone(service.Spec.ExternalIPs)
 	for _, ingress := range service.Status.LoadBalancer.Ingress {
