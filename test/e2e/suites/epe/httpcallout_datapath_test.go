@@ -346,11 +346,41 @@ spec:
   containers:
   - name: epe
     image: {{ .EPEImage }}
-    args: ["-epe-config={{ .Name }}", "-epe-config-primary={{ .Name }}-primary", "-namespace={{ .Namespace }}", "-fail-closed-on-missing-identity=true", "-enable-debug=true"]
+    args:
+    - -epe-config={{ .Name }}
+    - -epe-config-primary={{ .Name }}-primary
+    - -namespace={{ .Namespace }}
+    - -fail-closed-on-missing-identity=true
+    - -enable-debug=true
+    - --xds-address=agentiod.{{ .Namespace }}.svc:15012
+    - --xds-root-path=/var/run/xds-root/root-cert.pem
+    - --xds-token-path=/var/run/xds-token/token
+    env:
+    - name: POD_NAME
+      valueFrom: {fieldRef: {fieldPath: metadata.name}}
+    - name: POD_NAMESPACE
+      valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+    - name: POD_UID
+      valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+    - name: POD_IP
+      valueFrom: {fieldRef: {fieldPath: status.podIP}}
+    volumeMounts:
+    - {name: roots, mountPath: /var/run/xds-root, readOnly: true}
+    - {name: token, mountPath: /var/run/xds-token, readOnly: true}
     readinessProbe:
       grpc: {port: 9003}
       periodSeconds: 1
     resources:
       requests: {cpu: 100m, memory: 128Mi}
       limits: {cpu: "1", memory: 512Mi}
+  volumes:
+  - name: roots
+    configMap: {name: agentio-ca-root-cert}
+  - name: token
+    projected:
+      sources:
+      - serviceAccountToken:
+          audience: agentio-ca
+          expirationSeconds: 3600
+          path: token
 `

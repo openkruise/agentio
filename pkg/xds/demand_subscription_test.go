@@ -106,13 +106,21 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 			for _, next := range []*model.Resource{&changed, nil} {
 				before := server.resources.Snapshot()
 				change := model.ResourceChange{Key: a.Key, Old: &a, New: next}
-				after, _, err := before.Apply([]model.ResourceChange{change})
+				changes := []model.ResourceChange{change}
+				if next == nil && typeURL == model.TrafficPolicyType {
+					unbound := workloadWithTrafficRefs(t, addressResource(t, dependencies[0].Key.Name, "unbound"), "b")
+					changes = append(
+						changes,
+						model.ResourceChange{Key: unbound.Key, Old: &dependencies[0], New: &unbound},
+					)
+				}
+				after, _, err := before.Apply(changes)
 				if err != nil {
 					t.Fatal(err)
 				}
 				server.resources.publish(after)
 				if err := server.server.pushUpdate(stream, server.scope, log, watches,
-					updateBetween(before, after, []model.ResourceChange{change})); err != nil {
+					updateBetween(before, after, changes)); err != nil {
 					t.Fatal(err)
 				}
 				responses := stream.sent()
@@ -190,6 +198,46 @@ func TestDemandTrafficPolicyStillRequiresWorkloadReference(t *testing.T) {
 	}
 	if _, ok := watches[model.TrafficPolicyType].sent["a"]; !ok {
 		t.Fatal("denied demand removed earlier policy")
+	}
+}
+
+func TestMissingTrafficPolicyDemandFlushesWorkloadBinding(t *testing.T) {
+	for _, deleteBody := range []bool{false, true} {
+		policy := sharedTrafficResource(t, "p", securityv1.TrafficPolicy_ALLOW)
+		w := workloadWithTrafficRefs(t, addressResource(t, "w", "w"), "p")
+		server := newTestServer(t, gatewayScope(), []model.Resource{policy, w}, nil)
+		stream := newFakeStream(t.Context(), 1)
+		subscription := server.resources.Subscribe(t.Context(), model.ClientScope{})
+		watches := map[string]*watchState{}
+		if err := server.server.handleRequest(stream, server.scope, log, watches, subscription,
+			nodeRequest(model.WorkloadType, "w")); err != nil {
+			t.Fatal(err)
+		}
+		unbound := workloadWithTrafficRefs(t, addressResource(t, "w", "unbound"))
+		resources := []model.Resource{unbound}
+		if !deleteBody {
+			resources = append(resources, policy)
+		}
+		next, err := model.NewResourceSet(resources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.resources.publish(next) // Deliberately leave the Workload push queued.
+		if err := server.server.handleRequest(stream, server.scope, log, watches, subscription,
+			nodeRequest(model.TrafficPolicyType, "p")); err != nil {
+			t.Fatal(err)
+		}
+		sent := stream.sent()
+		if len(sent) != 3 || sent[1].TypeUrl != model.WorkloadType || sent[2].TypeUrl != model.TrafficPolicyType ||
+			!slices.Equal(
+				resourceNames(sent[1]),
+				[]string{"w"},
+			) || !slices.Equal(sent[2].RemovedResources, []string{"p"}) {
+			t.Fatalf("binding must precede missing policy (delete=%v): %v", deleteBody, sent)
+		}
+		if sent[1].SystemVersionInfo != sent[2].SystemVersionInfo {
+			t.Fatal("responses used different publications")
+		}
 	}
 }
 

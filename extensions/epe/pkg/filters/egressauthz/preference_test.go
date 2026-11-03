@@ -199,11 +199,11 @@ func TestEgressAuthzOriginalMustMatchLiteralHost(t *testing.T) {
 		}}}}
 	target, reply, err := egressauthz.NewAggregate(dns.NewClient(nil, time.Second), cfg).Authorize(
 		t.Context(),
-		&filter.Stream{Request: httpreq.HTTPRequest{
+		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 			Host:                "192.0.2.1",
 			Port:                443,
 			OriginalDestination: netip.MustParseAddrPort("192.0.2.2:443"),
-		}},
+		}}},
 	)
 	if err != nil || reply != nil || target == nil || target.Address.String() != "192.0.2.1:443" {
 		t.Fatalf("target=%v reply=%v err=%v", target, reply, err)

@@ -147,7 +147,7 @@ func TestEnvoyECDSIdleCensus(t *testing.T) {
 	started = time.Now()
 	r.reloadECDS(t, "agentio.connect_concurrency", func(p object) {
 		p["rate_limits"] = []any{object{
-			"actions": []any{object{"filter_state": object{"key": "sandbox.id", "descriptor_key": "sandbox"}}},
+			"actions": []any{object{"filter_state": object{"key": "agentio.sandbox.uid", "descriptor_key": "sandbox"}}},
 		}}
 		p["descriptors"] = []any{object{
 			"entries":                []any{object{"key": "sandbox"}},

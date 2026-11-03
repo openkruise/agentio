@@ -38,8 +38,44 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
+func TestWorkloadBindingBeforePolicyResolution(t *testing.T) {
+	for _, lookupError := range []error{nil, context.DeadlineExceeded} {
+		called := false
+		srv := NewServer(ServerDeps{
+			ResolveContext: func(_ context.Context, request filter.RequestContext) (filter.RequestContext, error) {
+				w := &request.Caller.Subject.Workload
+				w.Labels = map[string]string{"app": "wds"}
+				w.SecurityProfileReferences = []string{"global/profile"}
+				return request, lookupError
+			},
+			Resolve: func(_ context.Context, s subject.Subject, _ *httpreq.HTTPRequest) (engine.Resolution, error) {
+				called = true
+				if s.Workload.Labels["app"] != "wds" || len(s.Workload.SecurityProfileReferences) != 1 {
+					t.Fatal("policy did not receive WDS bindings")
+				}
+				return engine.Resolution{}, nil
+			},
+		})
+		state := newStreamState()
+		responses, err := srv.HandleRequestHeaders(
+			t.Context(),
+			makeRequestHeaders("api.example.com", "/", "GET"),
+			makeAttrsWithLabels("ns", "pod", testLabelsB64),
+			state,
+		)
+		if lookupError != nil {
+			if called || !errors.Is(err, lookupError) ||
+				responses[0].GetImmediateResponse().GetDetails() != "epe_policy_unavailable" {
+				t.Fatalf("lookup failure did not fail closed: called=%v err=%v responses=%v", called, err, responses)
+			}
+		} else if !called || err != nil || state.stream.Caller.Subject.Workload.Labels["app"] != "wds" {
+			t.Fatalf("resolved caller not retained: called=%v err=%v", called, err)
+		}
+	}
+}
+
 func TestUIDOnlyIdentityReachesResolver(t *testing.T) {
-	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxID} {
+	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxUID} {
 		t.Run(attribute, func(t *testing.T) {
 			called := false
 			unavailable := errors.New("binding unavailable")
@@ -112,7 +148,7 @@ func responseHeadersState(p *responseHeadersProbe) (*Server, *streamState, *capt
 	state := newStreamState()
 	state.markRequestSeen()
 	id := filter.UnitID{Scope: "default/p1", Name: "response"}
-	state.units = []engine.Unit{{
+	state.stream.Policies.FilterRules = []engine.Unit{{
 		ID:   id,
 		Cfgs: []any{struct{}{}},
 	}}
@@ -136,7 +172,11 @@ func (p *bodylessDeadlineProbe) OnRequestHeaders(ctx context.Context, _ *filter.
 	return filter.NeedBody(), nil
 }
 
-func (p *bodylessDeadlineProbe) OnRequestBody(ctx context.Context, _ *filter.Stream, _ filter.Body) (filter.Action, error) {
+func (p *bodylessDeadlineProbe) OnRequestBody(
+	ctx context.Context,
+	_ *filter.Stream,
+	_ filter.Body,
+) (filter.Action, error) {
 	p.bodyDeadline, p.bodyHasDeadline = ctx.Deadline()
 	return filter.Continue(), nil
 }
@@ -209,7 +249,7 @@ func makeAttrsWithLabels(namespace, name, labelsB64 string) map[string]*structpb
 	inner, _ := structpb.NewStruct(map[string]interface{}{
 		attributes.FilterStateDownstreamPeerNamespace: namespace,
 		attributes.FilterStateDownstreamPeerName:      name,
-		attributes.FilterStateWorkloadLabels:          labelsB64,
+		attributes.FilterStateSandboxLabels:           labelsB64,
 	})
 	return map[string]*structpb.Struct{
 		attributes.ExtProcAttrsKey: inner,
@@ -267,7 +307,8 @@ func TestHandleRequestHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *te
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_request_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_request_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_request_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -311,7 +352,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders: %v", err)
 			}
-			if len(responses) != 1 || responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
+			if len(responses) != 1 ||
+				responses[0].GetModeOverride().GetResponseHeaderMode() != extProcV3.ProcessingMode_SEND {
 				t.Fatalf("request responses = %+v, want response-headers subscription", responses)
 			}
 
@@ -325,7 +367,8 @@ func TestHandleResponseHeaders_CONNECTBodyDemandFailsClosedWithoutBuffering(t *t
 				t.Fatalf("responses = %+v, want one fail-closed ImmediateResponse", responses)
 			}
 			immediate := responses[0].GetImmediateResponse()
-			if immediate.GetStatus().GetCode() != 500 || immediate.GetDetails() != "epe_connect_response_body_unsupported" {
+			if immediate.GetStatus().GetCode() != 500 ||
+				immediate.GetDetails() != "epe_connect_response_body_unsupported" {
 				t.Fatalf("immediate = status %v details %q, want 500 / epe_connect_response_body_unsupported",
 					immediate.GetStatus().GetCode(), immediate.GetDetails())
 			}
@@ -674,7 +717,13 @@ func TestTrailerPassThroughAndBodyOrderValidation(t *testing.T) {
 	srv := NewServer(ServerDeps{})
 	ctx := context.Background()
 
-	if _, err := srv.HandleRequestBody(ctx, &extProcPb.HttpBody{EndOfStream: true}, nil); status.Code(err) != codes.FailedPrecondition {
+	if _, err := srv.HandleRequestBody(
+		ctx,
+		&extProcPb.HttpBody{EndOfStream: true},
+		nil,
+	); status.Code(
+		err,
+	) != codes.FailedPrecondition {
 		t.Errorf("HandleRequestBody without state: err=%v, want FailedPrecondition", err)
 	}
 	if r, err := srv.HandleRequestTrailers(ctx, nil); err != nil || len(r) != 1 {

@@ -28,6 +28,7 @@ import (
 
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/go-logr/zapr"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	uberzap "go.uber.org/zap"
 	"go.uber.org/zap/exp/zapslog"
@@ -60,6 +61,7 @@ import (
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
 	"github.com/openkruise/agentio/pkg/config"
+	"github.com/openkruise/agentio/pkg/demandcache"
 	"github.com/openkruise/agentio/pkg/dns"
 	"github.com/openkruise/agentio/pkg/envdoc"
 	"github.com/openkruise/agentio/pkg/krt"
@@ -247,22 +249,31 @@ func run() error {
 	}
 	providers := &extensionprovider.Registry{}
 	defer providers.Close()
-	var resourceStore *resourcestore.Aggregate
-	if *enableXDSEgressAuthz {
-		xds, conn, err := newEgressXDS()
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err := conn.Close(); err != nil {
-				setupLog.Error(err, "close xDS connection")
-			}
-		}()
-		resourceStore = resourcestore.NewAggregate(xdsstore.New(xds))
-		trafficpolicy.RegisterQueries(resourceStore, *xdsClusterID)
-		group.Add(runnable.Func(resourceStore.Run))
-		group.Add(runnable.Func(xds.Run))
+	xds, conn, err := newEgressXDS()
+	if err != nil {
+		return err
 	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			setupLog.Error(err, "close xDS connection")
+		}
+	}()
+	nativeStore, err := xdsstore.NewCached(
+		xds,
+		demandcache.Config{IdleTTL: *xdsCacheIdleTTL, MaxEntries: *xdsCacheMaxEntries},
+	)
+	if err != nil {
+		return err
+	}
+	resourceStore := resourcestore.NewAggregate(nativeStore)
+	metrics.Registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "agentio_epe_demand_cache_entries",
+		Help: "Retained Workload and TrafficPolicy subscriptions, including active resolutions.",
+	}, func() float64 { return float64(nativeStore.CacheEntries()) }))
+	trafficpolicy.RegisterQueries(resourceStore, *xdsClusterID)
+	group.Add(runnable.Func(nativeStore.Run))
+	group.Add(runnable.Func(resourceStore.Run))
+	group.Add(runnable.Func(xds.Run))
 	servingTLS, err := buildExtProcTLS(extProcTLSOptions{
 		Source:   *tlsSource,
 		CertPath: *tlsCertPath,
@@ -292,7 +303,11 @@ func run() error {
 		Apply:     wiring.ApplyEPEConfig,
 		Validate:  validateEPEConfig,
 	}, krt.WithName("EPEConfig"), krt.WithStop(ctx.Done())).AsCollection()
-	authorize, authorizationReg := newRequestAuthorizer(configs, resourceStore, dns.NewClient(nil, 0))
+	var authorizationResources *resourcestore.Aggregate
+	if *enableXDSEgressAuthz {
+		authorizationResources = resourceStore
+	}
+	authorize, authorizationReg := newRequestAuthorizer(configs, authorizationResources, dns.NewClient(nil, 0))
 	providerConfigs := extensionprovider.NewCollection(client, *systemNamespace,
 		configs, configMaps, nil, ctx.Done())
 	providerReg := providers.RegisterCollection(providerConfigs)
@@ -328,16 +343,12 @@ func run() error {
 	health.SetServingStatus("liveness", healthPb.HealthCheckResponse_SERVING)
 	updateReadiness := func() {
 		state := healthPb.HealthCheckResponse_SERVING
-		resourcesReady := true
-		if resourceStore != nil {
-			resourcesReady = resourceStore.Ready()
-		}
 		if !authorizationReg.HasSynced() ||
 			!providerReg.HasSynced() ||
 			!profileReg.HasSynced() ||
 			!secrets.HasSynced() ||
 			servingTLS.Ready() != nil ||
-			!resourcesReady {
+			!resourceStore.Ready() {
 			state = healthPb.HealthCheckResponse_NOT_SERVING
 		}
 		for _, service := range []string{"", "readiness", extProcPb.ExternalProcessor_ServiceDesc.ServiceName} {
@@ -404,6 +415,7 @@ func run() error {
 		CertProvider:                servingTLS.Provider,
 		RequireClientCert:           servingTLS.RequireClientCert,
 		Resolve:                     resolve,
+		ResolveContext:              trafficpolicy.NewContextResolver(resourceStore, *enableXDSEgressAuthz),
 		AuditLogger:                 auditLogger,
 		Registrations:               registrations,
 	}, ctrllog.Log.WithName("ext-proc"))

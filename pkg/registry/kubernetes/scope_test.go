@@ -15,16 +15,105 @@
 package kubernetes
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestResolveScopeAuthorizesTrustedEPEIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		namespace  string
+		account    string
+		configured string
+		want       model.ClientClass
+	}{
+		{"authorized", "agentio-system", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientEPE},
+		{"custom namespace", "tenant", "processor", "[spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+		{"multiple identities", "tenant", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor, spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+		{"wrong account", "agentio-system", "other", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"wrong namespace", "tenant", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"wrong trust domain", "agentio-system", "processor", "[spiffe://other.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"disabled", "agentio-system", "processor", "[]", model.ClientDedicatedZTunnel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := egressPod(tc.namespace, "processor", tc.account, "10.0.0.1")
+			pod.UID = "epe-pod"
+			pod.Spec.ServiceAccountName = tc.account
+			pod.Labels = map[string]string{"app.kubernetes.io/name": "agentio-epe"}
+			config := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
+				Data:       map[string]string{"config": "trustedEPEIdentities: " + tc.configured},
+			}
+			r := newTestRegistry(t, t.Context(), []runtime.Object{pod, config}, nil)
+			resolver := r.PodScopeResolver(r.Workloads)
+			scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
+			if err != nil || scope.Class != tc.want {
+				t.Fatalf("scope=%+v err=%v", scope, err)
+			}
+			if err := scope.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			stale := gatewayTestPeer(pod)
+			stale.Kubernetes.WorkloadUID = "old-pod"
+			if _, err := resolver.ResolveScope(stale, ""); err == nil {
+				t.Fatal("stale Pod token accepted")
+			}
+		})
+	}
+}
+
+func TestResolveScopeUpdatesTrustedEPEIdentities(t *testing.T) {
+	pod := egressPod("tenant", "processor", "processor", "10.0.0.1")
+	pod.UID = "epe-pod"
+	pod.Spec.ServiceAccountName = "processor"
+	config := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
+		Data: map[string]string{
+			"config": "trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]",
+		},
+	}
+	r := newTestRegistry(t, t.Context(), []runtime.Object{pod, config}, nil)
+	resolver := r.PodScopeResolver(r.Workloads)
+	if scope, err := resolver.ResolveScope(gatewayTestPeer(pod), ""); err != nil || scope.Class != model.ClientEPE {
+		t.Fatalf("initial scope=%+v err=%v", scope, err)
+	}
+	for _, update := range []struct {
+		config string
+		want   model.ClientClass
+	}{
+		{"trustedEPEIdentities: []", model.ClientDedicatedZTunnel},
+		{"trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+	} {
+		config.Data["config"] = update.config
+		var err error
+		config, err = r.client.CoreV1().ConfigMaps(config.Namespace).Update(t.Context(), config, metav1.UpdateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := wait.PollUntilContextTimeout(
+			t.Context(),
+			10*time.Millisecond,
+			time.Second,
+			true,
+			func(context.Context) (bool, error) {
+				scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
+				return scope.Class == update.want, err
+			},
+		); err != nil {
+			t.Fatalf("scope did not change to %s: %v", update.want, err)
+		}
+	}
+}
 
 func TestResolveScopeAuthorizesEnrolledGatewayPods(t *testing.T) {
 	ctx := t.Context()

@@ -117,19 +117,17 @@ func withHeaderCondition(cfg Config) Config {
 }
 
 func streamWithPeerToken() *filter.Stream {
-	return &filter.Stream{
-		Caller: filter.CallerContext{
-			Token:   &filter.SandboxToken{AccessToken: "at", SandboxClientID: "cid"},
-			Subject: subject.Subject{Workload: subject.Workload{Namespace: "podns", Name: "pod-x"}},
-		},
+	return &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+		Token:   &filter.SandboxToken{AccessToken: "at", SandboxClientID: "cid"},
+		Subject: subject.Subject{Workload: subject.Workload{Namespace: "podns", Name: "pod-x"}},
+	}},
 	}
 }
 
 func streamWithoutPeerToken() *filter.Stream {
-	return &filter.Stream{
-		Caller: filter.CallerContext{
-			Subject: subject.Subject{Workload: subject.Workload{Namespace: "podns", Name: "pod-x"}},
-		},
+	return &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+		Subject: subject.Subject{Workload: subject.Workload{Namespace: "podns", Name: "pod-x"}},
+	}},
 	}
 }
 

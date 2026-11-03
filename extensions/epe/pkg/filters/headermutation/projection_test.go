@@ -52,7 +52,7 @@ func TestProjectedPayloadRunsThroughEngine(t *testing.T) {
 	e := engine.NewEngine(regs, 0)
 	res, err := e.EvalRequestHeaders(
 		context.Background(),
-		&filter.Stream{Info: filter.NewStreamInfo()},
+		&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
 		units,
 	)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestProjectedResponsePayloadDeclaresDemand(t *testing.T) {
 			id := filter.UnitID{Scope: "default/profile", Name: "mutate"}
 			res, err := engine.NewEngine(regs, 0).EvalRequestHeaders(
 				context.Background(),
-				&filter.Stream{Info: filter.NewStreamInfo()},
+				&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
 				[]engine.Unit{{ID: id, Scope: scope, Cfgs: cfgs}},
 			)
 			if err != nil {

@@ -121,7 +121,15 @@ Omitting or setting `egressAuthorization` to null inherits the lower configurati
 
 ### Optional xDS policies and migration
 
-Set `--enable-xds-egressauthz=true` to additionally retrieve the calling Workload and its TrafficPolicy resources from Agentiod. Supply `--xds-address` and the existing xDS TLS/token settings. The xDS authorizer rejects missing or incomplete workload identity with HTTP 403 before querying resources; audit records use the reason `missing_source_identity`. Unavailable policies also fail closed. Enabling xDS does not change `--fail-closed-on-missing-identity`: that separate flag rejects missing identity at the request boundary, before any authorizer runs. `--enable-xds-egressauthz` defaults to false; when this xDS flag is disabled, authorization does not connect to xDS or query Workload/TrafficPolicy resources.
+Every EPE deployment must supply `--xds-address` and ADS TLS/token settings. EPE always retrieves Workloads from WDS to read ordered SecurityProfile references and metadata; SecurityProfile bodies still come from local Kubernetes watches. Set `--enable-xds-egressauthz=true` to additionally retrieve and enforce referenced TrafficPolicy resources. The xDS authorizer rejects missing or incomplete workload identity with HTTP 403 before querying resources; audit records use the reason `missing_source_identity`. Unavailable policies also fail closed. Enabling xDS does not change `--fail-closed-on-missing-identity`: that separate flag rejects missing identity at the request boundary, before any authorizer runs. `--enable-xds-egressauthz` defaults to false; disabling this flag skips TrafficPolicy authorization, while WDS remains required for SecurityProfile resolution.
+
+Each HTTP stream prepares one `RequestContext` containing caller identity and metadata, the credential handle, the original request and request ID, and a `PolicySnapshot`. The policy snapshot holds the compiled native TrafficPolicy configuration (when enabled), selected SecurityProfile execution units and the resolution's audit logger. Each unit retains its own profile/rule scope and immutable inputs; inputs with the same name in different profiles remain separate. Upstream selection, response data and execution observations stay in `StreamRuntime`.
+
+Later cache updates, deletions or disconnects do not replace these objects in an already prepared request. The context shares read-only maps and compiled configurations rather than cloning resource bodies. If the Workload changes while cold dependencies are being fetched, snapshot construction restarts within the original request deadline; authorization itself does not query discovery. Missing dependencies still fail closed. WDS and the local SecurityProfile watch remain separate sources; this context does not add an atomic revision across them.
+
+EPE uses the `epe~` ADS node type. Agentiod authenticates its Pod-bound token through TokenReview and authorizes the workload principal against `AgentioConfig.trustedEPEIdentities`. Helm registers the managed EPE identity automatically; external deployments must register their identities explicitly. Only Workload and TrafficPolicy discovery is allowed. Set `--domain` to the Kubernetes cluster DNS suffix used in the default node ID; `--xds-node-id` overrides the full ID. These ADS requirements apply to all EPE deployments. `--xds-cache-idle-ttl=10m` and `--xds-cache-max-entries=10000` bound the shared Workload/TrafficPolicy subscription cache. Helm exposes these as `epe.xdsCache.idleTTL` and `epe.xdsCache.maxEntries`. Zero disables the respective bound; negative values fail startup. Active resolutions are pinned, hot requests refresh idle TTL, and eviction unsubscribes resources so later requests rediscover them.
+
+EPE retains previously resolved Workloads and TrafficPolicies for up to 5 seconds after an ADS disconnect. Reconnection does not replay idle subscriptions: only resources accessed by requests are subscribed again. Opening a new stream or accepting an empty initial response does not discard still-valid retained values or renew their deadline. Fresh updates and explicit deletions take effect immediately. At the deadline, unrefreshed values are discarded and lookups wait for discovery within their original request timeout. Cold misses cannot use the grace, and policy references must still resolve completely. During an outage, policy updates or revocations can therefore be delayed by up to 5 seconds.
 
 Replace the former `--enable-egressauthz` argument with `--enable-xds-egressauthz` when upgrading a deployment that used native TrafficPolicy authorization. The old argument is removed. Deployments without either argument now perform target resolution and pinning too, and enforce the mandatory destination restrictions even when the user list is empty. EPE must be able to resolve the destination names previously resolved by the gateway; DNS failure now rejects the request.
 
@@ -183,10 +191,10 @@ sandboxExtProc:
   request:
     headerMode: SEND
     attributes:
-      - filter_state['sandbox.id']
+      - filter_state['agentio.sandbox.uid']
       - filter_state['sandbox.token']
       - filter_state['agentio.sandbox.metadata']
-      - filter_state['agentio.workload.labels']
+      - filter_state['agentio.workload.uid']
       - filter_state['sandbox.labels'] # Compatibility with older gateways
       - filter_state['agentio.workload.name']
       - filter_state['agentio.workload.namespace']
@@ -343,7 +351,7 @@ The cache environment variables configure every credential provider, whether reg
 
 `HTTP_CALLOUT_MAX_RESPONSE_BYTES` bounds the Decision response read by each HTTPCallout client. It defaults to `1048576` bytes (1 MiB); non-positive or invalid values use that default. The client reads the setting once at initialization, so changing it in a deployment requires restarting EPE. It does not affect credential lookups or the rule's `maxBodyBytes` disclosure limit. Each SecurityProfile callout uses this client limit.
 
-EPE shares agentiod's Kubernetes client limits: `AGENTIO_KUBERNETES_API_QPS=80` and `AGENTIO_KUBERNETES_API_BURST=160`. These limits also apply to synchronous Sandbox metadata lookups. Ordinary workloads without a matching Sandbox still require an API lookup on each request; size these limits for that traffic until policy bindings are delivered through xDS.
+EPE shares agentiod's Kubernetes client limits: `AGENTIO_KUBERNETES_API_QPS=80` and `AGENTIO_KUBERNETES_API_BURST=160`. These limits also apply to synchronous Sandbox metadata lookups. Ordinary workloads without a matching Sandbox still require an API lookup on each request; size these limits for that traffic. WDS SecurityProfile bindings do not remove the separate Sandbox metadata lookup.
 
 The following table is generated from EPE's Kubernetes client, credential-provider, token-cache, STS-cache, HTTPCallout, and audit-webhook registrations. It shows binary defaults; in particular, the chart sets `TOKEN_CACHE_MAX_SIZE=10000` while the binary defaults to `100000`.
 

@@ -75,6 +75,31 @@ func (a *Aggregate) Types() []Type { return a.types }
 // Snapshot loads one immutable view for a request's related queries.
 func (a *Aggregate) Snapshot() *Snapshot { return a.current.Load() }
 
+// SnapshotFor reads related, pinned resources together without publishing a global
+// index. Backends can copy only these keys while preserving source precedence.
+// The returned view has no query indexes or change notification.
+func (a *Aggregate) SnapshotFor(keys []Key) *Snapshot {
+	view := &Snapshot{ready: true, types: map[Type]TypeSnapshot{}}
+	for _, source := range a.stores {
+		var batch Batch
+		if selected, ok := source.(interface{ ReadKeys([]Key) Batch }); ok {
+			batch = selected.ReadKeys(keys)
+		} else {
+			batch = source.Read()
+		}
+		view.ready = view.ready && batch.Ready
+		for typ, snapshot := range batch.Snapshots {
+			merged, _ := view.types[typ].(*mergedTypeSnapshot)
+			if merged == nil {
+				merged = &mergedTypeSnapshot{}
+				view.types[typ] = merged
+			}
+			merged.sources = append(merged.sources, snapshot)
+		}
+	}
+	return view
+}
+
 // Ready reads publication readiness without querying or locking backends.
 func (a *Aggregate) Ready() bool { return a.Snapshot().Ready() }
 
@@ -245,4 +270,43 @@ func (a *Aggregate) Fetch(ctx context.Context, key Key) (*Resource, error) {
 		}
 	}
 	return nil, nil
+}
+
+// Acquire keeps managed resources subscribed until the caller finishes resolving
+// its related resources. It does not publish a global view; use SnapshotFor to
+// read the pinned set. The returned release function must be called once.
+func (a *Aggregate) Acquire(ctx context.Context, key Key) (*Resource, func(), error) {
+	for _, s := range a.stores {
+		if !slices.Contains(s.Types(), key.Type) {
+			continue
+		}
+		var r *Resource
+		var err error
+		release := func() {}
+		if managed, ok := s.(interface {
+			Acquire(context.Context, Key) (*Resource, func(), error)
+		}); ok {
+			r, release, err = managed.Acquire(ctx, key)
+		} else {
+			if view := s.Read().Snapshots[key.Type]; view != nil {
+				r, err = view.Get(key.Name)
+			}
+			if err == nil && r == nil {
+				r, err = s.Fetch(ctx, key)
+			}
+		}
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			return nil, nil, err
+		}
+		if r != nil {
+			return r, release, nil
+		}
+		if release != nil {
+			release()
+		}
+	}
+	return nil, nil, nil
 }

@@ -116,6 +116,8 @@ func KubernetesScopeFunc(resolver interface {
 		proxyType := nodeProxyType(node)
 		var expectedType string
 		switch scope.Class {
+		case model.ClientEPE:
+			expectedType = model.ProxyTypeEPE
 		case model.ClientSharedZTunnel, model.ClientDedicatedZTunnel:
 			expectedType = model.ProxyTypeZTunnel
 		case model.ClientEgressGateway:

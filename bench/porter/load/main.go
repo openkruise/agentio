@@ -24,7 +24,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -169,7 +168,7 @@ func workloadResource(i, revision int) model.Resource {
 	refs := trafficReferences(i)
 	w := &workload.Workload{
 		Uid:            uid(i),
-		Name:           fmt.Sprintf("workload-%05d", i),
+		Name:           fmt.Sprintf("workload-%05d-r%d", i, revision),
 		Namespace:      "perf",
 		Network:        "",
 		ClusterId:      "Kubernetes",
@@ -656,7 +655,9 @@ func message(mode string, i int) *extproc.ProcessingRequest {
 		}
 	}
 	if mode == "sandbox" {
-		attrs.Fields["filter_state['sandbox.id']"] = structpb.NewStringValue(fmt.Sprintf("kruise:sandbox-%05d", i))
+		attrs.Fields["filter_state['agentio.sandbox.uid']"] = structpb.NewStringValue(
+			fmt.Sprintf("kruise:sandbox-%05d", i),
+		)
 	}
 	return &extproc.ProcessingRequest{
 		Request: &extproc.ProcessingRequest_RequestHeaders{
@@ -705,23 +706,10 @@ func call(
 			return fmt.Errorf("unexpected denial: %v", r.GetImmediateResponse())
 		}
 		m := r.GetDynamicMetadata().GetFields()["agentio"].GetStructValue().GetFields()
-		if got := m["workload"].GetStructValue().GetFields()["name"].GetStringValue(); got != fmt.Sprintf(
-			"workload-%05d",
-			i,
-		) {
-			return fmt.Errorf("wrong workload %q for %d", got, i)
-		}
-		encoded := m["workload_labels"].GetStringValue()
-		b, e := base64.StdEncoding.DecodeString(encoded)
-		if e != nil {
-			return e
-		}
-		got := string(b)
-		if !strings.Contains(got, fmt.Sprintf("example.com/label-00=value-00-%06d", i)) {
-			return fmt.Errorf("wrong labels for %d", i)
-		}
-		if revision >= 0 && !strings.Contains(","+got+",", fmt.Sprintf(",revision=%d,", revision)) {
-			return fmt.Errorf("stale revision expected=%d", revision)
+		got := m["workload"].GetStructValue().GetFields()["name"].GetStringValue()
+		prefix := fmt.Sprintf("workload-%05d-r", i)
+		if !strings.HasPrefix(got, prefix) || (revision >= 0 && got != prefix+strconv.Itoa(revision)) {
+			return fmt.Errorf("wrong workload or stale revision %q for %d revision=%d", got, i, revision)
 		}
 		if mode != "ip" && m["workload_instance"].GetStringValue() != source(i).WorkloadAlias() {
 			return fmt.Errorf("wrong instance")

@@ -8,9 +8,9 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 
 const CONFIG: &str = r#"{
   "rate_limits":[
-    {"actions":[{"filter_state":{"key":"sandbox.id","descriptor_key":"sandbox"}}]},
+    {"actions":[{"filter_state":{"key":"agentio.sandbox.uid","descriptor_key":"sandbox"}}]},
     {"actions":[{"generic_key":{"descriptor_key":"scope","descriptor_value":"gateway"}}]},
-    {"actions":[{"filter_state":{"key":"sandbox.id","descriptor_key":"sandbox"}}]}
+    {"actions":[{"filter_state":{"key":"agentio.sandbox.uid","descriptor_key":"sandbox"}}]}
   ],
   "descriptors":[
     {"entries":[{"key":"sandbox"}],"max_concurrent_streams":2},
@@ -216,7 +216,7 @@ fn invalid_limits_and_grouping_are_rejected() {
             "\"max_concurrent_streams\":2",
             "\"max_concurrent_streams\":4294967296",
         ),
-        CONFIG.replace("\"sandbox.id\"", "\"\""),
+        CONFIG.replace("\"agentio.sandbox.uid\"", "\"\""),
         CONFIG.replace(
             "\"rate_limits\":",
             "\"max_dynamic_buckets\":0,\"rate_limits\":",

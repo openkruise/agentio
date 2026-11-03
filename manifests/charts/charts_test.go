@@ -216,7 +216,17 @@ func TestAgentiodMaxServerConnectionAgeConfiguration(t *testing.T) {
 
 func TestAmbientProfile(t *testing.T) {
 	manifest := renderAgentio(t, "--set", "profile=ambient")
-	if got, want := objectNamesByKind(t, manifest, "DaemonSet"), []string{"agentio-cni", "ztunnel"}; !reflect.DeepEqual(got, want) {
+	if got, want := objectNamesByKind(
+		t,
+		manifest,
+		"DaemonSet",
+	), []string{
+		"agentio-cni",
+		"ztunnel",
+	}; !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("ambient DaemonSets = %v, want %v", got, want)
 	}
 	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentiod"}; !reflect.DeepEqual(got, want) {
@@ -329,7 +339,17 @@ func TestCNIAndZtunnelOverrides(t *testing.T) {
 
 func TestStaticEgressGateway(t *testing.T) {
 	manifest := renderAgentio(t, "--set", "egressGateway.mode=static")
-	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentio-egress", "agentiod"}; !reflect.DeepEqual(got, want) {
+	if got, want := objectNamesByKind(
+		t,
+		manifest,
+		"Deployment",
+	), []string{
+		"agentio-egress",
+		"agentiod",
+	}; !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("static gateway Deployments = %v, want %v", got, want)
 	}
 	if got := objectNamesByKind(t, manifest, "Gateway"); len(got) != 0 {
@@ -401,7 +421,16 @@ func TestGatewayAPIEgressGateway(t *testing.T) {
 	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentiod"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Gateway API Deployments = %v, want %v", got, want)
 	}
-	if got, want := objectNamesByKind(t, manifest, "Gateway"), []string{"agentio-egress"}; !reflect.DeepEqual(got, want) {
+	if got, want := objectNamesByKind(
+		t,
+		manifest,
+		"Gateway",
+	), []string{
+		"agentio-egress",
+	}; !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("Gateway API Gateways = %v, want %v", got, want)
 	}
 	requireContains(t, manifest,
@@ -438,7 +467,17 @@ func TestManagedEPE(t *testing.T) {
 		"--set", "epe.mode=managed",
 		"--set", "epe.credentialProvider.url=https://credentials.example",
 	)
-	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentio-epe", "agentiod"}; !reflect.DeepEqual(got, want) {
+	if got, want := objectNamesByKind(
+		t,
+		manifest,
+		"Deployment",
+	), []string{
+		"agentio-epe",
+		"agentiod",
+	}; !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("managed EPE Deployments = %v, want %v", got, want)
 	}
 	requireContains(t, manifest,
@@ -456,6 +495,8 @@ func TestManagedEPE(t *testing.T) {
 		"- -grpc-port=9002",
 		"- -grpc-health-port=9003",
 		"- -metrics-port=9090",
+		"--xds-cache-idle-ttl=10m",
+		"--xds-cache-max-entries=10000",
 		"- -audit-webhook-insecure-skip-verify=false",
 		"livenessProbe:",
 		"readinessProbe:",
@@ -473,6 +514,50 @@ func TestManagedEPECanExplicitlySkipAuditWebhookTLSVerification(t *testing.T) {
 	)
 	requireContains(t, manifest, "- -audit-webhook-insecure-skip-verify=true")
 	requireNotContains(t, manifest, "- -audit-webhook-insecure-skip-verify=false")
+}
+
+func TestTrustedEPEIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values string
+		want   []string
+	}{
+		{"managed", "epe.mode=managed", []string{"spiffe://cluster.local/ns/agentio-system/sa/agentio-epe"}},
+		{"custom identity", "epe.mode=managed,global.trustDomain=example.org,epe.serviceAccount.name=processor", []string{"spiffe://example.org/ns/agentio-system/sa/processor"}},
+		{"disabled", "epe.mode=disabled", nil},
+		{"external", "epe.mode=external,epe.external.address=epe.example.org", nil},
+		{"override", "epe.mode=managed,agentiod.config.values.trustedEPEIdentities={spiffe://example.org/ns/custom/sa/processor}", []string{"spiffe://example.org/ns/custom/sa/processor"}},
+		{"clear", "epe.mode=managed,agentiod.config.values.trustedEPEIdentities=[]", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"--set", tc.values, "--show-only", "templates/agentiod/configmaps.yaml"}
+			// --set-json preserves an explicit empty list instead of a string.
+			if tc.name == "clear" {
+				args = []string{
+					"--set",
+					"epe.mode=managed",
+					"--set-json",
+					"agentiod.config.values.trustedEPEIdentities=[]",
+					"--show-only",
+					"templates/agentiod/configmaps.yaml",
+				}
+			}
+			manifest := renderAgentio(t, args...)
+			var cm corev1.ConfigMap
+			if err := yaml.Unmarshal([]byte(strings.Split(manifest, "\n---")[0]), &cm); err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				TrustedEPEIdentities []string `json:"trustedEPEIdentities"`
+			}
+			if err := yaml.Unmarshal([]byte(cm.Data["config"]), &config); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(config.TrustedEPEIdentities, tc.want) {
+				t.Fatalf("trustedEPEIdentities=%v, want %v", config.TrustedEPEIdentities, tc.want)
+			}
+		})
+	}
 }
 
 func TestImmutableImageDigests(t *testing.T) {
@@ -641,15 +726,30 @@ func TestInvalidModesFailRendering(t *testing.T) {
 	}{
 		{name: "profile", want: "profile", args: []string{"--set", "profile=invalid"}},
 		{name: "log level", want: "/agentiod/logging/level", args: []string{"--set", "agentiod.logging.level=verbose"}},
-		{name: "log format", want: "/agentiod/logging/format", args: []string{"--set", "agentiod.logging.format=console"}},
-		{name: "agentgateway CA boolean", want: "/egressGateway/agentgateway/ca/enabled", args: []string{"--set-string", "egressGateway.agentgateway.ca.enabled=false"}},
+		{
+			name: "log format",
+			want: "/agentiod/logging/format",
+			args: []string{"--set", "agentiod.logging.format=console"},
+		},
+		{
+			name: "agentgateway CA boolean",
+			want: "/egressGateway/agentgateway/ca/enabled",
+			args: []string{"--set-string", "egressGateway.agentgateway.ca.enabled=false"},
+		},
 		{name: "egress gateway", want: "/egressGateway/mode", args: []string{"--set", "egressGateway.mode=invalid"}},
 		{name: "EPE", want: "/epe/mode", args: []string{"--set", "epe.mode=invalid"}},
 		{name: "external EPE address", want: "/epe/external/address", args: []string{"--set", "epe.mode=external"}},
 		{
 			name: "Gateway API class",
 			want: "egressGateway.gatewayAPI.gatewayClassName is required",
-			args: []string{"--set", "egressGateway.mode=gatewayAPI", "--set", "egressGateway.gatewayAPI.create=true", "--set", "egressGateway.gatewayAPI.gatewayClassName="},
+			args: []string{
+				"--set",
+				"egressGateway.mode=gatewayAPI",
+				"--set",
+				"egressGateway.gatewayAPI.create=true",
+				"--set",
+				"egressGateway.gatewayAPI.gatewayClassName=",
+			},
 		},
 		{
 			name: "managed EPE files source",
@@ -674,14 +774,36 @@ func TestEveryProfileAndModeCombinationRendersUniqueObjects(t *testing.T) {
 		nil,
 		{"--set", "profile=ambient"},
 		{"--set", "profile=sidecar"},
-		{"--set", "egressGateway.mode=static", "--set", "epe.mode=managed", "--set", "epe.credentialProvider.url=https://credentials.example"},
-		{"--set", "egressGateway.mode=gatewayAPI", "--set", "egressGateway.gatewayAPI.create=true", "--set", "epe.mode=external", "--set", "epe.external.address=epe.example.internal"},
+		{
+			"--set",
+			"egressGateway.mode=static",
+			"--set",
+			"epe.mode=managed",
+			"--set",
+			"epe.credentialProvider.url=https://credentials.example",
+		},
+		{
+			"--set",
+			"egressGateway.mode=gatewayAPI",
+			"--set",
+			"egressGateway.gatewayAPI.create=true",
+			"--set",
+			"epe.mode=external",
+			"--set",
+			"epe.external.address=epe.example.internal",
+		},
 	}
 	for i, args := range tests {
 		t.Run(fmt.Sprintf("combination-%d", i), func(t *testing.T) {
 			seen := map[string]struct{}{}
 			for _, object := range renderedObjects(t, renderAgentio(t, args...)) {
-				key := fmt.Sprintf("%s/%s/%s/%s", object.APIVersion, object.Kind, object.Metadata.Namespace, object.Metadata.Name)
+				key := fmt.Sprintf(
+					"%s/%s/%s/%s",
+					object.APIVersion,
+					object.Kind,
+					object.Metadata.Namespace,
+					object.Metadata.Name,
+				)
 				if _, found := seen[key]; found {
 					t.Fatalf("duplicate rendered object %s", key)
 				}
@@ -726,7 +848,9 @@ func TestAgentgatewayCAInjectorValues(t *testing.T) {
 					t.Fatal(err)
 				}
 				g := values.Global
-				if g.Agentgateway.CA.Enabled != enabled || g.SDS.Token.Aud != "gateway-ca" || g.TrustBundleName != "gateway-root" || g.CAAddress != "agentiod.agentio-system.svc.cluster.local:15012" {
+				if g.Agentgateway.CA.Enabled != enabled || g.SDS.Token.Aud != "gateway-ca" ||
+					g.TrustBundleName != "gateway-root" ||
+					g.CAAddress != "agentiod.agentio-system.svc.cluster.local:15012" {
 					t.Fatalf("incorrect CA bootstrap values: %+v", g)
 				}
 				return
@@ -788,13 +912,27 @@ func TestEPEWorkloadMTLS(t *testing.T) {
 		"secretName: epe-server", "name: epe-client-ca",
 		"mountPath: /custom/tls", "mountPath: /custom/trust",
 	)
-	requireNotContains(t, manifest, "workload-root", "workload-token", "-ca-address")
+	requireNotContains(t, manifest, "-ca-address")
+	requireContains(
+		t,
+		manifest,
+		"workload-root",
+		"workload-token",
+		"--xds-address=agentiod.agentio-system.svc.cluster.local:15012",
+	)
 
 	// User-provided mounts also serve outbound provider files with inbound TLS off.
 	plain := renderAgentio(t, "-f", valuesFile, "--set", "epe.tls.enabled=false",
 		"--show-only", "templates/epe/deployment.yaml")
 	requireContains(t, plain, "secretName: epe-server", "mountPath: /custom/trust")
-	requireNotContains(t, plain, "-tls-source=", "-tls-cert-path=", "workload-root", "workload-token")
+	requireNotContains(t, plain, "-tls-source=", "-tls-cert-path=")
+	requireContains(
+		t,
+		plain,
+		"workload-root",
+		"workload-token",
+		"--xds-address=agentiod.agentio-system.svc.cluster.local:15012",
+	)
 
 	for _, overrides := range []string{
 		"epe.tls.certificateSource.file.certificateFile=/cert.pem",

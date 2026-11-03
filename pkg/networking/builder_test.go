@@ -1037,6 +1037,24 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 	}
 }
 
+func TestLegacySandboxLabelsHeaderFilterState(t *testing.T) {
+	filter := buildConnectAuthorityFilter("envoy.string", legacyPeerPrincipal, legacyLocalPrincipal, true)
+	config := &setstatehttpv3.Config{}
+	if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range config.GetOnRequestHeaders() {
+		if state.GetObjectKey() == "sandbox.labels" {
+			if state.GetFormatString().GetTextFormatSource().GetInlineString() != "%REQ(X-AGENTIO-SANDBOX-LABELS)%" ||
+				state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_TRANSITIVE {
+				t.Fatalf("legacy label headers must survive internal hops: %v", state)
+			}
+			return
+		}
+	}
+	t.Fatal("legacy sandbox.labels capture is missing")
+}
+
 func TestSandboxHeaderFilterState(t *testing.T) {
 	resources := buildCompleteGatewayGraph(t)
 	listeners := messagesOf(
@@ -1058,7 +1076,7 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		states = config.GetOnRequestHeaders()
 	}
 	for key, header := range map[string]string{
-		"sandbox.id":               "X-AGENTIO-SANDBOX-ID",
+		"agentio.sandbox.uid":      "X-AGENTIO-SANDBOX-UID",
 		"sandbox.token":            "X-AGENTIO-SANDBOX-TOKEN",
 		"agentio.sandbox.metadata": "X-AGENTIO-SANDBOX-METADATA",
 	} {

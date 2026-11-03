@@ -42,6 +42,8 @@ type subscription struct {
 	changed    chan struct{} // Created only when a caller needs to wait.
 	owners     int
 	persistent bool
+	active     bool // Requested on this stream, rather than merely retained locally.
+	waiters    int
 }
 
 // notify wakes this generation's waiters. All access is under client.mu.
@@ -136,11 +138,18 @@ func (c *Client) subscribeLocked(typ, name string) (*typeState, *subscription, e
 	if sub == nil {
 		sub = &subscription{done: make(chan struct{})}
 		st.names[name] = sub
-		st.pending[name] = struct{}{}
 		delete(st.removed, name)
+	}
+	c.activateLocked(st, name, sub)
+	return st, sub, nil
+}
+
+func (c *Client) activateLocked(st *typeState, name string, sub *subscription) {
+	if !sub.active {
+		sub.active = true
+		st.pending[name] = struct{}{}
 		c.wakeSubscriptions()
 	}
-	return st, sub, nil
 }
 
 func (st *typeState) interested(name string, aliases []string) bool {
@@ -272,7 +281,9 @@ func (c *Client) waitLocked(
 			c.mu.Unlock()
 			return nil, ErrReleased
 		}
-		if st.synced {
+		c.activateLocked(st, name, sub)
+		c.expireGraceLocked(st)
+		if st.synced || !st.graceUntil.IsZero() {
 			canonical := name
 			if target, alias := st.aliases[name]; alias {
 				if target == "" {
@@ -305,13 +316,18 @@ func (c *Client) waitLocked(
 			sub.changed = make(chan struct{})
 		}
 		changed := sub.changed
+		sub.waiters++
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-changed:
 		}
 		c.mu.Lock()
+		sub.waiters--
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
 	}
 }
 
@@ -323,6 +339,9 @@ func (c *Client) initialRequests(sent map[string]map[string]*subscription) []*di
 		sent[typ] = map[string]*subscription{}
 		st.pending = map[string]struct{}{}
 		for name, sub := range st.names {
+			if !sub.active {
+				continue
+			}
 			req.ResourceNamesSubscribe = append(req.ResourceNamesSubscribe, name)
 			sent[typ][name] = sub
 		}
@@ -351,7 +370,7 @@ func (c *Client) pendingRequests(sent map[string]map[string]*subscription) []*di
 			sub := st.names[name]
 			// A new generation must resubscribe even if the previous generation's
 			// unsubscribe has not yet been sent.
-			if sub != nil && sent[typ][name] != sub {
+			if sub != nil && sub.active && sent[typ][name] != sub {
 				req.ResourceNamesSubscribe = append(req.ResourceNamesSubscribe, name)
 				sent[typ][name] = sub
 			} else if sub == nil && sent[typ][name] != nil {

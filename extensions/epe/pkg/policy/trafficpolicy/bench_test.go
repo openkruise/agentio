@@ -41,6 +41,10 @@ type benchSource struct {
 }
 
 func (s *benchSource) Snapshot() xdsclient.Snapshot {
+	return s.SnapshotFor(nil)
+}
+
+func (s *benchSource) SnapshotFor(names map[string][]string) xdsclient.Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := xdsclient.Snapshot{
@@ -49,7 +53,17 @@ func (s *benchSource) Snapshot() xdsclient.Snapshot {
 		Resources: map[string]map[string]*xdsclient.Resource{},
 	}
 	for typ, resources := range s.snapshot.Resources {
-		result.Resources[typ] = maps.Clone(resources)
+		if names == nil {
+			result.Resources[typ] = maps.Clone(resources)
+			continue
+		}
+		selected := map[string]*xdsclient.Resource{}
+		for _, name := range names[typ] {
+			if resource := resources[name]; resource != nil {
+				selected[name] = resource
+			}
+		}
+		result.Resources[typ] = selected
 	}
 	return result
 }
@@ -64,7 +78,7 @@ func (s *benchSource) Observe(_ ...string) (<-chan struct{}, bool) {
 	return s.snapshot.Changed, true
 }
 
-func benchFixture(count int) (*benchSource, *store.Aggregate, *resolver, subject.Subject) {
+func benchFixture(count int) (*benchSource, *store.Aggregate, *resourceResolver, subject.Subject) {
 	pack := func(m proto.Message) *anypb.Any {
 		a, err := anypb.New(m)
 		if err != nil {
@@ -81,6 +95,7 @@ func benchFixture(count int) (*benchSource, *store.Aggregate, *resolver, subject
 	}
 	source.snapshot.Changed = source.changed
 	ref := pack(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: []string{"policy"}})
+	profile := pack(&ext.PolicyReference{TypeUrl: model.SecurityProfileType})
 	for i := range count {
 		name := fmt.Sprintf("pod-%d", i)
 		source.snapshot.Resources[model.WorkloadType][name] = &xdsclient.Resource{Value: &workload.Workload{
@@ -88,7 +103,7 @@ func benchFixture(count int) (*benchSource, *store.Aggregate, *resolver, subject
 			Name:       name,
 			Namespace:  "ns",
 			Addresses:  [][]byte{{192, 0, 2, 1}},
-			Extensions: []*workload.Extension{{Name: "traffic-policy-reference", Config: ref}},
+			Extensions: []*workload.Extension{{Name: "traffic-policy-reference", Config: ref}, {Name: "security-profile-reference", Config: profile}},
 		},
 		}
 	}
@@ -106,7 +121,7 @@ func benchFixture(count int) (*benchSource, *store.Aggregate, *resolver, subject
 	}
 	aggregate := store.NewAggregate(xdsstore.New(source))
 	RegisterQueries(aggregate, "Kubernetes")
-	r := &resolver{source: aggregate}
+	r := &resourceResolver{source: aggregate}
 	return source, aggregate, r, subject.Subject{
 		Workload: subject.Workload{Namespace: "ns", Name: "pod-0", IP: "192.0.2.1"},
 	}

@@ -139,7 +139,7 @@ func TestPushFailuresAreRecordedByStage(t *testing.T) {
 				Subscription: newSubscriptionView(watch),
 				Snapshot:     server.resources.Snapshot(),
 				Full:         true,
-			}, true)
+			}, true, nil)
 			if err == nil {
 				t.Fatal("push unexpectedly succeeded")
 			}
@@ -1775,7 +1775,7 @@ func TestFailedSendDoesNotCommitGeneratedDelta(t *testing.T) {
 		TypeURL:      model.AddressType,
 		Subscription: newSubscriptionView(watch),
 		Full:         true,
-	}, false)
+	}, false, nil)
 	if err == nil || err.Error() != "send failed" {
 		t.Fatalf("send error = %v, want send failed", err)
 	}
@@ -1891,7 +1891,7 @@ func TestExpiredSecretSendCommitsOnlyWireResources(t *testing.T) {
 					TypeURL:      model.SecretType,
 					Full:         true,
 					Subscription: newSubscriptionView(watch),
-				}, false)
+				}, false, nil)
 				if failSend {
 					if err == nil || len(watch.sent) != 1 ||
 						watch.sent[expired.XDSName] != expired.Hash || watch.nonceSent != "previous" {

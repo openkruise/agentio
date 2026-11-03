@@ -36,7 +36,7 @@ func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
 	if err := protojson.Unmarshal([]byte(`{
  "connectRateLimit":{"tokenBucket":{"maxTokens":10,"fillInterval":"1s"}},
  "connectConcurrencyLimit":{
- "rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],
+ "rateLimits":[{"actions":[{"filterState":{"key":"agentio.sandbox.uid","descriptorKey":"sandbox"}}]}],
  "descriptors":[{"entries":[{"key":"sandbox"}],"maxConcurrentStreams":2}]}
  }`), settings); err != nil {
 		t.Fatal(err)

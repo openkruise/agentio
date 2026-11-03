@@ -44,6 +44,7 @@ func (f *fakeSource) Snapshot() xdsclient.Snapshot {
 	result := xdsclient.Snapshot{
 		Changed:   f.snapshot.Changed,
 		Synced:    map[string]bool{},
+		InGrace:   maps.Clone(f.snapshot.InGrace),
 		Resources: map[string]map[string]*xdsclient.Resource{},
 	}
 	for typ, resources := range f.snapshot.Resources {
@@ -131,11 +132,61 @@ func (f *fakeSource) notify() {
 
 func (f *fakeSource) Observe(types ...string) (<-chan struct{}, bool) {
 	for _, typ := range types {
-		if !f.snapshot.Synced[typ] {
+		if !f.snapshot.Usable(typ) {
 			return f.snapshot.Changed, false
 		}
 	}
 	return f.snapshot.Changed, true
+}
+
+func TestReconnectGracePublicationAndExpiry(t *testing.T) {
+	f := testSource()
+	f.notify()
+	s := New(f)
+	before := s.Read()
+	f.snapshot.Synced = map[string]bool{}
+	f.snapshot.InGrace = map[string]bool{model.WorkloadType: true, model.TrafficPolicyType: true}
+	f.notify()
+	during := s.Read()
+	if !during.Ready || during.Status != s.Status() {
+		t.Fatal("retained resource set became unavailable during grace")
+	}
+	for _, typ := range s.Types() {
+		if during.Snapshots[typ] != before.Snapshots[typ] {
+			t.Fatal("disconnect rebuilt unchanged resources")
+		}
+	}
+	keys := []store.Key{{Type: store.Workload, Name: "uid"}, {Type: store.TrafficPolicy, Name: "allow"}}
+	if !s.ReadKeys(keys).Ready {
+		t.Fatal("selected request rejected usable grace values")
+	}
+	f.snapshot.InGrace = nil
+	f.notify()
+	after := s.Read()
+	if after.Ready || s.Status().Ready || s.ReadKeys(keys).Ready {
+		t.Fatal("expired source remained available")
+	}
+	if _, err := after.Snapshots[store.TrafficPolicy].Get("allow"); err == nil {
+		t.Fatal("published snapshot served expired policy")
+	}
+}
+
+func TestSelectedWorkloadDoesNotWaitForUnrequestedPolicyType(t *testing.T) {
+	f := testSource()
+	f.snapshot.Synced[model.TrafficPolicyType] = false
+	f.notify()
+	s := New(f)
+	workloadKey := store.Key{Type: store.Workload, Name: "uid"}
+	batch := s.ReadKeys([]store.Key{workloadKey})
+	if !batch.Ready {
+		t.Fatal("unrequested TrafficPolicy type blocked resolved Workload")
+	}
+	if value, err := batch.Snapshots[store.TrafficPolicy].Get("allow"); err != nil || value != nil {
+		t.Fatal("unrequested dependency must be missing so resolution can demand it", value, err)
+	}
+	if s.ReadKeys([]store.Key{workloadKey, {Type: store.TrafficPolicy, Name: "allow"}}).Ready {
+		t.Fatal("requested unsynchronized policy became usable")
+	}
 }
 
 func TestResourceQueriesAndFetch(t *testing.T) {

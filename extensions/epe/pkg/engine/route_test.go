@@ -264,7 +264,7 @@ func TestIncrementalRoutePreservesPrior(t *testing.T) {
 
 func TestRequestStreamViewPreservesGatewayTarget(t *testing.T) {
 	initial := routeMutation("192.0.2.1:8443", false).Route.Upstream
-	st := &filter.Stream{Upstream: initial}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Upstream: initial}}
 	walk := requestWalk{actionWalk: newActionWalk(st)}
 	for _, mutation := range []filter.Mutation{
 		filter.SetPath("/rewritten", true),

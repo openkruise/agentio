@@ -28,7 +28,7 @@ func BenchmarkExtractSandboxToken(b *testing.B) {
 		fields := map[string]any{
 			FilterStateDownstreamPeerNamespace: "default",
 			FilterStateDownstreamPeerName:      "sandbox-pod",
-			FilterStateWorkloadLabels:          b64("app=sandbox"),
+			FilterStateSandboxLabels:           b64("app=sandbox"),
 			AttrDestinationPort:                443,
 		}
 		if size > 0 {

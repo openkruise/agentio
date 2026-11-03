@@ -213,8 +213,12 @@ type AgentioConfig struct {
 	// Only inspected HTTP traffic is processed, not CONNECT setup or TLS passthrough.
 	// Names must be unique DNS labels. Empty lists remove all additional processors.
 	AdditionalExtProcs []*ExtProcProvider `protobuf:"bytes,5,rep,name=additional_ext_procs,json=additionalExtProcs,proto3" json:"additional_ext_procs,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy
+	// discovery. Empty disables EPE access. Clients must authenticate and use
+	// the epe node type; declaring an identity in node metadata is not sufficient.
+	TrustedEpeIdentities []string `protobuf:"bytes,6,rep,name=trusted_epe_identities,json=trustedEPEIdentities,proto3" json:"trusted_epe_identities,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *AgentioConfig) Reset() {
@@ -278,6 +282,13 @@ func (x *AgentioConfig) GetEgressGateways() []*EgressGateway {
 func (x *AgentioConfig) GetAdditionalExtProcs() []*ExtProcProvider {
 	if x != nil {
 		return x.AdditionalExtProcs
+	}
+	return nil
+}
+
+func (x *AgentioConfig) GetTrustedEpeIdentities() []string {
+	if x != nil {
+		return x.TrustedEpeIdentities
 	}
 	return nil
 }
@@ -2274,13 +2285,14 @@ var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
 
 const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\n" +
-	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x8c\x03\n" +
+	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\xc2\x03\n" +
 	"\rAgentioConfig\x12L\n" +
 	"\x10sandbox_ext_proc\x18\x01 \x01(\v2\".agentio.config.v1.ExtProcProviderR\x0esandboxExtProc\x12V\n" +
 	"\x0fegress_policies\x18\x02 \x03(\v2-.kruise.networking.extensions.v1.EgressPolicyR\x0eegressPolicies\x124\n" +
 	"\x16sandbox_ignored_labels\x18\x03 \x03(\tR\x14sandboxIgnoredLabels\x12I\n" +
 	"\x0fegress_gateways\x18\x04 \x03(\v2 .agentio.config.v1.EgressGatewayR\x0eegressGateways\x12T\n" +
-	"\x14additional_ext_procs\x18\x05 \x03(\v2\".agentio.config.v1.ExtProcProviderR\x12additionalExtProcs\"\xb6\x06\n" +
+	"\x14additional_ext_procs\x18\x05 \x03(\v2\".agentio.config.v1.ExtProcProviderR\x12additionalExtProcs\x124\n" +
+	"\x16trusted_epe_identities\x18\x06 \x03(\tR\x14trustedEPEIdentities\"\xb6\x06\n" +
 	"\rEgressGateway\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12P\n" +

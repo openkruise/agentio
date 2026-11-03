@@ -215,7 +215,7 @@ func (r *runner) request(ctx context.Context, config *tls.Config, i int) error {
 		Method: http.MethodConnect,
 		URL:    &url.URL{Scheme: "https", Host: r.Target},
 		Host:   r.Target,
-		Header: http.Header{"X-Agentio-Sandbox-Id": []string{"kruise:" + resourceName(i)}},
+		Header: http.Header{"X-Agentio-Sandbox-Uid": []string{"kruise:" + resourceName(i)}},
 		Body:   reader,
 	}
 	response, err := client.RoundTrip(req.WithContext(ctx))

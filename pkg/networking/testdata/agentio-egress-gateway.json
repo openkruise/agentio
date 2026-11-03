@@ -809,8 +809,6 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                  "normalizePath": true,
-                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "connect_terminate",
                   "rds": {
                     "configSource": {
@@ -890,11 +888,11 @@
                             "sharedWithUpstream": "ONCE"
                           },
                           {
-                            "objectKey": "sandbox.id",
+                            "objectKey": "agentio.sandbox.uid",
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%REQ(X-AGENTIO-SANDBOX-ID)%"
+                                "inlineString": "%REQ(X-AGENTIO-SANDBOX-UID)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -951,7 +949,7 @@
                           "responseTrailerMode": "SKIP"
                         },
                         "requestAttributes": [
-                          "filter_state['sandbox.id']",
+                          "filter_state['agentio.sandbox.uid']",
                           "filter_state['agentio.downstream.ip']",
                           "filter_state['agentio.peer.principal']",
                           "filter_state['agentio.peer.certificate']"
@@ -996,11 +994,11 @@
                             "skipIfEmpty": true
                           },
                           {
-                            "objectKey": "agentio.workload.labels",
+                            "objectKey": "agentio.workload.uid",
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_labels)%"
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload:uid)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -1008,11 +1006,11 @@
                             "skipIfEmpty": true
                           },
                           {
-                            "objectKey": "sandbox.labels",
-                            "factoryKey": "envoy.string",
+                            "objectKey": "agentio.workload.instance",
+                            "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_labels)%"
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_instance)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -1098,7 +1096,6 @@
                     },
                     {
                       "name": "agentio.connect_concurrency",
-                      "disabled": true,
                       "configDiscovery": {
                         "configSource": {
                           "ads": {},
@@ -1107,11 +1104,11 @@
                         "typeUrls": [
                           "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
                         ]
-                      }
+                      },
+                      "disabled": true
                     },
                     {
                       "name": "agentio.bandwidth",
-                      "disabled": true,
                       "configDiscovery": {
                         "configSource": {
                           "ads": {},
@@ -1120,7 +1117,8 @@
                         "typeUrls": [
                           "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
                         ]
-                      }
+                      },
+                      "disabled": true
                     },
                     {
                       "name": "envoy.filters.http.router",
@@ -1144,7 +1142,9 @@
                     {
                       "upgradeType": "CONNECT"
                     }
-                  ]
+                  ],
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED"
                 }
               }
             ],
@@ -1236,8 +1236,6 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                  "normalizePath": true,
-                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "configSource": {
@@ -1265,7 +1263,7 @@
                           "request.id",
                           "filter_state['agentio.workload.name']",
                           "filter_state['agentio.workload.namespace']",
-                          "filter_state['agentio.workload.labels']",
+                          "filter_state['agentio.workload.uid']",
                           "filter_state['sandbox.labels']",
                           "source.address",
                           "destination.address",
@@ -1392,6 +1390,9 @@
                       }
                     }
                   ],
+                  "httpProtocolOptions": {
+                    "acceptHttp10": true
+                  },
                   "http2ProtocolOptions": {
                     "allowConnect": true
                   },
@@ -1404,9 +1405,8 @@
                       "upgradeType": "websocket"
                     }
                   ],
-                  "httpProtocolOptions": {
-                    "acceptHttp10": true
-                  }
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED"
                 }
               }
             ],
@@ -1513,11 +1513,11 @@
                       "skipIfEmpty": true
                     },
                     {
-                      "objectKey": "sandbox.id",
+                      "objectKey": "agentio.sandbox.uid",
                       "factoryKey": "envoy.hashable_string",
                       "formatString": {
                         "textFormatSource": {
-                          "inlineString": "%FILTER_STATE(sandbox.id:PLAIN)%"
+                          "inlineString": "%FILTER_STATE(agentio.sandbox.uid:PLAIN)%"
                         },
                         "omitEmptyValues": true
                       },
@@ -1571,23 +1571,11 @@
                       "skipIfEmpty": true
                     },
                     {
-                      "objectKey": "agentio.workload.labels",
+                      "objectKey": "agentio.workload.uid",
                       "factoryKey": "envoy.hashable_string",
                       "formatString": {
                         "textFormatSource": {
-                          "inlineString": "%FILTER_STATE(agentio.workload.labels:PLAIN)%"
-                        },
-                        "omitEmptyValues": true
-                      },
-                      "sharedWithUpstream": "ONCE",
-                      "skipIfEmpty": true
-                    },
-                    {
-                      "objectKey": "sandbox.labels",
-                      "factoryKey": "envoy.string",
-                      "formatString": {
-                        "textFormatSource": {
-                          "inlineString": "%FILTER_STATE(sandbox.labels:PLAIN)%"
+                          "inlineString": "%FILTER_STATE(agentio.workload.uid:PLAIN)%"
                         },
                         "omitEmptyValues": true
                       },
@@ -1776,7 +1764,7 @@
                         }
                       }
                     },
-                    "'http/1.1'": {
+                    "'http/1.0'": {
                       "action": {
                         "name": "forward-http",
                         "typedConfig": {
@@ -1785,7 +1773,7 @@
                         }
                       }
                     },
-                    "'http/1.0'": {
+                    "'http/1.1'": {
                       "action": {
                         "name": "forward-http",
                         "typedConfig": {
@@ -1849,7 +1837,6 @@
           }
         ],
         "listenerFiltersTimeout": "1s",
-        "continueOnListenerFiltersTimeout": false,
         "trafficDirection": "INBOUND",
         "internalListener": {}
       }
@@ -1866,8 +1853,6 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typedConfig": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                  "normalizePath": true,
-                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
                   "statPrefix": "inbound_0.0.0.0_0;",
                   "rds": {
                     "configSource": {
@@ -1898,12 +1883,12 @@
                               "condition": {
                                 "id": "15",
                                 "callExpr": {
-                                  "function": "_&&_",
+                                  "function": "_\u0026\u0026_",
                                   "args": [
                                     {
                                       "id": "8",
                                       "callExpr": {
-                                        "function": "_&&_",
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "3",
@@ -1957,7 +1942,7 @@
                                     {
                                       "id": "29",
                                       "callExpr": {
-                                        "function": "_&&_",
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "13",
@@ -2123,7 +2108,7 @@
                           "request.id",
                           "filter_state['agentio.workload.name']",
                           "filter_state['agentio.workload.namespace']",
-                          "filter_state['agentio.workload.labels']",
+                          "filter_state['agentio.workload.uid']",
                           "filter_state['sandbox.labels']",
                           "source.address",
                           "destination.address",
@@ -2316,6 +2301,9 @@
                       }
                     }
                   ],
+                  "httpProtocolOptions": {
+                    "acceptHttp10": true
+                  },
                   "http2ProtocolOptions": {
                     "allowConnect": true
                   },
@@ -2331,9 +2319,8 @@
                       "upgradeType": "websocket"
                     }
                   ],
-                  "httpProtocolOptions": {
-                    "acceptHttp10": true
-                  }
+                  "normalizePath": true,
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED"
                 }
               }
             ],
@@ -2400,7 +2387,7 @@
                     }
                   }
                 },
-                "'http/1.1'": {
+                "'http/1.0'": {
                   "action": {
                     "name": "forward-http",
                     "typedConfig": {
@@ -2409,7 +2396,7 @@
                     }
                   }
                 },
-                "'http/1.0'": {
+                "'http/1.1'": {
                   "action": {
                     "name": "forward-http",
                     "typedConfig": {
@@ -2446,7 +2433,6 @@
           }
         ],
         "listenerFiltersTimeout": "1s",
-        "continueOnListenerFiltersTimeout": false,
         "trafficDirection": "INBOUND",
         "internalListener": {}
       }

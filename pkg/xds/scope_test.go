@@ -224,6 +224,9 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 			nodeID: "waypoint~10.0.0.1~egress.demo~demo.svc.cluster.local",
 			scope:  model.ClientScope{Class: model.ClientEgressGateway},
 		},
+		{name: "EPE declares its own role", nodeID: "epe~10.0.0.1~processor.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientEPE}},
+		{name: "EPE cannot claim gateway role", nodeID: "waypoint~10.0.0.1~processor.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientEPE}, wantError: true},
+		{name: "ordinary Pod cannot claim EPE role", nodeID: "epe~10.0.0.1~client.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientDedicatedZTunnel}, wantError: true},
 		{
 			name:      "missing node type cannot obtain gateway scope",
 			scope:     model.ClientScope{Class: model.ClientEgressGateway},

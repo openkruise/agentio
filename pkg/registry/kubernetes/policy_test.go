@@ -62,6 +62,37 @@ func TestAgentioConfigStartsFromDefaults(t *testing.T) {
 	}
 }
 
+func TestAgentioConfigTrustedEPEIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		yaml    string
+		invalid bool
+	}{
+		{"omitted", "{}", false},
+		{"empty", "trustedEPEIdentities: []", false},
+		{"multiple", "trustedEPEIdentities: [spiffe://cluster.local/ns/system/sa/epe, spiffe://example.org/custom-processor]", false},
+		{"empty identity", "trustedEPEIdentities: ['']", true},
+		{"wrong scheme", "trustedEPEIdentities: [https://example.org/epe]", true},
+		{"wildcard", "trustedEPEIdentities: [spiffe://cluster.local/ns/system/sa/*]", true},
+		{"noncanonical", "trustedEPEIdentities: [spiffe://CLUSTER.local/ns/system/sa/epe]", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := applyAgentioConfig(tc.yaml, nil)
+			if (err != nil) != tc.invalid {
+				t.Fatalf("applyAgentioConfig() error=%v, want invalid=%t", err, tc.invalid)
+			}
+		})
+	}
+	base, err := applyAgentioConfig("trustedEPEIdentities: [spiffe://cluster.local/ns/system/sa/epe]", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := applyAgentioConfig("trustedEPEIdentities: []", base)
+	if err != nil || len(cleared.GetTrustedEpeIdentities()) != 0 {
+		t.Fatalf("empty override did not clear identities: %v, %v", cleared, err)
+	}
+}
+
 func TestAgentioConfigMapNamesAreConfigurable(t *testing.T) {
 	ctx := t.Context()
 	objects := []runtime.Object{

@@ -13,8 +13,8 @@ egressGateways:
     connectConcurrencyLimit:
       rateLimits:
         - actions:
-            # sandbox.id must be a globally unique identity validated by Porter.
-            - filterState: {key: sandbox.id, descriptorKey: sandbox}
+            # agentio.sandbox.uid must be a globally unique identity validated by Porter.
+            - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
         - actions:
             - genericKey: {descriptorKey: scope, descriptorValue: gateway}
       descriptors:
@@ -25,7 +25,7 @@ egressGateways:
     bandwidthLimit:
       rateLimits:
         - actions:
-            - filterState: {key: sandbox.id, descriptorKey: sandbox}
+            - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
       descriptors:
         - entries: [{key: sandbox}]
           bandwidthLimit:

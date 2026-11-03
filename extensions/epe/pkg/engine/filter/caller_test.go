@@ -105,7 +105,11 @@ func TestParseSandboxToken(t *testing.T) {
 }
 
 func TestSandboxTokenSharedAcrossStreamViews(t *testing.T) {
-	original := Stream{Caller: CallerContext{Token: NewSandboxToken(`{"accessToken":"opaque","sandboxClientId":"c1"}`)}}
+	original := Stream{
+		RequestContext: RequestContext{
+			Caller: CallerContext{Token: NewSandboxToken(`{"accessToken":"opaque","sandboxClientId":"c1"}`)},
+		},
+	}
 	view := original
 	parsed := view.Caller.Token.Parse(t.Context())
 	if parsed == nil || parsed.AccessToken != "opaque" {

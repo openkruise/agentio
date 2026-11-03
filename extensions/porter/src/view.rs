@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use prost::Message;
 use prost_types::{Any, Struct, Value, value::Kind};
 
@@ -12,9 +11,7 @@ use crate::traffic::Policy;
 use crate::wire::{
     agentio::{sandbox::Sandbox, security::TrafficPolicy},
     istio::workload::{NetworkMode, Workload},
-    kruise::networking::extensions::v1::{
-        PolicyReference, SniAction, SniRule, SniTrafficPolicy, WorkloadMetadata,
-    },
+    kruise::networking::extensions::v1::{PolicyReference, SniAction, SniRule, SniTrafficPolicy},
 };
 
 pub const WORKLOAD: &str = "type.googleapis.com/istio.workload.Workload";
@@ -72,7 +69,6 @@ pub struct WorkloadView {
     pub namespace: String,
     pub principal: String,
     pub host_network: bool,
-    pub encoded_labels: String,
     pub traffic_policies: Option<Vec<String>>,
     pub rules: Vec<SniRule>,
 }
@@ -169,16 +165,6 @@ pub fn decode(kind: ResourceKind, value: &Any) -> Result<View> {
                 .into_iter()
                 .filter_map(|e| e.config)
                 .collect();
-            let mut labels = Vec::new();
-            for value in values
-                .iter()
-                .filter(|v| matches(v, "kruise.networking.extensions.v1.WorkloadMetadata"))
-            {
-                let metadata = WorkloadMetadata::decode(value.value.as_slice())
-                    .context("decode workload metadata")?;
-                labels.extend(metadata.labels.into_iter().map(|(k, v)| format!("{k}={v}")));
-            }
-            labels.sort();
             let principal =
                 if !workload.trust_domain.is_empty() && !workload.service_account.is_empty() {
                     format!(
@@ -194,7 +180,6 @@ pub fn decode(kind: ResourceKind, value: &Any) -> Result<View> {
                 namespace: workload.namespace,
                 principal,
                 host_network: workload.network_mode == NetworkMode::HostNetwork as i32,
-                encoded_labels: STANDARD.encode(labels.join(",")),
                 rules: rules(&values)?,
                 traffic_policies: traffic_references(&values)?,
             }))

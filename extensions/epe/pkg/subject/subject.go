@@ -31,6 +31,8 @@ type Workload struct {
 	Name      string
 	IP        string
 	Labels    map[string]string
+	// Nil selects the legacy local matcher; an explicit empty list binds no administrator profiles.
+	SecurityProfileReferences []string
 }
 
 // Sandbox identifies the request's execution unit by discovery UID.

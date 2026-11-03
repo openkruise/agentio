@@ -4,8 +4,8 @@
 {{- $certificateSource := .Values.epe.tls.certificateSource | default dict }}
 {{- $ca := $certificateSource.ca | default dict }}
 {{- $caMode := and .Values.epe.tls.enabled (not (hasKey $certificateSource "file")) }}
-{{- $mountRoot := and $caMode (not (hasKey $ca "caCertificateFile")) }}
-{{- $mountToken := and $caMode (not (hasKey $ca "tokenFile")) }}
+{{- $mountRoot := not (hasKey $ca "caCertificateFile") }}
+{{- $mountToken := not (hasKey $ca "tokenFile") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,6 +49,13 @@ spec:
             - -epe-config-primary={{ include "epe.fullname" . }}-config-primary
             - -namespace={{ .Release.Namespace }}
             - -secret-watch-scope={{ .Values.epe.secretWatchScope }}
+            - --xds-address={{ include "gateway.xdsAddress" . }}
+            - --xds-cluster-id={{ .Values.global.clusterId }}
+            - --xds-cache-idle-ttl={{ .Values.epe.xdsCache.idleTTL }}
+            - --xds-cache-max-entries={{ .Values.epe.xdsCache.maxEntries }}
+            - --domain={{ .Values.global.clusterDomain }}
+            - {{ printf "--xds-token-path=%s" (default "/var/run/secrets/tokens/agentio-token" $ca.tokenFile) | quote }}
+            - {{ printf "--xds-root-path=%s" (default "/var/run/secrets/agentio/root-cert.pem" $ca.caCertificateFile) | quote }}
             {{- if .Values.epe.tls.enabled }}
             {{- if $caMode }}
             - -tls-source=ca
@@ -74,6 +81,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
             - name: IDENTITY_PROVIDER_URL
               value: {{ .Values.epe.credentialProvider.url | quote }}
             - name: TOKEN_CACHE_TTL

@@ -331,15 +331,14 @@ spec:
 	trafficFixture.Client.CallOrFail(t, options)
 }
 
-// TestWorkloadLabelsReachEPE proves the agentio.workload.labels attribute contract. The
+// TestWorkloadLabelsReachEPE proves WDS SecurityProfile selector bindings. The
 // Positive calls through both matching callers are the propagation barriers
 // for the subsequent one-shot negative assertion: the shared caller proves the
 // first document is active, then the dedicated caller proves the later document
 // is active without changing the pinned document order.
 func TestWorkloadLabelsReachEPE(t *testing.T) {
 	environment, scope := beginEPEDataPathScenario(t,
-		"The caller's pod labels did not reach EPE, or did not decode. Either agentio.workload.labels is missing "+
-			"from the ext_proc request_attributes or the sandbox data plane did not populate it for this workload type. EPE log")
+		"The caller's WDS SecurityProfile bindings did not reach EPE, or the referenced profile was unavailable. EPE log")
 	selectorProbe := applyEPESelectorProbe(t, environment)
 
 	e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
@@ -621,10 +620,10 @@ data:
       request:
         headerMode: SEND
         attributes:
-        - filter_state['sandbox.id']
+        - filter_state['agentio.sandbox.uid']
         - filter_state['sandbox.token']
         - filter_state['agentio.sandbox.metadata']
-        - filter_state['agentio.workload.labels']
+        - filter_state['agentio.workload.uid']
         - filter_state['sandbox.labels']
         - filter_state['agentio.workload.name']
         - filter_state['agentio.workload.namespace']

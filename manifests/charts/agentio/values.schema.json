@@ -466,6 +466,13 @@
         "mode"
       ],
       "properties": {
+        "xdsCache": {
+          "type": "object",
+          "properties": {
+            "idleTTL": { "type": "string" },
+            "maxEntries": { "type": "integer", "minimum": 0 }
+          }
+        },
         "mode": {
           "type": "string",
           "enum": [

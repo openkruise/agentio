@@ -73,6 +73,7 @@ var clientClasses = [...]model.ClientClass{
 	model.ClientDedicatedZTunnel,
 	model.ClientEgressGateway,
 	model.ClientAgentioEgress,
+	model.ClientEPE,
 }
 
 // NewServer builds the Delta ADS server. Admission and the independent push and

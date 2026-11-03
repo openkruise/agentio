@@ -31,7 +31,7 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
       "rateLimits": [
         {"actions": [
           {"filterState": {"key": "tenant.id", "descriptorKey": "tenant"}},
-          {"filterState": {"key": "sandbox.id", "descriptorKey": "sandbox"}}
+          {"filterState": {"key": "agentio.sandbox.uid", "descriptorKey": "sandbox"}}
         ]},
         {"actions": [{"genericKey": {"descriptorKey": "scope", "descriptorValue": "gateway"}}]},
         {"actions": [{"filterState": {"key": "other.id", "descriptorKey": "sandbox"}}]}
@@ -63,12 +63,19 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 	if len(first) != 2 {
 		t.Fatalf("composite key has %d actions", len(first))
 	}
-	for i, key := range []string{"tenant", "sandbox"} {
+	for i, action := range []struct {
+		descriptor string
+		key        string
+	}{
+		{"tenant", "tenant.id"},
+		{"sandbox", "agentio.sandbox.uid"},
+	} {
 		expression := new(rlexprv3.Descriptor)
 		if err := first[i].GetExtension().GetTypedConfig().UnmarshalTo(expression); err != nil {
 			t.Fatal(err)
 		}
-		if expression.GetDescriptorKey() != key || expression.GetText() != `filter_state["`+key+`.id"]` {
+		if expression.GetDescriptorKey() != action.descriptor ||
+			expression.GetText() != `filter_state["`+action.key+`"]` {
 			t.Fatalf("incorrect filter-state action: %v", expression)
 		}
 	}
@@ -93,7 +100,7 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 func TestConnectRateLimitRejectsMixedLegacyCELAtCompilation(t *testing.T) {
 	settings := &configv1.LocalRateLimitSettings{
 		RateLimits: []*configv1.NetworkLimitRule{{Actions: []*configv1.NetworkLimitAction{{
-			FilterState: &configv1.NetworkLimitFilterStateAction{Key: "sandbox.id", DescriptorKey: "sandbox"},
+			FilterState: &configv1.NetworkLimitFilterStateAction{Key: "agentio.sandbox.uid", DescriptorKey: "sandbox"},
 		}}}},
 		Descriptors: []*configv1.RateLimitDescriptor{{Entries: []*configv1.RateLimitEntry{{
 			Key: "sandbox",

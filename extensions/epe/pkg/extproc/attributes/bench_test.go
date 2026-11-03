@@ -64,13 +64,13 @@ func benchHeaders(n int) *extProcPb.HttpHeaders {
 
 // BenchmarkExtract covers the per-request attribute extraction. The
 // identity-present arms differ only in whether sandbox.token and
-// agentio.workload.labels are in the attributes map: every absent key costs
+// sandbox.labels are in the attributes map: every absent key costs
 // extractFilterStateString a key concat plus a full map scan.
 func BenchmarkExtract(b *testing.B) {
 	base := map[string]any{
 		FilterStateDownstreamPeerNamespace: "default",
 		FilterStateDownstreamPeerName:      "agent-pod-abc123",
-		FilterStateWorkloadLabels:          b64("app=agent,tier=web,version=v2"),
+		FilterStateSandboxLabels:           b64("app=agent,tier=web,version=v2"),
 		AttrSourceAddress:                  "10.244.1.37:43210",
 		AttrDestinationPort:                8443,
 	}
@@ -164,13 +164,12 @@ func BenchmarkDebugLogArgs(b *testing.B) {
 }
 
 // BenchmarkExtractFilterStateString contrasts a key that is present against
-// one that is absent. The absent arm is the cost this function pays twice
-// per request for sandbox.token and agentio.workload.labels.
+// one that is absent, as happens for optional legacy sandbox.token and sandbox.labels.
 func BenchmarkExtractFilterStateString(b *testing.B) {
 	attrs := makeAttrs(b, map[string]any{
 		FilterStateDownstreamPeerNamespace: "default",
 		FilterStateDownstreamPeerName:      "agent-pod-abc123",
-		FilterStateWorkloadLabels:          b64("app=agent,tier=web,version=v2"),
+		FilterStateSandboxLabels:           b64("app=agent,tier=web,version=v2"),
 		AttrSourceAddress:                  "10.244.1.37:43210",
 		AttrDestinationPort:                8443,
 	})

@@ -35,7 +35,7 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 	if err := protojson.Unmarshal([]byte(`{
       "http":{"routing":{"fallback":{"retries":{"attempts":3,"retryOn":"5xx"}}}},
       "bandwidthLimit":{
-      "rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],
+      "rateLimits":[{"actions":[{"filterState":{"key":"agentio.sandbox.uid","descriptorKey":"sandbox"}}]}],
       "descriptors":[{"entries":[{"key":"sandbox"}],"bandwidthLimit":{"downloadBytesPerSecond":100}}]
     }}`), settings); err != nil {
 		t.Fatal(err)

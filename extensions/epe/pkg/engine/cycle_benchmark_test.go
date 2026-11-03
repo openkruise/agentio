@@ -35,7 +35,7 @@ func BenchmarkEvalRequestCycle(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					st := &filter.Stream{Info: filter.NewStreamInfo()}
+					st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 					res, err := e.EvalRequestHeaders(ctx, st, units)
 					if err != nil {
 						b.Fatal(err)

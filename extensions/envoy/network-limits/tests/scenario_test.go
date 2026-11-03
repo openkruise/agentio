@@ -253,7 +253,9 @@ func scenarioTransfers(t *testing.T, c fixture.Scenario) {
 			p["enabled"] = true
 			p["rate_limits"] = []any{
 				object{
-					"actions": []any{object{"filter_state": object{"key": "sandbox.id", "descriptor_key": "sandbox"}}},
+					"actions": []any{
+						object{"filter_state": object{"key": "agentio.sandbox.uid", "descriptor_key": "sandbox"}},
+					},
 				},
 			}
 			p["descriptors"] = []any{

@@ -99,7 +99,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 3. Console output is a CLI surface, not a diagnostics channel.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/* | test/e2e/* | tools/* | bench/xds/load/* | bench/xds/run/* | bench/porter/load/main.go | bench/porter/run/* | bench/connect/load/* | bench/connect/run/* | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/sandbox/* | pkg/server/env.go) ;;
+      cmd/* | test/e2e/* | tools/* | bench/xds/load/* | bench/xds/run/* | bench/porter/load/main.go | bench/porter/run/* | bench/epe/demand/main.go | bench/connect/load/* | bench/connect/run/* | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/sandbox/* | pkg/server/env.go) ;;
       *)
         scan "${f}" 'fmt\.Print|fmt\.Fprint(f|ln)?\(os\.Std(out|err)' \
           "use the package logger; fmt.Print is only for CLI surfaces and the e2e harness"
@@ -110,7 +110,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 4. Only main decides that the process should stop.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/sandbox/main.go) ;;
+      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/epe/demand/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/sandbox/main.go) ;;
       *)
         scan "${f}" 'os\.Exit\(' \
           "os.Exit belongs in main; return the error and let the entrypoint log it"

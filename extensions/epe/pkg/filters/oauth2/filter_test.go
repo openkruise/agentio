@@ -52,16 +52,15 @@ func (s *fakeSource) CallOAuth2(
 	return s.result, s.err
 }
 func requestStream(host, path, contentType string) *filter.Stream {
-	return &filter.Stream{
-		Caller: filter.CallerContext{
-			Token: &filter.SandboxToken{AccessToken: "trusted-identity", SandboxClientID: "trusted-resource"},
-		},
+	return &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+		Token: &filter.SandboxToken{AccessToken: "trusted-identity", SandboxClientID: "trusted-resource"},
+	},
 		Request: httpreq.HTTPRequest{Host: host,
 			Path:    path,
 			Method:  "POST",
 			Scheme:  "https",
 			Port:    9443,
-			Headers: map[string]string{"content-type": contentType, "authorization": "Bearer tool-token"}},
+			Headers: map[string]string{"content-type": contentType, "authorization": "Bearer tool-token"}}},
 	}
 }
 func replyJSON(t *testing.T, action filter.Action, status int) map[string]any {

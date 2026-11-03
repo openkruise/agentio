@@ -26,9 +26,11 @@ import (
 )
 
 func TestSourceContextWithoutWorkload(t *testing.T) {
-	stream := &filter.Stream{Caller: filter.CallerContext{Subject: subject.Subject{
-		Sandbox: &subject.Sandbox{UID: "kruise:sbx"},
-	}}}
+	stream := &filter.Stream{
+		RequestContext: filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{
+			Sandbox: &subject.Sandbox{UID: "kruise:sbx"},
+		}}},
+	}
 	if got := sourceContext(stream); !reflect.DeepEqual(got, SourceContext{}) {
 		t.Fatalf("Sandbox identity projected as workload: %+v", got)
 	}
@@ -42,18 +44,17 @@ func testUnitID() filter.UnitID {
 // must never leave the mesh, and a request whose parsed Query disagrees with
 // RawQuery so a builder reading the wrong one is visible.
 func testStream() *filter.Stream {
-	return &filter.Stream{
-		Caller: filter.CallerContext{
-			Token: &filter.SandboxToken{AccessToken: "secret-token", SandboxClientID: "client-1"},
-			Subject: subject.Subject{
-				Workload: subject.Workload{
-					Namespace: "default",
-					Name:      "agent-0",
-					IP:        "10.0.0.8",
-					Labels:    map[string]string{"app": "agent"},
-				},
+	return &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+		Token: &filter.SandboxToken{AccessToken: "secret-token", SandboxClientID: "client-1"},
+		Subject: subject.Subject{
+			Workload: subject.Workload{
+				Namespace: "default",
+				Name:      "agent-0",
+				IP:        "10.0.0.8",
+				Labels:    map[string]string{"app": "agent"},
 			},
 		},
+	},
 		RequestID: "req-123",
 		Request: httpreq.HTTPRequest{
 			Host:     "api.example.com",
@@ -70,8 +71,8 @@ func testStream() *filter.Stream {
 				"cookie":        "session=abc",
 				"x-request-id":  "req-123",
 			},
-		},
-		Response: httpreq.HTTPResponse{
+		}},
+		StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{
 			Status: 201,
 			Headers: map[string]string{
 				"content-type":       "text/plain",
@@ -80,7 +81,7 @@ func testStream() *filter.Stream {
 				"www-authenticate":   `Bearer realm="upstream"`,
 				"proxy-authenticate": `Basic realm="proxy"`,
 			},
-		},
+		}},
 	}
 }
 

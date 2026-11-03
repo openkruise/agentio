@@ -95,14 +95,24 @@ func New[V any](source Source[V], config Config) (*Cache[V], error) {
 // the source so policy updates are immediately visible and do not refresh TTL
 // unless a consumer actually requests the resource.
 func (c *Cache[V]) Demand(ctx context.Context, typ, name string) (V, error) {
+	value, release, err := c.Get(ctx, typ, name)
+	if release != nil {
+		release()
+	}
+	return value, err
+}
+
+// Get pins the subscription through the consumer's use of the value. A successful
+// caller must call release once, including when subsequent dependency loading fails.
+func (c *Cache[V]) Get(ctx context.Context, typ, name string) (V, func(), error) {
 	var zero V
 	if err := ctx.Err(); err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return zero, ErrClosed
+		return zero, nil, ErrClosed
 	}
 	c.prune(time.Now())
 	k := key{typ: typ, name: name}
@@ -119,7 +129,7 @@ func (c *Cache[V]) Demand(ctx context.Context, typ, name string) (V, error) {
 		lease, err := c.source.Acquire(typ, name)
 		if err != nil {
 			c.mu.Unlock()
-			return zero, err
+			return zero, nil, err
 		}
 		e = &entry[V]{key: k, lease: lease}
 		c.entries[k] = e
@@ -133,10 +143,19 @@ func (c *Cache[V]) Demand(ctx context.Context, typ, name string) (V, error) {
 	c.mu.Unlock()
 
 	value, err := e.lease.Demand(ctx)
+	release := func() { c.release(e, err) }
+	if err != nil {
+		release()
+		return zero, nil, err
+	}
+	return value, release, nil
+}
+
+func (c *Cache[V]) release(e *entry[V], err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e.users--
-	if e.users == 0 && c.entries[k] == e {
+	if e.users == 0 && c.entries[e.key] == e {
 		if err != nil {
 			c.remove(e)
 		} else {
@@ -146,7 +165,6 @@ func (c *Cache[V]) Demand(ctx context.Context, typ, name string) (V, error) {
 		}
 	}
 	c.signal()
-	return value, err
 }
 
 // Len returns the number of retained leases, including in-flight lookups.

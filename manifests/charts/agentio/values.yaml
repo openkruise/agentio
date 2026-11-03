@@ -348,6 +348,9 @@ egressGateway:
         protocol: HBONE
 
 epe:
+  xdsCache:
+    idleTTL: 10m
+    maxEntries: 10000
   # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
   # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
   # null leaves the base externally managed; primary is always externally managed.

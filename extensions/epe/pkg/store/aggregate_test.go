@@ -17,6 +17,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -190,6 +191,26 @@ func TestAggregateFetchAndPublication(t *testing.T) {
 	aggregate.Refresh()
 	if aggregate.Ready() || aggregate.Snapshot() == before {
 		t.Fatal("readiness change lost")
+	}
+}
+
+func TestAcquirePreservesPriorityAndExplicitFetch(t *testing.T) {
+	first, second := memory(Workload), memory(Workload)
+	key := Key{Type: Workload, Name: "shared"}
+	second.put(Resource{Key: key, Value: "lower-priority"})
+	first.pending = &Resource{Key: key, Value: map[string]string{"source": "first"}}
+	aggregate := NewAggregate(first, second)
+	r, release, err := aggregate.Acquire(t.Context(), key)
+	if release != nil {
+		defer release()
+	}
+	if err != nil || r == nil || !reflect.DeepEqual(r.Value, first.pending.Value) || first.fetches != 1 {
+		t.Fatalf("acquire skipped higher priority source: %v %v", r, err)
+	}
+	first.pending = &Resource{Key: key, Value: "explicitly-refetched"}
+	r, err = aggregate.Fetch(t.Context(), key)
+	if err != nil || r == nil || r.Value != "explicitly-refetched" || first.fetches != 2 {
+		t.Fatalf("explicit Fetch returned cached value: %v %v", r, err)
 	}
 }
 

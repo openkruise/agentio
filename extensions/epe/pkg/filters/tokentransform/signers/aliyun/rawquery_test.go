@@ -43,14 +43,14 @@ func TestSnapshotFromStream_CarriesWireQueryVerbatim(t *testing.T) {
 			// The adapter keeps whatever ParseQuery could extract, which for
 			// these inputs is lossy or re-encoded; RawQuery must be untouched.
 			parsed, _ := url.ParseQuery(tt.rawQuery)
-			st := &filter.Stream{Request: httpreq.HTTPRequest{
+			st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 				Method:   "GET",
 				Host:     "bucket.oss-cn-hangzhou.aliyuncs.com",
 				Path:     "/obj",
 				RawQuery: tt.rawQuery,
 				Query:    parsed,
 				Headers:  map[string]string{":authority": "bucket.oss-cn-hangzhou.aliyuncs.com"},
-			}}
+			}}}
 			snap := snapshotFromStream(st)
 			if snap.RawQuery != tt.rawQuery {
 				t.Errorf("RawQuery = %q, want the wire form %q", snap.RawQuery, tt.rawQuery)
@@ -61,7 +61,9 @@ func TestSnapshotFromStream_CarriesWireQueryVerbatim(t *testing.T) {
 
 // With no query at all there is nothing to carry.
 func TestSnapshotFromStream_EmptyQuery(t *testing.T) {
-	st := &filter.Stream{Request: httpreq.HTTPRequest{Method: "GET", Path: "/obj"}}
+	st := &filter.Stream{
+		RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Method: "GET", Path: "/obj"}},
+	}
 	if snap := snapshotFromStream(st); snap.RawQuery != "" {
 		t.Errorf("RawQuery = %q, want empty", snap.RawQuery)
 	}

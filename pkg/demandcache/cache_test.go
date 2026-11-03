@@ -257,3 +257,38 @@ func TestConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestGetPinsResolvedDependencies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		source := &fakeSource{}
+		cache, err := New(source, Config{IdleTTL: time.Second, MaxEntries: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cache.Close()
+		_, releaseA, err := cache.Get(t.Context(), "workload", "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, releaseB, err := cache.Get(t.Context(), "policy", "b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Second)
+		lookup(t, cache, "policy", "c")
+		if cache.Len() != 2 || source.leases[key{"workload", "a"}].released.Load() ||
+			source.leases[key{"policy", "b"}].released.Load() {
+			t.Fatal("resolved dependencies were evicted while in use")
+		}
+		releaseA()
+		if !source.leases[key{"workload", "a"}].released.Load() {
+			t.Fatal("capacity did not recover after release")
+		}
+		releaseB()
+		time.Sleep(500 * time.Millisecond)
+		lookup(t, cache, "policy", "b")
+		if source.acquisitions != 3 {
+			t.Fatal("idle time started before consumer released the value")
+		}
+	})
+}

@@ -52,6 +52,15 @@ func defaultAgentioConfiguration() *configv1.AgentioConfig {
 }
 
 func validateAgentioConfig(value *configv1.AgentioConfig) error {
+	for i, id := range value.GetTrustedEpeIdentities() {
+		uri, err := model.ParseSPIFFEID(id)
+		if err != nil {
+			return fmt.Errorf("trustedEPEIdentities[%d]: %w", i, err)
+		}
+		if _, err := model.ParsePrincipal(id, uri.Host); err != nil {
+			return fmt.Errorf("trustedEPEIdentities[%d]: %w", i, err)
+		}
+	}
 	if err := model.ValidateAdditionalExtProcs(value.GetAdditionalExtProcs()); err != nil {
 		return err
 	}

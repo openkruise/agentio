@@ -232,10 +232,10 @@ func (b *RequestBuilder) Attrs() map[string]*structpb.Struct {
 	setString(attributes.FilterStateWorkloadName, workload.Name)
 	if len(workload.Labels) > 0 {
 		encoded := base64.StdEncoding.EncodeToString([]byte(encodeLabelPairs(workload.Labels)))
-		setString(attributes.FilterStateWorkloadLabels, encoded)
+		setString(attributes.FilterStateSandboxLabels, encoded)
 	}
 	if sandbox := b.subject.Sandbox; sandbox != nil {
-		setString(attributes.FilterStateSandboxID, sandbox.UID)
+		setString(attributes.FilterStateSandboxUID, sandbox.UID)
 	}
 	setString(attributes.FilterStateSandboxToken, b.sandboxToken)
 	setString(attributes.FilterStateSandboxMetadata, b.sandboxMetadata)

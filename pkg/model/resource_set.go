@@ -130,6 +130,17 @@ func (s ResourceSet) ListWorkloads(typeURL string, query WorkloadQuery) []Resour
 	return result
 }
 
+// HasReference uses the publication's reverse indexes, without listing dependents.
+func (s ResourceSet) HasReference(key ResourceKey) bool {
+	indexKey := resourceReferenceIndexKey(key)
+	for _, index := range s.resources {
+		if len(lookupNames(&index.facts, indexKey)) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // HasWorkload reports whether any resource of the type matches the query.
 func (s ResourceSet) HasWorkload(typeURL string, query WorkloadQuery) bool {
 	index := s.resources[typeURL]
