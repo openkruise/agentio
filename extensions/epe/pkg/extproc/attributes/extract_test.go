@@ -184,7 +184,7 @@ func TestExtract(t *testing.T) {
 			wantValid: true,
 		},
 		{
-			name: "labels parsed from agentio.workload.labels",
+			name: "labels parsed from legacy sandbox.labels",
 			attrFields: map[string]any{
 				FilterStateDownstreamPeerNamespace: "ns1",
 				FilterStateDownstreamPeerName:      "pod-b",

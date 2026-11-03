@@ -20,53 +20,41 @@ import (
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
-	"github.com/openkruise/agentio/extensions/epe/pkg/store"
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// NewWorkloadResolver shares the Workload index without demanding TrafficPolicies.
-func NewWorkloadResolver(source Resources) subject.WorkloadResolver {
-	return func(ctx context.Context, identity subject.Workload) (subject.Workload, error) {
-		subj := subject.Subject{Workload: identity}
-		key, err := workloadKey(source, subj)
-		if err != nil {
-			return identity, err
-		}
-		resource, release, err := source.Acquire(ctx, key)
-		if release != nil {
-			defer release()
-		}
-		if err != nil {
-			return identity, err
-		}
-		if resource == nil {
-			return identity, &store.MissingResource{Key: key}
-		}
-		view := source.SnapshotFor([]store.Key{key})
-		if !view.Ready() {
-			return identity, fmt.Errorf("workload resources are not synchronized")
-		}
-		resource, err = view.Get(key)
-		if err != nil {
-			return identity, err
-		}
-		if resource == nil {
-			return identity, &store.MissingResource{Key: key}
-		}
+// NewContextResolver pins metadata and, when enabled, native policies before filters run.
+func NewContextResolver(source Resources, native bool) filter.ContextResolver {
+	return func(ctx context.Context, request filter.RequestContext) (filter.RequestContext, error) {
+		caller := &request.Caller
+		identity := caller.Subject.Workload
 		var binding subject.Workload
-		prior := source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name]
-		if prior != nil && prior.workload.Value == resource.Value {
-			binding, err = prior.binding, prior.bindingErr
+		if native {
+			snapshot, err := lookup(ctx, source, caller.Subject)
+			if err != nil {
+				return request, err
+			}
+			if snapshot.entry.bindingErr != nil {
+				return request, snapshot.entry.bindingErr
+			}
+			if snapshot.entry.compiled.err != nil {
+				return request, snapshot.entry.compiled.err
+			}
+			binding = snapshot.entry.binding
+			request.Policies.DestinationAuthorizer = &snapshot.entry.compiled.config
 		} else {
-			binding, err = workloadBinding(resource.Value.(*workload.Workload))
-		}
-		if err != nil {
-			return identity, err
+			var err error
+			binding, err = lookupBinding(ctx, source, caller.Subject)
+			if err != nil {
+				return request, err
+			}
 		}
 		identity.UID, identity.Name, identity.Namespace = binding.UID, binding.Name, binding.Namespace
 		identity.Labels, identity.SecurityProfileReferences = binding.Labels, binding.SecurityProfileReferences
-		return identity, nil
+		caller.Subject.Workload = identity
+		return request, nil
 	}
 }
 

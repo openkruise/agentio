@@ -93,7 +93,7 @@ func TestStaticAuthorizationConfigLifecycle(t *testing.T) {
 		check := func(host string, denied bool) {
 			t.Helper()
 			synctest.Wait()
-			target, reply, err := authorize(ctx, &filter.Stream{Request: httpreq.HTTPRequest{Host: host, Port: 15000}})
+			target, reply, err := authorize(ctx, &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: 15000}}})
 			if err != nil {
 				t.Fatal(err)
 			}

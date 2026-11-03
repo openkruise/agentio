@@ -516,7 +516,7 @@ func TestXDSAuthorizerHandlesMissingIdentity(t *testing.T) {
 					dns.NewClient(nil, 0),
 					egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}},
 					// Missing identity must not require an xDS resource store.
-					trafficpolicy.NewAuthorizer(nil),
+					trafficpolicy.NewAuthorizer(),
 				).Authorize,
 			})
 			state := newStreamState()

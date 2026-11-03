@@ -81,7 +81,7 @@ func startFilterServer(t *testing.T, cfg Config, protocolVersion string) *httpte
 			return
 		}
 
-		st := &filter.Stream{Request: httpreq.HTTPRequest{Headers: headers}}
+		st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Headers: headers}}}
 
 		// Headers phase.
 		hdrAct, hErr := f.OnRequestHeaders(context.Background(), st)

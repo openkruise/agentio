@@ -42,10 +42,11 @@ func TestWorkloadBindingBeforePolicyResolution(t *testing.T) {
 	for _, lookupError := range []error{nil, context.DeadlineExceeded} {
 		called := false
 		srv := NewServer(ServerDeps{
-			ResolveWorkload: func(_ context.Context, w subject.Workload) (subject.Workload, error) {
+			ResolveContext: func(_ context.Context, request filter.RequestContext) (filter.RequestContext, error) {
+				w := &request.Caller.Subject.Workload
 				w.Labels = map[string]string{"app": "wds"}
 				w.SecurityProfileReferences = []string{"global/profile"}
-				return w, lookupError
+				return request, lookupError
 			},
 			Resolve: func(_ context.Context, s subject.Subject, _ *httpreq.HTTPRequest) (engine.Resolution, error) {
 				called = true
@@ -141,7 +142,7 @@ func responseHeadersState(p *responseHeadersProbe) (*Server, *streamState, *capt
 	state := newStreamState()
 	state.markRequestSeen()
 	id := filter.UnitID{Scope: "default/p1", Name: "response"}
-	state.units = []engine.Unit{{
+	state.stream.Policies.FilterRules = []engine.Unit{{
 		ID:   id,
 		Cfgs: []any{struct{}{}},
 	}}

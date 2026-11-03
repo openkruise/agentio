@@ -67,10 +67,7 @@ func TestGlobalDeniedCIDRs(t *testing.T) {
 					lookups++
 					return dns.LookupResult{Addresses: tc.ips}, nil
 				}), 0)
-				stream := &filter.Stream{
-					Request: httpreq.HTTPRequest{Host: tc.host, Port: 15000},
-					Info:    filter.NewStreamInfo(),
-				}
+				stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 15000}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 				if tc.upstream != "" {
 					address := netip.MustParseAddrPort(tc.upstream)
 					stream.Upstream = &filter.UpstreamTarget{Address: &address}
@@ -126,7 +123,7 @@ func TestGlobalUpdateAndWorkloadPolicies(t *testing.T) {
 		),
 	).Authorize
 	request := func(host string) (*filter.UpstreamTarget, *filter.Reply, error) {
-		return authorize(t.Context(), &filter.Stream{Request: httpreq.HTTPRequest{Host: host, Port: 443}})
+		return authorize(t.Context(), &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: 443}}})
 	}
 	if target, reply, err := request("mixed.example"); err != nil || reply != nil || target == nil ||
 		target.Address.String() != "192.0.2.1:443" {
@@ -205,10 +202,7 @@ func TestAggregateRequiresCommonCandidate(t *testing.T) {
 				lookups++
 				return dns.LookupResult{Addresses: ips}, nil
 			}), 0)
-			stream := &filter.Stream{
-				Request: httpreq.HTTPRequest{Host: "multiple.example", Port: 443},
-				Info:    filter.NewStreamInfo(),
-			}
+			stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "multiple.example", Port: 443}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 			target, reply, err := NewAggregate(client, authorizers...).Authorize(t.Context(), stream)
 			if err != nil {
 				t.Fatal(err)
@@ -260,10 +254,7 @@ func TestAggregateStopsAfterDenialOrError(t *testing.T) {
 					t.Fatal("later authorizers must not run after a denial or error")
 					return nil, nil
 				}))
-			stream := &filter.Stream{
-				Request: httpreq.HTTPRequest{Host: "127.0.0.1", Port: 443},
-				Info:    filter.NewStreamInfo(),
-			}
+			stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "127.0.0.1", Port: 443}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 			target, reply, err := a.Authorize(t.Context(), stream)
 			if !errors.Is(err, tc.wantErr) || target != nil {
 				t.Fatalf("target=%v reply=%v err=%v", target, reply, err)
@@ -325,10 +316,7 @@ func TestAggregateAuditsSelectedCandidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			seen := make(map[string]bool)
 			for range 128 {
-				stream := &filter.Stream{
-					Request: httpreq.HTTPRequest{Host: "multiple.example", Port: 443},
-					Info:    filter.NewStreamInfo(),
-				}
+				stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "multiple.example", Port: 443}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 				target, reply, err := NewAggregate(client, cfg, tc.next).Authorize(t.Context(), stream)
 				if err != nil || reply != nil || target == nil {
 					t.Fatalf("target=%v reply=%v err=%v", target, reply, err)

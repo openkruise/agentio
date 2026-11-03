@@ -208,9 +208,9 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 			t.Fatalf("initial %s watch fetched %d unsolicited resources", typ, len(values))
 		}
 	}
-	resolver := &resolver{source: aggregate}
+	resolver := &resourceResolver{source: aggregate}
 	subj := subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}}
-	resolveWorkload := NewWorkloadResolver(aggregate)
+	resolveWorkload := workloadResolver(aggregate)
 	beforeDemand := aggregate.Snapshot()
 	resolved, err := resolveWorkload(ctx, subj.Workload)
 	if err != nil || resolved.UID != uid || len(resolved.SecurityProfileReferences) != 1 {

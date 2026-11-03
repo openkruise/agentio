@@ -30,7 +30,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
-	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
 // Server implements the Envoy external processing server.
@@ -39,7 +38,7 @@ type Server struct {
 	authorizeRequest engine.RequestAuthorizer
 	pluginBudget     time.Duration
 	resolve          engine.Resolver
-	resolveWorkload  subject.WorkloadResolver
+	resolveContext   filter.ContextResolver
 	eng              *engine.Engine
 	loggers          []filter.StreamLogger
 	// failClosedOnMissingIdentity denies requests when the source workload or Sandbox
@@ -51,8 +50,8 @@ type Server struct {
 // ServerDeps holds the dependencies needed by the ext-proc server.
 type ServerDeps struct {
 	// Resolve maps request identity to applicable units. Required.
-	Resolve         engine.Resolver
-	ResolveWorkload subject.WorkloadResolver
+	Resolve        engine.Resolver
+	ResolveContext filter.ContextResolver
 	// AuthorizeRequest optionally authorizes the final request target outside the rule chain.
 	AuthorizeRequest engine.RequestAuthorizer
 	// Registrations is the action order applied inside every rule.
@@ -81,7 +80,7 @@ func NewServer(deps ServerDeps) *Server {
 	loggers = append(loggers, deps.StreamLoggers...)
 	return &Server{
 		resolve:                     deps.Resolve,
-		resolveWorkload:             deps.ResolveWorkload,
+		resolveContext:              deps.ResolveContext,
 		authorizeRequest:            deps.AuthorizeRequest,
 		pluginBudget:                deps.PluginBudget,
 		eng:                         engine.NewEngine(deps.Registrations, deps.PluginBudget),
@@ -239,8 +238,8 @@ func (s *Server) finishStream(ctx context.Context, state *streamState, err error
 	}
 	// The resolver's per-stream logger runs last: after the static list, and
 	// after the outcome derivation above, so it observes the final outcome.
-	if state.streamLogger != nil {
-		state.streamLogger.Log(ctx, state.stream, info)
+	if state.stream.Policies.StreamLogger != nil {
+		state.stream.Policies.StreamLogger.Log(ctx, state.stream, info)
 	}
 }
 
@@ -277,14 +276,8 @@ const (
 // phase fields follow the ext_proc message flow; the lifecycle field belongs to
 // finalization and audit.
 type streamState struct {
-	// Resolution pin — written once by HandleRequestHeaders, read-only after.
+	// RequestContext is fixed after preparation; StreamRuntime follows the message phases.
 	stream *filter.Stream
-	units  []engine.Unit
-	// streamLogger is the per-stream logger the resolver supplied, if any.
-	// It is assigned alongside units and for the same reason: both describe
-	// the resolution that took effect, so a later resolution returning
-	// nothing must leave both untouched rather than clear them.
-	streamLogger filter.StreamLogger
 
 	// Request phase — the headers result with registered body callbacks, consumed exactly
 	// once by the body phase. Non-nil is what "a request body is owed" means;
@@ -312,7 +305,7 @@ type streamState struct {
 
 func newStreamState() *streamState {
 	return &streamState{
-		stream: &filter.Stream{Info: filter.NewStreamInfo()},
+		stream: &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
 	}
 }
 
@@ -324,10 +317,6 @@ func (st *streamState) markRequestSeen() {
 		st.lifecycle = lifecycleActive
 	}
 }
-
-// engineUnits returns the engine-facing units; the resolver already hands
-// them over in neutral form.
-func (st *streamState) engineUnits() []engine.Unit { return st.units }
 
 // awaitingRequestBody reports whether registered callbacks still await the
 // buffered request body.

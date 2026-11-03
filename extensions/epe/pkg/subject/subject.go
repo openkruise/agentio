@@ -15,11 +15,6 @@
 // Package subject defines caller identities and attributes shared by policy backends.
 package subject
 
-import "context"
-
-// WorkloadResolver loads metadata and policy references for the captured identity.
-type WorkloadResolver func(context.Context, Workload) (Workload, error)
-
 // Subject carries trusted, read-only caller identities and attributes.
 // Workload may be empty or partial; Sandbox is an optional execution identity.
 // Each policy backend determines which workload fields it needs.

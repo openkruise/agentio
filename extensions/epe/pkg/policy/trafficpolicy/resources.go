@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
@@ -26,6 +25,9 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/model"
+	podsource "github.com/openkruise/agentio/pkg/registry/kubernetes/pod"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // NamedPolicy preserves the resource name and binding order for compilation.
@@ -48,12 +50,16 @@ type policySnapshot struct {
 }
 
 func workloadKey(source Resources, subj subject.Subject) (store.Key, error) {
-	view := source.Snapshot()
-	if !view.Ready() {
-		return store.Key{}, fmt.Errorf("resource store is not synchronized")
-	}
 	if subj.Workload.UID != "" {
 		return store.Key{Type: store.Workload, Name: subj.Workload.UID}, nil
+	}
+	view := source.Snapshot()
+	if !view.Ready() {
+		index := view.Query(store.Workload).(*queryIndex)
+		uid := podsource.WorkloadUID(index.clusterID, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: subj.Workload.Namespace, Name: subj.Workload.Name},
+		})
+		return store.Key{Type: store.Workload, Name: uid}, nil
 	}
 	resources, err := view.ResourcesFor(store.Workload, subj)
 	if missing, ok := errors.AsType[*store.MissingResource](err); ok {
@@ -65,117 +71,116 @@ func workloadKey(source Resources, subj subject.Subject) (store.Key, error) {
 	return resources[0].Key, nil
 }
 
-// Hold the Workload and all referenced policies until the compiled view is read,
-// even when one request's dependency set exceeds the cache capacity.
+// lookupBinding captures Workload metadata without resolving TrafficPolicy dependencies.
+func lookupBinding(ctx context.Context, source Resources, subj subject.Subject) (subject.Workload, error) {
+	key, err := workloadKey(source, subj)
+	if err != nil {
+		return subject.Workload{}, err
+	}
+	resource, release, err := source.Acquire(ctx, key)
+	if release != nil {
+		defer release()
+	}
+	if err != nil {
+		return subject.Workload{}, err
+	}
+	if resource == nil {
+		return subject.Workload{}, &store.MissingResource{Key: key}
+	}
+	view := source.SnapshotFor([]store.Key{key})
+	if !view.Ready() {
+		return subject.Workload{}, fmt.Errorf("workload resources are not synchronized")
+	}
+	resource, err = view.Get(key)
+	if err != nil {
+		return subject.Workload{}, err
+	}
+	if resource == nil {
+		return subject.Workload{}, &store.MissingResource{Key: key}
+	}
+	previous := source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name]
+	if previous != nil && previous.workload.Value == resource.Value {
+		return previous.binding, previous.bindingErr
+	}
+	return workloadBinding(resource.Value.(*workload.Workload))
+}
+
+// Build one complete immutable snapshot before any request policy executes.
 func lookup(ctx context.Context, source Resources, subj subject.Subject) (policySnapshot, error) {
 	key, err := workloadKey(source, subj)
 	if err != nil {
 		return policySnapshot{}, err
 	}
-	for {
-		result, err := lookupPolicies(ctx, source, key)
-		missing, ok := errors.AsType[*store.MissingResource](err)
-		if !ok || missing.Key.Type != store.TrafficPolicy || result.Workload == nil {
-			return result, err
-		}
-		// A request can hold an old Workload across a binding update and policy removal.
-		current, release, readErr := source.Acquire(ctx, key)
-		if release != nil {
-			release()
-		}
-		if readErr != nil {
-			return policySnapshot{}, readErr
-		}
-		if current == nil {
-			return policySnapshot{}, &store.MissingResource{Key: key}
-		}
-		if current.Value == result.Workload {
-			return result, err
-		}
-		oldRefs, oldErr := references(result.Workload)
-		newRefs, newErr := references(current.Value.(*workload.Workload))
-		if oldErr != nil {
-			return policySnapshot{}, oldErr
-		}
-		if newErr != nil {
-			return policySnapshot{}, newErr
-		}
-		if slices.Equal(oldRefs, newRefs) {
-			return result, err
-		}
-	}
-}
-
-func lookupPolicies(ctx context.Context, source Resources, key store.Key) (result policySnapshot, err error) {
-	held := map[store.Key]bool{}
-	var keys []store.Key
-	var currentWorkload *store.Resource
+	acquired := map[store.Key]error{}
 	var releases []func()
 	defer func() {
-		if err != nil && currentWorkload != nil {
-			result.Workload = currentWorkload.Value.(*workload.Workload)
-		}
 		for _, release := range releases {
 			release()
 		}
 	}()
-	acquire := func(key store.Key) error {
+	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return policySnapshot{}, err
 		}
-		resource, release, err := source.Acquire(ctx, key)
+		candidate, release, err := source.Acquire(ctx, key)
 		if release != nil {
 			releases = append(releases, release)
 		}
 		if err != nil {
-			return err
+			return policySnapshot{}, err
 		}
-		if resource == nil {
-			return &store.MissingResource{Key: key}
+		if candidate == nil {
+			return policySnapshot{}, &store.MissingResource{Key: key}
 		}
-		held[key] = true
-		keys = append(keys, key)
-		if key.Type == store.Workload {
-			currentWorkload = resource
-		}
-		return nil
-	}
-	if err := acquire(key); err != nil {
-		return policySnapshot{}, err
-	}
-	// Hot dependency sets need only one selected snapshot after all leases are pinned.
-	previous := source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name]
-	if previous != nil && previous.workload.Value == currentWorkload.Value {
-		for _, dependency := range previous.dependencies {
-			if err := acquire(dependency.Key); err != nil {
+		previous := source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name]
+		keys := []store.Key{key}
+		if previous != nil && previous.workload.Value == candidate.Value && previous.err == nil {
+			for _, dependency := range previous.dependencies {
+				keys = append(keys, dependency.Key)
+			}
+		} else {
+			names, err := references(candidate.Value.(*workload.Workload))
+			if err != nil {
 				return policySnapshot{}, err
 			}
+			for _, name := range names {
+				keys = append(keys, store.Key{Type: store.TrafficPolicy, Name: name})
+			}
 		}
-	}
-	for {
+		for _, dependency := range keys[1:] {
+			if err := ctx.Err(); err != nil {
+				return policySnapshot{}, err
+			}
+			if _, attempted := acquired[dependency]; attempted {
+				continue
+			}
+			resource, release, err := source.Acquire(ctx, dependency)
+			if release != nil {
+				releases = append(releases, release)
+			}
+			if err == nil && resource == nil {
+				err = &store.MissingResource{Key: dependency}
+			}
+			acquired[dependency] = err
+		}
+		if err := ctx.Err(); err != nil {
+			return policySnapshot{}, err
+		}
 		view := source.SnapshotFor(keys)
-		result, err := lookupWorkload(view, key, source.Snapshot().Query(store.Workload).(*queryIndex).byUID[key.Name])
-		if missing, ok := errors.AsType[*store.MissingResource](err); ok && !held[missing.Key] {
-			if err := acquire(missing.Key); err != nil {
-				return policySnapshot{}, err
-			}
-			continue
-		}
+		current, err := view.Get(key)
 		if err != nil {
 			return policySnapshot{}, err
 		}
-		refreshed := false
-		for _, dependency := range result.entry.dependencies {
-			if !held[dependency.Key] {
-				if err := acquire(dependency.Key); err != nil {
-					return policySnapshot{}, err
-				}
-				refreshed = true
+		// A changed Workload invalidates the entire candidate, including metadata.
+		if current == nil || current.Value != candidate.Value {
+			continue
+		}
+		for _, dependency := range keys[1:] {
+			if err := acquired[dependency]; err != nil {
+				return policySnapshot{}, err
 			}
 		}
-		if !refreshed {
-			return result, nil
-		}
+		return lookupWorkload(view, key, previous)
 	}
 }
 

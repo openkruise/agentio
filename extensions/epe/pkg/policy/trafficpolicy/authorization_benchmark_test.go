@@ -38,7 +38,7 @@ func (benchmarkLookup) Lookup(context.Context, string, dns.Family) (dns.LookupRe
 	return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("203.0.113.7")}, TTL: time.Hour}, nil
 }
 
-// BenchmarkEgressAuthorization includes workload lookup, compiled policy lookup,
+// BenchmarkEgressAuthorization includes production caller snapshot preparation,
 // destination evaluation and target construction. DNS cache misses are excluded.
 func BenchmarkEgressAuthorization(b *testing.B) {
 	ctx := ctrllog.IntoContext(context.Background(), logr.Discard())
@@ -49,13 +49,12 @@ func BenchmarkEgressAuthorization(b *testing.B) {
 				b.Run(mode, func(b *testing.B) {
 					authorize := egressauthz.NewAggregate(
 						dns.NewClient(benchmarkLookup{}, time.Second),
-						NewAuthorizer(aggregate),
+						NewAuthorizer(),
 					).Authorize
-					st := &filter.Stream{
-						Caller: filter.CallerContext{
-							Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod-0"}},
-						},
-						Request: httpreq.HTTPRequest{Host: "203.0.113.7", Port: 443},
+					st := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+						Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod-0"}},
+					},
+						Request: httpreq.HTTPRequest{Host: "203.0.113.7", Port: 443}},
 					}
 					switch mode {
 					case "original":
@@ -65,6 +64,13 @@ func BenchmarkEgressAuthorization(b *testing.B) {
 					case "denied":
 						st.Request.Host = "198.51.100.7"
 					}
+					input := st.RequestContext
+					prepare := NewContextResolver(aggregate, true)
+					caller, err := prepare(ctx, input)
+					if err != nil {
+						b.Fatal(err)
+					}
+					st.RequestContext = caller
 					target, reply, err := authorize(ctx, st)
 					if err != nil {
 						b.Fatal(err)
@@ -79,7 +85,12 @@ func BenchmarkEgressAuthorization(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for b.Loop() {
-						_, _, err := authorize(ctx, st)
+						caller, err := prepare(ctx, input)
+						if err != nil {
+							b.Fatal(err)
+						}
+						st.RequestContext = caller
+						_, _, err = authorize(ctx, st)
 						if err != nil {
 							b.Fatal(err)
 						}

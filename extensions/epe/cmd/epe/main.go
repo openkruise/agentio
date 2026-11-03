@@ -412,7 +412,7 @@ func run() error {
 		CertProvider:                servingTLS.Provider,
 		RequireClientCert:           servingTLS.RequireClientCert,
 		Resolve:                     resolve,
-		ResolveWorkload:             trafficpolicy.NewWorkloadResolver(resourceStore),
+		ResolveContext:              trafficpolicy.NewContextResolver(resourceStore, *enableXDSEgressAuthz),
 		AuditLogger:                 auditLogger,
 		Registrations:               registrations,
 	}, ctrllog.Log.WithName("ext-proc"))

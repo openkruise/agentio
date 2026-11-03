@@ -33,7 +33,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/extproc"
 	"github.com/openkruise/agentio/extensions/epe/pkg/runnable"
-	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
 // Config carries everything the ext-proc gRPC server needs. It is consumed
@@ -70,8 +69,8 @@ type Config struct {
 
 	// Resolve maps request identity to the policy units the engine evaluates.
 	// Required. Policy-specific stores and binders are assembled by the caller.
-	Resolve         engine.Resolver
-	ResolveWorkload subject.WorkloadResolver
+	Resolve        engine.Resolver
+	ResolveContext filter.ContextResolver
 	// Registrations is the action order applied inside every rule.
 	Registrations []filter.Registration
 	// StreamLoggers are invoked once per stream at stream end (audit).
@@ -129,7 +128,7 @@ func New(cfg Config, logger logr.Logger) runnable.Runnable {
 			srv,
 			extproc.NewServer(extproc.ServerDeps{
 				Resolve:                     cfg.Resolve,
-				ResolveWorkload:             cfg.ResolveWorkload,
+				ResolveContext:              cfg.ResolveContext,
 				Registrations:               cfg.Registrations,
 				StreamLoggers:               cfg.StreamLoggers,
 				AuditLogger:                 cfg.AuditLogger,

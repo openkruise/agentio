@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
-	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 )
 
 // Disposition aliases the filter-level type; the engine derives it from
@@ -35,18 +34,8 @@ const (
 	DispositionError       = filter.DispositionError
 )
 
-// Unit is the engine-facing view of one matched policy unit: identity,
-// evaluation scope, and the per-registration projected configs. A policy
-// resolver may carry richer attribution alongside it; the engine never sees
-// the policy model. Units and their configs remain read-only through body
-// continuation, as response continuations also retain them.
-type Unit struct {
-	ID    filter.UnitID
-	Scope *inputs.Scope
-	// Cfgs[i] is the projected config for registration i; nil when the
-	// unit does not carry that filter's config.
-	Cfgs []any
-}
+// Unit is the neutral execution rule shared with the request policy snapshot.
+type Unit = filter.Unit
 
 // Engine evaluates rules in policy order and actions in registration order.
 // It records every invocation and unit action into Stream.Info when the

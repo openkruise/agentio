@@ -37,7 +37,7 @@ func streamWithVersion(v string) *filter.Stream {
 	if v != "" {
 		headers[mcpProtocolVersionHeader] = v
 	}
-	return &filter.Stream{Request: httpreq.HTTPRequest{Headers: headers}}
+	return &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Headers: headers}}}
 }
 
 // streamWithHeaders builds a Stream with MCP routing headers set.
@@ -60,7 +60,7 @@ func streamWithHeaders(version, method, name string) *filter.Stream {
 	if name != "" {
 		headers[mcpNameHeader] = name
 	}
-	return &filter.Stream{Request: httpreq.HTTPRequest{Headers: headers}}
+	return &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Headers: headers}}}
 }
 
 // encodeMcpName wraps a tool name in the Base64 sentinel encoding used by

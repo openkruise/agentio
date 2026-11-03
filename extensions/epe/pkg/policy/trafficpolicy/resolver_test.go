@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -40,6 +41,24 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 )
+
+// These helpers exercise discovery construction separately from immutable authorization.
+type resourceResolver struct{ source Resources }
+
+func (r *resourceResolver) config(ctx context.Context, subj subject.Subject) (egressauthz.Config, error) {
+	snapshot, err := lookup(ctx, r.source, subj)
+	if err != nil {
+		return egressauthz.Config{}, err
+	}
+	return snapshot.entry.compiled.config, snapshot.entry.compiled.err
+}
+
+func workloadResolver(source Resources) func(context.Context, subject.Workload) (subject.Workload, error) {
+	return func(ctx context.Context, w subject.Workload) (subject.Workload, error) {
+		caller, err := NewContextResolver(source, false)(ctx, filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{Workload: w}}})
+		return caller.Caller.Subject.Workload, err
+	}
+}
 
 type fakeStore struct {
 	types     []store.Type
@@ -127,7 +146,8 @@ func (s *fakeStore) bind(names ...string) {
 	if err != nil {
 		panic(err)
 	}
-	w.Extensions = []*workload.Extension{{Name: "traffic-policy-reference", Config: ref}}
+	w.Extensions = slices.DeleteFunc(w.Extensions, func(e *workload.Extension) bool { return e.Name == "traffic-policy-reference" })
+	w.Extensions = append(w.Extensions, &workload.Extension{Name: "traffic-policy-reference", Config: ref})
 	s.put(store.Workload, "uid", w)
 }
 
@@ -137,7 +157,11 @@ func testStore() *fakeStore {
 		resources: map[store.Key]store.Resource{},
 		ready:     true,
 	}
-	s.put(store.Workload, "uid", &workload.Workload{Name: "pod", Namespace: "ns", Addresses: [][]byte{{192, 0, 2, 1}}})
+	profile, err := anypb.New(&ext.PolicyReference{TypeUrl: model.SecurityProfileType})
+	if err != nil {
+		panic(err)
+	}
+	s.put(store.Workload, "uid", &workload.Workload{Uid: "uid", Name: "pod", Namespace: "ns", Addresses: [][]byte{{192, 0, 2, 1}}, Extensions: []*workload.Extension{{Name: "security-profile-reference", Config: profile}}})
 	s.bind("allow")
 	s.put(
 		store.TrafficPolicy,
@@ -160,7 +184,7 @@ func testStore() *fakeStore {
 func TestResolverCacheUpdates(t *testing.T) {
 	f := testStore()
 	source := testAggregate(f)
-	s := &resolver{source: source}
+	s := &resourceResolver{source: source}
 	subj := subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod", IP: "192.0.2.1"}}
 	target := netip.MustParseAddrPort("203.0.113.7:443")
 	cfg, err := s.config(t.Context(), subj)
@@ -205,12 +229,18 @@ func TestResolverCacheUpdates(t *testing.T) {
 func TestAuthorizerUsesWorkloadBinding(t *testing.T) {
 	f := testStore()
 	f.bind()
+	prepare := NewContextResolver(testAggregate(f), true)
 	authorize := egressauthz.NewAggregate(
 		dns.NewClient(nil, 0),
-		NewAuthorizer(testAggregate(f)),
+		NewAuthorizer(),
 	).Authorize
-	stream := &filter.Stream{Request: httpreq.HTTPRequest{Host: "203.0.113.7", Port: 443}, Info: filter.NewStreamInfo()}
+	stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "203.0.113.7", Port: 443}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	stream.Caller.Subject.Workload = subject.Workload{Namespace: "ns", Name: "pod"}
+	var err error
+	stream.RequestContext, err = prepare(t.Context(), stream.RequestContext)
+	if err != nil {
+		t.Fatal(err)
+	}
 	target, reply, err := authorize(t.Context(), stream)
 	if err != nil || reply != nil || target == nil || target.Address.String() != "203.0.113.7:443" {
 		t.Fatalf("empty binding should allow: target=%v reply=%v err=%v", target, reply, err)
@@ -223,14 +253,20 @@ func TestAuthorizerUsesWorkloadBinding(t *testing.T) {
 }
 
 func TestAuthorizerAcceptsWorkloadUIDOnly(t *testing.T) {
-	authorizer := NewAuthorizer(testAggregate(testStore()))
+	prepare := NewContextResolver(testAggregate(testStore()), true)
+	authorizer := NewAuthorizer()
 	for _, workload := range []subject.Workload{{UID: "uid"}, {}} {
-		stream := &filter.Stream{
-			Caller: filter.CallerContext{Subject: subject.Subject{
-				Workload: workload,
-				Sandbox:  &subject.Sandbox{UID: "kruise:sbx"},
-			}},
-			Info: filter.NewStreamInfo(),
+		stream := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{
+			Workload: workload,
+			Sandbox:  &subject.Sandbox{UID: "kruise:sbx"},
+		}}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
+		}
+		if workload.HasIdentity() {
+			caller, err := prepare(t.Context(), stream.RequestContext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream.RequestContext = caller
 		}
 		got, err := authorizer.Authorize(
 			t.Context(),
@@ -388,7 +424,7 @@ func TestWorkloadConfigDoesNotDependOnSourceIP(t *testing.T) {
 		w.Addresses = addresses
 		f.put(store.Workload, "uid", w)
 		source := testAggregate(f)
-		resolver := &resolver{source: source}
+		resolver := &resourceResolver{source: source}
 		expected, err := resolver.config(
 			t.Context(),
 			subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}},
@@ -507,11 +543,19 @@ func TestLookupStopsFetchingWhenCanceled(t *testing.T) {
 	}
 }
 
-func TestLookupRejectsUnsynchronizedStoreBeforeDemand(t *testing.T) {
-	f := &fakeStore{types: []store.Type{store.Workload, store.TrafficPolicy}, resources: map[store.Key]store.Resource{}}
-	f.fetch = func(store.Key) { t.Fatal("unsynchronized request started discovery") }
-	if _, err := lookup(t.Context(), testAggregate(f), subject.Subject{Workload: subject.Workload{UID: "uid"}}); err == nil {
-		t.Fatal("unsynchronized request accepted")
+func TestLookupDemandsUnsynchronizedWorkload(t *testing.T) {
+	for _, identity := range []subject.Workload{{UID: "uid"}, {Name: "pod", Namespace: "ns"}} {
+		f := &fakeStore{types: []store.Type{store.Workload, store.TrafficPolicy}, resources: map[store.Key]store.Resource{}}
+		calls := 0
+		f.fetch = func(key store.Key) {
+			calls++
+			if key.Type != store.Workload || key.Name == "" {
+				t.Fatalf("unexpected cold discovery: %+v", key)
+			}
+		}
+		if _, err := lookup(t.Context(), testAggregate(f), subject.Subject{Workload: identity}); err == nil || calls != 1 {
+			t.Fatalf("unsynchronized lookup: err=%v demands=%d", err, calls)
+		}
 	}
 }
 
@@ -631,36 +675,23 @@ func TestLookupRefreshesRemovedPolicyBinding(t *testing.T) {
 	}
 }
 
-func TestAuthorizerRecordsUnavailablePolicy(t *testing.T) {
+func TestCallerPreparationRejectsUnavailablePolicy(t *testing.T) {
 	source := testStore()
 	source.err = errors.New("xDS unavailable")
-	stream := &filter.Stream{
-		Caller: filter.CallerContext{
-			Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}},
-		},
-		Request: httpreq.HTTPRequest{Host: "192.0.2.1", Port: 443},
-		Info:    filter.NewStreamInfo(),
-	}
-	_, _, err := egressauthz.NewAggregate(
-		dns.NewClient(nil, 0),
-		NewAuthorizer(testAggregate(source)),
-	).Authorize(
-		t.Context(),
-		stream,
-	)
-	if err == nil || stream.Info.Authorization == nil ||
-		stream.Info.Authorization.Reason != filter.AuthorizationReasonPolicyLoadFailed {
-		t.Fatalf("error=%v audit=%+v", err, stream.Info.Authorization)
+	caller, err := NewContextResolver(testAggregate(source), true)(t.Context(), filter.RequestContext{Caller: filter.CallerContext{Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}}}})
+	if err == nil || caller.Policies.DestinationAuthorizer != nil {
+		t.Fatalf("unavailable policy prepared: caller=%+v err=%v", caller, err)
 	}
 }
 
-func TestGlobalDenyPrecedesXDSPolicy(t *testing.T) {
+func TestGlobalDenyOverridesWorkloadPolicy(t *testing.T) {
 	f := testStore() // Workload policy allows 203.0.113.0/24.
+	prepare := NewContextResolver(testAggregate(f), true)
 	global := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.7/32")}}
 	authorize := egressauthz.NewAggregate(
 		dns.NewClient(nil, 0),
 		egressauthz.NewStaticAuthorizer(global),
-		NewAuthorizer(testAggregate(f)),
+		NewAuthorizer(),
 	).Authorize
 	for _, tc := range []struct {
 		host    string
@@ -670,12 +701,16 @@ func TestGlobalDenyPrecedesXDSPolicy(t *testing.T) {
 		{"203.0.113.8", true},
 		{"192.0.2.1", false}, // Global miss preserves workload default-deny.
 	} {
-		stream := &filter.Stream{
-			Caller: filter.CallerContext{
-				Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}},
-			},
-			Request: httpreq.HTTPRequest{Host: tc.host, Port: 443},
+		stream := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+			Subject: subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}},
+		},
+			Request: httpreq.HTTPRequest{Host: tc.host, Port: 443}},
 		}
+		caller, err := prepare(t.Context(), stream.RequestContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream.RequestContext = caller
 		target, reply, err := authorize(t.Context(), stream)
 		if err != nil {
 			t.Fatal(err)
@@ -700,16 +735,14 @@ func TestAuthorizerRejectsMissingIdentityBeforeLookup(t *testing.T) {
 		{name: "missing name", pod: types.NamespacedName{Namespace: "ns"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stream := &filter.Stream{
-				Caller: filter.CallerContext{
-					Subject: subject.Subject{
-						Workload: subject.Workload{Namespace: tc.pod.Namespace, Name: tc.pod.Name},
-					},
+			stream := &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+				Subject: subject.Subject{
+					Workload: subject.Workload{Namespace: tc.pod.Namespace, Name: tc.pod.Name},
 				},
-				Info: filter.NewStreamInfo(),
+			}}, StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
 			}
 			// No resource store is needed: rejection must precede any lookup.
-			allowed, err := NewAuthorizer(nil).Authorize(t.Context(), stream, []netip.AddrPort{
+			allowed, err := NewAuthorizer().Authorize(t.Context(), stream, []netip.AddrPort{
 				netip.MustParseAddrPort("203.0.113.7:443"),
 			})
 			if err != nil || len(allowed) != 0 {

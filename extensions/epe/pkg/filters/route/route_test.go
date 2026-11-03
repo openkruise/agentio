@@ -25,9 +25,7 @@ import (
 
 func run(t *testing.T, f filter.Filter, host string, port int32) *filter.RouteMutation {
 	t.Helper()
-	action, err := f.OnRequestHeaders(context.Background(), &filter.Stream{
-		Request: httpreq.HTTPRequest{Host: host, Port: port},
-	})
+	action, err := f.OnRequestHeaders(context.Background(), &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}})
 	if err != nil {
 		t.Fatal(err)
 	}

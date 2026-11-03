@@ -1166,3 +1166,288 @@ async fn complete_dependency_cache_serves_connect_only_within_disconnect_grace()
             .all(|kind| kind.resources.is_empty() && kind.aliases.is_empty())
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_rebuilds_when_binding_changes_without_policy_deletion() {
+    for changed_identity in [false, true] {
+        let p = processor();
+        let c = &p.client;
+        seed(
+            c,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            workload(Some(&["old"])),
+        );
+        seed(
+            c,
+            ResourceKind::TrafficPolicy,
+            "old",
+            any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+        );
+        let mut pending = Box::pin(p.handle(request("sandbox", false)));
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        let mut current = Workload::decode(workload(Some(&["new"])).value.as_slice()).unwrap();
+        if changed_identity {
+            current.service_account = "other".into();
+        }
+        seed(
+            c,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            any(view::WORKLOAD, current),
+        );
+        seed(
+            c,
+            ResourceKind::TrafficPolicy,
+            "new",
+            any(
+                view::TRAFFIC_POLICY,
+                policy(if changed_identity {
+                    proto::Action::Allow
+                } else {
+                    proto::Action::Deny
+                }),
+            ),
+        );
+        seed(
+            c,
+            ResourceKind::Sandbox,
+            "sandbox",
+            any(
+                view::SANDBOX,
+                Sandbox {
+                    uid: "sandbox".into(),
+                    attester: Some(Attester {
+                        workload_uid: UID.into(),
+                    }),
+                    traffic_policy: Some(policy(proto::Action::Allow)),
+                    ..Default::default()
+                },
+            ),
+        );
+        assert_denied(pending.await.unwrap());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn captured_views_survive_policy_removal_and_cache_reset() {
+    let p = processor();
+    let c = &p.client;
+    seed(
+        c,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["old"])),
+    );
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "old",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    let snapshot = c
+        .capture(&[
+            (ResourceKind::Workload, "/10.0.0.1"),
+            (ResourceKind::TrafficPolicy, "old"),
+        ])
+        .unwrap();
+    c.reset();
+    seed(
+        c,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["new"])),
+    );
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "new",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Deny)),
+    );
+    let View::Workload(workload) = snapshot[0].as_ref().unwrap().as_ref() else {
+        unreachable!()
+    };
+    assert_eq!(workload.traffic_policies.as_deref().unwrap(), &["old"]);
+    let View::TrafficPolicy(policy) = snapshot[1].as_ref().unwrap().as_ref() else {
+        unreachable!()
+    };
+    assert!(
+        crate::traffic::evaluate(
+            [policy],
+            crate::traffic::Target::parse("192.0.2.1:443", false).unwrap()
+        )
+        .allowed
+    );
+    assert!(c.capture(&[(ResourceKind::TrafficPolicy, "old")]).unwrap()[0].is_none());
+    assert!(!allowed(p.handle(request("", false)).await.unwrap()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_pins_dependencies_exceeding_idle_cache_capacity() {
+    let mut p = processor();
+    p.client = Client::new(
+        CacheConfig {
+            max_entries: 1,
+            ..CacheConfig::default()
+        },
+        Metrics::new(),
+    );
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["one", "two", "three"])),
+    );
+    let mut pending = Box::pin(p.handle(request("", false)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    for name in ["one", "two", "three"] {
+        seed(
+            &p.client,
+            ResourceKind::TrafficPolicy,
+            name,
+            any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+        );
+    }
+    assert!(allowed(pending.await.unwrap()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_rebuilds_when_sandbox_changes_during_policy_discovery() {
+    let p = processor();
+    let c = &p.client;
+    seed(
+        c,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["pending"])),
+    );
+    let sandbox = |action| {
+        any(
+            view::SANDBOX,
+            Sandbox {
+                uid: "sandbox".into(),
+                attester: Some(Attester {
+                    workload_uid: UID.into(),
+                }),
+                traffic_policy: Some(policy(action)),
+                ..Default::default()
+            },
+        )
+    };
+    seed(
+        c,
+        ResourceKind::Sandbox,
+        "sandbox",
+        sandbox(proto::Action::Allow),
+    );
+    let mut pending = Box::pin(p.handle(request("sandbox", false)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    seed(
+        c,
+        ResourceKind::Sandbox,
+        "sandbox",
+        sandbox(proto::Action::Deny),
+    );
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "pending",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    assert_denied(pending.await.unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn processor_hot_policy_reads_count_hits_and_refresh_ttl() {
+    let mut p = processor();
+    p.client = Client::new(
+        CacheConfig {
+            idle_ttl: Duration::from_secs(1),
+            max_entries: 10,
+        },
+        Metrics::new(),
+    );
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["one", "two"])),
+    );
+    for name in ["one", "two"] {
+        seed(
+            &p.client,
+            ResourceKind::TrafficPolicy,
+            name,
+            any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+        );
+    }
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_millis(800)).await;
+        assert!(allowed(p.handle(request("", false)).await.unwrap()));
+    }
+    assert_eq!(
+        p.client
+            .metrics
+            .cache_lookups
+            .get_or_create(&DemandResult {
+                resource_type: view::TRAFFIC_POLICY,
+                result: "hit"
+            })
+            .get(),
+        4
+    );
+    assert_eq!(
+        p.client
+            .metrics
+            .cache_lookups
+            .get_or_create(&DemandResult {
+                resource_type: view::TRAFFIC_POLICY,
+                result: "miss"
+            })
+            .get(),
+        0
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn changed_policy_invalidates_evaluation_before_capture() {
+    let p = processor();
+    let c = &p.client;
+    seed(
+        c,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["policy"])),
+    );
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "policy",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    let mut pending = Box::pin(p.handle(request("sandbox", false)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    seed(
+        c,
+        ResourceKind::TrafficPolicy,
+        "policy",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Deny)),
+    );
+    seed(
+        c,
+        ResourceKind::Sandbox,
+        "sandbox",
+        any(
+            view::SANDBOX,
+            Sandbox {
+                uid: "sandbox".into(),
+                attester: Some(Attester {
+                    workload_uid: UID.into(),
+                }),
+                traffic_policy: Some(policy(proto::Action::Allow)),
+                ..Default::default()
+            },
+        ),
+    );
+    assert_denied(pending.await.unwrap());
+}

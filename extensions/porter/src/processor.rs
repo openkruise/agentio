@@ -35,10 +35,18 @@ pub struct Processor {
     pub enable_traffic_policy: bool,
 }
 
+struct RequestSnapshot {
+    workload: Arc<View>,
+    sandbox: Option<Arc<View>>,
+    policies: Vec<Arc<View>>,
+    sandbox_decision: Option<traffic::Evaluation>,
+    workload_decision: Option<traffic::Evaluation>,
+}
+
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 enum ResolveError {
-    #[error("Workload policy binding changed")]
-    BindingChanged,
+    #[error("snapshot construction deadline exceeded")]
+    Deadline,
     #[error("connection denied")]
     Denied,
     #[error(transparent)]
@@ -174,6 +182,210 @@ impl Processor {
         response
     }
 
+    // Construct the complete candidate before emitting metadata or allowing CONNECT.
+    async fn snapshot(
+        &self,
+        lookup: &str,
+        instance: Option<&str>,
+        principal: &str,
+        sandbox_id: &str,
+        target: Option<Target>,
+        request_deadline: tokio::time::Instant,
+    ) -> Result<RequestSnapshot, ResolveError> {
+        let mut dependencies = self
+            .client
+            .dependencies(ResourceKind::TrafficPolicy, Some(request_deadline));
+        loop {
+            if tokio::time::Instant::now() >= request_deadline {
+                return Err(ResolveError::Deadline);
+            }
+            let mut candidate = None;
+            let resolution = {
+                // Share the authenticated Workload lookup between binding validation and
+                // platform policy discovery; neither path waits for the other to finish.
+                let workload = async {
+                    let held = self
+                        .client
+                        .pin(ResourceKind::Workload, lookup, Some(request_deadline))
+                        .await?;
+                    let resource = held.value.clone();
+                    candidate = Some(held);
+                    let View::Workload(workload) = resource.as_ref() else {
+                        unreachable!("typed Workload watch")
+                    };
+                    if instance.is_none()
+                        && (workload.host_network
+                            || workload.principal != principal
+                            || workload.name.is_empty()
+                            || workload.namespace.is_empty()
+                            || workload.uid
+                                != format!(
+                                    "{}//Pod/{}/{}",
+                                    self.cluster_id, workload.namespace, workload.name
+                                ))
+                    {
+                        debug!(reason = "fallback_workload_mismatch", "CONNECT denied");
+                        return Err(ResolveError::Denied);
+                    }
+                    Ok::<_, ResolveError>(resource)
+                }
+                .shared();
+                let sandbox = async {
+                    if sandbox_id.is_empty() {
+                        return Ok((None, None));
+                    }
+                    let resource = self
+                        .client
+                        .pin(ResourceKind::Sandbox, sandbox_id, Some(request_deadline))
+                        .await?;
+                    let View::Sandbox(sandbox) = resource.value.as_ref() else {
+                        unreachable!("typed Sandbox watch")
+                    };
+                    if sandbox.uid != sandbox_id {
+                        debug!(reason = "sandbox_id_mismatch", "CONNECT denied");
+                        return Err(ResolveError::Denied);
+                    }
+                    let evaluation = target
+                        .map(|target| traffic::evaluate(sandbox.traffic_policy.iter(), target));
+                    if let (Some(target), Some(evaluation)) = (target, &evaluation) {
+                        if !evaluation.allowed {
+                            log_policy(
+                                &sandbox.workload_uid,
+                                sandbox_id,
+                                target,
+                                "sandbox",
+                                None,
+                                evaluation,
+                            );
+                            return Err(ResolveError::Denied);
+                        }
+                    }
+                    Ok((Some(resource), evaluation))
+                };
+                let identity = async {
+                    let (workload, (sandbox, sandbox_decision)) =
+                        tokio::try_join!(workload.clone(), sandbox)?;
+                    let View::Workload(source) = workload.as_ref() else {
+                        unreachable!("typed Workload watch")
+                    };
+                    if let Some(resource) = &sandbox {
+                        let View::Sandbox(sandbox) = resource.value.as_ref() else {
+                            unreachable!("typed Sandbox watch")
+                        };
+                        if sandbox.workload_uid != source.uid {
+                            debug!(reason = "sandbox_workload_mismatch", "CONNECT denied");
+                            return Err(ResolveError::Denied);
+                        }
+                    }
+                    Ok((workload, sandbox, sandbox_decision))
+                };
+                let policies = async {
+                    if let Some(target) = target {
+                        let resource = workload.clone().await?;
+                        let View::Workload(workload) = resource.as_ref() else {
+                            unreachable!("typed Workload watch")
+                        };
+                        let Some(references) = &workload.traffic_policies else {
+                            debug!(reason = "traffic_binding_missing", "CONNECT denied");
+                            return Err(ResolveError::Denied);
+                        };
+                        // Preserve policy order and resolve the complete stage: an earlier
+                        // ALLOW can override a later DENY within the platform policy set.
+                        let policies = dependencies.resolve(references).await?;
+                        let evaluation = traffic::evaluate(
+                            policies.iter().map(|value| {
+                                let View::TrafficPolicy(policy) = value.as_ref() else {
+                                    unreachable!("typed TrafficPolicy watch")
+                                };
+                                policy
+                            }),
+                            target,
+                        );
+                        let policy = evaluation
+                            .matched_rule
+                            .map(|(index, _)| references[index].as_str());
+                        if !evaluation.allowed {
+                            log_policy(
+                                &workload.uid,
+                                sandbox_id,
+                                target,
+                                "workload",
+                                policy,
+                                &evaluation,
+                            );
+                            return Err(ResolveError::Denied);
+                        }
+                        return Ok((policies, Some(evaluation)));
+                    }
+                    Ok((Vec::new(), None))
+                };
+                // A denial cancels the other branch's pending demands. Only ALLOW needs
+                // both identity validation and all required policy checks to complete.
+                tokio::try_join!(identity, policies)
+            };
+
+            if matches!(&resolution, Err(ResolveError::Denied)) {
+                return Err(ResolveError::Denied);
+            }
+            let mut keys = vec![(ResourceKind::Workload, lookup)];
+            if !sandbox_id.is_empty() {
+                keys.push((ResourceKind::Sandbox, sandbox_id));
+            }
+            if target.is_some()
+                && let Some(resource) = &candidate
+            {
+                let View::Workload(workload) = resource.value.as_ref() else {
+                    unreachable!("typed Workload watch")
+                };
+                if let Some(names) = &workload.traffic_policies {
+                    keys.extend(
+                        names
+                            .iter()
+                            .map(|name| (ResourceKind::TrafficPolicy, name.as_str())),
+                    );
+                }
+            }
+            let captured = self.client.capture(&keys)?;
+            // Any Workload change invalidates the candidate, not just a missing policy.
+            if let (Some(before), Some(after)) = (&candidate, &captured[0])
+                && !Arc::ptr_eq(&before.value, after)
+            {
+                continue;
+            }
+            let ((workload, sandbox, sandbox_decision), (policies, workload_decision)) =
+                resolution?;
+            if captured[0].is_none() {
+                continue;
+            }
+            if let Some(before) = &sandbox {
+                match &captured[1] {
+                    Some(after) if Arc::ptr_eq(&before.value, after) => {}
+                    _ => continue,
+                }
+            }
+            // A hot dependency can be evicted before capture; rebuild before allowing.
+            if captured.iter().any(Option::is_none) {
+                continue;
+            }
+            // Reuse evaluations only when capture still contains the same policy objects.
+            if captured
+                .iter()
+                .skip(if sandbox.is_some() { 2 } else { 1 })
+                .zip(&policies)
+                .any(|(after, before)| !Arc::ptr_eq(before, after.as_ref().unwrap()))
+            {
+                continue;
+            }
+            return Ok(RequestSnapshot {
+                workload,
+                sandbox: sandbox.map(|held| held.value),
+                policies,
+                sandbox_decision,
+                workload_decision,
+            });
+        }
+    }
+
     async fn resolve(
         &self,
         certificate: &str,
@@ -202,155 +414,43 @@ impl Processor {
             };
             Cow::Owned(format!("/{}", ip.to_canonical()))
         };
-        let (workload, sandbox) = loop {
-            let resolution = {
-                // Share the authenticated Workload lookup between binding validation and
-                // platform policy discovery; neither path waits for the other to finish.
-                let workload = async {
-                    let resource = self
-                        .client
-                        .demand(ResourceKind::Workload, &lookup, Some(request_deadline))
-                        .await?;
-                    let View::Workload(workload) = resource.as_ref() else {
-                        unreachable!("typed Workload watch")
-                    };
-                    if instance.is_none()
-                        && (workload.host_network
-                            || workload.principal != principal
-                            || workload.name.is_empty()
-                            || workload.namespace.is_empty()
-                            || workload.uid
-                                != format!(
-                                    "{}//Pod/{}/{}",
-                                    self.cluster_id, workload.namespace, workload.name
-                                ))
-                    {
-                        debug!(reason = "fallback_workload_mismatch", "CONNECT denied");
-                        return Err(ResolveError::Denied);
-                    }
-                    Ok::<_, ResolveError>(resource)
-                }
-                .shared();
-                let sandbox = async {
-                    if sandbox_id.is_empty() {
-                        return Ok(None);
-                    }
-                    let resource = self
-                        .client
-                        .demand(ResourceKind::Sandbox, sandbox_id, Some(request_deadline))
-                        .await?;
-                    let View::Sandbox(sandbox) = resource.as_ref() else {
-                        unreachable!("typed Sandbox watch")
-                    };
-                    if sandbox.uid != sandbox_id {
-                        debug!(reason = "sandbox_id_mismatch", "CONNECT denied");
-                        return Err(ResolveError::Denied);
-                    }
-                    if let Some(target) = target {
-                        let evaluation = traffic::evaluate(sandbox.traffic_policy.iter(), target);
-                        if !evaluation.allowed {
-                            log_policy(
-                                &sandbox.workload_uid,
-                                sandbox_id,
-                                target,
-                                "sandbox",
-                                None,
-                                &evaluation,
-                            );
-                            return Err(ResolveError::Denied);
-                        }
-                    }
-                    Ok(Some(resource))
-                };
-                let identity = async {
-                    let (workload, sandbox) = tokio::try_join!(workload.clone(), sandbox)?;
-                    let View::Workload(source) = workload.as_ref() else {
-                        unreachable!("typed Workload watch")
-                    };
-                    if let Some(resource) = &sandbox {
-                        let View::Sandbox(sandbox) = resource.as_ref() else {
-                            unreachable!("typed Sandbox watch")
-                        };
-                        if sandbox.workload_uid != source.uid {
-                            debug!(reason = "sandbox_workload_mismatch", "CONNECT denied");
-                            return Err(ResolveError::Denied);
-                        }
-                    }
-                    Ok((workload, sandbox))
-                };
-                let policies = async {
-                    if let Some(target) = target {
-                        let resource = workload.clone().await?;
-                        let View::Workload(workload) = resource.as_ref() else {
-                            unreachable!("typed Workload watch")
-                        };
-                        let Some(references) = &workload.traffic_policies else {
-                            debug!(reason = "traffic_binding_missing", "CONNECT denied");
-                            return Err(ResolveError::Denied);
-                        };
-                        // Preserve policy order and resolve the complete stage: an earlier
-                        // ALLOW can override a later DENY within the platform policy set.
-                        let policies = self
-                            .client
-                            .demand_many(
-                                ResourceKind::TrafficPolicy,
-                                references,
-                                Some(request_deadline),
-                            )
-                            .await;
-                        let policies = match policies {
-                            Err(DemandError::NotFound) => {
-                                // Refresh only after a missing dependency, then revalidate identity.
-                                let current = self
-                                    .client
-                                    .demand(ResourceKind::Workload, &lookup, Some(request_deadline))
-                                    .await?;
-                                let View::Workload(current) = current.as_ref() else {
-                                    unreachable!("typed Workload watch")
-                                };
-                                if current.traffic_policies != workload.traffic_policies {
-                                    return Err(ResolveError::BindingChanged);
-                                }
-                                return Err(DemandError::NotFound.into());
-                            }
-                            result => result?,
-                        };
-                        let evaluation = traffic::evaluate(
-                            policies.iter().map(|value| {
-                                let View::TrafficPolicy(policy) = value.as_ref() else {
-                                    unreachable!("typed TrafficPolicy watch")
-                                };
-                                policy
-                            }),
-                            target,
-                        );
-                        let policy = evaluation
-                            .matched_rule
-                            .map(|(index, _)| references[index].as_str());
-                        log_policy(
-                            &workload.uid,
-                            sandbox_id,
-                            target,
-                            "workload",
-                            policy,
-                            &evaluation,
-                        );
-                        if !evaluation.allowed {
-                            return Err(ResolveError::Denied);
-                        }
-                    }
-                    Ok(())
-                };
-                // A denial cancels the other branch's pending demands. Only ALLOW needs
-                // both identity validation and all required policy checks to complete.
-                tokio::try_join!(identity, policies)
-            };
-            match resolution {
-                Ok((identity, ())) => break identity,
-                Err(ResolveError::BindingChanged) => continue,
-                Err(error) => return Err(error),
-            }
+        let RequestSnapshot {
+            workload,
+            sandbox,
+            policies: _policies,
+            sandbox_decision,
+            workload_decision,
+        } = self
+            .snapshot(
+                &lookup,
+                instance.as_deref(),
+                principal,
+                sandbox_id,
+                target,
+                request_deadline,
+            )
+            .await?;
+        let View::Workload(source) = workload.as_ref() else {
+            unreachable!("typed Workload watch")
         };
+        if let Some(target) = target {
+            if let Some(evaluation) = &sandbox_decision {
+                log_policy(&source.uid, sandbox_id, target, "sandbox", None, evaluation);
+            }
+            let references = source.traffic_policies.as_ref().unwrap();
+            let evaluation = workload_decision.as_ref().unwrap();
+            let policy = evaluation
+                .matched_rule
+                .map(|(index, _)| references[index].as_str());
+            log_policy(
+                &source.uid,
+                sandbox_id,
+                target,
+                "workload",
+                policy,
+                evaluation,
+            );
+        }
         let View::Workload(workload) = workload.as_ref() else {
             unreachable!("typed Workload watch")
         };
