@@ -496,9 +496,16 @@ func managedGatewayControllerVersion(gw gatewayv1.Gateway) (existing string, tak
 // setGatewayControllerVersion patches the Gateway's controller-version
 // annotation through the status subresource.
 func (d *DeploymentController) setGatewayControllerVersion(gw gatewayv1.Gateway) error {
-	patch := fmt.Sprintf(`{"apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"annotations":{"%s":"%d"}}}`,
-		ControllerVersionAnnotation, ControllerVersion)
-	return d.clients.Patcher(gatewayGVR, gw.GetName(), gw.GetNamespace(), []byte(patch), "status")
+	patch, err := json.Marshal(map[string]any{
+		"apiVersion": gatewayv1.GroupVersion.String(), "kind": "Gateway",
+		"metadata": metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace,
+			Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)}},
+		"status": map[string]any{"addresses": gw.Status.Addresses},
+	})
+	if err != nil {
+		return err
+	}
+	return d.clients.Patcher(gatewayGVR, gw.GetName(), gw.GetNamespace(), patch, "status")
 }
 
 func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input TemplateInput) error {
@@ -524,19 +531,34 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionProgrammed), programmedStatus,
 			gw.Generation, programmedReason, programmedMessage),
 	}
+	// Preserve the published address while a gateway is rolling out or temporarily unavailable.
+	addresses := gw.Status.Addresses
+	if programmedStatus == metav1.ConditionTrue {
+		if service := d.clients.Services.Get(input.DeploymentName, gw.Namespace); !controllers.IsNil(service) && service.Labels[managedLabel] == input.ControllerLabel {
+			domain := nestedString(d.renderer.state.Load().values, "global", "proxy", "clusterDomain")
+			if domain == "" {
+				domain = "cluster.local"
+			}
+			addressType := gatewayv1.HostnameAddressType
+			addresses = []gatewayv1.GatewayStatusAddress{{Type: &addressType,
+				Value: service.Name + "." + service.Namespace + ".svc." + domain}}
+		}
+	}
 	// Retain the controller-version annotation owned by the same SSA field manager.
 	patch := struct {
 		APIVersion string            `json:"apiVersion"`
 		Kind       string            `json:"kind"`
 		Metadata   metav1.ObjectMeta `json:"metadata"`
 		Status     struct {
-			Conditions []metav1.Condition `json:"conditions"`
+			Conditions []metav1.Condition               `json:"conditions"`
+			Addresses  []gatewayv1.GatewayStatusAddress `json:"addresses"`
 		} `json:"status"`
 	}{APIVersion: gatewayv1.GroupVersion.String(), Kind: "Gateway", Metadata: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
 		Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)},
 	}}
 	patch.Status.Conditions = conditions
+	patch.Status.Addresses = addresses
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err

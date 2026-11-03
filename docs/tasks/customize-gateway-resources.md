@@ -98,6 +98,12 @@ Class defaults apply first; the Gateway's `parametersRef` patches apply afterwar
 
 HPA and PDB are generated only when their respective patch key is present in the selected class defaults or per-Gateway ConfigMap. An empty `{}` patch also enables the resource with its template defaults. Removing the key stops applying that resource but does not delete an existing HPA or PDB.
 
+## Gateway addresses
+
+Once the generated Deployment is available and its Service exists, the deployer publishes that Service's DNS name in `Gateway.status.addresses` with type `Hostname`. The address has the form `<service>.<namespace>.svc.<cluster-domain>` and uses the configured cluster domain, defaulting to `cluster.local`.
+
+An already published address is retained while the Deployment is pending or rolling out. Read the `Programmed` condition to distinguish availability from the retained discovery address.
+
 ## Updates and errors
 
 ConfigMap creation, updates, and deletion trigger reconciliation. Deployment Pod template changes trigger a rollout; Envoy `config`-only updates use xDS without changing the Pod template. Native `config.yaml` changes still trigger a rollout.

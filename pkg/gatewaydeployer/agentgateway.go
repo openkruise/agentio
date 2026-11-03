@@ -79,7 +79,8 @@ func (d *DeploymentController) setGatewayConfigError(gw gatewayv1.Gateway, confi
 		Kind       string            `json:"kind"`
 		Metadata   metav1.ObjectMeta `json:"metadata"`
 		Status     struct {
-			Conditions []metav1.Condition `json:"conditions"`
+			Conditions []metav1.Condition               `json:"conditions"`
+			Addresses  []gatewayv1.GatewayStatusAddress `json:"addresses"`
 		} `json:"status"`
 	}{APIVersion: gatewayv1.GroupVersion.String(), Kind: "Gateway", Metadata: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
@@ -91,6 +92,7 @@ func (d *DeploymentController) setGatewayConfigError(gw gatewayv1.Gateway, confi
 		gatewayCondition(gw.Status.Conditions, string(gatewayv1.GatewayConditionProgrammed), metav1.ConditionFalse,
 			gw.Generation, string(gatewayv1.GatewayReasonInvalid), configErr.Error()),
 	}
+	patch.Status.Addresses = gw.Status.Addresses
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err
