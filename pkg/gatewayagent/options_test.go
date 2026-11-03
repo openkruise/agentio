@@ -173,7 +173,7 @@ func TestDrainDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestEnvironmentReadsAndEmptyFallbacks(t *testing.T) {
-	for _, name := range []string{"AGENTIO_GATEWAY_CONFIG", "AGENTIO_ROOT_CA", "AGENTIO_CA_ROOT_CA", "AGENTIO_XDS_ROOT_CA", "CA_ADDR", "AGENTIO_CONFIG_DIR", "ENVOY_BINARY", "CLUSTER_ID", "TRUST_DOMAIN", "AGENTIO_TOKEN_FILE"} {
+	for _, name := range []string{"AGENTIO_GATEWAY_CONFIG", "AGENTIO_ROOT_CA", "AGENTIO_CA_ROOT_CA", "AGENTIO_XDS_ROOT_CA", "CA_ADDR", "AGENTIO_CONFIG_DIR", "ENVOY_BINARY", "CLUSTER_ID", "TRUST_DOMAIN", "AGENTIO_TOKEN_FILE", "AGENTIO_CA_TOKEN_FILE"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("AGENTIO_XDS_ADDRESS", "first:15012")
@@ -188,7 +188,7 @@ func TestEnvironmentReadsAndEmptyFallbacks(t *testing.T) {
 		c.Proxy.BinaryPath != "/usr/local/bin/envoy" ||
 		c.ClusterID != "Kubernetes" ||
 		c.TrustDomain != "cluster.local" ||
-		c.TokenFile != "/var/run/secrets/tokens/agentio-token" {
+		c.TokenFile != "/var/run/secrets/tokens/agentio-token" || c.CATokenFile != c.TokenFile {
 		t.Fatalf("empty environment lost defaults: %+v", c)
 	}
 	t.Setenv("AGENTIO_XDS_ADDRESS", "second:15012")

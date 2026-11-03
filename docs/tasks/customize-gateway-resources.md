@@ -66,6 +66,12 @@ Unset `spec.infrastructure.labels` and `spec.infrastructure.annotations` inherit
 
 The same ConfigMap may also contain `data.config` for Envoy's xDS settings or `data["config.yaml"]` for native agentgateway configuration. These keys are excluded from resource patching. Envoy resource-only ConfigMaps may omit `config` to use default proxy settings; an explicitly empty or invalid `config` retains the last valid proxy configuration. Native agentgateway still requires `config.yaml`; see [Deploy agentgateway](deploy-agentgateway.md).
 
+## Use separate CA and ADS credentials
+
+The Envoy gateway agent uses `AGENTIO_TOKEN_FILE` for ADS authentication. Set `AGENTIO_CA_TOKEN_FILE` to a separate projected ServiceAccount token when the certificate authority requires a different audience. If unset or empty, it uses `AGENTIO_TOKEN_FILE`, preserving the existing shared-token setup. The CA token file is read again on each signing attempt, including certificate renewal.
+
+Use a `deployment` patch to mount the additional projected token and set `AGENTIO_CA_TOKEN_FILE` in `agentio-proxy`. Choose the token audience accepted by the CA. `CA_ADDR`, `AGENTIO_CA_SERVER_NAME`, and `AGENTIO_CA_ROOT_CA` configure the CA connection independently of `AGENTIO_XDS_ADDRESS`, `AGENTIO_XDS_SERVER_NAME`, and `AGENTIO_XDS_ROOT_CA` for ADS.
+
 ## Set GatewayClass defaults
 
 Create a ConfigMap in the control-plane namespace (`agentio-system` by default) with the `gateway.agentio.kruise.io/defaults-for-class` label:

@@ -17,6 +17,7 @@ package gatewayagent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -262,7 +263,7 @@ func requestWorkloadCertificate(ctx context.Context, c Config) (*tlsv3.Secret, t
 		c.CAAddress,
 		c.CAServerName,
 		c.CARootCertFile,
-		c.TokenFile,
+		cmp.Or(c.CATokenFile, c.TokenFile),
 		c.ClusterID,
 		c.CAHeaders,
 	)

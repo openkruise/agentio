@@ -152,6 +152,7 @@ func (c Config) validateHeaders() error {
 }
 
 func (c *Config) applyCredentialPaths() {
+	c.CATokenFile = cmp.Or(caTokenFileEnv.Get(), c.TokenFile)
 	if root, set := rootCAEnv.Lookup(); set {
 		c.RootCertFile = cmp.Or(root, c.RootCertFile)
 	}
