@@ -43,11 +43,14 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-type countingAuthenticator struct{ calls int }
+type countingAuthenticator struct {
+	calls  int
+	caller model.PeerIdentity
+}
 
 func (a *countingAuthenticator) Authenticate(context.Context) (model.PeerIdentity, error) {
 	a.calls++
-	return model.PeerIdentity{}, nil
+	return a.caller, nil
 }
 
 func TestNewServerRegistersAllClientClassMetrics(t *testing.T) {

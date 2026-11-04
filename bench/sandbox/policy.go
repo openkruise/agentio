@@ -29,6 +29,9 @@ import (
 )
 
 func (r *runner) policy(ctx context.Context) (any, error) {
+	if r.PolicyKind != "security" && r.PolicyKind != "traffic" {
+		return nil, fmt.Errorf("policy-kind must be security or traffic")
+	}
 	conn, roots, err := r.credentials(ctx)
 	if err != nil {
 		return nil, err
@@ -71,12 +74,44 @@ func (r *runner) policy(ctx context.Context) (any, error) {
 				},
 			},
 		}
+		resource := "globalsecurityprofiles"
+		if r.PolicyKind == "traffic" {
+			action := "allow"
+			if blocked {
+				action = "reject"
+			}
+			object = map[string]any{
+				"apiVersion": "agents.kruise.io/v1alpha1",
+				"kind":       "GlobalTrafficPolicy",
+				"metadata":   map[string]any{"name": r.Prefix + "-policy"},
+				"spec": map[string]any{
+					"priority": 1,
+					"selector": map[string]any{
+						"matchLabels": map[string]string{
+							"bench.agentio.io/label-00": fmt.Sprintf("value-%d-0", r.Offset),
+						},
+					},
+					"egress": map[string]any{"rules": []any{
+						map[string]any{
+							"action": action,
+							"to":     []any{map[string]any{"cidr": "0.0.0.0/0"}},
+							"ports":  []any{map[string]any{"protocol": "TCP", "port": 8080}},
+						},
+						map[string]any{
+							"action": "allow",
+							"to":     []any{map[string]any{"cidr": "0.0.0.0/0"}, map[string]any{"cidr": "::/0"}},
+						},
+					}},
+				},
+			}
+			resource = "globaltrafficpolicies"
+		}
 		data, err := json.Marshal(object)
 		if err != nil {
 			return nil, err
 		}
 		started := time.Now()
-		_, err = r.dynamic.Resource(schema.GroupVersionResource{Group: "agents.kruise.io", Version: "v1alpha1", Resource: "globalsecurityprofiles"}).
+		_, err = r.dynamic.Resource(schema.GroupVersionResource{Group: "agents.kruise.io", Version: "v1alpha1", Resource: resource}).
 			Patch(ctx, r.Prefix+"-policy", types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "sandbox-scale-bench", FieldValidation: "Strict"})
 		if err != nil {
 			return nil, err
@@ -90,6 +125,9 @@ func (r *runner) policy(ctx context.Context) (any, error) {
 			if blocked {
 				probe.ExpectedStatus = 451
 				probe.ExpectedBody = "sandbox-scale-denied"
+				if r.PolicyKind == "traffic" {
+					probe.ExpectedStatus = 403
+				}
 			}
 			consecutive := 0
 			var last error

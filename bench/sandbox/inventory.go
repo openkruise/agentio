@@ -35,7 +35,13 @@ func (r *runner) namespace(i int) string { return fmt.Sprintf("%s-%03d", r.Prefi
 
 func resourceName(i int) string { return fmt.Sprintf("sandbox-%06d", i) }
 
-func (r *runner) node(i int) string { return fmt.Sprintf("%s-node-%04d", r.Prefix, i/100) }
+func (r *runner) node(i int) string {
+	node := i / 100
+	if r.VirtualNodeCount > 0 {
+		node %= r.VirtualNodeCount
+	}
+	return fmt.Sprintf("%s-node-%04d", r.Prefix, node)
+}
 
 func (r *runner) seed(ctx context.Context) error {
 	for i := r.Offset / 1000; i <= (r.Offset+r.Count-1)/1000; i++ {

@@ -19,12 +19,45 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/openkruise/agentio/bench/load"
 )
+
+func TestContinuousTrafficChangesRateWithoutRepreparingClients(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rate")
+	if err := os.WriteFile(path, []byte("100"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{options: options{TrafficRateFile: path, Duration: time.Minute}}
+	var rates []int
+	result, err := r.continuousTraffic(t.Context(), func(rate, requests int, _ time.Duration) (load.Result, error) {
+		rates = append(rates, rate)
+		next := "200"
+		if len(rates) == 2 {
+			next = "-1"
+		}
+		if err := os.WriteFile(path, []byte(next), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if len(rates) == 1 {
+			return load.Result{Operations: requests}, context.DeadlineExceeded
+		}
+		return load.Result{Operations: requests}, nil
+	})
+	if err != nil || !reflect.DeepEqual(rates, []int{100, 200}) || result.(map[string]int)["operations"] != 3000 {
+		t.Fatalf("rates=%v result=%v err=%v", rates, result, err)
+	}
+}
 
 // A TCP/TLS success is insufficient: the test adapter must check both CONNECT
 // authorization and the exact HTTP response carried inside the tunnel.
@@ -35,11 +68,15 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 		inner     int
 		body      string
 		wantError bool
+		traffic   bool
 	}{
-		{"allowed", 200, 200, "sandbox-scale-ok\n", false},
-		{"connect_denied", 403, 200, "sandbox-scale-ok\n", true},
-		{"policy_denied", 200, 451, "denied", true},
-		{"wrong_backend", 200, 200, "other-service\n", true},
+		{"allowed", 200, 200, "sandbox-scale-ok\n", false, false},
+		{"connect_denied", 403, 200, "sandbox-scale-ok\n", true, false},
+		{"policy_denied", 200, 451, "denied", true, false},
+		{"wrong_backend", 200, 200, "other-service\n", true, false},
+		{"traffic_policy_denied", 200, 403, `{"code":"epe_egress_denied","message":"Outbound destination is denied by policy.","requestID":"dynamic-id"}`, false, true},
+		{"traffic_wrong_error", 200, 403, `{"code":"other","message":"Outbound destination is denied by policy."}`, true, true},
+		{"traffic_malformed_error", 200, 403, `not json`, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -74,6 +111,12 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				}
 			}))
 			server.EnableHTTP2 = true
+			var connections atomic.Int64
+			server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateNew {
+					connections.Add(1)
+				}
+			}
 			server.StartTLS()
 			defer server.Close()
 			r := &runner{
@@ -86,10 +129,25 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if test.traffic {
+				r.PolicyKind = "traffic"
+				r.ExpectedStatus = http.StatusForbidden
+			}
 			defer cancel()
 			err := r.request(ctx, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}}, 42)
 			if (err != nil) != test.wantError {
 				t.Fatalf("request error=%v, want error=%t", err, test.wantError)
+			}
+			transport := r.gatewayTransport(&tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
+			defer transport.CloseIdleConnections()
+			for range 2 {
+				err := r.requestOn(ctx, transport.RoundTrip, 42)
+				if (err != nil) != test.wantError {
+					t.Fatalf("reused request error=%v, want error=%t", err, test.wantError)
+				}
+			}
+			if got := connections.Load(); got != 2 {
+				t.Fatalf("TLS connections=%d, want one fresh and one reused", got)
 			}
 		})
 	}

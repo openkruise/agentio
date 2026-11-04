@@ -54,6 +54,8 @@ type Result struct {
 	P50MS           float64                `json:"p50_ms"`
 	P95MS           float64                `json:"p95_ms"`
 	P99MS           float64                `json:"p99_ms"`
+	QueueP99MS      float64                `json:"queue_p99_ms"`
+	OperationP99MS  float64                `json:"operation_p99_ms"`
 	MaxMS           float64                `json:"max_ms"`
 	Errors          int                    `json:"errors"`
 	FirstError      string                 `json:"first_error"`
@@ -61,10 +63,12 @@ type Result struct {
 }
 
 type sample struct {
-	latency int64
-	second  int
-	err     error
-	done    bool
+	latency   int64
+	queue     int64
+	operation int64
+	second    int
+	err       error
+	done      bool
 }
 
 // Run calls operation concurrently. The adapter owns connections, payloads and
@@ -106,12 +110,16 @@ func Run(ctx context.Context, cfg Config, operation func(context.Context, int) e
 						return
 					}
 				}
+				operationStart := time.Now()
 				err := operation(ctx, cfg.Offset+index%cfg.Identities)
+				finished := time.Now()
 				samples[index] = sample{
-					latency: time.Since(arrival).Nanoseconds(),
-					second:  int(time.Since(start).Seconds()),
-					err:     err,
-					done:    true,
+					latency:   finished.Sub(arrival).Nanoseconds(),
+					queue:     operationStart.Sub(arrival).Nanoseconds(),
+					operation: finished.Sub(operationStart).Nanoseconds(),
+					second:    int(time.Since(start).Seconds()),
+					err:       err,
+					done:      true,
 				}
 			}
 		})
@@ -135,6 +143,8 @@ func summarize(cfg Config, samples []sample, start, finish time.Time) Result {
 		Seconds:      finish.Sub(start).Seconds(),
 	}
 	latencies := make([]int64, 0, cfg.Requests)
+	queues := make([]int64, 0, cfg.Requests)
+	operations := make([]int64, 0, cfg.Requests)
 	identities := make(map[int]struct{})
 	for index, value := range samples {
 		if !value.done {
@@ -142,6 +152,8 @@ func summarize(cfg Config, samples []sample, start, finish time.Time) Result {
 		}
 		identities[index%cfg.Identities] = struct{}{}
 		latencies = append(latencies, value.latency)
+		queues = append(queues, value.queue)
+		operations = append(operations, value.operation)
 		if result.SecondsBins[value.second] == nil {
 			result.SecondsBins[value.second] = map[string]int{"success": 0, "error": 0}
 		}
@@ -170,6 +182,11 @@ func summarize(cfg Config, samples []sample, start, finish time.Time) Result {
 	}
 	if len(latencies) > 0 {
 		slices.Sort(latencies)
+		slices.Sort(queues)
+		slices.Sort(operations)
+		p99 := min(int(float64(len(latencies))*.99), len(latencies)-1)
+		result.QueueP99MS = float64(queues[p99]) / 1e6
+		result.OperationP99MS = float64(operations[p99]) / 1e6
 		quantile := func(p float64) float64 {
 			return float64(latencies[min(int(float64(len(latencies))*p), len(latencies)-1)]) / 1e6
 		}

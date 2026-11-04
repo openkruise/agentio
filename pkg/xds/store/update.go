@@ -68,6 +68,7 @@ type Update struct {
 	affectedTypes sets.Set[string]
 	full          bool
 	fullTypes     sets.Set[string]
+	addressScopes *addressScopeIndex
 }
 
 // Version identifies the most recent publication included in this notice.
@@ -124,6 +125,9 @@ func indexedUpdate(version string, candidates map[model.ResourceKey]Candidate) U
 			return u.candidates[typeURL][i].Key.Name < u.candidates[typeURL][j].Key.Name
 		})
 	}
+	if len(u.candidates[model.AddressType]) != 0 {
+		u.addressScopes = &addressScopeIndex{}
+	}
 	return u
 }
 
@@ -165,7 +169,9 @@ func Merge(older, newer Update) Update {
 		version:       newer.version,
 		candidates:    older.candidates,
 		affectedTypes: older.affectedTypes,
+		addressScopes: older.addressScopes,
 	}
+	addressChanged := false
 	copied := false
 	if merged.candidates == nil {
 		merged.candidates = make(map[string][]Candidate, len(newer.candidates))
@@ -174,6 +180,7 @@ func Merge(older, newer Update) Update {
 	for typeURL, incoming := range newer.candidates {
 		batch, changed := mergeCandidates(older.candidates[typeURL], incoming)
 		if changed {
+			addressChanged = addressChanged || typeURL == model.AddressType
 			if !copied {
 				merged.candidates = maps.Clone(older.candidates)
 				copied = true
@@ -191,6 +198,9 @@ func Merge(older, newer Update) Update {
 		merged.fullTypes = sets.New[string]()
 		merged.fullTypes.Merge(older.fullTypes)
 		merged.fullTypes.Merge(newer.fullTypes)
+	}
+	if addressChanged {
+		merged.addressScopes = &addressScopeIndex{}
 	}
 	return merged
 }

@@ -31,27 +31,35 @@ import (
 )
 
 type options struct {
-	Action         string
-	Kubeconfig     string
-	Prefix         string
-	System         string
-	Output         string
-	CA             string
-	Gateway        string
-	Target         string
-	Path           string
-	ExpectedBody   string
-	StartFile      string
-	ExpectedStatus int
-	Count          int
-	Offset         int
-	Workers        int
-	APIQPS         int
-	Revision       int
-	Requests       int
-	Rate           int
-	Active         int
-	Duration       time.Duration
+	Action           string
+	Kubeconfig       string
+	Prefix           string
+	System           string
+	Output           string
+	CA               string
+	CAServerName     string
+	PolicyKind       string
+	Gateway          string
+	Target           string
+	Path             string
+	ExpectedBody     string
+	StartFile        string
+	TrafficRateFile  string
+	ExpectedStatus   int
+	Count            int
+	Offset           int
+	Workers          int
+	APIQPS           int
+	Revision         int
+	Requests         int
+	Rate             int
+	Active           int
+	ConnectionRate   int
+	VirtualNodeCount int
+	ReuseConnections bool
+	Acknowledge      bool
+	ReadDelay        time.Duration
+	Duration         time.Duration
 }
 
 type runner struct {
@@ -80,6 +88,8 @@ func parseOptions() options {
 	flag.StringVar(&o.System, "system", "sandbox-scale-system", "Agentio installation namespace")
 	flag.StringVar(&o.Output, "output", "", "JSON result path")
 	flag.StringVar(&o.CA, "ca", "", "CA gRPC host:port; TLS server name is agentiod.SYSTEM.svc")
+	flag.StringVar(&o.CAServerName, "ca-server-name", "", "override CA/ADS TLS server name for group-admission probes")
+	flag.StringVar(&o.PolicyKind, "policy-kind", "security", "policy probe kind: security or traffic")
 	flag.StringVar(&o.Gateway, "gateway", "", "gateway TLS host:port")
 	flag.StringVar(&o.Target, "target", "", "CONNECT target host:port (traffic also accepts comma-separated upstreams)")
 	flag.IntVar(&o.Count, "count", 10000, "inventory or mutation count")
@@ -90,8 +100,24 @@ func parseOptions() options {
 	flag.IntVar(&o.Requests, "requests", 10000, "traffic operations")
 	flag.IntVar(&o.Rate, "rate", 100, "offered CONNECT requests per second")
 	flag.IntVar(&o.Active, "active", 1000, "number of traffic identities")
+	flag.IntVar(&o.ConnectionRate, "connection-rate", 100, "new sidecar ADS connections per second")
+	flag.IntVar(
+		&o.VirtualNodeCount,
+		"virtual-node-count",
+		0,
+		"reuse this many KWOK nodes as inventory grows; zero uses 100 Pods per node",
+	)
+	flag.BoolVar(&o.ReuseConnections, "reuse-connections", false, "reuse HTTP/2 connections per traffic identity")
+	flag.BoolVar(&o.Acknowledge, "ack", true, "acknowledge ADS responses; false simulates a non-ACKing client")
+	flag.DurationVar(&o.ReadDelay, "read-delay", 0, "delay the first ADS receive to simulate a slow receiver")
 	flag.DurationVar(&o.Duration, "duration", 3*time.Minute, "traffic deadline")
 	flag.StringVar(&o.StartFile, "start-file", "", "wait for this shared file after certificate preparation")
+	flag.StringVar(
+		&o.TrafficRateFile,
+		"traffic-rate-file",
+		"",
+		"continuous traffic: read QPS between 10-second batches; 0 pauses, -1 stops; preserve HTTP/2 connections",
+	)
 	flag.StringVar(&o.Path, "path", "/", "HTTP request path inside CONNECT")
 	flag.StringVar(&o.ExpectedBody, "expected-body", "sandbox-scale-ok\n", "exact expected HTTP response body")
 	flag.IntVar(&o.ExpectedStatus, "expected-status", 200, "expected inner HTTP status")
@@ -104,7 +130,7 @@ func run() error {
 	if o.Action == "backend" {
 		return backend()
 	}
-	if o.Kubeconfig == "" || o.Count < 1 || o.Workers < 1 || o.APIQPS < 1 || o.Offset < 0 {
+	if o.Kubeconfig == "" || o.Count < 1 || o.Workers < 1 || o.APIQPS < 1 || o.Offset < 0 || o.VirtualNodeCount < 0 {
 		return fmt.Errorf("explicit kubeconfig and positive counts are required")
 	}
 	cfg, err := clientcmd.BuildConfigFromFlags("", o.Kubeconfig)
@@ -204,7 +230,7 @@ func (r *runner) execute(ctx context.Context) (any, error) {
 		result, err = r.policy(ctx)
 	case "lifecycle":
 		result, err = r.lifecycle(ctx)
-	case "watch":
+	case "watch", "watch-sidecar":
 		result, err = r.watch(ctx)
 	case "traffic":
 		result, err = r.traffic(ctx)

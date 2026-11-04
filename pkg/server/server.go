@@ -358,6 +358,13 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		},
 		features.PushConcurrency,
 		features.RequestRateLimit,
+		xds.FlowControlOptions{
+			InitialAdmission: features.XDSInitialAdmissionTimeout,
+			RateLimit:        features.XDSRateLimitTimeout,
+			Send:             features.XDSSendTimeout,
+			ACK:              features.XDSACKTimeout,
+			MaxPodStreams:    features.XDSMaxPodStreams,
+		},
 	)
 	if err != nil {
 		return err
