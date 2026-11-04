@@ -244,7 +244,7 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 		t.Fatalf("gatewayResourcesFor: %v", err)
 	}
 	clusters := make(map[string]*clusterv3.Cluster)
-	for _, resource := range resources.Resources {
+	for _, resource := range resources.StaticResources {
 		if resource.Key.TypeURL != model.ClusterType {
 			continue
 		}
@@ -1241,11 +1241,11 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(resources.Resources) == 0 {
+			if len(resources.StaticResources) == 0 {
 				t.Fatal("community gateway resources missing")
 			}
 			found := false
-			for _, resource := range resources.Resources {
+			for _, resource := range resources.StaticResources {
 				if !resource.Facts.AgentioEgress {
 					t.Fatalf("unsupported legacy variant published: %v", resource.Key)
 				}

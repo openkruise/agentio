@@ -21,6 +21,7 @@ import (
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/util/protoutil"
 )
 
 // ServiceTarget identifies a TCP Service port to resolve for EDS.
@@ -28,6 +29,28 @@ type ServiceTarget struct {
 	Namespace string
 	Name      string
 	Port      uint32
+}
+
+// EndpointBinding keeps an EDS publication identity with its accepted Service target.
+type EndpointBinding struct {
+	Key           model.ResourceKey
+	XDSName       string
+	GatewayOwner  string
+	AgentioEgress bool
+	Target        ServiceTarget
+}
+
+// BuildResource resolves current endpoints without recompiling the owning gateway.
+func (b EndpointBinding) BuildResource(services []model.Service, endpoints []model.Endpoint) (model.Resource, error) {
+	assignment := BuildServiceLoadAssignment(b.XDSName, b.Target, services, endpoints)
+	value, err := protoutil.MarshalAny(assignment)
+	if err != nil {
+		return model.Resource{}, err
+	}
+	return model.NewResource(b.Key, b.XDSName, value, nil, model.ResourceFacts{
+		GatewayOwner:  b.GatewayOwner,
+		AgentioEgress: b.AgentioEgress,
+	})
 }
 
 // BuildServiceLoadAssignment resolves a Service port to ready, serving, non-terminating endpoints.

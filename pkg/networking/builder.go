@@ -76,10 +76,10 @@ type effectiveConfig struct {
 	telemetry          *telemetry.Output
 }
 
-// GatewayResources retains endpoint targets alongside the static resource graph.
-type GatewayResources struct {
-	Resources       []model.Resource
-	EndpointTargets map[string]ServiceTarget
+// GatewayCompilation retains static resources and accepted Service bindings for independent EDS updates.
+type GatewayCompilation struct {
+	StaticResources  []model.Resource
+	EndpointBindings []EndpointBinding
 }
 
 func Build(inputs Inputs) ([]model.Resource, error) {
@@ -87,13 +87,21 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	return built.Resources, nil
+	resources := built.StaticResources
+	for _, binding := range built.EndpointBindings {
+		resource, err := binding.BuildResource(inputs.Services, inputs.Endpoints)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
 }
 
-// BuildGateway lets incremental callers retain accepted targets while refreshing EDS separately.
+// BuildGateway compiles static resources and Service bindings without resolving live endpoints.
 //
-//nolint:gocyclo,funlen // Preserve the existing gateway assembly while exposing accepted EDS targets.
-func BuildGateway(inputs Inputs) (*GatewayResources, error) {
+//nolint:gocyclo,funlen // Keep gateway assembly and accepted EDS bindings together.
+func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
 	}
@@ -190,7 +198,11 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 		}
 		resources = append(resources, resource)
 	}
-	targets := make(map[string]ServiceTarget)
+	resourcePrefix := inputs.Gateway.ResourceName() + "|"
+	if !inputs.LegacyGateway {
+		resourcePrefix += "agentio-egress|"
+	}
+	var bindings []EndpointBinding
 	for i, provider := range append([]*configv1.ExtProcProvider{effective.extProc}, effective.additionalExtProcs...) {
 		if provider.GetServiceRef() == nil {
 			continue
@@ -208,13 +220,13 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 			Name:      provider.GetServiceRef().GetName(),
 			Port:      port,
 		}
-		targets[name] = target
-		assignment := BuildServiceLoadAssignment(name, target, inputs.Services, inputs.Endpoints)
-		resource, err := scopedResource(inputs.Gateway, model.EndpointType, name, assignment)
-		if err != nil {
-			return nil, err
-		}
-		resources = append(resources, resource)
+		bindings = append(bindings, EndpointBinding{
+			Key:           model.ResourceKey{TypeURL: model.EndpointType, Name: resourcePrefix + name},
+			XDSName:       name,
+			GatewayOwner:  inputs.Gateway.ResourceName(),
+			AgentioEgress: !inputs.LegacyGateway,
+			Target:        target,
+		})
 	}
 	for _, message := range routes {
 		resource, err := scopedResource(inputs.Gateway, model.RouteType, message.GetName(), message)
@@ -252,11 +264,11 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 		// Same Envoy names, separate cache keys and selection facts. A mixed
 		// rollout must never replace the other proxy's resource graph.
 		for i := range resources {
-			resources[i].Key.Name = inputs.Gateway.ResourceName() + "|agentio-egress|" + resources[i].XDSName
+			resources[i].Key.Name = resourcePrefix + resources[i].XDSName
 			resources[i].Facts.AgentioEgress = true
 		}
 	}
-	return &GatewayResources{Resources: resources, EndpointTargets: targets}, nil
+	return &GatewayCompilation{StaticResources: resources, EndpointBindings: bindings}, nil
 }
 
 func validatePatchedMessages(

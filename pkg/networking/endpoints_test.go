@@ -77,9 +77,32 @@ func TestExtProcEDS(t *testing.T) {
 			DiscoveryAddress:   "agentiod:15012",
 			TrustDomain:        "cluster.local",
 		}
+		compiled, err := BuildGateway(inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, resource := range compiled.StaticResources {
+			if resource.Key.TypeURL == model.EndpointType {
+				t.Fatal("gateway compilation contains a placeholder EDS resource")
+			}
+		}
 		resources, err := Build(inputs)
 		if err != nil {
 			t.Fatal(err)
+		}
+		for _, resource := range resources {
+			if resource.Key.TypeURL != model.EndpointType {
+				continue
+			}
+			prefix := inputs.Gateway.ResourceName() + "|"
+			if !legacy {
+				prefix += "agentio-egress|"
+			}
+			if resource.Key.Name != prefix+resource.XDSName ||
+				resource.Facts.GatewayOwner != inputs.Gateway.ResourceName() ||
+				resource.Facts.AgentioEgress != !legacy {
+				t.Fatalf("legacy=%v incorrect EDS publication identity: %+v", legacy, resource)
+			}
 		}
 		clusters := messagesOf(
 			t,

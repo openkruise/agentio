@@ -16,7 +16,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 
@@ -29,20 +28,19 @@ import (
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
-	"github.com/openkruise/agentio/pkg/util/protoutil"
 )
 
 type compiledGateway struct {
 	Name string
-	networking.GatewayResources
+	networking.GatewayCompilation
 }
 
 func (g compiledGateway) ResourceName() string { return g.Name }
 
 func (g compiledGateway) Equals(other compiledGateway) bool {
 	return g.Name == other.Name &&
-		slices.EqualFunc(g.Resources, other.Resources, model.Resource.Equals) &&
-		maps.Equal(g.EndpointTargets, other.EndpointTargets)
+		slices.EqualFunc(g.StaticResources, other.StaticResources, model.Resource.Equals) &&
+		slices.Equal(g.EndpointBindings, other.EndpointBindings)
 }
 
 type gatewayGlobalExtProc struct {
@@ -213,12 +211,9 @@ func gatewayEndpointResources(
 	base baseIndexes,
 	gateway compiledGateway,
 ) ([]model.Resource, error) {
-	resources := slices.Clone(gateway.Resources)
-	for i, resource := range resources {
-		if resource.Key.TypeURL != model.EndpointType {
-			continue
-		}
-		target := gateway.EndpointTargets[resource.XDSName]
+	resources := slices.Clone(gateway.StaticResources)
+	for _, binding := range gateway.EndpointBindings {
+		target := binding.Target
 		var services []model.Service
 		var endpoints []model.Endpoint
 		if service := krt.FetchOne(ctx, inputs.Services,
@@ -230,15 +225,11 @@ func gatewayEndpointResources(
 				krt.FilterIndex(base.endpointsByService, service.ResourceName()),
 			)
 		}
-		assignment := networking.BuildServiceLoadAssignment(resource.XDSName, target, services, endpoints)
-		value, err := protoutil.MarshalAny(assignment)
+		resource, err := binding.BuildResource(services, endpoints)
 		if err != nil {
 			return nil, err
 		}
-		resources[i], err = model.NewResource(resource.Key, resource.XDSName, value, resource.Aliases, resource.Facts)
-		if err != nil {
-			return nil, err
-		}
+		resources = append(resources, resource)
 	}
 	return resources, nil
 }
@@ -259,7 +250,7 @@ func recordGatewayFailureIfCurrent(
 func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 	item := inputs.Gateway
 	var built []model.Resource
-	targets := make(map[string]networking.ServiceTarget)
+	var bindings []networking.EndpointBinding
 	for _, legacy := range []bool{true, false} {
 		// Limits require the community module; do not publish an unprotected legacy variant.
 		if legacy && (item.Config.GetBandwidthLimit() != nil || item.Config.GetConnectConcurrencyLimit() != nil) {
@@ -270,8 +261,8 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compile gateway %s (legacy=%t): %w", item.ResourceName(), legacy, err)
 		}
-		built = append(built, variant.Resources...)
-		maps.Copy(targets, variant.EndpointTargets)
+		built = append(built, variant.StaticResources...)
+		bindings = append(bindings, variant.EndpointBindings...)
 	}
 	result := make([]model.Resource, 0, len(built))
 	for _, resource := range built {
@@ -289,9 +280,9 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 	}
 	return &compiledGateway{
 		Name: item.ResourceName(),
-		GatewayResources: networking.GatewayResources{
-			Resources:       result,
-			EndpointTargets: targets,
+		GatewayCompilation: networking.GatewayCompilation{
+			StaticResources:  result,
+			EndpointBindings: bindings,
 		},
 	}, nil
 }
