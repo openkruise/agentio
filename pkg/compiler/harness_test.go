@@ -519,6 +519,8 @@ func validCompilerInputs(stop <-chan struct{}) Inputs {
 		Pods:                       krt.NewStaticCollection[*corev1.Pod](nil, nil, options...),
 		KubernetesServices:         krt.NewStaticCollection[*corev1.Service](nil, nil, options...),
 		EndpointSlices:             krt.NewStaticCollection[*discoveryv1.EndpointSlice](nil, nil, options...),
+		ConfigMaps:                 krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, options...),
+		Secrets:                    krt.NewStaticCollection[*corev1.Secret](nil, nil, options...),
 		Services:                   krt.NewStaticCollection[model.Service](nil, nil, options...),
 		Endpoints:                  krt.NewStaticCollection[model.Endpoint](nil, nil, options...),
 		Gateways:                   krt.NewStaticCollection[model.Gateway](nil, nil, options...),

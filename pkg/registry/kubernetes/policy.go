@@ -83,6 +83,9 @@ func validateAgentioConfig(value *configv1.AgentioConfig) error {
 		if err := model.ValidateUpstreamTLS(gateway.GetTls().GetOrigination()); err != nil {
 			return fmt.Errorf("egressGateways[%d].%w", i, err)
 		}
+		if err := model.ValidateUpstreamTrustBundle(gateway.GetUpstreamTrustBundle()); err != nil {
+			return fmt.Errorf("egressGateways[%d].%w", i, err)
+		}
 		if err := model.ValidateAccessLogFormat(gateway.GetAccessLogFormat()); err != nil {
 			return fmt.Errorf("egressGateways[%d].%w", i, err)
 		}

@@ -28,6 +28,54 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
+func TestGatewayUpstreamTrustSources(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		bundle  string
+		invalid bool
+	}{
+		{"empty", "{}", false},
+		{"empty sources", "{additionalSources: []}", false},
+		{"ConfigMap", "{additionalSources: [{configMapRef: {name: company-ca, key: ca.crt}}]}", false},
+		{"Secret", "{additionalSources: [{secretRef: {name: partner-ca, key: ca.pem}}]}", false},
+		{"missing source", "{additionalSources: [{}]}", true},
+		{"null source", "{additionalSources: [null]}", true},
+		{"missing name", "{additionalSources: [{configMapRef: {key: ca.crt}}]}", true},
+		{"missing key", "{additionalSources: [{secretRef: {name: company-ca}}]}", true},
+		{"invalid name", "{additionalSources: [{configMapRef: {name: 'bad/name', key: ca.crt}}]}", true},
+		{"invalid key", "{additionalSources: [{secretRef: {name: company-ca, key: 'bad/key'}}]}", true},
+		{"unknown namespace ignored", "{additionalSources: [{configMapRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false},
+		{"unknown secret namespace ignored", "{additionalSources: [{secretRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false},
+		{"conflicting sources", "{additionalSources: [{configMapRef: {name: a, key: ca.crt}, secretRef: {name: b, key: ca.crt}}]}", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := "upstreamTrustBundle: " + tc.bundle
+			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
+				"AgentioConfig": func() (*configv1.EgressGateway, error) {
+					got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: demo\n  "+content, nil)
+					if err != nil {
+						return nil, err
+					}
+					return got.GetEgressGateways()[0], nil
+				},
+				"Gateway API parameters": func() (*configv1.EgressGateway, error) {
+					return decodeEgressGateway(content)
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					got, err := decode()
+					if (err != nil) != tc.invalid {
+						t.Fatalf("decode() = %v, %v; invalid=%t", got, err, tc.invalid)
+					}
+					if err == nil && got.GetUpstreamTrustBundle() == nil {
+						t.Fatal("upstreamTrustBundle was not decoded")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestGatewayConfigurationProtocolSettings(t *testing.T) {
 	const content = `
 tlsTermination:

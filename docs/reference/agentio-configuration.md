@@ -279,6 +279,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. In static SNI matching, an identical pattern in both lists belongs to `excludeHosts` (case-insensitive); repeated patterns are registered once. Different overlapping patterns retain Envoy's most-specific-match precedence. |
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
+| `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
@@ -398,6 +399,83 @@ agentiod:
 ```
 
 The Secret coordinates and gateway namespace must be consistent. See [MITM certificate environment variables](agentiod-environment-variables.md#on-demand-tls-certificates) for the complete signing settings.
+
+### Upstream CA trust
+
+Use `upstreamTrustBundle.additionalSources` to trust private CAs while retaining
+the built-in public CA package. Each entry must select exactly one `configMapRef`
+or `secretRef`, with an explicit `name` and `key`. Both kinds are resolved in the
+**mesh root namespace**, even when the gateway is declared in another namespace.
+References do not accept a `namespace` field.
+
+For example, create these sources in `agentio-system` when that is the root namespace:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: company-ca
+  namespace: agentio-system
+data:
+  ca.crt: |
+    <COMPANY_CA_CERTIFICATES_PEM>
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: partner-ca
+  namespace: agentio-system
+type: Opaque
+stringData:
+  ca.crt: |
+    <PARTNER_CA_CERTIFICATES_PEM>
+```
+
+Reference them from the gateway configuration:
+
+```yaml
+egressGateways:
+  - name: egress-gateway
+    namespace: sandbox-traffic-system
+    upstreamTrustBundle:
+      additionalSources:
+        - configMapRef:
+            name: company-ca
+            key: ca.crt
+        - secretRef:
+            name: partner-ca
+            key: ca.crt
+```
+
+Each selected key must contain one or more PEM CA certificates; private keys,
+non-CA service certificates, empty sources, and malformed PEM are rejected.
+ConfigMaps use `data`; Secrets use `data` (or `stringData` when creating them).
+The controller merges and deduplicates these certificates with the built-in public
+CA package and sends the complete bundle through xDS to both destination and HTTPS
+proxy TLS origination clusters. Hostname verification remains enabled. This does
+not change the workload `clientTrustBundle` or the MITM signing CA.
+
+Source updates apply without restarting Agentiod or the gateway. If a source is
+missing, its selected key is absent, or its contents are invalid, compilation
+reports the gateway, source, key, and reason and retains the previous valid gateway
+output. An initially invalid configuration produces no gateway resources. Check
+compiler failures before relying on a trust change having taken effect.
+
+Remove entries, or set `additionalSources: []`, to remove their contribution.
+A CA remains trusted if it is still present in another source or the public
+package. Existing TLS connections can remain active until they close.
+
+Additional sources require the embedded public CA package configured by
+`AGENTIO_CLIENT_TRUST_PACKAGE_PATH` in the standard Agentiod image. Without that
+package, the controller rejects additional sources rather than replacing a
+gateway-local public CA file. With no additional sources, existing local-file
+installations retain their previous behavior. Secret references reuse the shared
+Secret cache and the existing root-namespace read permissions; no wider Secret
+RBAC is required.
+
+Gateway API `parametersRef` ConfigMaps accept the same `upstreamTrustBundle` block
+in `data.config`, without the `egressGateways` wrapper. Trust sources still resolve
+in the mesh root namespace, independently of the parameters ConfigMap namespace.
 
 ### Upstream TLS defaults
 

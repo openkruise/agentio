@@ -66,7 +66,7 @@ type Inputs struct {
 	TelemetryProviderOverrides *model.TelemetryProviderOverrides
 	DiscoveryAddress           string
 	TrustDomain                string
-	// UpstreamTrustBundle contains validated public CA PEM, excluding the MITM CA.
+	// UpstreamTrustBundle contains validated public and additional upstream CA PEM.
 	// When empty, retain the gateway-local CA file used by non-package installations.
 	UpstreamTrustBundle string
 }

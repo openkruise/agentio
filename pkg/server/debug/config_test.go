@@ -455,6 +455,8 @@ func newConfigDebugFixture(t *testing.T, mutate configDebugSourceMutation, wait 
 		Pods:               krt.NewStaticCollection[*corev1.Pod](nil, nil, krt.WithStop(stop)),
 		KubernetesServices: krt.NewStaticCollection[*corev1.Service](nil, nil, krt.WithStop(stop)),
 		EndpointSlices:     krt.NewStaticCollection[*discoveryv1.EndpointSlice](nil, nil, krt.WithStop(stop)),
+		ConfigMaps:         krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, options...),
+		Secrets:            krt.NewStaticCollection[*corev1.Secret](nil, nil, options...),
 		Services:           krt.NewStaticCollection[model.Service](nil, nil, options...),
 		Endpoints:          krt.NewStaticCollection[model.Endpoint](nil, nil, options...),
 		Gateways:           sources.Gateways,

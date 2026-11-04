@@ -16,27 +16,11 @@ package kubernetes
 
 import (
 	"fmt"
-	"strings"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
-	"github.com/golang/protobuf/jsonpb"            //nolint:staticcheck // Agentio transfer schemas require jsonpb names and merge semantics.
-	legacyproto "github.com/golang/protobuf/proto" //nolint:staticcheck // jsonpb accepts the legacy message interface.
-	"sigs.k8s.io/yaml"
-
 	"github.com/openkruise/agentio/pkg/model"
 )
-
-func decodeAgentioYAML(content, description string, target legacyproto.Message) error {
-	jsonData, err := yaml.YAMLToJSON([]byte(content))
-	if err != nil {
-		return fmt.Errorf("parse YAML: %w", err)
-	}
-	if err := (&jsonpb.Unmarshaler{}).Unmarshal(strings.NewReader(string(jsonData)), target); err != nil {
-		return fmt.Errorf("decode %s: %w", description, err)
-	}
-	return nil
-}
 
 // normalizeEgressServiceEntries validates data at the Kubernetes source
 // boundary so invalid updates retain the last-known-good value.

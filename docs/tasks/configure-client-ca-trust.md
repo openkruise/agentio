@@ -69,6 +69,11 @@ Official Agentiod images include the package JSON in both debug and distroless v
 
 A custom bundle does not automatically inherit private CAs from application images. Include every additional enterprise trust anchor that the application needs. Sources are parsed, deduplicated and stably ordered. Invalid or missing sources retain the last successfully assembled bundle in the running distributor. On a fresh start, a source failure leaves existing target ConfigMaps unchanged but does not provision new targets until all sources are available. Foreign ConfigMaps are not overwritten. Private keys and non-CA certificates are rejected.
 
+To trust private CAs on gateway upstream connections, configure
+[`egressGateways[].upstreamTrustBundle.additionalSources`](../reference/agentio-configuration.md#upstream-ca-trust)
+separately. Its ConfigMap and Secret references resolve only in the mesh root
+namespace, and updates reach the gateway through xDS without a restart.
+
 Distribution is driven by KRT dependencies on namespaces, validated configuration, and certificate sources. Namespace creation provisions its ConfigMap; a changed bundle updates all eligible namespaces. Target ConfigMap deletion or modification triggers repair. A leader-owned queue retries failed writes with backoff. There is no Pod informer or periodic full reconciliation. A namespace receives its bundle even before its first Pod is created.
 
 ## Custom mounts and environment variables

@@ -250,6 +250,8 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		Pods:                       registry.Pods,
 		KubernetesServices:         registry.KubernetesServices,
 		EndpointSlices:             registry.EndpointSlices,
+		ConfigMaps:                 registry.ConfigMaps,
+		Secrets:                    registry.Secrets,
 		Services:                   sources.Services,
 		Endpoints:                  sources.Endpoints,
 		Gateways:                   sources.Gateways,
