@@ -62,7 +62,7 @@ func BuildServiceLoadAssignment(
 	endpoints []model.Endpoint,
 ) *endpointv3.ClusterLoadAssignment {
 	assignment := &endpointv3.ClusterLoadAssignment{ClusterName: name}
-	selected := selectServiceEndpoints(target, services, endpoints)
+	selected := SelectServiceEndpoints(target, services, endpoints)
 	if len(selected) > 0 {
 		locality := &endpointv3.LocalityLbEndpoints{}
 		for _, endpoint := range selected {
@@ -77,7 +77,8 @@ func BuildServiceLoadAssignment(
 	return assignment
 }
 
-func selectServiceEndpoints(
+// SelectServiceEndpoints resolves a Service port using the shared readiness and port-mapping rules.
+func SelectServiceEndpoints(
 	target ServiceTarget,
 	services []model.Service,
 	endpoints []model.Endpoint,

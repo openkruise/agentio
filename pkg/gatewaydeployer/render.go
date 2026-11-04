@@ -50,6 +50,8 @@ type TemplateInput struct {
 	ControllerLabel           string
 	AgentgatewayConfigName    string
 	AgentgatewayConfigHash    string
+	AgentgatewayConfig        string
+	AgentgatewayTrustBundle   string
 }
 
 type renderer struct {
@@ -158,6 +160,10 @@ func (r *renderer) Render(templateName string, input TemplateInput) ([]string, e
 			return nil, err
 		}
 		switch meta.Kind {
+		case "ConfigMap":
+			if templateName == agentgatewayTemplateName && input.AgentgatewayConfig != "" {
+				out = append(out, p)
+			}
 		case "Deployment", "Service", "ServiceAccount", "HorizontalPodAutoscaler", "PodDisruptionBudget":
 			out = append(out, p)
 		default:

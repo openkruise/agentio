@@ -217,6 +217,13 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 			ClusterDomain:         options.ClusterDomain,
 			CAAddress:             fmt.Sprintf("%s.%s.svc:15012", features.ServiceName, options.RootNamespace),
 			LeaseName:             features.GatewayLeaseName,
+			Agentgateway: gatewaydeployer.AgentgatewaySources{
+				Config:      sources.AgentioConfig,
+				Services:    sources.Services,
+				Endpoints:   sources.Endpoints,
+				Secrets:     registry.Secrets,
+				TrustBundle: gatewayTrustBundle,
+			},
 		})
 		if err != nil {
 			return err

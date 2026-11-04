@@ -68,7 +68,7 @@ func NativeConfig(version string, extProc map[string]any) string {
 		map[string]any{"protocol": "TLS", "hostname": "*", "tcpRoutes": []any{map[string]any{"backends": []any{map[string]any{"dynamic": map[string]any{"target": target}}}}}},
 		map[string]any{"protocol": "TCP", "tcpRoutes": []any{map[string]any{"backends": []any{map[string]any{"dynamic": map[string]any{"target": target}}}}}},
 	}
-	// Unlike generic CONNECT, v1.5.0's native HBONE gateway requires a bind
+	// Unlike generic CONNECT, v1.7.0's native HBONE gateway requires a bind
 	// for each destination port; it does not fall back to an internal wildcard.
 	// Cover both Service and directly addressed workload ports of the fixture.
 	seen := map[int]bool{8080: true, 15008: true}
@@ -155,6 +155,11 @@ func WaitGateway(ctx context.Context, env *e2e.Environment, namespace, name, acc
 
 func WaitReady(ctx context.Context, env *e2e.Environment, namespace, name, content string) error {
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+	return WaitReadyHash(ctx, env, namespace, name, hash)
+}
+
+// WaitReadyHash also supports generated file-watched configurations, whose mode hash is stable.
+func WaitReadyHash(ctx context.Context, env *e2e.Environment, namespace, name, hash string) error {
 	if err := retry.UntilSuccess(ctx, retry.Policy{Timeout: 2 * time.Minute, Delay: time.Second, Converge: 1}, func() error {
 		d, err := env.Cluster.Kube.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {

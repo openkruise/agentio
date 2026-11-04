@@ -1,0 +1,577 @@
+diff --git a/crates/agentgateway/src/cel/types.rs b/crates/agentgateway/src/cel/types.rs
+index 7572658..a371b9a 100644
+--- a/crates/agentgateway/src/cel/types.rs
++++ b/crates/agentgateway/src/cel/types.rs
+@@ -335,6 +335,10 @@ pub struct SourceContext {
+ 	)]
+ 	#[dynamic(rename = "connectHeaders", with_value = "connect_headers_to_value")]
+ 	pub connect_headers: http::HeaderMap,
++	/// Metadata returned by the outer HBONE processor, isolated from HTTP processors.
++	#[serde(default, skip_serializing_if = "Option::is_none")]
++	#[dynamic(rename = "connectMetadata")]
++	pub connect_metadata: Option<Arc<ExtProcDynamicMetadata>>,
+ }
+ 
+ #[apply(schema!)]
+@@ -382,6 +386,7 @@ impl SourceContext {
+ 			tls,
+ 			unverified_workload,
+ 			connect_headers: http::HeaderMap::new(),
++			connect_metadata: None,
+ 		}
+ 	}
+ }
+@@ -2538,6 +2543,7 @@ pub fn full_example_executor() -> ExecutorSerde {
+ 				http::HeaderName::from_static("x-custom-header"),
+ 				http::HeaderValue::from_static("custom-value"),
+ 			)]),
++			connect_metadata: None,
+ 		}),
+ 		destination: Some(DestinationContext {
+ 			address: "10.0.0.1".parse().unwrap(),
+diff --git a/crates/agentgateway/src/cel/types_test.rs b/crates/agentgateway/src/cel/types_test.rs
+index 1de4c94..ea97a4a 100644
+--- a/crates/agentgateway/src/cel/types_test.rs
++++ b/crates/agentgateway/src/cel/types_test.rs
+@@ -79,6 +79,7 @@ fn build_test_request() -> crate::http::Request {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: http::HeaderMap::new(),
++		connect_metadata: None,
+ 	};
+ 	req.extensions_mut().insert(source);
+ 
+@@ -658,6 +659,7 @@ fn test_extension_or_direct_serialization() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: http::HeaderMap::new(),
++		connect_metadata: None,
+ 	};
+ 	let ext_or_direct: ExtensionOrDirect<SourceContext> = ExtensionOrDirect::Direct(Some(&value));
+ 	let json = serde_json::to_value(&ext_or_direct).expect("failed to serialize");
+@@ -697,6 +699,7 @@ fn test_source_connect_headers() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: headers,
++		connect_metadata: None,
+ 	};
+ 	let exec = ExecutorSerde {
+ 		source: Some(src),
+@@ -718,6 +721,7 @@ fn test_source_connect_headers() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: http::HeaderMap::new(),
++		connect_metadata: None,
+ 	};
+ 	let exec_empty = ExecutorSerde {
+ 		source: Some(src_empty),
+@@ -753,6 +757,7 @@ fn test_source_connect_headers_sensitive_redacted_in_debug() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: headers,
++		connect_metadata: None,
+ 	};
+ 	let debug = format!("{src:?}");
+ 	assert!(
+diff --git a/crates/agentgateway/src/http/authorization_tests.rs b/crates/agentgateway/src/http/authorization_tests.rs
+index 856a064..e8f0b17 100644
+--- a/crates/agentgateway/src/http/authorization_tests.rs
++++ b/crates/agentgateway/src/http/authorization_tests.rs
+@@ -191,6 +191,7 @@ fn test_network_authorization_allows_source_cidr() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: http::HeaderMap::new(),
++		connect_metadata: None,
+ 	};
+ 
+ 	assert_matches!(
+@@ -216,6 +217,7 @@ fn test_network_authorization_deny_takes_precedence() {
+ 		tls: None,
+ 		unverified_workload: None,
+ 		connect_headers: http::HeaderMap::new(),
++		connect_metadata: None,
+ 	};
+ 
+ 	assert_matches!(
+diff --git a/crates/agentgateway/src/http/ext_proc.rs b/crates/agentgateway/src/http/ext_proc.rs
+index 99fb65d..4d53d71 100644
+--- a/crates/agentgateway/src/http/ext_proc.rs
++++ b/crates/agentgateway/src/http/ext_proc.rs
+@@ -83,7 +83,7 @@ pub enum Error {
+ 
+ #[apply(schema!)]
+ #[derive(Default, ::cel::DynamicType)]
+-pub struct ExtProcDynamicMetadata(serde_json::Map<String, JsonValue>);
++pub struct ExtProcDynamicMetadata(pub(crate) serde_json::Map<String, JsonValue>);
+ 
+ #[allow(warnings)]
+ #[allow(clippy::derive_partial_eq_without_eq)]
+@@ -307,6 +307,7 @@ pub struct ExtProc {
+ impl ExtProc {
+ 	pub fn build(&self, client: PolicyClient) -> ExtProcRequest {
+ 		ExtProcRequest {
++			identity: Arc::new(()),
+ 			ext_proc: Some(ExtProcInstance::new(
+ 				client,
+ 				self.target.clone(),
+@@ -347,6 +348,7 @@ impl crate::store::HasExpressions for ExtProc {
+ 
+ #[derive(Debug)]
+ pub struct ExtProcRequest {
++	identity: Arc<()>,
+ 	ext_proc: Option<ExtProcInstance>,
+ }
+ 
+@@ -358,8 +360,12 @@ impl ExtProcRequest {
+ 		let Some(ext_proc) = &mut self.ext_proc else {
+ 			return Ok(PolicyResponse::default());
+ 		};
+-		let r = std::mem::take(req);
+-		let (new_req, pr) = ext_proc.mutate_request(r).await?;
++		let mut r = std::mem::take(req);
++		r.extensions_mut()
++			.insert(crate::proxy::hbone_ext_proc::ActiveProcessor(
++				self.identity.clone(),
++			));
++		let (new_req, pr) = Box::pin(ext_proc.mutate_request(r)).await?;
+ 		*req = new_req;
+ 		let pr = pr.unwrap_or_default();
+ 		pol_result!(
+diff --git a/crates/agentgateway/src/http/ext_proc/mutation.rs b/crates/agentgateway/src/http/ext_proc/mutation.rs
+index 4b85772..15ee147 100644
+--- a/crates/agentgateway/src/http/ext_proc/mutation.rs
++++ b/crates/agentgateway/src/http/ext_proc/mutation.rs
+@@ -123,9 +123,11 @@ pub(super) async fn handle_response_for_request_mutation(
+ ) -> Result<(bool, bool), Error> {
+ 	if let Some(dm) = &presp.dynamic_metadata {
+ 		if let Some(req) = req.as_mut() {
+-			if let Err(e) = extract_dynamic_metadata(req, dm) {
+-				warn!("Failed to extract ext_proc dynamic metadata: {}", e);
+-			}
++			extract_dynamic_metadata(req, dm)?;
++		} else if dm.fields.contains_key("agentio.route") {
++			return Err(Error::MetadataConversion(
++				"EPE target arrived after request dispatch".into(),
++			));
+ 		} else if !dm.fields.is_empty() {
+ 			warn!(
+ 				"ext_proc server sent dynamic_metadata after headers were processed; \
+@@ -374,6 +376,7 @@ pub(crate) fn extract_dynamic_metadata(
+ 	req: &mut http::Request,
+ 	metadata: &prost_wkt_types::Struct,
+ ) -> Result<(), Error> {
++	crate::proxy::hbone_ext_proc::pin_authorized_target(req, metadata)?;
+ 	merge_dynamic_metadata(req.extensions_mut(), metadata)
+ }
+ 
+diff --git a/crates/agentgateway/src/proxy/gateway.rs b/crates/agentgateway/src/proxy/gateway.rs
+index 65134db..2e2f899 100644
+--- a/crates/agentgateway/src/proxy/gateway.rs
++++ b/crates/agentgateway/src/proxy/gateway.rs
+@@ -633,7 +633,8 @@ impl Gateway {
+ 				}
+ 			},
+ 			TunnelProtocol::HboneGateway => {
+-				let err = Self::terminate_gateway_hbone(inputs, raw_stream, policies, drain).await;
++				let err =
++					Self::terminate_gateway_hbone(bind_name, inputs, raw_stream, policies, drain).await;
+ 				if let Err(e) = err {
+ 					warn!(src.addr = %peer_addr, "hbone error: {e}");
+ 				}
+@@ -909,6 +910,9 @@ impl Gateway {
+ 		if let Some(ch) = stream.ext_mut().remove::<ConnectHeaders>() {
+ 			src.connect_headers = ch.0;
+ 		}
++		if let Some(ctx) = stream.ext::<super::hbone_ext_proc::HboneContext>() {
++			src = ctx.source.clone();
++		}
+ 		if let Some(network_authorization) = policies.network_authorization.as_ref()
+ 			&& let Err(e) = network_authorization.apply(&crate::cel::Executor::new_tcp(Some(&src), &dst))
+ 		{
+@@ -1155,6 +1159,10 @@ impl Gateway {
+ 			source.connect_headers = existing.connect_headers.clone();
+ 		}
+ 		stream.ext_mut().insert(source);
++		if let Some(ctx) = stream.ext::<super::hbone_ext_proc::HboneContext>() {
++			let source = ctx.source.clone();
++			stream.ext_mut().insert(source);
++		}
+ 		let target_address = stream.target_address();
+ 		let proxy = super::tcpproxy::TCPProxy {
+ 			bind_name,
+@@ -1240,6 +1248,7 @@ impl Gateway {
+ 			};
+ 			let ch = start.client_hello();
+ 			let sni = ch.server_name().unwrap_or_default();
++			let hbone_termination = super::hbone_ext_proc::tls_termination(&ext, sni)?;
+ 			let egress_mode = substrate::authorize_tls(
+ 				&super::httpproxy::PolicyClient::new(inp.clone()),
+ 				&mut ext,
+@@ -1247,15 +1256,19 @@ impl Gateway {
+ 			)
+ 			.await?;
+ 			let best = listeners
+-				.best_match_filtered(sni, |protocol| match egress_mode {
+-					Some(EgressTlsMode::Intercept) => {
+-						matches!(protocol, ListenerProtocol::HTTPS(_))
++				.best_match_filtered(sni, |protocol| match hbone_termination {
++					Some(true) => matches!(protocol, ListenerProtocol::HTTPS(_)),
++					Some(false) => matches!(protocol, ListenerProtocol::TLS(None)),
++					None => match egress_mode {
++						Some(EgressTlsMode::Intercept) => {
++							matches!(protocol, ListenerProtocol::HTTPS(_))
++						},
++						Some(EgressTlsMode::Passthrough) => matches!(protocol, ListenerProtocol::TLS(None)),
++						None => matches!(
++							protocol,
++							ListenerProtocol::HTTPS(_) | ListenerProtocol::TLS(_)
++						),
+ 					},
+-					Some(EgressTlsMode::Passthrough) => matches!(protocol, ListenerProtocol::TLS(None)),
+-					None => matches!(
+-						protocol,
+-						ListenerProtocol::HTTPS(_) | ListenerProtocol::TLS(_)
+-					),
+ 				})
+ 				.ok_or(anyhow!("no TLS listener match for {sni}"))?;
+ 			if let Some(mode) = egress_mode {
+@@ -1425,6 +1438,7 @@ impl Gateway {
+ 	}
+ 
+ 	async fn terminate_gateway_hbone(
++		bind_name: BindKey,
+ 		inp: Arc<ProxyInputs>,
+ 		raw_stream: Socket,
+ 		policies: FrontendPolices,
+@@ -1444,7 +1458,9 @@ impl Gateway {
+ 		debug!("accepted connection");
+ 		let cfg = inp.cfg.clone();
+ 		let request_handler = move |req, ext, graceful| {
+-			Self::serve_gateway_connect(inp.clone(), req, ext, graceful).instrument(info_span!("inbound"))
++			let hbone_ext_proc = Self::frontend_policies_for_bind(&bind_name, &inp).hbone_ext_proc;
++			Self::serve_gateway_connect(inp.clone(), req, ext, graceful, hbone_ext_proc.clone())
++				.instrument(info_span!("inbound"))
+ 		};
+ 
+ 		let (_, force_shutdown) = watch::channel(());
+@@ -1654,8 +1670,9 @@ impl Gateway {
+ 		req: agent_hbone::server::H2Request,
+ 		ext: Arc<Extension>,
+ 		drain: DrainWatcher,
++		processor: Option<Arc<super::hbone_ext_proc::HboneExtProc>>,
+ 	) {
+-		debug!(?req, "received request");
++		debug!(target = %req.uri(), "received HBONE CONNECT");
+ 
+ 		let uri = req.uri();
+ 		let address = HboneAddress::try_from(uri)
+@@ -1690,6 +1707,19 @@ impl Gateway {
+ 			};
+ 			return;
+ 		};
++		let context = if let Some(processor) = processor {
++			match super::hbone_ext_proc::authorize(pi.clone(), req.uri(), req.headers(), &ext, &processor)
++				.await
++			{
++				Ok(context) => Some(context),
++				Err(status) => {
++					let _ = req.send_error(build_response(status));
++					return;
++				},
++			}
++		} else {
++			None
++		};
+ 		let Ok(resp) = req.send_response(build_response(StatusCode::OK)).await else {
+ 			warn!("failed to send response");
+ 			return;
+@@ -1700,14 +1730,11 @@ impl Gateway {
+ 			drain_tx: None,
+ 		};
+ 
+-		Self::proxy_bind(
+-			bind.key.clone(),
+-			bind.protocol,
+-			Socket::from_hbone(ext, socket_addr, con),
+-			pi,
+-			drain,
+-		)
+-		.await
++		let mut socket = Socket::from_hbone(ext, socket_addr, con);
++		if let Some(context) = context {
++			socket.ext_mut().insert(context);
++		}
++		Self::proxy_bind(bind.key.clone(), bind.protocol, socket, pi, drain).await
+ 	}
+ }
+ 
+diff --git a/crates/agentgateway/src/proxy/httpproxy.rs b/crates/agentgateway/src/proxy/httpproxy.rs
+index 26e89e0..419d506 100644
+--- a/crates/agentgateway/src/proxy/httpproxy.rs
++++ b/crates/agentgateway/src/proxy/httpproxy.rs
+@@ -725,7 +725,19 @@ impl HTTPProxy {
+ 			.copy::<TCPConnectionInfo>(req.extensions_mut())
+ 			.expect("tcp connection must be set")
+ 			.clone();
+-		connection.copy::<TLSConnectionInfo>(req.extensions_mut());
++		// Outer HBONE mTLS does not make the tunneled HTTP request HTTPS.
++		if connection
++			.get::<super::hbone_ext_proc::HboneContext>()
++			.is_none()
++			|| matches!(
++				self
++					.selected_listener
++					.as_ref()
++					.map(|listener| &listener.protocol),
++				Some(ListenerProtocol::HTTPS(_))
++			) {
++			connection.copy::<TLSConnectionInfo>(req.extensions_mut());
++		}
+ 		if connection
+ 			.copy::<ActorIdentity>(req.extensions_mut())
+ 			.is_some()
+@@ -846,6 +858,24 @@ impl HTTPProxy {
+ 		normalize_uri(log.tls_info.as_ref(), &mut req)
+ 			.map_err(ProxyError::Processing)
+ 			.snapshot_on_err(log, &mut req)?;
++		if req.method() != ::http::Method::CONNECT
++			&& req
++				.extensions()
++				.get::<cel::SourceContext>()
++				.is_some_and(|source| source.connect_metadata.is_some())
++			&& log
++				.tls_info
++				.as_ref()
++				.and_then(|tls| tls.server_name.as_deref())
++				.is_some_and(|sni| {
++					req
++						.uri()
++						.host()
++						.is_some_and(|host| !sni.eq_ignore_ascii_case(host))
++				}) {
++			return Err(ProxyResponse::Error(ProxyError::AuthorizationFailed))
++				.snapshot_on_err(log, &mut req);
++		}
+ 		set_destination_hostname(&mut req);
+ 		let connect_upgrade = if req.method() == ::http::Method::CONNECT {
+ 			req.extensions_mut().remove::<OnUpgrade>()
+@@ -3164,6 +3194,22 @@ async fn make_backend_call(
+ 		});
+ 		return Ok(resp);
+ 	}
++	if req
++		.extensions()
++		.get::<super::hbone_ext_proc::AuthorizedTargetOwner>()
++		.is_some()
++		&& let Some(tls) = Arc::make_mut(&mut backend_call.backend_policies)
++			.backend_tls
++			.as_mut()
++		&& tls.hostname_override.is_none()
++	{
++		// EPE pins the dial IP; certificate verification still uses the authorized HTTP host.
++		tls.hostname_override = Some(
++			rustls_pki_types::ServerName::try_from(http::get_host(&req)?.to_string()).map_err(
++				|error| ProxyError::Processing(anyhow!("invalid authorized TLS hostname: {error}")),
++			)?,
++		);
++	}
+ 	let mut transport = build_backend_transport(&inputs, &backend_call, hbone_source).await?;
+ 	if callout && !matches!(backend, Backend::Service(..)) {
+ 		transport = inputs
+diff --git a/crates/agentgateway/src/proxy/mod.rs b/crates/agentgateway/src/proxy/mod.rs
+index 5f71a36..da205e6 100644
+--- a/crates/agentgateway/src/proxy/mod.rs
++++ b/crates/agentgateway/src/proxy/mod.rs
+@@ -1,6 +1,7 @@
+ pub mod admission;
+ pub mod dtrace;
+ mod gateway;
++pub mod hbone_ext_proc;
+ pub mod httpproxy;
+ pub mod policy_host;
+ pub mod proxy_protocol;
+diff --git a/crates/agentgateway/src/store/binds.rs b/crates/agentgateway/src/store/binds.rs
+index 2e7408e..7191518 100644
+--- a/crates/agentgateway/src/store/binds.rs
++++ b/crates/agentgateway/src/store/binds.rs
+@@ -165,6 +165,7 @@ pub struct FrontendPolices {
+ 	pub tcp: Option<frontend::TCP>,
+ 	pub network_authorization: Option<NetworkAuthorizationSet>,
+ 	pub network_ext_authz: Option<Arc<ext_authz::ExtAuthz>>,
++	pub hbone_ext_proc: Option<Arc<crate::proxy::hbone_ext_proc::HboneExtProc>>,
+ 	pub substrate_egress_actor_resolution: Option<substrate::EgressActorResolution>,
+ 	pub proxy: Option<frontend::Proxy>,
+ 	pub connect: Option<frontend::Connect>,
+@@ -196,6 +197,9 @@ impl FrontendPolices {
+ 			FrontendPolicy::NetworkExtAuthz(p) => {
+ 				self.network_ext_authz.get_or_insert_with(|| p.clone());
+ 			},
++			FrontendPolicy::HboneExtProc(p) => {
++				self.hbone_ext_proc.get_or_insert_with(|| p.clone());
++			},
+ 			FrontendPolicy::SubstrateEgressActorResolution(p) => {
+ 				self
+ 					.substrate_egress_actor_resolution
+@@ -222,6 +226,15 @@ impl FrontendPolices {
+ 		}
+ 	}
+ 	pub fn register_cel_expressions(&self, ctx: &mut ContextBuilder) {
++		if let Some(p) = &self.hbone_ext_proc {
++			for expression in p
++				.request_attributes
++				.iter()
++				.flat_map(|attributes| attributes.values())
++			{
++				ctx.register_expression(expression);
++			}
++		}
+ 		if let Some(frontend::LoggingPolicy {
+ 			preset: _,
+ 			filter,
+@@ -4320,6 +4333,7 @@ mod tests {
+ 						tls: None,
+ 						unverified_workload: None,
+ 						connect_headers: http::HeaderMap::new(),
++						connect_metadata: None,
+ 					}
+ 				))
+ 				.is_ok()
+@@ -4335,6 +4349,7 @@ mod tests {
+ 						tls: None,
+ 						unverified_workload: None,
+ 						connect_headers: http::HeaderMap::new(),
++						connect_metadata: None,
+ 					}
+ 				))
+ 				.is_ok()
+@@ -4350,6 +4365,7 @@ mod tests {
+ 						tls: None,
+ 						unverified_workload: None,
+ 						connect_headers: http::HeaderMap::new(),
++						connect_metadata: None,
+ 					}
+ 				))
+ 				.is_err()
+diff --git a/crates/agentgateway/src/types/agent.rs b/crates/agentgateway/src/types/agent.rs
+index 692d78e..89b65f1 100644
+--- a/crates/agentgateway/src/types/agent.rs
++++ b/crates/agentgateway/src/types/agent.rs
+@@ -1598,6 +1598,7 @@ impl<'de> serde::Deserialize<'de> for SimpleBackendReference {
+ #[derive(Debug, Clone, serde::Serialize)]
+ #[serde(rename_all = "camelCase")]
+ #[cfg_attr(feature = "schema", derive(JsonSchema))]
++#[cfg_attr(feature = "schema", schemars(with = "BackendReferenceInput"))]
+ pub struct SimpleBackendReferenceWithPolicies {
+ 	#[serde(flatten)]
+ 	#[cfg_attr(
+@@ -1655,6 +1656,28 @@ impl<'de> serde::Deserialize<'de> for SimpleBackendReferenceWithPoliciesAndPath
+ 	}
+ }
+ 
++// Keep schema generation and the flattened wire decoder on the same fields.
++#[derive(Debug, Clone, serde::Deserialize)]
++#[cfg_attr(feature = "schema", derive(JsonSchema))]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct BackendReferenceInput {
++	#[serde(default)]
++	pub name: Option<NamespacedHostname>,
++	#[serde(default)]
++	pub port: Option<u16>,
++	#[serde(default)]
++	pub host: Option<TargetOrUri>,
++	#[serde(default)]
++	pub backend: Option<BackendKey>,
++	#[serde(default, skip_serializing_if = "Vec::is_empty")]
++	#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
++	#[cfg_attr(
++		feature = "schema",
++		schemars(with = "Option<crate::types::local::SimpleLocalBackendPolicies>")
++	)]
++	pub policies: Vec<BackendTrafficPolicy>,
++}
++
+ fn deserialize_backend_reference<'de, D>(
+ 	deserializer: D,
+ ) -> Result<
+@@ -1667,36 +1690,13 @@ fn deserialize_backend_reference<'de, D>(
+ where
+ 	D: serde::Deserializer<'de>,
+ {
+-	#[derive(Debug, Clone, serde::Deserialize)]
+-	#[serde(rename_all = "camelCase", deny_unknown_fields)]
+-	pub struct Input {
+-		// Keep these wire fields explicit instead of flattening
+-		// SimpleLocalBackendWithSchema. Outer structs may use
+-		// deny_unknown_fields with #[serde(flatten)] target; if this helper
+-		// hides `host` behind another flattened enum, serde can report `host`
+-		// as unknown before this type gets to consume it.
+-		#[serde(default)]
+-		pub name: Option<NamespacedHostname>,
+-		#[serde(default)]
+-		pub port: Option<u16>,
+-		#[serde(default)]
+-		pub host: Option<TargetOrUri>,
+-		#[serde(default)]
+-		pub backend: Option<BackendKey>,
+-
+-		#[serde(default, skip_serializing_if = "Vec::is_empty")]
+-		#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
+-		/// Backend policies used when connecting to the service.
+-		pub policies: Vec<BackendTrafficPolicy>,
+-	}
+-
+-	let Input {
++	let BackendReferenceInput {
+ 		name,
+ 		port,
+ 		host,
+ 		backend,
+ 		mut policies,
+-	} = Input::deserialize(deserializer)?;
++	} = BackendReferenceInput::deserialize(deserializer)?;
+ 
+ 	let service = match (name, port) {
+ 		(Some(name), Some(port)) => Some((name, port)),
+@@ -2956,6 +2956,7 @@ pub enum FrontendPolicy {
+ 	TCP(frontend::TCP),
+ 	NetworkAuthorization(frontend::NetworkAuthorization),
+ 	NetworkExtAuthz(Arc<ext_authz::ExtAuthz>),
++	HboneExtProc(Arc<crate::proxy::hbone_ext_proc::HboneExtProc>),
+ 	SubstrateEgressActorResolution(crate::http::substrate::EgressActorResolution),
+ 	Proxy(frontend::Proxy),
+ 	Connect(frontend::Connect),
+diff --git a/crates/agentgateway/src/types/local.rs b/crates/agentgateway/src/types/local.rs
+index 49c7cd6..544d749 100644
+--- a/crates/agentgateway/src/types/local.rs
++++ b/crates/agentgateway/src/types/local.rs
+@@ -3045,6 +3045,9 @@ struct LocalFrontendPolicies {
+ 	/// HTTP external authorization performed once for each downstream network connection.
+ 	#[serde(default)]
+ 	pub network_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
++	/// External processing of each HBONE CONNECT before accepting the tunnel.
++	#[serde(default)]
++	pub hbone_ext_proc: Option<crate::proxy::hbone_ext_proc::HboneExtProc>,
+ 	/// Validate the originating actor before accepting a CONNECT tunnel.
+ 	#[serde(default)]
+ 	pub substrate_egress_actor_resolution: Option<crate::http::substrate::EgressActorResolution>,
+@@ -5468,6 +5471,7 @@ async fn split_frontend_policies(
+ 		tcp,
+ 		network_authorization,
+ 		network_ext_authz,
++		hbone_ext_proc,
+ 		substrate_egress_actor_resolution,
+ 		proxy_protocol,
+ 		connect,
+@@ -5504,6 +5508,12 @@ async fn split_frontend_policies(
+ 			"substrateEgressActorResolution",
+ 		);
+ 	}
++	if let Some(p) = hbone_ext_proc {
++		if p.timeout.is_zero() {
++			bail!("frontendPolicies.hboneExtProc.timeout must be positive");
++		}
++		add(FrontendPolicy::HboneExtProc(Arc::new(p)), "hboneExtProc");
++	}
+ 	if let Some(p) = proxy_protocol {
+ 		add(FrontendPolicy::Proxy(p), "proxy");
+ 	}

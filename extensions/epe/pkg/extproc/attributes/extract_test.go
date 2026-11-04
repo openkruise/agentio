@@ -701,3 +701,38 @@ func TestExtractUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractAgentgatewayRouteCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   any
+		invalid bool
+	}{
+		{name: "empty", value: []any{}},
+		{name: "IPv4 and IPv6", value: []any{"192.0.2.10:443", "[2001:db8::1]:443"}},
+		{name: "not a list", value: "192.0.2.10:443", invalid: true},
+		{name: "invalid trailing candidate", value: []any{"192.0.2.10:443", "api.example:443"}, invalid: true},
+		{name: "zero port", value: []any{"192.0.2.10:0"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target, err := ExtractUpstream(makeAttrs(t, map[string]any{AttrRouteCandidates: tc.value}))
+			if (err != nil) != tc.invalid {
+				t.Fatalf("target=%v error=%v", target, err)
+			}
+			if tc.name == "empty" && target != nil {
+				t.Fatal("empty candidates must preserve DNS routing")
+			}
+			if tc.name == "IPv4 and IPv6" && (target == nil ||
+				(target.Address.String() != "192.0.2.10:443" && target.Address.String() != "[2001:db8::1]:443")) {
+				t.Fatalf("selected outside configured endpoints: %v", target)
+			}
+		})
+	}
+	target, err := ExtractUpstream(makeAttrs(t, map[string]any{
+		FilterStateRouteUpstream: "192.0.2.20:8443",
+		AttrRouteCandidates:      []any{"192.0.2.10:443"},
+	}))
+	if err != nil || target.Address.String() != "192.0.2.20:8443" {
+		t.Fatalf("explicit route must retain priority: %v, %v", target, err)
+	}
+}

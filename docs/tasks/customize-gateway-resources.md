@@ -60,6 +60,8 @@ Each key contains a Strategic Merge Patch applied after template rendering:
 
 Containers and environment variables merge by `name`; a container entry with a new name adds a sidecar. Use `agentio-proxy` for the Envoy gateway and `agentgateway` for the native agentgateway. Strategic Merge Patch directives such as `$patch: delete` are supported. Patches may modify labels and annotations, but not resource identity or ownership metadata such as name, namespace, owner references, or finalizers.
 
+The same ConfigMap may also contain `data.config` for Agentio egress settings or `data["config.yaml"]` for native agentgateway configuration. These keys are excluded from resource patching. Envoy resource-only ConfigMaps may omit `config` to use default proxy settings; an explicitly empty or invalid `config` retains the last valid proxy configuration. Agentgateway requires either `config.yaml` or translated `config`; see [Deploy agentgateway](deploy-agentgateway.md).
+
 ## Set GatewayClass defaults
 
 Create a ConfigMap in the control-plane namespace (`agentio-system` by default) with the `gateway.agentio.kruise.io/defaults-for-class` label:

@@ -20,6 +20,7 @@ package attributes
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/netip"
 	"strings"
 
@@ -59,6 +60,8 @@ const (
 	FilterStateSandboxToken    = "filter_state['sandbox.token']"
 	FilterStateSandboxMetadata = "filter_state['agentio.sandbox.metadata']"
 	FilterStateRouteUpstream   = "filter_state['agentio.route.upstream']"
+	// AttrRouteCandidates carries agentgateway's static endpoints for selection before authorization.
+	AttrRouteCandidates = "agentio.route.candidates"
 
 	AttrDestinationPort    = "destination.port"
 	AttrDestinationAddress = "destination.address"
@@ -279,17 +282,30 @@ func extractHeaderMap(headers *extProcPb.HttpHeaders) map[string]string {
 
 // ExtractUpstream parses the gateway-selected target, returning nil when absent.
 func ExtractUpstream(attrs map[string]*structpb.Struct) (*filter.UpstreamTarget, error) {
-	value, present := attrs[ExtProcAttrsKey].GetFields()[FilterStateRouteUpstream]
-	if !present {
+	fields := attrs[ExtProcAttrsKey].GetFields()
+	var candidates []*structpb.Value
+	if value, present := fields[FilterStateRouteUpstream]; present {
+		candidates = []*structpb.Value{value}
+	} else if value, present := fields[AttrRouteCandidates]; present {
+		if value.GetListValue() == nil {
+			return nil, fmt.Errorf("route candidates must be a list")
+		}
+		candidates = value.GetListValue().GetValues()
+	}
+	if len(candidates) == 0 {
 		return nil, nil
 	}
-	address, err := netip.ParseAddrPort(value.GetStringValue())
-	if err != nil {
-		return nil, fmt.Errorf("invalid route upstream: %w", err)
+	addresses := make([]netip.AddrPort, len(candidates))
+	for i, candidate := range candidates {
+		address, err := netip.ParseAddrPort(candidate.GetStringValue())
+		if err != nil {
+			return nil, fmt.Errorf("invalid route upstream: %w", err)
+		}
+		if err := (&filter.RouteMutation{Upstream: &filter.UpstreamTarget{Address: &address}}).Validate(); err != nil {
+			return nil, err
+		}
+		addresses[i] = address
 	}
-	target := &filter.UpstreamTarget{Address: &address}
-	if err := (&filter.RouteMutation{Upstream: target}).Validate(); err != nil {
-		return nil, err
-	}
-	return target, nil
+	address := addresses[rand.IntN(len(addresses))]
+	return &filter.UpstreamTarget{Address: &address}, nil
 }

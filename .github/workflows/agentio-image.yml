@@ -28,6 +28,9 @@ on:
       porter_image:
         description: Immutable Porter image reference
         value: ${{ jobs.build-images.outputs.porter_image }}
+      agentgateway_image:
+        description: Immutable agentgateway v1.7.0 image with the Agentio HBONE adapter
+        value: ${{ jobs.build-images.outputs.agentgateway_image }}
       epe_image:
         description: Immutable EPE image reference
         value: ${{ jobs.build-images.outputs.epe_image }}
@@ -63,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-        image: [agentio-gateway, agentiod, agentio-epe, agentio-porter]
+        image: [agentio-gateway, agentiod, agentio-epe, agentio-porter, agentio-agentgateway]
         include:
           - image: agentio-gateway
             dockerfile: docker/Dockerfile.gateway
@@ -73,6 +76,8 @@ jobs:
             dockerfile: extensions/epe/docker/Dockerfile
           - image: agentio-porter
             dockerfile: extensions/porter/docker/Dockerfile
+          - image: agentio-agentgateway
+            dockerfile: docker/Dockerfile.agentgateway
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,8 +114,8 @@ jobs:
         run: |
           docker run --rm "$IMAGE" version
           ./bin/test_network_limits.sh "$IMAGE"
-      - name: Smoke-test Porter candidate
-        if: matrix.image == 'agentio-porter'
+      - name: Smoke-test Porter and agentgateway candidates
+        if: matrix.image == 'agentio-porter' || matrix.image == 'agentio-agentgateway'
         env:
           IMAGE: ${{ env.HUB }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
         run: docker run --rm --read-only "$IMAGE" --version
@@ -145,6 +150,7 @@ jobs:
       agentiod_image: ${{ steps.images.outputs.agentiod_image }}
       epe_image: ${{ steps.images.outputs.epe_image }}
       porter_image: ${{ steps.images.outputs.porter_image }}
+      agentgateway_image: ${{ steps.images.outputs.agentgateway_image }}
       ztunnel_image: ${{ steps.images.outputs.ztunnel_image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -247,6 +253,7 @@ jobs:
           merge_image agentiod_image agentiod
           merge_image epe_image agentio-epe
           merge_image porter_image agentio-porter
+          merge_image agentgateway_image agentio-agentgateway
           build_image ztunnel_image ztunnel docker/Dockerfile.ztunnel ztunnel-context \
             --build-arg "ZTUNNEL_VERSION=$ZTUNNEL_SOURCE_SHA" \
             --label "org.opencontainers.image.source=https://github.com/${ZTUNNEL_SOURCE_REPOSITORY}" \

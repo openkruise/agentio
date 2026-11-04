@@ -40,6 +40,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayclientv1 "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1"
 
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
 	"github.com/openkruise/agentio/pkg/kube/kclient"
@@ -240,6 +241,12 @@ func (d *Deployer) Run(ctx context.Context) {
 	if !d.waitForGatewayCRD(ctx.Done()) {
 		return
 	}
+	for _, source := range []krt.Syncer{d.options.Agentgateway.Config, d.options.Agentgateway.Services,
+		d.options.Agentgateway.Endpoints, d.options.Agentgateway.Secrets} {
+		if source != nil && !source.WaitUntilSynced(ctx.Done()) {
+			return
+		}
+	}
 	hostname, _ := os.Hostname()
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
@@ -339,6 +346,9 @@ func (d *Deployer) runControllers(leaderCtx context.Context) {
 	)
 	// Unregister this cycle's requeueAll handler so a dead queue stops receiving values reloads.
 	defer deregisterRequeueAll()
+	controller.agentgatewaySources = d.options.Agentgateway
+	unregisterSources := controller.watchAgentgatewaySources()
+	defer unregisterSources()
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
