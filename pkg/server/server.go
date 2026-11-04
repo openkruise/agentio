@@ -359,7 +359,6 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		features.PushConcurrency,
 		features.RequestRateLimit,
 		xds.FlowControlOptions{
-			ClientClasses:    features.AllowedXDSClientClasses(),
 			InitialAdmission: features.XDSInitialAdmissionTimeout,
 			RateLimit:        features.XDSRateLimitTimeout,
 			Send:             features.XDSSendTimeout,

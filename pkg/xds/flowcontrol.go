@@ -26,14 +26,11 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	"github.com/openkruise/agentio/pkg/model"
 )
 
 var errRequestRateLimited = errors.New("request rate limit exceeded")
 
 type flowControlConfig struct {
-	clientClasses    []model.ClientClass
 	concurrency      int
 	requestRateLimit float64
 	admissionWait    time.Duration

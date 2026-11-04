@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -79,7 +78,6 @@ var clientClasses = [...]model.ClientClass{
 
 // FlowControlOptions bounds Pod streams, admission, sends, and ACK progress.
 type FlowControlOptions struct {
-	ClientClasses    []string
 	InitialAdmission time.Duration
 	RateLimit        time.Duration
 	Send             time.Duration
@@ -117,12 +115,6 @@ func NewServer(
 	}
 	if len(flowOptions) == 1 {
 		configured := flowOptions[0]
-		for _, class := range configured.ClientClasses {
-			if !slices.Contains(clientClasses[:], model.ClientClass(class)) {
-				return nil, fmt.Errorf("unknown ADS client class %q", class)
-			}
-			flowConfig.clientClasses = append(flowConfig.clientClasses, model.ClientClass(class))
-		}
 		if configured.InitialAdmission <= 0 || configured.RateLimit <= 0 || configured.Send <= 0 ||
 			configured.ACK <= 0 {
 			return nil, fmt.Errorf("flow-control timeouts must be positive")
@@ -271,14 +263,6 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	}
 	if err := scope.Validate(); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
-	}
-	if allowed := s.flow.config.clientClasses; len(allowed) > 0 && !slices.Contains(allowed, scope.Class) {
-		metrics.Default.RecordXDSRequestRejection()
-		return status.Errorf(
-			codes.PermissionDenied,
-			"ADS client class %q is not served by this control-plane group",
-			scope.Class,
-		)
 	}
 	if scope.Class == model.ClientDedicatedZTunnel {
 		releaseStream, err := s.flow.admitPodStream()

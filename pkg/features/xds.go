@@ -19,7 +19,6 @@ import (
 	"math"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"istio.io/istio/pkg/env"
@@ -27,12 +26,6 @@ import (
 )
 
 var (
-	// XDSClientClasses limits ADS admission by authenticated client class.
-	XDSClientClasses = env.Register(
-		"AGENTIO_XDS_CLIENT_CLASSES",
-		"",
-		"Comma-separated authenticated ADS client classes accepted by this process: shared-ztunnel,dedicated-ztunnel,egress-gateway,agentio-egress,epe. Empty accepts all classes. Does not restrict certificate issuance.",
-	).Get()
 	KRTDebounceAfter = env.Register(
 		"AGENTIO_KRT_DEBOUNCE",
 		200*time.Millisecond,
@@ -110,13 +103,6 @@ var (
 )
 
 func validateXDS() error {
-	for _, class := range AllowedXDSClientClasses() {
-		switch class {
-		case "shared-ztunnel", "dedicated-ztunnel", "egress-gateway", "agentio-egress", "epe":
-		default:
-			return fmt.Errorf("invalid AGENTIO_XDS_CLIENT_CLASSES entry %q", class)
-		}
-	}
 	if xdsMaxPodStreamsErr != nil {
 		return fmt.Errorf("parse AGENTIO_XDS_MAX_POD_STREAMS: %w", xdsMaxPodStreamsErr)
 	}
@@ -171,18 +157,6 @@ func validateXDS() error {
 		return fmt.Errorf("client queue size must be positive")
 	}
 	return nil
-}
-
-// AllowedXDSClientClasses returns the configured classes; nil accepts all classes.
-func AllowedXDSClientClasses() []string {
-	if XDSClientClasses == "" {
-		return nil
-	}
-	var classes []string
-	for class := range strings.SplitSeq(XDSClientClasses, ",") {
-		classes = append(classes, strings.TrimSpace(class))
-	}
-	return classes
 }
 
 func defaultPushConcurrency() int {

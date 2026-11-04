@@ -131,7 +131,6 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server&#39;s own certificate. |
 | <code>AGENTIO_WORKLOAD_CERT_RENEW_BEFORE</code> | Duration | <code>8h0m0s</code> | How long before expiry the xDS server re-issues its own certificate. |
 | <code>AGENTIO_XDS_ACK_TIMEOUT</code> | String | <code>5s</code> | Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive. |
-| <code>AGENTIO_XDS_CLIENT_CLASSES</code> | String | empty | Comma-separated authenticated ADS client classes accepted by this process: shared-ztunnel,dedicated-ztunnel,egress-gateway,agentio-egress,epe. Empty accepts all classes. Does not restrict certificate issuance. |
 | <code>AGENTIO_XDS_CPU_BUDGET</code> | String | empty | CPU budget for automatic new xDS stream admission, as a positive Kubernetes quantity (for example 500m or 2). The chart uses the CPU limit, falling back to the CPU request. Empty uses min(NumCPU, GOMAXPROCS); an explicit budget is also bounded by that runtime CPU count. |
 | <code>AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT</code> | String | <code>1s</code> | Maximum wait for a new stream initialization slot before authentication; must be positive. |
 | <code>AGENTIO_XDS_MAX_POD_STREAMS</code> | String | <code>0</code> | Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity. |
@@ -265,24 +264,6 @@ $ curl --request PUT \
 `PUT /debug/logging` remains available and changes the `default` scope. The default scope covers standard-library, Kubernetes dependency, and other unscoped logs; it does not overwrite levels already assigned to registered components. At startup, `AGENTIO_LOG_LEVEL` initializes the default and every registered component to the same value.
 
 Loopback requests do not require credentials. Requests from any other address must pass the same TokenReview and root-namespace authorization as `/debug/configz`. A successful change returns HTTP 202 and affects existing loggers immediately. It is process-local and is not persisted: after an `agentiod` restart, `AGENTIO_LOG_LEVEL` supplies the level again.
-
-## Separate ADS serving groups
-
-`AGENTIO_XDS_CLIENT_CLASSES` restricts ADS admission using the authenticated and
-validated client scope. Empty accepts all existing client classes. For separate
-Deployments, use `shared-ztunnel,dedicated-ztunnel` for the ztunnel group and
-`egress-gateway,agentio-egress,epe` for the Gateway/Porter/EPE group. A client sent
-to the wrong group receives `PermissionDenied` before resource subscription.
-Certificate issuance is unaffected.
-
-When using the chart's `agentiod.policyPool`, its environment inherits `agentiod.env`. If the main group sets `AGENTIO_XDS_CLIENT_CLASSES` to the ztunnel classes, override the same setting in `agentiod.policyPool.env` with `egress-gateway,agentio-egress,epe` so policy clients can connect.
-
-Give the Deployments independent Service selectors and resource budgets, and
-point each client at the appropriate Service. `AGENTIO_SERVICE_NAME` must match
-each group's Service so the serving certificate covers its DNS name. The groups
-can share the existing CA, trust bundle, configuration, and RBAC. They still
-independently watch and compile Kubernetes resources, so this separates serving
-pressure rather than Kubernetes API or compilation dependencies.
 
 ## See also
 

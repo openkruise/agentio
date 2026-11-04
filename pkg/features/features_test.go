@@ -18,7 +18,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +203,6 @@ func TestValidateKubernetesAPILimits(t *testing.T) {
 
 func setValidFeatures(t *testing.T) {
 	t.Helper()
-	test.SetForTest(t, &XDSClientClasses, "")
 	test.SetForTest(t, &KubernetesAPIQPS, 80)
 	test.SetForTest(t, &KubernetesAPIBurst, 160)
 	test.SetForTest(t, &KRTDebounceAfter, time.Millisecond)
@@ -239,32 +237,6 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
-}
-
-func TestXDSClientClasses(t *testing.T) {
-	for _, tc := range []struct {
-		value string
-		want  []string
-		valid bool
-	}{
-		{"", nil, true},
-		{"shared-ztunnel,dedicated-ztunnel", []string{"shared-ztunnel", "dedicated-ztunnel"}, true},
-		{"egress-gateway, agentio-egress,epe", []string{"egress-gateway", "agentio-egress", "epe"}, true},
-		{"dedicated-ztunnel,", nil, false},
-		{"unknown", nil, false},
-	} {
-		t.Run(tc.value, func(t *testing.T) {
-			setValidFeatures(t)
-			test.SetForTest(t, &XDSClientClasses, tc.value)
-			err := Validate()
-			if (err == nil) != tc.valid {
-				t.Fatalf("Validate() = %v, valid=%t", err, tc.valid)
-			}
-			if tc.valid && !slices.Equal(AllowedXDSClientClasses(), tc.want) {
-				t.Fatalf("classes=%v, want %v", AllowedXDSClientClasses(), tc.want)
-			}
-		})
-	}
 }
 
 func TestValidateXDSFlowControlTimeouts(t *testing.T) {
