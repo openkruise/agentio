@@ -188,6 +188,11 @@ agentio:
       tag: ""
       digest: ""
     replicaCount: 1
+    # Keep serving while endpoint withdrawal propagates; zero omits the sleep hook.
+    # Requires PodLifecycleSleepAction (enabled by default in Kubernetes 1.30+).
+    preStopDelaySeconds: 10
+    # Includes preStop and EPE's 30-second gRPC drain, plus cleanup time.
+    terminationGracePeriodSeconds: 45
     serviceAccount:
       create: true
       name: ""

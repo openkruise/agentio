@@ -38,6 +38,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "agentio.epe.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.agentio.epe.terminationGracePeriodSeconds }}
       {{- with .Values.agentio.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -115,6 +116,12 @@ spec:
             - {name: extproc, containerPort: {{ .Values.agentio.epe.service.grpcPort }}}
             - {name: health, containerPort: {{ .Values.agentio.epe.service.healthPort }}}
             - {name: metrics, containerPort: {{ .Values.agentio.epe.service.metricsPort }}}
+          {{- if gt (int .Values.agentio.epe.preStopDelaySeconds) 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.agentio.epe.preStopDelaySeconds }}
+          {{- end }}
           livenessProbe:
             grpc: {port: {{ .Values.agentio.epe.service.healthPort }}, service: liveness}
             initialDelaySeconds: 5

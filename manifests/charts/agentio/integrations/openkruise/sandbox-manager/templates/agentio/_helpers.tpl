@@ -90,6 +90,9 @@
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.agentio.epe.mode "managed" -}}
+{{- if le (int .Values.agentio.epe.terminationGracePeriodSeconds) (int .Values.agentio.epe.preStopDelaySeconds) -}}
+{{- fail "epe.terminationGracePeriodSeconds must exceed epe.preStopDelaySeconds to leave time for RPC draining" -}}
+{{- end -}}
 {{- if not (has .Values.agentio.epe.secretWatchScope (list "system" "cluster")) -}}
 {{- fail "epe.secretWatchScope must be system or cluster" -}}
 {{- end -}}

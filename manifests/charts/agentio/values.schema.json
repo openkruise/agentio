@@ -485,6 +485,14 @@
           "type": "integer",
           "minimum": 1
         },
+        "preStopDelaySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
         "external": {
           "type": "object",
           "properties": {
