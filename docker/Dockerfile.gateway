@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Copyright 2026 The Kruise Authors
 ARG ENVOY_IMAGE=docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb
-FROM rust:1.93.0-bookworm AS metrics-builder
+FROM rust:1.99.0-bookworm AS metrics-builder
 WORKDIR /src
 COPY extensions/envoy/gateway-metrics/ ./
 RUN cargo build --release --locked --offline
@@ -9,7 +9,7 @@ RUN cargo build --release --locked --offline
 FROM scratch AS metrics-artifact
 COPY --from=metrics-builder /src/target/release/libagentio_gateway_metrics.so /libagentio_gateway_metrics.so
 
-FROM rust:1.93.0-bookworm AS sni-builder
+FROM rust:1.99.0-bookworm AS sni-builder
 RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY extensions/envoy/sni-policy/ ./
