@@ -364,7 +364,7 @@
             }
           }
         },
-        "policy": {
+        "policyPool": {
           "type": "object",
           "additionalProperties": false,
           "properties": {

@@ -132,7 +132,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "agentio.agentiod.policyAddress" -}}
 {{- $service := include "agentio.agentiod.fullname" . -}}
-{{- if .Values.agentio.agentiod.policy.enabled -}}
+{{- if .Values.agentio.agentiod.policyPool.enabled -}}
 {{- $service = include "agentio.agentiod.policyFullname" . -}}
 {{- end -}}
 {{- printf "%s.%s.svc.%s:15012" $service (include "agentio.namespace" .) .Values.agentio.global.clusterDomain -}}

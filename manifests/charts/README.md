@@ -77,7 +77,8 @@ add an `agentiod-policy` Deployment and Service for gateway, Porter and EPE:
 
 ```yaml
 agentiod:
-  policy:
+  policyPool:
+    # Deploy a separate backend for gateway/Porter/EPE; ztunnel keeps using agentiod.
     enabled: true
     replicaCount: 2
     resources:

@@ -1106,7 +1106,7 @@ func TestExportedPolicyControlPlane(t *testing.T) {
 	rendered := renderChart(t, target, map[string]any{"agentio": map[string]any{
 		"enabled":       true,
 		"global":        map[string]any{"namespace": "policy-system"},
-		"agentiod":      map[string]any{"policy": map[string]any{"enabled": true, "replicaCount": 3}},
+		"agentiod":      map[string]any{"policyPool": map[string]any{"enabled": true, "replicaCount": 3}},
 		"egressGateway": map[string]any{"mode": "static"},
 		"epe":           map[string]any{"mode": "managed"},
 	}})

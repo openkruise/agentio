@@ -1,9 +1,9 @@
-{{- if .Values.agentiod.policy.enabled }}
+{{- if .Values.agentiod.policyPool.enabled }}
 {{- $values := deepCopy .Values }}
 {{- $name := include "agentiod.policyFullname" . }}
-{{- $policy := mergeOverwrite $values.agentiod (deepCopy .Values.agentiod.policy) }}
+{{- $policy := mergeOverwrite $values.agentiod (deepCopy .Values.agentiod.policyPool) }}
 {{- range $key := list "resources" "nodeSelector" "tolerations" "affinity" }}
-{{- $_ := set $policy $key (deepCopy (get $.Values.agentiod.policy $key)) }}
+{{- $_ := set $policy $key (deepCopy (get $.Values.agentiod.policyPool $key)) }}
 {{- end }}
 {{- $_ := set $policy "nameOverride" $name }}
 {{- $_ := set $policy "fullnameOverride" $name }}

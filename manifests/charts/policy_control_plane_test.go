@@ -29,8 +29,8 @@ func TestPolicyControlPlane(t *testing.T) {
 	for _, profile := range []string{"sidecar", "ambient"} {
 		t.Run(profile, func(t *testing.T) {
 			manifest := renderAgentio(t, "--set", "profile="+profile,
-				"--set", "agentiod.policy.enabled=true,agentiod.policy.replicaCount=3",
-				"--set", "agentiod.policy.resources.requests.cpu=2,agentiod.resources.limits.cpu=4",
+				"--set", "agentiod.policyPool.enabled=true,agentiod.policyPool.replicaCount=3",
+				"--set", "agentiod.policyPool.resources.requests.cpu=2,agentiod.resources.limits.cpu=4",
 				"--set", "agentiod.networkPolicy.enabled=true,agentiod.autoscaling.enabled=true",
 				"--set", "egressGateway.mode=static,epe.mode=managed,epe.tls.enabled=true")
 			deployments := map[string]appsv1.Deployment{}
@@ -147,7 +147,7 @@ func TestPolicyControlPlane(t *testing.T) {
 }
 
 func TestPolicyControlPlaneNamesAndValidation(t *testing.T) {
-	manifest := renderAgentio(t, "--set", "agentiod.policy.enabled=true,agentiod.fullnameOverride=custom-control,agentiod.serviceAccount.name=shared-control")
+	manifest := renderAgentio(t, "--set", "agentiod.policyPool.enabled=true,agentiod.fullnameOverride=custom-control,agentiod.serviceAccount.name=shared-control")
 	requireContains(t, manifest, "name: custom-control-policy", `value: "custom-control-policy"`, "serviceAccountName: shared-control")
-	requireRenderError(t, "/agentiod/policy/replicaCount", "--set", "agentiod.policy.replicaCount=0")
+	requireRenderError(t, "/agentiod/policyPool/replicaCount", "--set", "agentiod.policyPool.replicaCount=0")
 }
