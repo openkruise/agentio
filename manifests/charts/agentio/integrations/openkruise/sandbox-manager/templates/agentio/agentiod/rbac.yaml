@@ -34,6 +34,9 @@ rules:
     verbs: ["create"]
 
   {{- if eq .Values.agentio.egressGateway.mode "gatewayAPI" }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["patch"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways/status", "gatewayclasses/status"]
     verbs: ["get", "update", "patch"]
