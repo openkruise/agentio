@@ -1,14 +1,19 @@
 # Get started with ambient mode
 
-> **Alpha:** Ambient mode does not yet have full feature parity with sidecar mode. Prefer [sidecar mode](sidecar-mode.md) for deployments.
+> **Alpha:** Sidecar mode is the recommended deployment mode; ambient mode is Alpha.
 
-This guide installs the Agentio ambient mode, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
+This guide installs Agentio in ambient mode, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
 
 ## Before you begin
 
-Complete the prerequisites in [Getting started](../getting-started.md). Ambient mode requires Linux nodes on which the Agentio CNI can install its plugin and program workload traffic.
+Complete the prerequisites in [Getting started](../getting-started.md). Ambient mode requires Linux nodes.
 
-If the cluster already runs Istio or another service-mesh CNI, inspect the existing CNI configuration and namespace labels before continuing.
+If the cluster already runs Istio or another service-mesh CNI, confirm the existing CNI configuration before installing. Check the CNI DaemonSets in `kube-system` and any existing namespace enrollment labels:
+
+```console
+$ kubectl get daemonset --namespace kube-system
+$ kubectl get namespace -L agentio.kruise.io/dataplane-mode
+```
 
 ## Install Agentio
 
@@ -97,7 +102,8 @@ Complete the cleanup sections in the shared tasks before deleting the workload n
 $ kubectl delete namespace agentio-demo-ambient
 ```
 
-Removing the namespace label from existing Pods does not undo their network setup. Delete or restart workloads when changing enrollment, and follow your Kubernetes distribution's node cleanup procedure before removing a CNI installation.
+- Removing the namespace label from existing Pods does not undo their network setup. Delete or restart workloads when changing enrollment.
+- Follow your Kubernetes distribution's node cleanup procedure before removing a CNI installation.
 
 ## See also
 

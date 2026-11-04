@@ -1,6 +1,6 @@
 # Integrate OpenKruise Agents
 
-Use this integration when OpenKruise Agents creates a workload as a `Sandbox`. The Agentio watches the `Sandbox` and its controller-owned Pod, derives a stable sandbox identity, and attaches Agentio policy to that identity.
+Use this integration when OpenKruise Agents creates a workload as a `Sandbox`. A Sandbox is an OpenKruise Sandbox workload, the unit of identity and policy in Agentio. Agentio watches the Sandbox and its controller-owned Pod, derives a stable Sandbox identity, and attaches Agentio policy to that identity.
 
 This integration changes the workload source; it is not a third Agentio data-plane profile. Install Agentio with either the ambient or sidecar profile required by your runtime distribution.
 
@@ -24,7 +24,7 @@ $ kubectl rollout status deployment/agentiod --namespace agentio-system --timeou
 The Agentio chart includes generated integrations for the OpenKruise
 sandbox-manager and sandbox-controller charts. Follow
 [OpenKruise chart integration](../../manifests/charts/OPENKRUISE.md) to generate or
-synchronize these bundles and configure their releases. The manager runs Agentiod;
+synchronize these bundles and configure their releases. The manager runs `agentiod`;
 the controller supplies the `traffic-proxy` runtime injection configuration.
 
 For this installation, configure bootstrap addresses, the token audience, and the
@@ -33,11 +33,9 @@ workload CA bundle consistently in both releases. The default workload bundle is
 
 ## Understand the identity boundary
 
-Agentio treats `Sandbox` as the policy subject and its backing Pod as the network endpoint and authenticated attester. The controller accepts the binding only when the Pod UID reported by the data plane matches the identity derived from the Sandbox, and the Sandbox is running with an initialized runtime.
+Agentio treats the `Sandbox` as the policy subject and its backing Pod as the network endpoint and authenticated attester. The delivery identity is the stable identifier Agentio binds policy to: it is derived from the Sandbox's namespace and name, or taken from the `agents.kruise.io/sandbox-id` label when that label is present.
 
-For a non-pooled Sandbox, the fallback identity is `<namespace>--<name>`. When `agents.kruise.io/sandbox-id` is present, that label is the delivery identity. A pooled Sandbox is published as a policy subject only while it is claimed; ambiguous or stale bindings fail closed.
-
-Do not copy a sandbox identity label onto an unrelated Pod. Labels are selection metadata, not proof that a Pod owns a Sandbox identity.
+Do not copy a Sandbox identity label onto an unrelated Pod. Labels are selection metadata, not proof that a Pod owns a Sandbox identity. See [Sandbox identity derivation](../design/openkruise-agents-identity.md) for the exact rules.
 
 ## Create a Sandbox
 

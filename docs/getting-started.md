@@ -4,22 +4,20 @@ Agentio supports two data-plane profiles. The ambient profile captures traffic w
 
 ## Before you begin
 
-You need a Kubernetes cluster, `kubectl`, Helm 3.10 or later, and access to the images configured in [`manifests/charts/agentio/values.yaml`](../manifests/charts/agentio/values.yaml). Run the commands in these guides from the repository root.
+You need a Kubernetes cluster, `kubectl`, Helm 3, and access to the images configured in [`manifests/charts/agentio/values.yaml`](../manifests/charts/agentio/values.yaml). Run the commands in these guides from the repository root.
 
-Install the [Kruise Agents API](https://github.com/openkruise/agents-api) before using `Sandbox` resources. Install the [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api) before enabling `egressGateway.mode=gatewayAPI`.
+Install the [Kruise Agents API](https://github.com/openkruise/agents-api) before using `Sandbox` resources. A `Sandbox` is an OpenKruise Sandbox workload — the unit of identity and policy subject in Agentio. Install the [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api) before enabling `egressGateway.mode=gatewayAPI`.
 
 ## Choose a profile
 
-**Use sidecar mode as the preferred deployment mode. Ambient mode is in Alpha and does not yet have full feature parity with sidecar mode.**
+**Sidecar mode is the recommended deployment mode; ambient mode is Alpha.**
 
 | Profile | Traffic capture | Start here |
 | --- | --- | --- |
 | Sidecar (recommended) | One injected ztunnel per workload Pod | [Get started with sidecar mode](getting-started/sidecar-mode.md) |
 | Ambient (Alpha) | Agentio CNI and one ztunnel per node | [Get started with ambient mode](getting-started/ambient-mode.md) |
 
-The chart installs one profile at a time and defaults to `sidecar`. To use the Alpha ambient mode, set `profile: ambient` in your values file or pass `--set profile=ambient`. Keep the selected profile in a values file so later upgrades use the same mode explicitly.
-
-If OpenKruise Agents creates the workload, also read [Integrate OpenKruise Agents](integrations/openkruise-agents.md) after installing Agentio. That integration changes the workload source, not the Agentio data-plane profile.
+The chart defaults to `profile: sidecar`; set `profile: ambient` for ambient mode. If OpenKruise Agents creates the workload, also read [Integrate OpenKruise Agents](integrations/openkruise-agents.md) after installing Agentio.
 
 ## Continue with policy and egress
 
@@ -27,6 +25,6 @@ Each onboarding guide creates a test workload and exports the variables used by 
 
 1. [Route traffic through an egress gateway](tasks/route-traffic-through-egress-gateway.md).
 2. [Configure a TrafficPolicy](tasks/configure-traffic-policy.md).
-3. [Get started with EPE](getting-started/epe.md) when Layer 7 request policy is required.
+3. [Get started with the Egress Policy Enforcer (EPE)](getting-started/epe.md) when Layer 7 request policy is required.
 
 For production settings, upgrades, and profile changes, see the [Agentio Helm chart guide](../manifests/charts/README.md).
