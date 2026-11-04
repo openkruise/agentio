@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,7 @@ func TestValidateKubernetesAPILimits(t *testing.T) {
 
 func setValidFeatures(t *testing.T) {
 	t.Helper()
+	test.SetForTest(t, &XDSClientClasses, "")
 	test.SetForTest(t, &KubernetesAPIQPS, 80)
 	test.SetForTest(t, &KubernetesAPIBurst, 160)
 	test.SetForTest(t, &KRTDebounceAfter, time.Millisecond)
@@ -210,6 +212,11 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &PushDebounceAfter, time.Millisecond)
 	test.SetForTest(t, &PushDebounceMax, 2*time.Millisecond)
 	test.SetForTest(t, &PushConcurrency, 1)
+	test.SetForTest(t, &XDSMaxPodStreams, 0)
+	test.SetForTest(t, &XDSInitialAdmissionTimeout, time.Second)
+	test.SetForTest(t, &XDSRateLimitTimeout, time.Second)
+	test.SetForTest(t, &XDSSendTimeout, 5*time.Second)
+	test.SetForTest(t, &XDSACKTimeout, 5*time.Second)
 	test.SetForTest(t, &RequestRateLimit, 1)
 	test.SetForTest(t, &ClientQueueSize, 1)
 	test.SetForTest(t, &MaxServerConnectionAge, 30*time.Minute)
@@ -232,6 +239,62 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
+}
+
+func TestXDSClientClasses(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  []string
+		valid bool
+	}{
+		{"", nil, true},
+		{"shared-ztunnel,dedicated-ztunnel", []string{"shared-ztunnel", "dedicated-ztunnel"}, true},
+		{"egress-gateway, agentio-egress,epe", []string{"egress-gateway", "agentio-egress", "epe"}, true},
+		{"dedicated-ztunnel,", nil, false},
+		{"unknown", nil, false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			setValidFeatures(t)
+			test.SetForTest(t, &XDSClientClasses, tc.value)
+			err := Validate()
+			if (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, valid=%t", err, tc.valid)
+			}
+			if tc.valid && !slices.Equal(AllowedXDSClientClasses(), tc.want) {
+				t.Fatalf("classes=%v, want %v", AllowedXDSClientClasses(), tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateXDSFlowControlTimeouts(t *testing.T) {
+	for _, timeout := range []struct {
+		name  string
+		value *time.Duration
+	}{
+		{"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT", &XDSInitialAdmissionTimeout},
+		{"AGENTIO_XDS_RATE_LIMIT_TIMEOUT", &XDSRateLimitTimeout},
+		{"AGENTIO_XDS_SEND_TIMEOUT", &XDSSendTimeout},
+		{"AGENTIO_XDS_ACK_TIMEOUT", &XDSACKTimeout},
+	} {
+		for _, invalid := range []time.Duration{0, -time.Second} {
+			t.Run(timeout.name+"/"+invalid.String(), func(t *testing.T) {
+				setValidFeatures(t)
+				test.SetForTest(t, timeout.value, invalid)
+				if err := Validate(); err == nil || !strings.Contains(err.Error(), timeout.name) {
+					t.Fatalf("Validate() = %v, want named timeout validation", err)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateRejectsNegativeMaxStreams(t *testing.T) {
+	setValidFeatures(t)
+	test.SetForTest(t, &XDSMaxPodStreams, -1)
+	if err := Validate(); err == nil || !strings.Contains(err.Error(), "AGENTIO_XDS_MAX_POD_STREAMS") {
+		t.Fatalf("Validate=%v", err)
+	}
 }
 
 func TestValidateAllowsDisabledPushDebounce(t *testing.T) {

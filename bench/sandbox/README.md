@@ -144,6 +144,22 @@ are checked against the configured CA and the exact gateway SPIFFE principal.
   preserving access to the backend. WDS version convergence is measured separately
   from the Kubernetes write acknowledgment.
 
+## Adjust traffic without restarting clients
+
+Server shutdowns, configured gRPC connection expiry, and network failures trigger
+ADS reconnects; reconnects reuse the Pod and its token until renewal, with
+exponential backoff and jitter.
+
+For continuous traffic, use `--reuse-connections --traffic-rate-file=/signal/traffic-rate`
+in the same traffic Pod. Mount the rate file from a ConfigMap and change its value
+to adjust the offered QPS while preserving the traffic process and its transports.
+
+Positive values set offered QPS, `0` pauses, and `-1` stops. Updates take effect after
+ConfigMap volume propagation and the current 10-second batch. Batch deadline errors
+are recorded and traffic continues using the same HTTP/2 transports. Inner CONNECT
+streams and backend TCP connections are created per operation. Review the measured
+throughput and errors as well as the offered rate.
+
 ## Repeatable scale run
 
 `run.py` runs on the Linux kind host and leaves the scene intact. Its `--root`
@@ -200,3 +216,5 @@ before certificate preparation to the snapshot after mixed load, then summed
 across matched replicas before calculating means and P99 bucket
 upper bounds. Those bounds are not exact percentiles. Unmatched Pods or counter
 resets are reported instead of producing a misleading aggregate.
+
+The load result also reports `queue_p99_ms` (scheduled arrival to operation start) and `operation_p99_ms` (operation start to response validation, including client and network time). These quantiles do not add up to the end-to-end P99.

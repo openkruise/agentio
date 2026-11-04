@@ -79,7 +79,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_CA_ROOT_LIFETIME</code> | Duration | <code>87600h0m0s</code> | Validity of generated workload CA certificates. |
 | <code>AGENTIO_CA_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often the elected leader checks CA expiry. |
 | <code>AGENTIO_CA_SECRET_NAME</code> | String | <code>agentio-ca-secret</code> | Secret holding the workload root CA. |
-| <code>AGENTIO_CLIENT_QUEUE_SIZE</code> | Integer | <code>100</code> | Maximum requests queued per xDS client before the stream is considered stuck. |
+| <code>AGENTIO_CLIENT_QUEUE_SIZE</code> | Integer | <code>100</code> | Maximum incoming requests buffered per xDS stream before reads apply backpressure. |
 | <code>AGENTIO_CLIENT_TRUST_PACKAGE_PATH</code> | String | <code>/usr/local/share/agentio/trust-package/cert-manager-package-debian.json</code> | Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution. Must be non-empty; an unreadable or invalid package prevents startup. |
 | <code>AGENTIO_CONFIGMAP_NAME</code> | String | <code>agentio-config</code> | ConfigMap name of Agentio configuration. |
 | <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection with the sidecar injector. |
@@ -118,7 +118,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_SIGN_MODE</code> | String | <code>SELF&#95;SIGN</code> | MITM CA ownership mode: SECRET reads an externally managed Secret; SELF&#95;SIGN persists a control-plane-managed self-signed CA. |
 | <code>AGENTIO_NATIVE_SIDECARS</code> | String | <code>auto</code> | Native sidecar injection mode: true, false, or auto (per-node kubelet version detection). |
 | <code>AGENTIO_PRIMARY_CONFIGMAP_NAME</code> | String | <code>agentio-config-primary</code> | ConfigMap name of primary Agentio configuration. Empty disables the primary overlay. |
-| <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for background pushes and for streams awaiting xDS acknowledgements, with independent initial-response, established-request, and background-response pools. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
+| <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for initializing streams, background pushes, and streams awaiting xDS acknowledgements, with independent admission, initial-response, established-request, and background-response pools. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
 | <code>AGENTIO_PUSH_DEBOUNCE</code> | Duration | <code>0s</code> | Optional quiet period before all compiled resource changes are published; zero disables push debounce. |
 | <code>AGENTIO_PUSH_DEBOUNCE_MAX</code> | Duration | <code>1s</code> | Maximum wait when push debounce is enabled; must be at least AGENTIO&#95;PUSH&#95;DEBOUNCE. |
 | <code>AGENTIO_SANDBOX_MODE</code> | Boolean | <code>false</code> | Enable Kruise Sandbox discovery and Sandbox xDS resources. Inline SNI also projects to the bound Workload when it hosts one Sandbox for legacy compatibility; shared policies remain on Workloads. |
@@ -130,7 +130,13 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_TRUST_BUNDLE_LEASE_NAME</code> | String | <code>agentiod-trust-bundle-leader</code> | Lease electing the replica that distributes the trust bundle ConfigMap. |
 | <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server&#39;s own certificate. |
 | <code>AGENTIO_WORKLOAD_CERT_RENEW_BEFORE</code> | Duration | <code>8h0m0s</code> | How long before expiry the xDS server re-issues its own certificate. |
+| <code>AGENTIO_XDS_ACK_TIMEOUT</code> | String | <code>5s</code> | Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive. |
+| <code>AGENTIO_XDS_CLIENT_CLASSES</code> | String | empty | Comma-separated authenticated ADS client classes accepted by this process: shared-ztunnel,dedicated-ztunnel,egress-gateway,agentio-egress,epe. Empty accepts all classes. Does not restrict certificate issuance. |
 | <code>AGENTIO_XDS_CPU_BUDGET</code> | String | empty | CPU budget for automatic new xDS stream admission, as a positive Kubernetes quantity (for example 500m or 2). The chart uses the CPU limit, falling back to the CPU request. Empty uses min(NumCPU, GOMAXPROCS); an explicit budget is also bounded by that runtime CPU count. |
+| <code>AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT</code> | String | <code>1s</code> | Maximum wait for a new stream initialization slot before authentication; must be positive. |
+| <code>AGENTIO_XDS_MAX_POD_STREAMS</code> | String | <code>0</code> | Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity. |
+| <code>AGENTIO_XDS_RATE_LIMIT_TIMEOUT</code> | String | <code>1s</code> | Maximum wait for new-stream rate admission before authentication; must be positive. |
+| <code>AGENTIO_XDS_SEND_TIMEOUT</code> | String | <code>5s</code> | Maximum duration of one xDS response send before closing the stream; must be positive. |
 | <code>ENABLE_POLICY_STATUS</code> | Boolean | <code>true</code> | Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained. |
 
 <!-- END GENERATED ENVIRONMENT VARIABLES -->
@@ -144,15 +150,28 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | `AGENTIO_MAX_REQUESTS_PER_SECOND` | `min(250 * CPU budget, 1000)` | Maximum new xDS streams accepted per second; zero selects the automatic default. |
 | `AGENTIO_PUSH_CONCURRENCY` | `min(15 + 5 * GOMAXPROCS, 100)` | Concurrency limit for pushes and streams awaiting acknowledgements. |
 | `AGENTIO_XDS_CPU_BUDGET` | empty | CPU budget for the automatic stream-admission rate; empty uses `min(NumCPU, GOMAXPROCS)`. |
+| `AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT` | `1s` | Maximum wait for a new-stream initialization slot before authentication. |
+| `AGENTIO_XDS_RATE_LIMIT_TIMEOUT` | `1s` | Maximum wait for new-stream rate admission. |
+| `AGENTIO_XDS_SEND_TIMEOUT` | `5s` | Maximum duration of one response send. |
+| `AGENTIO_XDS_ACK_TIMEOUT` | `5s` | Maximum time a response may remain unacknowledged. |
+| `AGENTIO_XDS_MAX_POD_STREAMS` | `0` | Optional per-process dedicated Pod ADS stream cap; zero disables it. |
 
 `AGENTIO_KUBERNETES_API_QPS` and `AGENTIO_KUBERNETES_API_BURST` configure client-side throttling only, not the API server's own limits. The stream-admission and push-concurrency settings bound new-stream acceptance and push concurrency. For recovery and capacity semantics, see [xDS connection limits](../design/xds-connection-limits.md).
+
+New-stream admission timeouts do not apply to established streams waiting for response capacity; those streams apply backpressure. Send and ACK timeouts still close stalled streams. All four timeouts accept positive Go durations such as `500ms` or `15s`; invalid values fail startup. Set them through `agentiod.env`:
 
 ```yaml
 agentiod:
   env:
     AGENTIO_KUBERNETES_API_QPS: "80"
     AGENTIO_KUBERNETES_API_BURST: "160"
+    AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT: "3s"
+    AGENTIO_XDS_RATE_LIMIT_TIMEOUT: "3s"
+    AGENTIO_XDS_SEND_TIMEOUT: "15s"
+    AGENTIO_XDS_ACK_TIMEOUT: "20s"
 ```
+
+Longer send and ACK budgets retain slow clients and their response slots for longer; size them together with concurrency and memory limits.
 
 ## Shared Secret informer
 
@@ -246,6 +265,24 @@ $ curl --request PUT \
 `PUT /debug/logging` remains available and changes the `default` scope. The default scope covers standard-library, Kubernetes dependency, and other unscoped logs; it does not overwrite levels already assigned to registered components. At startup, `AGENTIO_LOG_LEVEL` initializes the default and every registered component to the same value.
 
 Loopback requests do not require credentials. Requests from any other address must pass the same TokenReview and root-namespace authorization as `/debug/configz`. A successful change returns HTTP 202 and affects existing loggers immediately. It is process-local and is not persisted: after an `agentiod` restart, `AGENTIO_LOG_LEVEL` supplies the level again.
+
+## Separate ADS serving groups
+
+`AGENTIO_XDS_CLIENT_CLASSES` restricts ADS admission using the authenticated and
+validated client scope. Empty accepts all existing client classes. For separate
+Deployments, use `shared-ztunnel,dedicated-ztunnel` for the ztunnel group and
+`egress-gateway,agentio-egress,epe` for the Gateway/Porter/EPE group. A client sent
+to the wrong group receives `PermissionDenied` before resource subscription.
+Certificate issuance is unaffected.
+
+When using the chart's `agentiod.policyPool`, its environment inherits `agentiod.env`. If the main group sets `AGENTIO_XDS_CLIENT_CLASSES` to the ztunnel classes, override the same setting in `agentiod.policyPool.env` with `egress-gateway,agentio-egress,epe` so policy clients can connect.
+
+Give the Deployments independent Service selectors and resource budgets, and
+point each client at the appropriate Service. `AGENTIO_SERVICE_NAME` must match
+each group's Service so the serving certificate covers its DNS name. The groups
+can share the existing CA, trust bundle, configuration, and RBAC. They still
+independently watch and compile Kubernetes resources, so this separates serving
+pressure rather than Kubernetes API or compilation dependencies.
 
 ## See also
 

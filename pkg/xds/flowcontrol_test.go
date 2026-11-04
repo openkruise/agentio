@@ -66,11 +66,11 @@ func TestSessionInitialCapacityPreservesEstablishedRequestsAndPushes(t *testing.
 		synctest.Wait()
 		select {
 		case err := <-secondDone:
-			if status.Code(err) != codes.ResourceExhausted || len(second.sent()) != 0 {
-				t.Fatalf("second initial request = %v, responses = %d", err, len(second.sent()))
-			}
+			t.Fatalf("queued initial request disconnected: %v", err)
 		default:
-			t.Fatal("initial capacity wait exceeded one second")
+		}
+		if len(second.sent()) != 0 {
+			t.Fatal("initial request bypassed response capacity")
 		}
 
 		ready.send(request(model.AddressType))
@@ -98,6 +98,14 @@ func TestSessionInitialCapacityPreservesEstablishedRequestsAndPushes(t *testing.
 		if err := <-blockedDone; !errors.Is(err, context.Canceled) {
 			t.Fatalf("unconfirmed stream cancellation = %v", err)
 		}
+		synctest.Wait()
+		if len(second.sent()) != 1 {
+			t.Fatal("queued initial request did not recover after capacity release")
+		}
+		second.closeRequests()
+		if err := <-secondDone; err != nil {
+			t.Fatal(err)
+		}
 		recovered := newFakeStream(ctx, 1)
 		recovered.send(nodeRequest(model.AddressType))
 		recoveredDone := server.start(recovered)
@@ -108,6 +116,110 @@ func TestSessionInitialCapacityPreservesEstablishedRequestsAndPushes(t *testing.
 		recovered.closeRequests()
 		if err := <-recoveredDone; err != nil {
 			t.Fatal(err)
+		}
+	})
+}
+
+func TestEstablishedCapacityWaitPreservesStreamAndLatestConfiguration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		old := gatewayResource(t, "demo/egress", "cluster", "old")
+		server := newTestServerWithScheduler(t, gatewayScope(), []model.Resource{old}, nil, NewPushScheduler(1))
+		healthy, slow := newFakeStream(ctx, server.server.queueSize+8), newFakeStream(ctx, 8)
+		var done []<-chan error
+		for _, stream := range []*fakeStream{healthy, slow} {
+			stream.send(nodeRequest(model.ClusterType))
+			done = append(done, server.start(stream))
+			synctest.Wait()
+			stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: stream.sent()[0].Nonce})
+			synctest.Wait()
+		}
+		slow.send(request(model.ClusterType))
+		synctest.Wait()
+		for range server.server.queueSize + 8 {
+			healthy.send(request(model.ClusterType))
+		}
+		synctest.Wait()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done[0]:
+			t.Fatalf("temporary response congestion disconnected healthy stream: %v", err)
+		default:
+		}
+		if len(healthy.sent()) != 1 {
+			t.Fatal("request bypassed the occupied response pool")
+		}
+		if len(healthy.requests) == 0 {
+			t.Fatal("pending requests were drained without bounded receive backpressure")
+		}
+		for _, value := range []string{"intermediate", "latest"} {
+			updated := gatewayResource(t, "demo/egress", "cluster", value)
+			if err := server.resources.apply([]model.ResourceChange{{Key: old.Key, New: &updated}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		synctest.Wait()
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		if err := <-done[1]; status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("non-ACKing client = %v, want acknowledgement timeout", err)
+		}
+		responses := healthy.sent()
+		latest := gatewayResource(t, "demo/egress", "cluster", "latest")
+		if len(responses) < 2 || responses[1].Resources[0].Version != latest.Hash {
+			t.Fatalf("queued request did not use latest snapshot: %+v", responses)
+		}
+		healthy.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: responses[len(responses)-1].Nonce})
+		synctest.Wait()
+		healthy.closeRequests()
+		if err := <-done[0]; err != nil {
+			t.Fatal(err)
+		}
+		if len(server.server.flow.requestSlots) != 0 || len(server.server.flow.initialSlots) != 0 {
+			t.Fatal("stream completion leaked response capacity")
+		}
+	})
+}
+
+func TestInitialAdmissionRejectsBeforeAuthenticationAndReleasesOnCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		server := newTestServerWithScheduler(t, ztunnelScope(), nil, nil, NewPushScheduler(1))
+		originalAuthenticator := server.server.authenticator
+		authenticator := &countingAuthenticator{}
+		server.server.authenticator = authenticator
+		ctx, cancel := context.WithCancel(t.Context())
+		first := newFakeStream(ctx, 1)
+		firstDone := server.start(first)
+		synctest.Wait()
+		if authenticator.calls != 1 {
+			t.Fatal("first initializer did not authenticate")
+		}
+		second := newFakeStream(t.Context(), 1)
+		second.send(nodeRequest(model.AddressType))
+		secondDone := server.start(second)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if err := <-secondDone; status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("initial admission = %v, want ResourceExhausted", err)
+		}
+		if authenticator.calls != 1 || len(second.requests) != 1 {
+			t.Fatal("overload reached authentication or created a receive queue")
+		}
+		cancel()
+		if err := <-firstDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled initializer = %v", err)
+		}
+		server.server.authenticator = originalAuthenticator
+		recovered := newFakeStream(t.Context(), 1)
+		recovered.send(nodeRequest(model.AddressType))
+		recovered.closeRequests()
+		if err := <-server.start(recovered); err != nil {
+			t.Fatal(err)
+		}
+		if len(recovered.sent()) != 1 || len(server.server.flow.initialAdmissions) != 0 {
+			t.Fatal("initial admission was not recovered")
 		}
 	})
 }
@@ -141,19 +253,77 @@ func TestRequestSlotWaitHonorsParentCancellation(t *testing.T) {
 	}
 }
 
-func TestRequestCapacityWaitStillExpiresAfterOneSecond(t *testing.T) {
+func TestPodStreamLimitPreservesExistingAndSystemStreams(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		server := newTestServerWithScheduler(t, ztunnelScope(), nil, nil, NewPushScheduler(1))
+		server.server.flow.streams = make(chan struct{}, 1)
+		original := server.server.authenticator
+		authenticator := &countingAuthenticator{caller:original.(fakeAuthenticator).caller}
+		server.server.authenticator = authenticator
+		ctx, cancel := context.WithCancel(t.Context())
+		first := newFakeStream(ctx, 1)
+		first.send(nodeRequest(model.AddressType))
+		done := server.start(first)
+		synctest.Wait()
+		responses:=first.sent()
+		if len(responses)!=1 {t.Fatalf("first stream responses=%v",responses)}
+		response := responses[0]
+		first.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: response.Nonce})
+		synctest.Wait()
+		second := newFakeStream(t.Context(), 1)
+		second.send(nodeRequest(model.AddressType))
+		if err := <-server.start(second); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "active stream limit") {
+			t.Fatalf("admission=%v", err)
+		}
+		if authenticator.calls != 2 || len(first.sent()) != 1 {
+			t.Fatal("Pod admission skipped authentication or disturbed the established stream")
+		}
+		server.server.scopeFuncs = fakeResolver{scope: gatewayScope()}.scopeFuncs()
+		system := newFakeStream(t.Context(), 1)
+		system.send(nodeRequest(model.AddressType))
+		system.closeRequests()
+		if err := <-server.start(system); err != nil {
+			t.Fatal(err)
+		}
+		if len(server.server.flow.streams) != 1 {
+			t.Fatal("system stream consumed Pod capacity")
+		}
+		server.server.scopeFuncs = fakeResolver{scope: ztunnelScope()}.scopeFuncs()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		server.server.authenticator = original
+		recovered := newFakeStream(t.Context(), 1)
+		recovered.send(nodeRequest(model.AddressType))
+		recovered.closeRequests()
+		if err := <-server.start(recovered); err != nil {
+			t.Fatal(err)
+		}
+		if len(server.server.flow.streams) != 0 {
+			t.Fatal("active stream capacity leaked")
+		}
+	})
+}
+
+func TestRequestCapacityWaitUsesBackpressureUntilCapacityReturns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
 		server.server.flow.requestSlots <- struct{}{}
-		defer func() { <-server.server.flow.requestSlots }()
 		lease := server.server.flow.newLease(t.Context())
 		defer lease.release()
-		started := time.Now()
-		if err := lease.acquire(server.server.flow.requestSlots); status.Code(err) != codes.ResourceExhausted {
-			t.Fatalf("request capacity wait = %v, want ResourceExhausted", err)
+		done := make(chan error, 1)
+		go func() { done <- lease.acquire(server.server.flow.requestSlots) }()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("capacity wait terminated before capacity returned: %v", err)
+		default:
 		}
-		if elapsed := time.Since(started); elapsed != time.Second {
-			t.Fatalf("request capacity wait = %s, want one second", elapsed)
+		<-server.server.flow.requestSlots
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
 	})
 }
@@ -343,15 +513,11 @@ func TestSessionSharesResponseCapacityAcrossTypes(t *testing.T) {
 		synctest.Wait()
 		select {
 		case err := <-probeDone:
-			if status.Code(err) != codes.ResourceExhausted || len(probe.sent()) != 0 {
-				t.Fatalf(
-					"ACK for one type released initial capacity: error = %v, responses = %d",
-					err,
-					len(probe.sent()),
-				)
-			}
+			t.Fatalf("queued probe disconnected: %v", err)
 		default:
-			t.Fatal("initial capacity wait exceeded one second")
+		}
+		if len(probe.sent()) != 0 {
+			t.Fatal("ACK for one type released initial capacity")
 		}
 		stream.send(&discoveryv3.DeltaDiscoveryRequest{
 			TypeUrl:       model.ListenerType,
@@ -359,6 +525,13 @@ func TestSessionSharesResponseCapacityAcrossTypes(t *testing.T) {
 			ErrorDetail:   &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "rejected"},
 		})
 		synctest.Wait()
+		if len(probe.sent()) != 1 {
+			t.Fatal("ACK plus NACK did not release capacity for queued probe")
+		}
+		probe.closeRequests()
+		if err := <-probeDone; err != nil {
+			t.Fatal(err)
+		}
 		recovered := newFakeStream(ctx, 1)
 		recovered.send(nodeRequest(model.ClusterType))
 		recoveredDone := server.start(recovered)
@@ -380,7 +553,7 @@ func TestSessionSharesResponseCapacityAcrossTypes(t *testing.T) {
 func TestResponseLeaseDeadlineIsNotExtendedByMoreResponses(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		pool := make(chan struct{}, 1)
-		lease := &responseLease{ctx: t.Context(), wait: time.Second, timeout: 5 * time.Second}
+		lease := &responseLease{ctx: t.Context(), timeout: 5 * time.Second}
 		defer lease.release()
 		if err := lease.acquire(pool); err != nil {
 			t.Fatal(err)
@@ -537,6 +710,13 @@ func TestSDSCompletionAcquiresResponseLease(t *testing.T) {
 		job := <-provider.requests
 		job.result <- testSDSCertificate()
 		synctest.Wait()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("SDS response capacity wait disconnected stream: %v", err)
+		default:
+		}
 		if len(stream.sent()) != 0 {
 			t.Fatal("SDS completion bypassed occupied response capacity")
 		}

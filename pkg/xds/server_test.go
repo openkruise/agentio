@@ -43,11 +43,50 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-type countingAuthenticator struct{ calls int }
+type countingAuthenticator struct {
+	calls  int
+	caller model.PeerIdentity
+}
+
+func TestControlPlaneGroupRejectsOtherAuthenticatedClasses(t *testing.T) {
+	for _, allowed := range [][]model.ClientClass{
+		nil,
+		{model.ClientSharedZTunnel, model.ClientDedicatedZTunnel},
+		{model.ClientEgressGateway, model.ClientAgentioEgress, model.ClientEPE},
+	} {
+		for _, class := range clientClasses {
+			t.Run(fmt.Sprintf("%v/%s", allowed, class), func(t *testing.T) {
+				scope := gatewayScope()
+				scope.Class, scope.NodeName = class, "node-a"
+				server := newTestServer(t, scope, nil, nil)
+				server.server.flow.config.clientClasses = allowed
+				authenticator := &countingAuthenticator{caller: server.server.authenticator.(fakeAuthenticator).caller}
+				server.server.authenticator = authenticator
+				stream := newFakeStream(t.Context(), 1)
+				stream.send(nodeRequest(model.TrafficPolicyType))
+				stream.closeRequests()
+				err := <-server.start(stream)
+				accept := len(allowed) == 0
+				for _, candidate := range allowed {
+					accept = accept || candidate == class
+				}
+				if authenticator.calls != 1 {
+					t.Fatal("class admission bypassed authentication")
+				}
+				if accept && err != nil || !accept && status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("accepted=%t, error=%v", accept, err)
+				}
+				if !accept && len(stream.sent()) != 0 {
+					t.Fatal("rejected class received resources")
+				}
+			})
+		}
+	}
+}
 
 func (a *countingAuthenticator) Authenticate(context.Context) (model.PeerIdentity, error) {
 	a.calls++
-	return model.PeerIdentity{}, nil
+	return a.caller, nil
 }
 
 func TestNewServerRegistersAllClientClassMetrics(t *testing.T) {

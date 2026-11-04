@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -76,8 +77,17 @@ var clientClasses = [...]model.ClientClass{
 	model.ClientEPE,
 }
 
-// NewServer builds the Delta ADS server. Admission and the independent push and
-// request-response concurrency limits are shared by its streams and fixed at construction.
+// FlowControlOptions bounds Pod streams, admission, sends, and ACK progress.
+type FlowControlOptions struct {
+	ClientClasses    []string
+	InitialAdmission time.Duration
+	RateLimit        time.Duration
+	Send             time.Duration
+	ACK              time.Duration
+	MaxPodStreams    int
+}
+
+// NewServer fixes shared admission and response limits at construction.
 func NewServer(
 	authenticator attestation.Authenticator,
 	scopeFuncs ScopeFuncs,
@@ -87,6 +97,7 @@ func NewServer(
 	generators map[string]ResourceGenerator,
 	pushConcurrency int,
 	requestRateLimit float64,
+	flowOptions ...FlowControlOptions,
 ) (*Server, error) {
 	if authenticator == nil || scopeFuncs == nil || nilutil.IsNilInterface(resources) || ready == nil {
 		return nil, fmt.Errorf("authenticator, scope functions, resource source, and readiness callback are required")
@@ -100,6 +111,30 @@ func NewServer(
 	if invalidRequestRateLimit(requestRateLimit) {
 		return nil, fmt.Errorf("request rate limit must be finite and non-negative")
 	}
+	flowConfig := defaultFlowControlConfig(pushConcurrency, requestRateLimit)
+	if len(flowOptions) > 1 {
+		return nil, fmt.Errorf("only one flow-control configuration is supported")
+	}
+	if len(flowOptions) == 1 {
+		configured := flowOptions[0]
+		for _, class := range configured.ClientClasses {
+			if !slices.Contains(clientClasses[:], model.ClientClass(class)) {
+				return nil, fmt.Errorf("unknown ADS client class %q", class)
+			}
+			flowConfig.clientClasses = append(flowConfig.clientClasses, model.ClientClass(class))
+		}
+		if configured.InitialAdmission <= 0 || configured.RateLimit <= 0 || configured.Send <= 0 || configured.ACK <= 0 {
+			return nil, fmt.Errorf("flow-control timeouts must be positive")
+		}
+		flowConfig.admissionWait = configured.InitialAdmission
+		flowConfig.rateLimitWait = configured.RateLimit
+		flowConfig.sendTimeout = configured.Send
+		flowConfig.ackTimeout = configured.ACK
+		if configured.MaxPodStreams < 0 {
+			return nil, fmt.Errorf("maximum Pod ADS streams must not be negative")
+		}
+		flowConfig.maxPodStreams = configured.MaxPodStreams
+	}
 	return newServerWithScheduler(
 		authenticator,
 		scopeFuncs,
@@ -108,7 +143,7 @@ func NewServer(
 		queueSize,
 		generators,
 		NewPushScheduler(pushConcurrency),
-		defaultFlowControlConfig(pushConcurrency, requestRateLimit),
+		flowConfig,
 	)
 }
 
@@ -189,6 +224,12 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		metrics.Default.RecordXDSRequestRejection()
 		return status.Error(codes.ResourceExhausted, err.Error())
 	}
+	releaseAdmission, err := s.flow.admitInitial(stream.Context())
+	if err != nil {
+		metrics.Default.RecordXDSRequestRejection()
+		return err
+	}
+	defer releaseAdmission()
 	caller, err := s.authenticator.Authenticate(stream.Context())
 	if err != nil {
 		if stream.Context().Err() != nil {
@@ -230,6 +271,18 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	if err := scope.Validate(); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
+	if allowed := s.flow.config.clientClasses; len(allowed) > 0 && !slices.Contains(allowed, scope.Class) {
+		metrics.Default.RecordXDSRequestRejection()
+		return status.Errorf(codes.PermissionDenied, "ADS client class %q is not served by this control-plane group", scope.Class)
+	}
+	if scope.Class == model.ClientDedicatedZTunnel {
+		releaseStream, err := s.flow.admitPodStream()
+		if err != nil {
+			metrics.Default.RecordXDSRequestRejection()
+			return err
+		}
+		defer releaseStream()
+	}
 	version := clientVersion(first.request.GetNode())
 
 	metrics.Default.AddXDSConnection(1)
@@ -254,7 +307,7 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		connLog.Error("Delta ADS client disconnected", attrs...)
 	}()
 
-	return newDeltaSession(s, stream, scope, connLog, requests).run(first.request)
+	return newDeltaSession(s, stream, scope, connLog, requests).run(first.request, releaseAdmission)
 }
 
 func expectedStreamError(err error) bool {

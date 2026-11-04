@@ -73,7 +73,7 @@ func (r *runner) trafficPolicy(ctx context.Context) error {
 						"to":     []any{map[string]any{"cidr": "192.0.2.0/24"}},
 						"ports":  []any{map[string]any{"protocol": "TCP", "port": 10000 + r.Revision}},
 					},
-					map[string]any{"action": "allow"},
+					map[string]any{"action": "allow", "to": []any{map[string]any{"cidr": "0.0.0.0/0"}, map[string]any{"cidr": "::/0"}}},
 				},
 			},
 		},

@@ -34,7 +34,7 @@ func sandboxResource(t *testing.T, uid string, policies ...*securityv1.TrafficPo
 }
 
 func sandboxResourceWithAttester(
-	t *testing.T,
+	t testing.TB,
 	uid, workloadUID string,
 	policies ...*securityv1.TrafficPolicy,
 ) model.Resource {

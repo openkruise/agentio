@@ -19,29 +19,36 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 var errRequestRateLimited = errors.New("request rate limit exceeded")
 
 type flowControlConfig struct {
+	clientClasses    []model.ClientClass
 	concurrency      int
 	requestRateLimit float64
-	requestWait      time.Duration
+	admissionWait    time.Duration
+	rateLimitWait    time.Duration
 	sendTimeout      time.Duration
 	ackTimeout       time.Duration
+	maxPodStreams    int
 }
 
 func defaultFlowControlConfig(concurrency int, requestRateLimit float64) flowControlConfig {
 	return flowControlConfig{
 		concurrency:      concurrency,
 		requestRateLimit: requestRateLimit,
-		requestWait:      time.Second,
+		admissionWait:    time.Second,
+		rateLimitWait:    time.Second,
 		sendTimeout:      5 * time.Second,
 		ackTimeout:       5 * time.Second,
 	}
@@ -49,34 +56,68 @@ func defaultFlowControlConfig(concurrency int, requestRateLimit float64) flowCon
 
 // One server owns these pools; each stream owns its response lease.
 type flowController struct {
-	config       flowControlConfig
-	requestLimit *rate.Limiter
-	initialSlots chan struct{}
-	requestSlots chan struct{}
-	pushSlots    chan struct{}
+	config            flowControlConfig
+	requestLimit      *rate.Limiter
+	initialAdmissions chan struct{}
+	initialSlots      chan struct{}
+	requestSlots      chan struct{}
+	pushSlots         chan struct{}
+	streams           chan struct{}
 }
 
 func newFlowController(config flowControlConfig) *flowController {
-	return &flowController{
-		config:       config,
-		requestLimit: rate.NewLimiter(rate.Limit(config.requestRateLimit), 1),
+	f := &flowController{
+		config:            config,
+		requestLimit:      rate.NewLimiter(rate.Limit(config.requestRateLimit), 1),
+		initialAdmissions: make(chan struct{}, config.concurrency),
 		// Responses cannot borrow scheduler capacity: an assigned push may
 		// be waiting for the same stream's request handler to finish.
 		initialSlots: make(chan struct{}, config.concurrency),
 		requestSlots: make(chan struct{}, config.concurrency),
 		pushSlots:    make(chan struct{}, config.concurrency),
 	}
+	if config.maxPodStreams > 0 {
+		f.streams = make(chan struct{}, config.maxPodStreams)
+	}
+	return f
+}
+
+func (f *flowController) admitPodStream() (func(), error) {
+	if f.streams == nil {
+		return func() {}, nil
+	}
+	select {
+	case f.streams <- struct{}{}:
+		return func() { <-f.streams }, nil
+	default:
+		return nil, status.Error(codes.ResourceExhausted, "xDS active stream limit reached")
+	}
 }
 
 func (f *flowController) newLease(ctx context.Context) *responseLease {
-	return &responseLease{ctx: ctx, wait: f.config.requestWait, timeout: f.config.ackTimeout}
+	return &responseLease{ctx: ctx, timeout: f.config.ackTimeout}
+}
+
+// Bound authenticated initializers before TokenReview or a receive queue is created.
+func (f *flowController) admitInitial(ctx context.Context) (func(), error) {
+	wait, cancel := context.WithTimeout(ctx, f.config.admissionWait)
+	defer cancel()
+	select {
+	case f.initialAdmissions <- struct{}{}:
+		return sync.OnceFunc(func() { <-f.initialAdmissions }), nil
+	case <-wait.Done():
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, status.Error(codes.ResourceExhausted, "xDS initial admission concurrency limit exceeded")
+	}
 }
 
 func (f *flowController) acceptRequest(ctx context.Context) error {
 	if f.requestLimit.Limit() == 0 {
 		return nil
 	}
-	wait, cancel := context.WithTimeout(ctx, time.Second)
+	wait, cancel := context.WithTimeout(ctx, f.config.rateLimitWait)
 	defer cancel()
 	if err := f.requestLimit.Wait(wait); err != nil {
 		return fmt.Errorf("%w: %w", errRequestRateLimited, err)
@@ -92,7 +133,6 @@ func invalidRequestRateLimit(limit float64) bool {
 // batch never waits for its own ACKs. Send returning only means data was queued.
 type responseLease struct {
 	ctx      context.Context
-	wait     time.Duration
 	timeout  time.Duration
 	pool     chan struct{}
 	timer    *time.Timer
@@ -106,17 +146,14 @@ func (l *responseLease) acquire(pool chan struct{}) error {
 	if l.pool != nil {
 		return nil
 	}
-	wait, cancel := context.WithTimeout(l.ctx, l.wait)
-	defer cancel()
+	// The bounded receive queue applies backpressure while this stream has no
+	// outstanding responses. Existing response leases still expire on slow ACKs.
 	select {
 	case pool <- struct{}{}:
 		l.start(pool)
 		return nil
-	case <-wait.Done():
-		if l.ctx.Err() != nil {
-			return status.FromContextError(l.ctx.Err()).Err()
-		}
-		return status.Error(codes.ResourceExhausted, "xDS response concurrency limit exceeded")
+	case <-l.ctx.Done():
+		return status.FromContextError(l.ctx.Err()).Err()
 	}
 }
 

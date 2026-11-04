@@ -218,9 +218,13 @@ func (s *Server) pushUpdate(
 	update xdsstore.Update,
 ) error {
 	snapshot := s.resources.Snapshot()
+	if scope.Class == model.ClientDedicatedZTunnel {
+		update = update.ForWorkload(scope.WorkloadUID, snapshot)
+	}
 	for _, typeURL := range orderedWatchedTypes(watches, update) {
 		watch := watches[typeURL]
-		full := update.FullFor(typeURL)
+		// Dedicated Sandbox scopes are indexed; reselect them instead of scanning a cluster-wide batch.
+		full := update.FullFor(typeURL) || typeURL == model.SandboxType && scope.Class == model.ClientDedicatedZTunnel
 		var subscription SubscriptionView
 		if full {
 			subscription = newSubscriptionView(watch)

@@ -1400,12 +1400,12 @@ func TestPushConcurrencyIsGloballyScheduled(t *testing.T) {
 
 	first := newFakeStream(ctx, 4)
 	second := newFakeStream(ctx, 4)
-	firstDone := server.start(first)
-	secondDone := server.start(second)
 	first.send(nodeRequest(model.AddressType))
+	firstDone := server.start(first)
 	initial := first.awaitResponses(t, model.AddressType, 1)[0]
 	first.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 	second.send(nodeRequest(model.AddressType))
+	secondDone := server.start(second)
 	initial = second.awaitResponses(t, model.AddressType, 1)[0]
 	second.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 
