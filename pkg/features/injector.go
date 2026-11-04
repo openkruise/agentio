@@ -26,8 +26,8 @@ var (
 	// ClientTrustPackagePath points to the versioned public certificate package.
 	ClientTrustPackagePath = env.Register(
 		"AGENTIO_CLIENT_TRUST_PACKAGE_PATH",
-		"",
-		"Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution.",
+		"/usr/local/share/agentio/trust-package/cert-manager-package-debian.json",
+		"Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution. Must be non-empty; an unreadable or invalid package prevents startup.",
 	).Get()
 	// EnableSidecarInjector enables the Pod admission endpoint.
 	EnableSidecarInjector = env.Register(

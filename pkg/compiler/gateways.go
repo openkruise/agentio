@@ -251,7 +251,7 @@ func gatewayUpstreamTrustBundle(ctx krt.HandlerContext, inputs Inputs, gateway m
 	if len(bundle.GetAdditionalSources()) == 0 {
 		return inputs.GatewayTrustBundle, nil
 	}
-	// A gateway-local CA file cannot be merged by the control plane.
+	// Additional sources must preserve the public CA baseline.
 	if inputs.GatewayTrustBundle == "" {
 		return "", fmt.Errorf(
 			"upstreamTrustBundle requires the built-in public CA package (AGENTIO_CLIENT_TRUST_PACKAGE_PATH)",

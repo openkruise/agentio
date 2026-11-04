@@ -33,6 +33,5 @@ FROM ${BASE_DISTRIBUTION:-debug}
 
 COPY --from=builder /out/agentiod /usr/local/bin/agentiod
 COPY --from=trust-package /debian-package/ /usr/local/share/agentio/trust-package/
-ENV AGENTIO_CLIENT_TRUST_PACKAGE_PATH=/usr/local/share/agentio/trust-package/cert-manager-package-debian.json
 USER 1337:1337
 ENTRYPOINT ["/usr/local/bin/agentiod"]

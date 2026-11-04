@@ -58,12 +58,11 @@ func TestTrustPackageImagePin(t *testing.T) {
 	if !strings.Contains(
 		string(dockerfile),
 		"COPY --from=trust-package /debian-package/ /usr/local/share/agentio/trust-package/",
-	) ||
-		!strings.Contains(
-			string(dockerfile),
-			"ENV AGENTIO_CLIENT_TRUST_PACKAGE_PATH=/usr/local/share/agentio/trust-package/cert-manager-package-debian.json",
-		) {
+	) {
 		t.Fatal("Agentiod image must contain the public CA package at its configured path")
+	}
+	if strings.Contains(string(dockerfile), "ENV AGENTIO_CLIENT_TRUST_PACKAGE_PATH=") {
+		t.Fatal("the public CA package default belongs in Go configuration, not the image environment")
 	}
 }
 

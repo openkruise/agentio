@@ -449,7 +449,7 @@ Source updates apply without restarting Agentiod or the gateway. If a source is 
 
 Remove entries, or set `additionalSources: []`, to remove their contribution. A CA remains trusted if it is still present in another source or the public package. Existing TLS connections can remain active until they close.
 
-Additional sources require the embedded public CA package configured by `AGENTIO_CLIENT_TRUST_PACKAGE_PATH` in the standard Agentiod image. Without that package, the controller rejects additional sources rather than replacing a gateway-local public CA file. With no additional sources, existing local-file installations retain their previous behavior. Secret references reuse the shared Secret cache and the existing root-namespace read permissions; no wider Secret RBAC is required.
+Agentiod always loads the public CA package at startup. The code defaults `AGENTIO_CLIENT_TRUST_PACKAGE_PATH` to `/usr/local/share/agentio/trust-package/cert-manager-package-debian.json`, which standard images provide; set the environment variable only to override this path. An empty path or an unreadable or invalid package prevents startup. Agentiod does not fall back to a gateway-local CA file. Secret references reuse the shared Secret cache and the existing root-namespace read permissions; no wider Secret RBAC is required.
 
 Gateway API `parametersRef` ConfigMaps accept the same `upstreamTrustBundle` block in `data.config`, without the `egressGateways` wrapper. Trust sources still resolve in the mesh root namespace, independently of the parameters ConfigMap namespace.
 

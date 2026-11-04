@@ -74,9 +74,6 @@ func grpcServerKeepaliveParameters() keepalive.ServerParameters {
 }
 
 func loadGatewayTrustBundle(packagePath string) (string, error) {
-	if packagePath == "" {
-		return "", nil
-	}
 	data, err := os.ReadFile(packagePath)
 	if err != nil {
 		return "", fmt.Errorf("read gateway trust package: %w", err)

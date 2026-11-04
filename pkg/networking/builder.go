@@ -67,7 +67,7 @@ type Inputs struct {
 	DiscoveryAddress           string
 	TrustDomain                string
 	// UpstreamTrustBundle contains validated public and additional upstream CA PEM.
-	// When empty, retain the gateway-local CA file used by non-package installations.
+	// Direct builders without a bundle use the legacy gateway-local CA file.
 	UpstreamTrustBundle string
 }
 

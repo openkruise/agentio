@@ -53,7 +53,7 @@ func TestLoadGatewayTrustBundle(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "unconfigured"},
+		{name: "unconfigured", wantErr: "read gateway trust package"},
 		{name: "valid", data: valid, want: bundle},
 		{name: "missing", wantErr: "read gateway trust package"},
 		{name: "invalid JSON", data: []byte("invalid"), wantErr: "parse gateway trust package"},
