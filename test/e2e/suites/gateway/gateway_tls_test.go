@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -358,7 +359,11 @@ data:
 		defer cancel()
 		result, err := src.Call(ctx, options)
 		if err != nil {
-			t.Fatalf("expected 403 for SNI=example.com Host=example.org — egress allowlist may be bypassed: %v; attempts: %+v", err, result.Attempts)
+			t.Fatalf(
+				"expected 403 for SNI=example.com Host=example.org — egress allowlist may be bypassed: %v; attempts: %+v",
+				err,
+				result.Attempts,
+			)
 		}
 	})
 
@@ -526,7 +531,12 @@ data:
 					return fmt.Errorf("curl through %s failed: %v; stdout=%q stderr=%q", test.name, err, stdout, stderr)
 				}
 				if codes := strings.TrimSpace(stdout); codes != "200:200" {
-					return fmt.Errorf("curl through %s returned target:CONNECT codes %s, want 200:200; stderr=%q", test.name, codes, stderr)
+					return fmt.Errorf(
+						"curl through %s returned target:CONNECT codes %s, want 200:200; stderr=%q",
+						test.name,
+						codes,
+						stderr,
+					)
 				}
 				return nil
 			})
@@ -539,19 +549,29 @@ data:
 			// An unencrypted proxy request remains a positive control for connectivity.
 			stdout, stderr, err := curlThroughProxy(connectProxyHost, "http", connectProxyHTTPNodePort)
 			if err != nil || strings.TrimSpace(stdout) != "200:200" {
-				return fmt.Errorf("HTTP proxy control: codes=%q error=%v stderr=%q", stdout, err, stderr)
+				return errors.Join(fmt.Errorf("HTTP proxy control: codes=%q stderr=%q", stdout, stderr), err)
 			}
 			stdout, stderr, curlErr := curlThroughProxy(proxyHost, "https", connectProxyHTTPSNodePort)
 			codes := strings.Split(strings.TrimSpace(stdout), ":")
 			if len(codes) != 2 {
-				return fmt.Errorf("parse curl target:CONNECT codes %q: curl error=%v stderr=%q", stdout, curlErr, stderr)
+				return errors.Join(fmt.Errorf("parse curl target:CONNECT codes %q; stderr=%q", stdout, stderr), curlErr)
 			}
 			code, err := strconv.Atoi(codes[1])
 			if err != nil {
-				return fmt.Errorf("parse curl CONNECT code %q: %v; curl error=%v stderr=%q", codes[1], err, curlErr, stderr)
+				return errors.Join(
+					fmt.Errorf("parse curl CONNECT code %q: %w; stderr=%q", codes[1], err, stderr),
+					curlErr,
+				)
 			}
 			if code < 500 || code > 599 {
-				return fmt.Errorf("untrusted HTTPS proxy returned CONNECT %d, want 5xx rejection; curl error=%v stderr=%q", code, curlErr, stderr)
+				return errors.Join(
+					fmt.Errorf(
+						"untrusted HTTPS proxy returned CONNECT %d, want 5xx rejection; stderr=%q",
+						code,
+						stderr,
+					),
+					curlErr,
+				)
 			}
 			return nil
 		})
@@ -564,12 +584,16 @@ data:
 		defer cancel()
 		_, _, unrelatedCA := generateConnectProxyCertificate(t, connectProxyHost)
 		for _, ca := range []string{unrelatedCA, proxyCA} {
-			secret, err := environment.Cluster.Kube.CoreV1().Secrets(systemNamespace).Get(ctx, "forward-http-connect-proxy-ca", metav1.GetOptions{})
+			secret, err := environment.Cluster.Kube.CoreV1().
+				Secrets(systemNamespace).
+				Get(ctx, "forward-http-connect-proxy-ca", metav1.GetOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			secret.Data["ca.crt"] = []byte(ca)
-			if _, err := environment.Cluster.Kube.CoreV1().Secrets(systemNamespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+			if _, err := environment.Cluster.Kube.CoreV1().
+				Secrets(systemNamespace).
+				Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			if ca == unrelatedCA {
@@ -579,7 +603,7 @@ data:
 			harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
 				stdout, stderr, err := curlThroughProxy(connectProxyHost, "https", connectProxyHTTPSNodePort)
 				if err != nil || strings.TrimSpace(stdout) != "200:200" {
-					return fmt.Errorf("restored HTTPS proxy CA: codes=%q error=%v stderr=%q", stdout, err, stderr)
+					return errors.Join(fmt.Errorf("restored HTTPS proxy CA: codes=%q stderr=%q", stdout, stderr), err)
 				}
 				return nil
 			})

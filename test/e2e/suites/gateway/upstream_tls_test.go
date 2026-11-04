@@ -51,7 +51,17 @@ func TestSandboxUpstreamTLS(t *testing.T) {
 		t.Fatalf("TLS upstream not ready: %v", err)
 	}
 	applySettings := func(t *testing.T, settings string, trustCA bool) {
-		rig.ApplyConfig(t, scope, map[string]any{"Namespace": namespace, "Host": host, "BadHost": badHost, "Settings": settings, "TrustCA": trustCA}, `
+		rig.ApplyConfig(
+			t,
+			scope,
+			map[string]any{
+				"Namespace": namespace,
+				"Host":      host,
+				"BadHost":   badHost,
+				"Settings":  settings,
+				"TrustCA":   trustCA,
+			},
+			`
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -76,7 +86,8 @@ data:
         - "{{ .BadHost }}"
         - example.com
       {{ .Settings }}
-`)
+`,
+		)
 	}
 	call := func(host string, port int, want string) error {
 		// -k trusts only the gateway's on-demand downstream certificate. The
@@ -92,7 +103,8 @@ data:
 			return fmt.Errorf("TLS request to %s:%d: %w; stdout=%q stderr=%q", host, port, err, stdout, stderr)
 		}
 		if want == "503" {
-			if !strings.HasSuffix(strings.TrimSpace(stdout), "\n503") || !strings.Contains(stdout, "upstream connect error") {
+			if !strings.HasSuffix(strings.TrimSpace(stdout), "\n503") ||
+				!strings.Contains(stdout, "upstream connect error") {
 				return fmt.Errorf("response = %q, want gateway upstream-connect 503", stdout)
 			}
 		} else if want == "200" {
@@ -139,7 +151,9 @@ data:
 		ctx, cancel := e2e.Context(t, 10*time.Minute)
 		defer cancel()
 		token, err := environment.Cluster.Kube.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, "default",
-			&authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}}}, metav1.CreateOptions{})
+			&authenticationv1.TokenRequest{
+				Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}},
+			}, metav1.CreateOptions{})
 		if err != nil {
 			t.Fatalf("create config debug token: %v", err)
 		}
@@ -157,12 +171,16 @@ data:
 		}
 		updateCA := func(value string) {
 			t.Helper()
-			cm, err := environment.Cluster.Kube.CoreV1().ConfigMaps(namespace).Get(ctx, "upstream-tls-ca", metav1.GetOptions{})
+			cm, err := environment.Cluster.Kube.CoreV1().
+				ConfigMaps(namespace).
+				Get(ctx, "upstream-tls-ca", metav1.GetOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			cm.Data["ca.crt"] = value
-			if _, err := environment.Cluster.Kube.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			if _, err := environment.Cluster.Kube.CoreV1().
+				ConfigMaps(namespace).
+				Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -179,18 +197,28 @@ data:
 					return fmt.Errorf("read compiler failures: %w; stderr=%s", err, stderr)
 				}
 				var snapshot struct {
-					Failures []struct{ Key, Message string } `json:"failures"`
+					Failures []struct {
+						Key     string
+						Message string
+					} `json:"failures"`
 				}
 				if err := json.Unmarshal([]byte(stdout), &snapshot); err != nil {
 					return err
 				}
 				for _, failure := range snapshot.Failures {
 					if failure.Key == "Gateway/"+namespace+"/egress-gateway" &&
-						strings.Contains(failure.Message, "upstream-tls-ca") && strings.Contains(failure.Message, reason) {
+						strings.Contains(
+							failure.Message,
+							"upstream-tls-ca",
+						) && strings.Contains(failure.Message, reason) {
 						return nil
 					}
 				}
-				return fmt.Errorf("compiler failures = %+v, want CA source rejection containing %q", snapshot.Failures, reason)
+				return fmt.Errorf(
+					"compiler failures = %+v, want CA source rejection containing %q",
+					snapshot.Failures,
+					reason,
+				)
 			})
 		}
 
@@ -208,7 +236,9 @@ data:
 		updateCA("invalid PEM")
 		waitRejected("non-certificate data")
 		assertTraffic("tls13")
-		if err := environment.Cluster.Kube.CoreV1().ConfigMaps(namespace).Delete(ctx, "upstream-tls-ca", metav1.DeleteOptions{}); err != nil {
+		if err := environment.Cluster.Kube.CoreV1().
+			ConfigMaps(namespace).
+			Delete(ctx, "upstream-tls-ca", metav1.DeleteOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		waitRejected("not found")
