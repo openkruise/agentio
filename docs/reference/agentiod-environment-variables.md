@@ -90,9 +90,9 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_GATEWAY_CONNECT_TIMEOUT</code> | Duration | <code>10s</code> | Connect timeout for passthrough and dynamic-forward-proxy gateway clusters. |
 | <code>AGENTIO_GATEWAY_ENABLE_UDP_PROXY</code> | Boolean | <code>false</code> | If enabled, egress gateways terminate experimental IPv4 CONNECT-UDP sessions from ztunnel and forward datagrams directly to the MASQUE target without inspection. |
 | <code>AGENTIO_GATEWAY_LEASE_NAME</code> | String | <code>agentiod-gateway-deployer-leader</code> | Lease electing the single replica running the gateway deployment controller. |
-| <code>AGENTIO_GATEWAY_ROOT_CA_PATH</code> | String | empty | Legacy gateway-local CA bundle path. Unused by `agentiod`, which distributes its public CA trust package through xDS. |
-| <code>AGENTIO_IGNORE_RESOURCES</code> | String | empty | Comma-separated CRD names excluded from the CRD watcher; a `"*."` prefix excludes a whole group by suffix (e.g. `"*.istio.io"`). |
-| <code>AGENTIO_INCLUDE_RESOURCES</code> | String | empty | Comma-separated CRD names always admitted to the CRD watcher, overriding AGENTIO_IGNORE_RESOURCES; same `"*."` group-suffix syntax. |
+| <code>AGENTIO_GATEWAY_ROOT_CA_PATH</code> | String | empty | Legacy gateway-local CA bundle path. Unused by Agentiod, which distributes its public CA trust package through xDS. |
+| <code>AGENTIO_IGNORE_RESOURCES</code> | String | empty | Comma-separated CRD names excluded from the CRD watcher; a &#34;&#42;.&#34; prefix excludes a whole group by suffix (e.g. &#34;&#42;.istio.io&#34;). |
+| <code>AGENTIO_INCLUDE_RESOURCES</code> | String | empty | Comma-separated CRD names always admitted to the CRD watcher, overriding AGENTIO&#95;IGNORE&#95;RESOURCES; same &#34;&#42;.&#34; group-suffix syntax. |
 | <code>AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME</code> | String | empty | Agentio MutatingWebhookConfiguration whose caBundle is kept in sync with the workload root. |
 | <code>AGENTIO_INJECTOR_CONFIGMAP_NAME</code> | String | <code>agentio-sidecar-injector</code> | ConfigMap carrying the ztunnel and egress-gateway templates and their shared values. |
 | <code>AGENTIO_KEEPALIVE_MAX_SERVER_CONNECTION_AGE</code> | String | <code>30m</code> | Maximum lifetime of a server-side gRPC connection before a graceful close. Zero disables periodic connection expiry. |
@@ -102,25 +102,25 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_KUBERNETES_API_QPS</code> | Floating-point | <code>80</code> | Client-side Kubernetes API requests per second. Must be finite and positive. |
 | <code>AGENTIO_LOG_FORMAT</code> | String | <code>text</code> | agentiod log encoding: text or json. |
 | <code>AGENTIO_LOG_LEVEL</code> | String | <code>info</code> | Minimum agentiod log level: debug, info, warn, error, or none. |
-| <code>AGENTIO_MAX_REQUESTS_PER_SECOND</code> | Floating-point | <code>0</code> | Maximum new xDS streams accepted per second across the process; does not throttle ACKs or server pushes. Zero automatically selects min(250 * effective CPU budget, 1000); see AGENTIO_XDS_CPU_BUDGET. |
-| <code>AGENTIO_MESH_INTERNAL_TRAFFIC_POLICY</code> | String | <code>PEER_AWARE</code> | Controls how mesh-internal (east-west) traffic is handled for sandbox tunnel proxies. Allowed values are PEER_AWARE and PASSTHROUGH. |
+| <code>AGENTIO_MAX_REQUESTS_PER_SECOND</code> | Floating-point | <code>0</code> | Maximum new xDS streams accepted per second across the process; does not throttle ACKs or server pushes. Zero automatically selects min(250 &#42; effective CPU budget, 1000); see AGENTIO&#95;XDS&#95;CPU&#95;BUDGET. |
+| <code>AGENTIO_MESH_INTERNAL_TRAFFIC_POLICY</code> | String | <code>PEER&#95;AWARE</code> | Controls how mesh-internal (east-west) traffic is handled for sandbox tunnel proxies. Allowed values are PEER&#95;AWARE and PASSTHROUGH. |
 | <code>AGENTIO_MITM_CACHE_MAX_AGE</code> | Duration | <code>168h0m0s</code> | Maximum local issuer cache age; eviction does not remove certificates from gateways. |
 | <code>AGENTIO_MITM_CACHE_MAX_ENTRIES</code> | Integer | <code>10000</code> | Maximum number of on-demand certificates the cache may hold; the entry closest to eviction makes room when full. |
-| <code>AGENTIO_MITM_CA_SECRET_NAME</code> | String | <code>agentio-mitm-ca</code> | Secret holding the CA that signs on-demand domain certificates. SECRET mode reads it; SELF_SIGN mode owns it. |
+| <code>AGENTIO_MITM_CA_SECRET_NAME</code> | String | <code>agentio-mitm-ca</code> | Secret holding the CA that signs on-demand domain certificates. SECRET mode reads it; SELF&#95;SIGN mode owns it. |
 | <code>AGENTIO_MITM_CA_SECRET_NAMESPACE</code> | String | empty | Namespace of the MITM CA Secret. Empty uses the control-plane root namespace. |
 | <code>AGENTIO_MITM_LEAF_LIFETIME</code> | Duration | <code>15m0s</code> | Validity of on-demand domain certificates. |
 | <code>AGENTIO_MITM_RENEW_BEFORE</code> | Duration | <code>1m0s</code> | How long before expiry SDS TTL removes an on-demand certificate; new demand re-issues it. |
 | <code>AGENTIO_MITM_RESOURCE_TTL</code> | Duration | <code>15m0s</code> | Maximum SDS residency from certificate signing time; replay never extends this deadline. |
-| <code>AGENTIO_MITM_ROOT_LIFETIME</code> | Duration | <code>87600h0m0s</code> | Validity of the control-plane-managed root CA in MITM SELF_SIGN mode. |
-| <code>AGENTIO_MITM_ROOT_RENEW_BEFORE</code> | Duration | <code>8760h0m0s</code> | How long before expiry the control-plane-managed MITM root CA is renewed in SELF_SIGN mode. |
+| <code>AGENTIO_MITM_ROOT_LIFETIME</code> | Duration | <code>87600h0m0s</code> | Validity of the control-plane-managed root CA in MITM SELF&#95;SIGN mode. |
+| <code>AGENTIO_MITM_ROOT_RENEW_BEFORE</code> | Duration | <code>8760h0m0s</code> | How long before expiry the control-plane-managed MITM root CA is renewed in SELF&#95;SIGN mode. |
 | <code>AGENTIO_MITM_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often each replica checks whether the control-plane-managed MITM root CA needs CAS renewal. |
 | <code>AGENTIO_MITM_SIGN_CONCURRENCY</code> | Integer | <code>8</code> | Maximum number of on-demand certificates signed concurrently. |
-| <code>AGENTIO_MITM_SIGN_MODE</code> | String | <code>SELF_SIGN</code> | MITM CA ownership mode: SECRET reads an externally managed Secret; SELF_SIGN persists a control-plane-managed self-signed CA. |
+| <code>AGENTIO_MITM_SIGN_MODE</code> | String | <code>SELF&#95;SIGN</code> | MITM CA ownership mode: SECRET reads an externally managed Secret; SELF&#95;SIGN persists a control-plane-managed self-signed CA. |
 | <code>AGENTIO_NATIVE_SIDECARS</code> | String | <code>auto</code> | Native sidecar injection mode: true, false, or auto (per-node kubelet version detection). |
 | <code>AGENTIO_PRIMARY_CONFIGMAP_NAME</code> | String | <code>agentio-config-primary</code> | ConfigMap name of primary Agentio configuration. Empty disables the primary overlay. |
-| <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for background pushes and for streams awaiting xDS acknowledgements, with independent initial-response, established-request, and background-response pools. Defaults to min(15 + 5 * GOMAXPROCS, 100). |
+| <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for background pushes and for streams awaiting xDS acknowledgements, with independent initial-response, established-request, and background-response pools. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
 | <code>AGENTIO_PUSH_DEBOUNCE</code> | Duration | <code>0s</code> | Optional quiet period before all compiled resource changes are published; zero disables push debounce. |
-| <code>AGENTIO_PUSH_DEBOUNCE_MAX</code> | Duration | <code>1s</code> | Maximum wait when push debounce is enabled; must be at least AGENTIO_PUSH_DEBOUNCE. |
+| <code>AGENTIO_PUSH_DEBOUNCE_MAX</code> | Duration | <code>1s</code> | Maximum wait when push debounce is enabled; must be at least AGENTIO&#95;PUSH&#95;DEBOUNCE. |
 | <code>AGENTIO_SANDBOX_MODE</code> | Boolean | <code>false</code> | Enable Kruise Sandbox discovery and Sandbox xDS resources. Inline SNI also projects to the bound Workload when it hosts one Sandbox for legacy compatibility; shared policies remain on Workloads. |
 | <code>AGENTIO_SCOPED_SECRETS</code> | Boolean | <code>true</code> | Watch only the root namespace in the shared Secret informer. False watches all namespaces and requires cluster-wide Secret list/watch RBAC. |
 | <code>AGENTIO_SERVICE_NAME</code> | String | <code>agentiod</code> | Kubernetes service name placed in the xDS server certificate. |
@@ -128,7 +128,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_TRUSTED_NODE_ACCOUNTS</code> | String | empty | If set, the list of service accounts that are allowed to use node authentication for CSRs. Node authentication allows an identity to create CSRs on behalf of other identities, but only if there is a pod running on the same node with that identity. This is intended for use with node proxies. |
 | <code>AGENTIO_TRUST_BUNDLE_CONFIGMAP_NAME</code> | String | <code>agentio-ca-root-cert</code> | Per-namespace ConfigMap distributing the workload trust bundle to proxies. |
 | <code>AGENTIO_TRUST_BUNDLE_LEASE_NAME</code> | String | <code>agentiod-trust-bundle-leader</code> | Lease electing the replica that distributes the trust bundle ConfigMap. |
-| <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server's own certificate. |
+| <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server&#39;s own certificate. |
 | <code>AGENTIO_WORKLOAD_CERT_RENEW_BEFORE</code> | Duration | <code>8h0m0s</code> | How long before expiry the xDS server re-issues its own certificate. |
 | <code>AGENTIO_XDS_CPU_BUDGET</code> | String | empty | CPU budget for automatic new xDS stream admission, as a positive Kubernetes quantity (for example 500m or 2). The chart uses the CPU limit, falling back to the CPU request. Empty uses min(NumCPU, GOMAXPROCS); an explicit budget is also bounded by that runtime CPU count. |
 | <code>ENABLE_POLICY_STATUS</code> | Boolean | <code>true</code> | Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained. |
