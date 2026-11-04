@@ -3,6 +3,7 @@ kind: ConfigMap
 metadata:
   name: upstream-tls
 data:
+  # Close each response so CA updates are checked with a fresh upstream TLS handshake.
   envoy.yaml: |
     static_resources:
       listeners:
@@ -26,6 +27,7 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: tls13
+              common_http_protocol_options: {max_requests_per_connection: 1}
               route_config:
                 name: direct
                 virtual_hosts:
@@ -61,6 +63,7 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: ecdhe
+              common_http_protocol_options: {max_requests_per_connection: 1}
               route_config:
                 name: direct
                 virtual_hosts:
@@ -96,6 +99,7 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: rsa128
+              common_http_protocol_options: {max_requests_per_connection: 1}
               route_config:
                 name: direct
                 virtual_hosts:
@@ -131,6 +135,7 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: rsa256
+              common_http_protocol_options: {max_requests_per_connection: 1}
               route_config:
                 name: direct
                 virtual_hosts:
@@ -224,34 +229,5 @@ kind: ConfigMap
 metadata:
   name: upstream-tls-ca
   namespace: {{ .Namespace }}
-  labels:
-    manifests.agents.kruise.io/kube-source: "true"
 data:
-  sources: |
-    apiVersion: networking.istio.io/v1alpha3
-    kind: EnvoyFilter
-    metadata:
-      name: upstream-tls-ca
-      namespace: {{ .Namespace }}
-    spec:
-      targetRefs:
-      - group: gateway.networking.k8s.io
-        kind: Gateway
-        name: egress-gateway
-      configPatches:
-      - applyTo: CLUSTER
-        match:
-          context: ANY
-          cluster:
-            name: tls_connect_originate
-        patch:
-          operation: MERGE
-          value:
-            transport_socket:
-              name: envoy.transport_sockets.tls
-              typed_config:
-                "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-                common_tls_context:
-                  validation_context:
-                    trusted_ca:
-                      inline_string: {{ printf "%q" .ServerCA }}
+  ca.crt: {{ printf "%q" .ServerCA }}
