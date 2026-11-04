@@ -794,12 +794,18 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 		if start < 0 {
 			return nil, errors.New("agentiod deployment is missing apiVersion")
 		}
-		content = content[start:]
+		content = append([]byte("{{- define \"agentiod.deployment\" -}}\n"), content[start:]...)
 		removeBlock("{{- if $useTrustPackage }}")
 		for _, name := range []string{"AGENTIO_TRUSTED_NODE_ACCOUNTS", "AGENTIO_INJECTOR_CONFIGMAP_NAME", "AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME", "AGENTIO_NATIVE_SIDECARS"} {
 			content = regexp.MustCompile(`(?m)^            - name: `+name+`\n              value: [^\n]*\n`).ReplaceAll(content, nil)
 		}
 		content = bytes.ReplaceAll(content, []byte("$clientTrustEnabled"), []byte("false"))
+	case "agentiod/policy.yaml":
+		content = bytes.ReplaceAll(
+			content,
+			[]byte(`dict "Values" $values`),
+			[]byte(`dict "Values" (dict "agentio" $values)`),
+		)
 	case "_helpers.tpl":
 		for _, prefix := range []string{"agentio-cni.", "ztunnel.", "agentiod.webhookName", "agentiod.componentImage", "agentio.sidecarEnabled"} {
 			for {
@@ -815,6 +821,7 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 			}
 		}
 	}
+	content = bytes.ReplaceAll(content, []byte(`{{- $_ := set $values "profile" "ambient" }}`), nil)
 	removeBlock(`{{- if eq .Values.profile "sidecar" }}`)
 	removeBlock(`{{- if eq .Values.profile "ambient" }}`)
 	content = bytes.ReplaceAll(content, []byte(`or (eq .Values.profile "sidecar") (eq .Values.egressGateway.mode "gatewayAPI")`), []byte(`eq .Values.egressGateway.mode "gatewayAPI"`))

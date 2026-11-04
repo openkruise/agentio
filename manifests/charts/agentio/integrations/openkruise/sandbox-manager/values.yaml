@@ -20,6 +20,28 @@ agentio:
     nameOverride: agentiod
     fullnameOverride: ""
     replicaCount: 1
+    # Optional agentiod instances dedicated to gateway, Porter and managed EPE.
+    # Creates a separate <agentiod-name>-policy Deployment and Service.
+    # Policy Pods carry agentio.kruise.io/control-plane-pool: policy.
+    # Shares agentiod's image, configuration, ServiceAccount and CA root; each pool
+    # has a serving certificate for its own Service name. Policy replicas do not run
+    # the injector, client trust distributor or gateway deployment controller.
+    policyPool:
+      # Switches gateway/Porter/EPE default ADS and CA endpoints to the policy Service.
+      # The original agentiod Deployment/Service and ztunnel addresses stay unchanged.
+      # No automatic fallback to agentiod; migrate clients back before disabling.
+      enabled: false
+      # Independent of agentiod.replicaCount and the original Deployment's HPA.
+      replicaCount: 2
+      # Per-policy-Pod resources; does not inherit agentiod.resources.
+      resources:
+        requests: {cpu: 500m, memory: 512Mi}
+      # Independent nodeSelector, tolerations and affinity for policy replicas.
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      # Inherits agentiod.env; entries here override it only for policy replicas.
+      env: {}
     image:
       repository: ""
       name: agentiod

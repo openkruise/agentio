@@ -1,3 +1,4 @@
+{{- define "agentiod.deployment" -}}
 {{- $clientTrustEnabled := and (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled -}}
 {{- $useTrustPackage := false -}}
 {{- range .Values.agentiod.clientTrustBundle.sources -}}
@@ -19,6 +20,9 @@ spec:
   selector:
     matchLabels:
       {{- include "agentiod.selectorLabels" . | nindent 6 }}
+      {{- if eq (.Values.agentiod.controlPlanePool | default "proxy") "policy" }}
+      agentio.kruise.io/control-plane-pool: policy
+      {{- end }}
   strategy:
     rollingUpdate:
       maxSurge: {{ .Values.agentiod.rollingUpdate.maxSurge }}
@@ -28,6 +32,9 @@ spec:
       labels:
         {{- include "agentiod.selectorLabels" . | nindent 8 }}
         app: agentiod
+        {{- if eq (.Values.agentiod.controlPlanePool | default "proxy") "policy" }}
+        agentio.kruise.io/control-plane-pool: policy
+        {{- end }}
         agentio.kruise.io/dataplane-mode: none
         {{- with .Values.agentiod.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -198,3 +205,5 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end -}}
+{{ include "agentiod.deployment" . }}

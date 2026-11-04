@@ -61,7 +61,7 @@ spec:
             {{- if .Values.agentio.epe.tls.enabled }}
             {{- if $caMode }}
             - -tls-source=ca
-            - {{ printf "-ca-address=%s" (default (include "agentio.agentiod.caAddress" .) $ca.address) | quote }}
+            - {{ printf "-ca-address=%s" (default (include "agentio.gateway.xdsAddress" .) $ca.address) | quote }}
             - {{ printf "-ca-token-path=%s" (default "/var/run/secrets/tokens/agentio-token" $ca.tokenFile) | quote }}
             - {{ printf "-ca-root-path=%s" (default "/var/run/secrets/agentio/root-cert.pem" $ca.caCertificateFile) | quote }}
             - -tls-spiffe-id={{ printf "spiffe://%s/ns/%s/sa/%s" .Values.agentio.global.trustDomain (include "agentio.namespace" .) (include "agentio.epe.serviceAccountName" .) }}

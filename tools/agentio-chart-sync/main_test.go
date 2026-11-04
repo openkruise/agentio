@@ -1095,3 +1095,28 @@ func renderChart(t *testing.T, target string, values map[string]any) map[string]
 	}
 	return rendered
 }
+
+func TestExportedPolicyControlPlane(t *testing.T) {
+	target := t.TempDir()
+	writeTestFile(t, target, "Chart.yaml", "apiVersion: v2\nname: sandbox-manager\nversion: 0.1.0\n")
+	writeTestFile(t, target, "values.yaml", "manager: unchanged\n")
+	if err := buildSandboxManagerBundle(repositoryAgentioChart(t), target); err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderChart(t, target, map[string]any{"agentio": map[string]any{
+		"enabled":       true,
+		"global":        map[string]any{"namespace": "policy-system"},
+		"agentiod":      map[string]any{"policyPool": map[string]any{"enabled": true, "replicaCount": 3}},
+		"egressGateway": map[string]any{"mode": "static"},
+		"epe":           map[string]any{"mode": "managed"},
+	}})
+	var all string
+	for _, content := range rendered {
+		all += content
+	}
+	for _, want := range []string{"name: agentiod-policy", "replicas: 3", "namespace: policy-system", "control-plane-pool: policy", "--xds-address=agentiod-policy.policy-system.svc.cluster.local:15012"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("exported chart is missing %q", want)
+		}
+	}
+}
