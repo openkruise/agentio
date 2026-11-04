@@ -39,9 +39,16 @@ func TestAgentioEgressReceivesExtProcEDSAndEmptyUpdate(t *testing.T) {
 		GlobalExtProc: &configv1.ExtProcProvider{
 			ServiceRef: &configv1.ServiceReference{Namespace: "system", Name: "epe"},
 		},
-		ExtProcServices: []model.Service{service},
-		ExtProcEndpoints: []model.Endpoint{
-			{ServiceKey: service.ResourceName(), PortName: "grpc", Port: 19002, Address: "10.0.0.1", Ready: true},
+		Services: []model.Service{service},
+		Endpoints: []model.Endpoint{
+			{
+				ServiceKey: service.ResourceName(),
+				PortName:   "grpc",
+				Port:       19002,
+				Address:    "10.0.0.1",
+				Ready:      true,
+				Serving:    true,
+			},
 		},
 		DiscoveryAddress: "agentiod:15012",
 		TrustDomain:      "cluster.local",
@@ -101,7 +108,7 @@ func TestAgentioEgressReceivesExtProcEDSAndEmptyUpdate(t *testing.T) {
 		t.Fatalf("EDS assignment=%v", assignment)
 	}
 	stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.EndpointType, ResponseNonce: eds.Nonce})
-	inputs.ExtProcEndpoints = nil
+	inputs.Endpoints = nil
 	resources, err = networking.Build(inputs)
 	if err != nil {
 		t.Fatal(err)

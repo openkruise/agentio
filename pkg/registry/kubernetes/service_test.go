@@ -81,8 +81,53 @@ func TestWorkloadServicePortsNormalizeServiceAndEndpointIntent(t *testing.T) {
 	if got.TargetUID != "pod-a-uid" || got.TargetName != "pod-a" || got.TargetNamespace != "demo" || !got.HasTargetRef {
 		t.Fatalf("endpoint target = %+v", got)
 	}
-	if got.Ready || !got.Terminating {
+	if got.Ready || !got.Serving || !got.Terminating {
 		t.Fatalf("terminating serving endpoint lost its conditions: %+v", got)
+	}
+}
+
+func TestEndpointSliceConditions(t *testing.T) {
+	ready, notServing, terminating := true, false, true
+	port := int32(9002)
+	for _, tc := range []struct {
+		name        string
+		conditions  discoveryv1.EndpointConditions
+		serving     bool
+		terminating bool
+	}{
+		{name: "unknown conditions are ready and serving", serving: true},
+		{
+			name:       "publishNotReadyAddresses does not imply serving",
+			conditions: discoveryv1.EndpointConditions{Ready: &ready, Serving: &notServing},
+		},
+		{
+			name:        "terminating can still be serving",
+			conditions:  discoveryv1.EndpointConditions{Terminating: &terminating},
+			serving:     true,
+			terminating: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoints := endpointsFromSlice("cluster.local", &discoveryv1.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "demo",
+					Name:      "manual",
+					Labels:    map[string]string{discoveryv1.LabelServiceName: "manual"},
+				},
+				Ports: []discoveryv1.EndpointPort{{Port: &port}},
+				Endpoints: []discoveryv1.Endpoint{{
+					Addresses:  []string{"10.0.0.1"},
+					Conditions: tc.conditions,
+				}},
+			})
+			if len(endpoints) != 1 {
+				t.Fatalf("endpoints=%v, want one endpoint", endpoints)
+			}
+			got := endpoints[0]
+			if !got.Ready || got.Serving != tc.serving || got.Terminating != tc.terminating {
+				t.Fatalf("endpoint lost its conditions: %+v", got)
+			}
+		})
 	}
 }
 

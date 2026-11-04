@@ -40,15 +40,17 @@ func TestExtProcEDS(t *testing.T) {
 		PortName:   "extproc",
 		Protocol:   "TCP",
 		Ready:      true,
+		Serving:    true,
 	}
 	endpoints := []model.Endpoint{endpoint}
 	for _, change := range []func(*model.Endpoint){
 		func(e *model.Endpoint) { e.SourceKey = "overlapping-slice" },
 		func(e *model.Endpoint) { e.Address = "2001:db8::1" },
 		func(e *model.Endpoint) { e.Ready = false },
+		func(e *model.Endpoint) { e.Serving = false },
 		func(e *model.Endpoint) { e.Terminating = true },
 		func(e *model.Endpoint) { e.PortName = "health" },
-		func(e *model.Endpoint) { e.Port = 9003 },
+		func(e *model.Endpoint) { e.Port = 0 },
 		func(e *model.Endpoint) { e.Protocol = "UDP" },
 		func(e *model.Endpoint) { e.ServiceKey = "other/service" },
 	} {
@@ -70,8 +72,8 @@ func TestExtProcEDS(t *testing.T) {
 			Gateway:            testGateway(nil),
 			GlobalExtProc:      provider,
 			AdditionalExtProcs: []*configv1.ExtProcProvider{{Name: "second", ServiceRef: provider.ServiceRef}},
-			ExtProcServices:    []model.Service{service},
-			ExtProcEndpoints:   endpoints,
+			Services:           []model.Service{service},
+			Endpoints:          endpoints,
 			DiscoveryAddress:   "agentiod:15012",
 			TrustDomain:        "cluster.local",
 		}
@@ -153,15 +155,12 @@ func TestExtProcEDS(t *testing.T) {
 	}
 }
 
-func TestExtProcEDSPortSelectionAndEmptyAssignments(t *testing.T) {
-	provider := &configv1.ExtProcProvider{
-		Service:    "fallback.invalid",
-		ServiceRef: &configv1.ServiceReference{Namespace: "system", Name: "epe"},
-	}
+func TestServiceEDSPortSelectionAndEmptyAssignments(t *testing.T) {
+	target := ServiceTarget{Namespace: "system", Name: "backend", Port: 9002}
 	service := model.Service{
 		Namespace:                "system",
-		Name:                     "epe",
-		Hostname:                 "epe.system.svc",
+		Name:                     "backend",
+		Hostname:                 "backend.system.svc",
 		PublishNotReadyAddresses: true,
 		Ports:                    []model.ServicePort{{Name: "grpc", Port: 9002, TargetPortName: "server"}},
 	}
@@ -171,7 +170,10 @@ func TestExtProcEDSPortSelectionAndEmptyAssignments(t *testing.T) {
 		PortName:   "grpc",
 		Port:       19002,
 		Ready:      true,
+		Serving:    true,
 	}
+	notServing := ep
+	notServing.Serving = false
 	for _, tc := range []struct {
 		name      string
 		services  []model.Service
@@ -181,29 +183,76 @@ func TestExtProcEDSPortSelectionAndEmptyAssignments(t *testing.T) {
 		{"missing Service", nil, []model.Endpoint{ep}, 0},
 		{"no endpoints", []model.Service{service}, nil, 0},
 		{"unready despite publishNotReadyAddresses", []model.Service{service}, []model.Endpoint{{ServiceKey: ep.ServiceKey, Address: ep.Address, PortName: "grpc", Port: ep.Port}}, 0},
+		{"ready but not serving despite publishNotReadyAddresses", []model.Service{service}, []model.Endpoint{notServing}, 0},
 		{"named target port", []model.Service{service}, []model.Endpoint{ep}, 1},
 		{"wrong Service", []model.Service{{Namespace: "other", Name: service.Name, Ports: service.Ports}}, []model.Endpoint{ep}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assignment := BuildExtProcLoadAssignment(ExtProcCluster, provider, tc.services, tc.endpoints)
+			assignment := BuildServiceLoadAssignment("backend", target, tc.services, tc.endpoints)
 			count := 0
 			for _, locality := range assignment.Endpoints {
 				count += len(locality.LbEndpoints)
 			}
-			if assignment.ClusterName != ExtProcCluster || count != tc.want {
+			if assignment.ClusterName != "backend" || count != tc.want {
 				t.Fatalf("assignment=%v, want %d hosts", assignment, tc.want)
 			}
 		})
 	}
-	provider.Port = 1234
-	if got := BuildExtProcLoadAssignment(
-		ExtProcCluster,
-		provider,
+	target.Port = 1234
+	if got := BuildServiceLoadAssignment(
+		"backend",
+		target,
 		[]model.Service{service},
 		[]model.Endpoint{ep},
 	); len(
 		got.Endpoints,
 	) != 0 {
 		t.Fatal("missing Service port fell back to another port")
+	}
+}
+
+func TestServiceEDSUsesActualEndpointPorts(t *testing.T) {
+	service := model.Service{
+		Namespace: "demo",
+		Name:      "manual",
+		Hostname:  "manual.demo.svc",
+		Ports:     []model.ServicePort{{Name: "grpc", Port: 80, TargetPort: 8080}},
+	}
+	ep := model.Endpoint{
+		ServiceKey: service.ResourceName(),
+		Address:    "10.0.0.1",
+		PortName:   "grpc",
+		Port:       19002,
+		Ready:      true,
+		Serving:    true,
+	}
+	otherPort := ep
+	otherPort.Port = 19001
+	duplicate := ep
+	duplicate.SourceKey = "overlapping-slice"
+	endpoints := []model.Endpoint{ep, otherPort, duplicate}
+	before := append([]model.Endpoint(nil), endpoints...)
+	for _, named := range []bool{false, true} {
+		if named {
+			service.Ports[0].TargetPort = 0
+			service.Ports[0].TargetPortName = "server"
+		}
+		assignment := BuildServiceLoadAssignment("backend", ServiceTarget{
+			Namespace: service.Namespace,
+			Name:      service.Name,
+			Port:      80,
+		}, []model.Service{service}, endpoints)
+		var ports []uint32
+		for _, locality := range assignment.Endpoints {
+			for _, endpoint := range locality.LbEndpoints {
+				ports = append(ports, endpoint.GetEndpoint().GetAddress().GetSocketAddress().GetPortValue())
+			}
+		}
+		if !reflect.DeepEqual(ports, []uint32{19001, 19002}) {
+			t.Fatalf("named=%v actual endpoint ports=%v", named, ports)
+		}
+		if !reflect.DeepEqual(endpoints, before) {
+			t.Fatal("EDS selection mutated the shared endpoint input")
+		}
 	}
 }

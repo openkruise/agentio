@@ -42,11 +42,7 @@ func (g compiledGateway) ResourceName() string { return g.Name }
 func (g compiledGateway) Equals(other compiledGateway) bool {
 	return g.Name == other.Name &&
 		slices.EqualFunc(g.Resources, other.Resources, model.Resource.Equals) &&
-		maps.EqualFunc(
-			g.ExtProcTargets,
-			other.ExtProcTargets,
-			func(a, b *configv1.ExtProcProvider) bool { return proto.Equal(a, b) },
-		)
+		maps.Equal(g.EndpointTargets, other.EndpointTargets)
 }
 
 type gatewayGlobalExtProc struct {
@@ -222,12 +218,11 @@ func gatewayEndpointResources(
 		if resource.Key.TypeURL != model.EndpointType {
 			continue
 		}
-		provider := gateway.ExtProcTargets[resource.XDSName]
-		ref := provider.GetServiceRef()
+		target := gateway.EndpointTargets[resource.XDSName]
 		var services []model.Service
 		var endpoints []model.Endpoint
 		if service := krt.FetchOne(ctx, inputs.Services,
-			krt.FilterIndex(base.servicesByName, ref.GetNamespace()+"/"+ref.GetName())); service != nil {
+			krt.FilterIndex(base.servicesByName, target.Namespace+"/"+target.Name)); service != nil {
 			services = []model.Service{*service}
 			endpoints = krt.Fetch(
 				ctx,
@@ -235,7 +230,7 @@ func gatewayEndpointResources(
 				krt.FilterIndex(base.endpointsByService, service.ResourceName()),
 			)
 		}
-		assignment := networking.BuildExtProcLoadAssignment(resource.XDSName, provider, services, endpoints)
+		assignment := networking.BuildServiceLoadAssignment(resource.XDSName, target, services, endpoints)
 		value, err := protoutil.MarshalAny(assignment)
 		if err != nil {
 			return nil, err
@@ -264,7 +259,7 @@ func recordGatewayFailureIfCurrent(
 func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 	item := inputs.Gateway
 	var built []model.Resource
-	targets := make(map[string]*configv1.ExtProcProvider)
+	targets := make(map[string]networking.ServiceTarget)
 	for _, legacy := range []bool{true, false} {
 		// Limits require the community module; do not publish an unprotected legacy variant.
 		if legacy && (item.Config.GetBandwidthLimit() != nil || item.Config.GetConnectConcurrencyLimit() != nil) {
@@ -276,7 +271,7 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 			return nil, fmt.Errorf("compile gateway %s (legacy=%t): %w", item.ResourceName(), legacy, err)
 		}
 		built = append(built, variant.Resources...)
-		maps.Copy(targets, variant.ExtProcTargets)
+		maps.Copy(targets, variant.EndpointTargets)
 	}
 	result := make([]model.Resource, 0, len(built))
 	for _, resource := range built {
@@ -295,8 +290,8 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 	return &compiledGateway{
 		Name: item.ResourceName(),
 		GatewayResources: networking.GatewayResources{
-			Resources:      result,
-			ExtProcTargets: targets,
+			Resources:       result,
+			EndpointTargets: targets,
 		},
 	}, nil
 }

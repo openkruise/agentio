@@ -57,8 +57,8 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
-	ExtProcServices            []model.Service
-	ExtProcEndpoints           []model.Endpoint
+	Services                   []model.Service
+	Endpoints                  []model.Endpoint
 	GatewayPatches             []model.GatewayPatch
 	TelemetryRootNamespace     string
 	TelemetryClusterID         string
@@ -78,8 +78,8 @@ type effectiveConfig struct {
 
 // GatewayResources retains endpoint targets alongside the static resource graph.
 type GatewayResources struct {
-	Resources      []model.Resource
-	ExtProcTargets map[string]*configv1.ExtProcProvider
+	Resources       []model.Resource
+	EndpointTargets map[string]ServiceTarget
 }
 
 func Build(inputs Inputs) ([]model.Resource, error) {
@@ -190,7 +190,7 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 		}
 		resources = append(resources, resource)
 	}
-	targets := make(map[string]*configv1.ExtProcProvider)
+	targets := make(map[string]ServiceTarget)
 	for i, provider := range append([]*configv1.ExtProcProvider{effective.extProc}, effective.additionalExtProcs...) {
 		if provider.GetServiceRef() == nil {
 			continue
@@ -199,8 +199,17 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 		if i > 0 {
 			name = additionalExtProcName(provider)
 		}
-		targets[name] = provider
-		assignment := BuildExtProcLoadAssignment(name, provider, inputs.ExtProcServices, inputs.ExtProcEndpoints)
+		port := provider.GetPort()
+		if port == 0 {
+			port = 9002
+		}
+		target := ServiceTarget{
+			Namespace: provider.GetServiceRef().GetNamespace(),
+			Name:      provider.GetServiceRef().GetName(),
+			Port:      port,
+		}
+		targets[name] = target
+		assignment := BuildServiceLoadAssignment(name, target, inputs.Services, inputs.Endpoints)
 		resource, err := scopedResource(inputs.Gateway, model.EndpointType, name, assignment)
 		if err != nil {
 			return nil, err
@@ -247,7 +256,7 @@ func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 			resources[i].Facts.AgentioEgress = true
 		}
 	}
-	return &GatewayResources{Resources: resources, ExtProcTargets: targets}, nil
+	return &GatewayResources{Resources: resources, EndpointTargets: targets}, nil
 }
 
 func validatePatchedMessages(

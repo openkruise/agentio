@@ -20,19 +20,26 @@ import (
 
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 
-	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// BuildExtProcLoadAssignment resolves an accepted target against current Service endpoints.
-func BuildExtProcLoadAssignment(
+// ServiceTarget identifies a TCP Service port to resolve for EDS.
+type ServiceTarget struct {
+	Namespace string
+	Name      string
+	Port      uint32
+}
+
+// BuildServiceLoadAssignment resolves a Service port to ready, serving, non-terminating endpoints.
+// EndpointSlice ports are authoritative; Service targetPort does not constrain them.
+func BuildServiceLoadAssignment(
 	name string,
-	provider *configv1.ExtProcProvider,
+	target ServiceTarget,
 	services []model.Service,
 	endpoints []model.Endpoint,
 ) *endpointv3.ClusterLoadAssignment {
 	assignment := &endpointv3.ClusterLoadAssignment{ClusterName: name}
-	selected := selectExtProcEndpoints(provider, services, endpoints)
+	selected := selectServiceEndpoints(target, services, endpoints)
 	if len(selected) > 0 {
 		locality := &endpointv3.LocalityLbEndpoints{}
 		for _, endpoint := range selected {
@@ -47,30 +54,26 @@ func BuildExtProcLoadAssignment(
 	return assignment
 }
 
-func selectExtProcEndpoints(
-	provider *configv1.ExtProcProvider,
+func selectServiceEndpoints(
+	target ServiceTarget,
 	services []model.Service,
 	endpoints []model.Endpoint,
 ) []model.Endpoint {
-	port := provider.GetPort()
-	if port == 0 {
-		port = 9002
-	}
 	var selected []model.Endpoint
 	for _, service := range services {
-		if service.Namespace != provider.GetServiceRef().GetNamespace() ||
-			service.Name != provider.GetServiceRef().GetName() {
+		if service.Namespace != target.Namespace || service.Name != target.Name {
 			continue
 		}
 		for _, servicePort := range service.Ports {
-			if servicePort.Port != port || (servicePort.Protocol != "" && servicePort.Protocol != "TCP") {
+			if servicePort.Port != target.Port || (servicePort.Protocol != "" && servicePort.Protocol != "TCP") {
 				continue
 			}
 			for _, endpoint := range endpoints {
-				if endpoint.ServiceKey != service.ResourceName() || !endpoint.Ready || endpoint.Terminating ||
-					endpoint.PortName != servicePort.Name || endpoint.Port == 0 ||
-					(endpoint.Protocol != "" && endpoint.Protocol != "TCP") ||
-					(servicePort.TargetPort != 0 && endpoint.Port != servicePort.TargetPort) {
+				if endpoint.ServiceKey != service.ResourceName() ||
+					!endpoint.Ready || !endpoint.Serving || endpoint.Terminating ||
+					endpoint.PortName != servicePort.Name ||
+					endpoint.Port == 0 ||
+					(endpoint.Protocol != "" && endpoint.Protocol != "TCP") {
 					continue
 				}
 				selected = append(selected, endpoint)

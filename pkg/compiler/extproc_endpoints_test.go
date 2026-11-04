@@ -97,18 +97,20 @@ func TestExtProcEndpointsFollowServiceAndReadiness(t *testing.T) {
 		Port:       19002,
 		PortName:   "grpc",
 		Ready:      true,
+		Serving:    true,
 	}
 	fixture.endpoints.ConditionalUpdateObject(ep)
 	fixture.services.ConditionalUpdateObject(service)
 	expectEndpoints("demo/egress-a", networking.ExtProcCluster, []string{ep.Address})
 	for _, state := range []struct {
 		ready       bool
+		serving     bool
 		terminating bool
-	}{{false, false}, {true, false}, {true, true}, {true, false}} {
-		ep.Ready, ep.Terminating = state.ready, state.terminating
+	}{{false, true, false}, {true, true, false}, {true, false, false}, {true, true, false}, {true, true, true}, {true, true, false}} {
+		ep.Ready, ep.Serving, ep.Terminating = state.ready, state.serving, state.terminating
 		fixture.endpoints.ConditionalUpdateObject(ep)
 		var want []string
-		if ep.Ready && !ep.Terminating {
+		if ep.Ready && ep.Serving && !ep.Terminating {
 			want = []string{ep.Address}
 		}
 		expectEndpoints("demo/egress-a", networking.ExtProcCluster, want)
@@ -178,6 +180,7 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 		PortName:   "grpc",
 		Port:       9002,
 		Ready:      true,
+		Serving:    true,
 	}
 	fixture.services.ConditionalUpdateObject(service)
 	fixture.endpoints.ConditionalUpdateObject(ep)
