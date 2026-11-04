@@ -1,8 +1,8 @@
 # Get started with sidecar mode
 
-**Sidecar mode is the recommended deployment mode.** Ambient mode is in Alpha and does not yet have full feature parity with sidecar mode.
+**Sidecar mode is the recommended deployment mode; ambient mode is Alpha.**
 
-This guide installs the Agentio with sidecar injection, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
+This guide installs Agentio with sidecar injection, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
 
 ## Before you begin
 
@@ -69,11 +69,13 @@ EOF
 $ kubectl rollout status deployment/curl --namespace agentio-demo-sidecar --timeout=2m
 ```
 
-The injected ztunnel appears as the `agentio-proxy` container — either a regular container or a restartable init container, depending on native-sidecar support. Inspect both lists:
+The injected ztunnel appears as the `agentio-proxy` container. Depending on native-sidecar support, it is injected as either a regular container or a restartable init container, so check both lists:
 
 ```console
 $ kubectl get pod --namespace agentio-demo-sidecar --selector app=curl --output jsonpath='{range .items[0].spec.containers[*]}container={.name}{"\n"}{end}{range .items[0].spec.initContainers[*]}initContainer={.name} restartPolicy={.restartPolicy}{"\n"}{end}'
 ```
+
+The command prints each regular container as `container=<name>` and each init container as `initContainer=<name> restartPolicy=<policy>`. Expect `agentio-proxy` in one of the two lists.
 
 Send a baseline request from the application container:
 
@@ -91,19 +93,7 @@ $ export AGENTIO_WORKLOAD_CONTAINER=curl
 
 ## Injection metadata
 
-The injector uses the following Agentio metadata. These fields replace the corresponding Istio names for new Pods; recreate workloads from their original Pod templates after upgrading rather than reusing previously injected Pod YAML.
-
-| Field | Purpose |
-| --- | --- |
-| Annotation `sidecar.agentio.kruise.io/status` | Records injected containers and volumes for reinjection. |
-| Annotation `sidecar.agentio.kruise.io/overrides` | Records user-provided proxy container overrides for reinjection. |
-| Label `agentio.kruise.io/network` | Overrides the injected proxy's network, taking precedence over injector URL and Helm values. |
-| Annotation `prometheus.agentio.kruise.io/merge-metrics` | Enables or disables application metrics merging for this Pod. |
-| Label `cni.agentio.kruise.io/uninitialized` | Default failure label when CNI repair is configured to label broken Pods. |
-
-The chart's pinned CNI image still reads `sidecar.istio.io/status`. Injection through a CNI-enabled template therefore also writes that key; default init-container injection writes only the Agentio status. The CNI repair controller is configured to read the Agentio status. Traffic capture settings (`traffic.sidecar.istio.io/*`, `sidecar.istio.io/interceptionMode`, `status.sidecar.istio.io/port`, and `istio.io/reroute-virtual-interfaces`) retain their existing names because the CNI plugin consumes them. Ambient enrollment also retains the CNI-written `ambient.istio.io/redirection` annotation.
-
-The injector no longer validates the unused `readiness.status.sidecar.istio.io/*` tuning annotations; they do not configure the ztunnel readiness probe. New injection does not add Istio revision, TLS mode, tunnel, or canonical-service labels. User-supplied metadata is preserved.
+See [Sidecar injection metadata](../design/sidecar-injection-metadata.md) for the annotations and labels the injector adds to Pods.
 
 ## Continue
 

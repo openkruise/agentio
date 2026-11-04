@@ -43,7 +43,7 @@ $ curl --fail --silent http://127.0.0.1:9090/metrics | grep '^epe_'
 | Metric | Type and labels | Meaning |
 | --- | --- | --- |
 | `epe_plugin_calls_total` | Counter; `plugin`, `phase`, `outcome` | Filter invocations. `phase` is `request_headers`, `body_finalize`, or `response_headers`; `outcome` is `continue`, `immediate`, `mutate`, `record`, or `error`. |
-| `epe_plugin_duration_seconds` | Histogram; `plugin`, `phase` | Filter invocation latency. Bucket boundaries are `.01`, `.1`, `.5`, `2`, `4.5`, `5` seconds: `4.5` is the default per-phase plugin budget and `5` the chart's ext_proc message timeout, so a filter at its limit stays distinguishable from one the gateway gave up on. |
+| `epe_plugin_duration_seconds` | Histogram; `plugin`, `phase` | Filter invocation latency. Bucket boundaries are `.01`, `.1`, `.5`, `2`, `4.5`, `5` seconds: `4.5` is the default per-phase plugin budget and `5` the chart's external-processing message timeout, so a filter at its limit stays distinguishable from one the gateway gave up on. |
 | `epe_profile_compile_failures_total` | Counter; `scope` (`namespaced`, `global`, or `pod`) | Published policy versions that EPE rejected during compilation. `pod` counts per-Sandbox annotation rule chains. |
 | `epe_profile_stale` | Gauge; `scope` | How many policy sources in that scope had their newest version rejected while an earlier version remains active. |
 | `epe_profile_unenforced` | Gauge; `scope` | How many policy sources in that scope have no installed version at all, so none of their rules are enforced. For `pod`, that Sandbox's own rules are absent while administrator profiles still apply. |
@@ -56,11 +56,11 @@ $ curl --fail --silent http://127.0.0.1:9090/metrics | grep '^epe_'
 
 Metric names and labels describe the current implementation; this page does not make a stability guarantee for dashboards or alerts.
 
-Every label above is a fixed enum resolved at startup, so the series count does not grow with the number of profiles, Sandboxes, requests, or destinations. A full scrape is roughly 180 `epe_` series, two thirds of it the two plugin metrics. EPE runs on the data path, so a metric earns its place by answering a question someone acts on: request-path outcome and latency per filter, whether published policy is actually enforced, and whether audit records are being lost.
+Every label above is a fixed enum resolved at startup, so the series count does not grow with the number of profiles, Sandboxes, requests, or destinations. A full scrape is roughly 180 `epe_` series, two thirds of it the two plugin metrics.
 
 ## Dashboard
 
-[`manifests/charts/agentio/addons/dashboards/agentio.json`](../../manifests/charts/agentio/addons/dashboards/agentio.json) is a Grafana dashboard covering the egress gateway, EPE, and Agentiod. Import it directly; the chart does not install it. Its EPE section leads with **Policy Enforcement** and **Rejected Policy Versions**, then covers audit delivery, plugin errors, and resource use.
+[`manifests/charts/agentio/addons/dashboards/agentio.json`](../../manifests/charts/agentio/addons/dashboards/agentio.json) is a Grafana dashboard covering the egress gateway, EPE, and `agentiod`. Import it directly; the chart does not install it. Its EPE section leads with **Policy Enforcement** and **Rejected Policy Versions**, then covers audit delivery, plugin errors, and resource use.
 
 The enforcement panels aggregate with `max by (scope)` rather than `sum`: every EPE replica watches the same policy and publishes the same counts, so summing would multiply them by the replica count. The request-path panels sum because requests are split across replicas.
 
@@ -72,13 +72,11 @@ The `scope` label separates who has to act: `namespaced` and `global` are operat
 
 High or growing `epe_audit_log_dropped_total` indicates saturation of the single-worker access log queue. `epe_audit_webhook_dropped_total` with `buffer_full` indicates webhook admission saturation; `draining`, `stopped`, and `shutdown_timeout` identify shutdown loss. `http_error`, `transport_error`, and `timeout` in dispatched webhooks distinguish receiver responses from network/TLS/request construction failures and deadline expiry. EPE does not retry webhooks, so these counters represent lost audit records rather than delayed retries.
 
-Use plugin duration and outcome series together. A growing `error` outcome or durations approaching the configured per-phase plugin budget can explain request blocks or failures. The default EPE plugin budget is 4.5 seconds while the chart's ext_proc message timeout is 5 seconds; changes to either setting can shift the failure boundary. Metrics do not expose queue depth, individual profile compile errors, or audit webhook response bodies.
+Use plugin duration and outcome series together. A growing `error` outcome or durations approaching the configured per-phase plugin budget can explain request blocks or failures. The default EPE plugin budget is 4.5 seconds while the chart's external-processing message timeout is 5 seconds; changes to either setting can shift the failure boundary. Metrics do not expose queue depth, individual profile compile errors, or audit webhook response bodies.
 
 ## Logs and audit output
 
 EPE uses logr backed by Zap in JSON production mode. By default `-v=0` emits Info and higher levels; `--zap-log-level` takes precedence over `-v` when provided. The code uses verbosity levels 0 (info), 1 (debug, including per-request summaries), and 2 (trace). `--zap-log-level=debug` and `-v=1` enable the same diagnostics. `--zap-stacktrace-level` can override the production default, which emits stack traces only at `DPanic` and above.
-
-The verbosity scale previously used 2 (default), 3 (verbose), 4 (debug), and 5 (trace). When upgrading, replace explicit `-v=2` with `-v=0`, `-v=3` or `-v=4` with `-v=1`, and `-v=5` with `-v=2`. The same changes apply to numeric `--zap-log-level` and runtime logging values.
 
 With debug endpoints enabled, [GET/PUT `/debug/logging/default`](epe-admin-api.md#runtime-log-level) on the admin listener inspects or changes the running process's log level. Use the same request format as agentiod: PUT `{"output_level":"debug"}` for EPE debug diagnostics at `V(1)`, then PUT `{"output_level":"info"}` to restore default verbosity. EPE exposes only the process-wide `default` scope. Updates affect existing loggers immediately and reset to the startup flags after a restart.
 

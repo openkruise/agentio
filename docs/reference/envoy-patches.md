@@ -39,13 +39,13 @@ kubectl apply -f gateway-patches.yaml
 
 Replace `demo/egress` with the namespace/name of your Envoy egress gateway. Static Agentio gateways and gateways managed through the `agentio-egress` GatewayClass are supported. The deployment-only `agentgateway` path does not consume these patches.
 
-Agentiod watches the ConfigMap and rebuilds the selected gateways' xDS resources. Updating the configuration does not require restarting Agentiod or the gateway. A complete [example manifest](../../manifests/examples/gateway-patches.yaml) also demonstrates patching an HTTP connection manager's typed configuration.
+`agentiod` watches the ConfigMap and rebuilds the selected gateways' configuration. Updating the configuration does not require restarting `agentiod` or the gateway. A complete [example manifest](../../manifests/examples/gateway-patches.yaml) also demonstrates patching an HTTP connection manager's typed configuration.
 
-## Configuration type and legacy compatibility
+## Selecting a configuration
 
-The `manifests.agentio.kruise.io/type` label declares one configuration type per ConfigMap. The exact, case-sensitive value `gateway-patch` selects `data.patches`. A `patches` key alone does not select a ConfigMap. Other type values are not handled by the gateway patch reader.
+The `manifests.agentio.kruise.io/type` label declares one configuration type per ConfigMap. The exact, case-sensitive value `gateway-patch` selects `data.patches`. A `patches` key alone does not select a ConfigMap.
 
-The legacy `manifests.agents.kruise.io/kube-source` label remains supported for embedded Istio documents in `data.sources`. Separate multiple documents with `---`; List wrappers are not supported.
+The legacy `manifests.agents.kruise.io/kube-source` label selects embedded Istio documents in `data.sources`. Separate multiple documents with `---`; List wrappers are not supported.
 
 | Labels | Gateway patch input |
 | --- | --- |
@@ -123,31 +123,26 @@ An empty list does not clear an existing protobuf list. For proto3 scalar fields
 
 Lower priorities are ordered first. Equal-priority patch configurations are ordered by ConfigMap namespace/name. The engine also processes resources and operations in phases; patches are not an arbitrary sequential instruction list. For example, cluster ADD runs after modifications of existing clusters, so a MERGE in the same rebuild does not modify a newly added cluster. Include the complete configuration in its ADD value.
 
-## Updates, removal, and diagnostics
+## Updates and diagnostics
 
 Each rebuild starts from generated resources, so repeated updates do not accumulate appended values from previous rebuilds.
 
-If the selected patch input is invalid, Agentiod retains that ConfigMap's complete previously accepted patch collection, including when switching input formats. Parse errors are logged with the ConfigMap name, namespace, and resourceVersion. It does not fall back to the other format. Invalid `data.sources` does not block patches selected by `type: gateway-patch`. If applying accepted patches produces an invalid gateway resource set, the compiler retains that gateway's previous resource set.
-
-Remove or clear `data.patches` while retaining the gateway-patch type label to withdraw its patches without activating legacy EnvoyFilters. Deleting the ConfigMap or removing both selection labels withdraws all patches from that source. These changes restore generated behavior, subject to other configured patches and successful gateway compilation. A nonempty object with `patches: []` is invalid; remove or clear the data key to withdraw the configuration.
+- An invalid patch input retains that ConfigMap's complete previously accepted patch collection, including when switching input formats. It does not fall back to the other format.
+- If applying accepted patches produces an invalid gateway resource set, the compiler retains that gateway's previous resource set.
+- Remove or clear `data.patches` while retaining the gateway-patch type label to withdraw its patches without activating legacy EnvoyFilters. Deleting the ConfigMap or removing both selection labels withdraws all patches from that source. A nonempty object with `patches: []` is invalid.
+- Last-known-good state is held in memory: an invalid source on a fresh start produces no patches, and an invalid first gateway compilation has no previous resource set to retain. Source and gateway updates are not a transaction across gateways or resource types.
 
 When the authenticated `/debug/configz` endpoint is enabled:
 
 - `items` contains accepted patches using the diagnostic kind `GatewayPatch`, including patches converted from legacy EnvoyFilters. This is an internal representation, not a Kubernetes resource. Use `?kind=GatewayPatch` to filter patch entries.
 - `failures` includes compilation failures under `Gateway/namespace/name`.
 
-The debug endpoint shows accepted patches and their resourceVersions. Check the Agentiod logs for rejected ConfigMap revisions and parsing errors.
-
-Successful `kubectl apply` only stores the ConfigMap. Acceptance and compilation do not guarantee an Envoy ACK or a match against a particular generated object. Check the applied Envoy configuration when verifying a change; the debug endpoint does not provide per-patch match counts or Envoy ACK state.
-
-Last-known-good state is held in memory. An invalid source on a fresh start produces no patches, so a gateway can use its unpatched base configuration. An invalid first gateway compilation has no previous resource set to retain. Source and gateway updates do not provide a transaction across gateways or xDS resource types.
+Check the `agentiod` logs for rejected ConfigMap revisions and parsing errors. Successful `kubectl apply` only stores the ConfigMap; acceptance and compilation do not guarantee an Envoy ACK or a match against a particular generated object. The debug endpoint does not provide per-patch match counts or Envoy ACK state.
 
 ## Migrate from embedded EnvoyFilter
 
-Deploy an Agentiod version supporting the gateway-patch type label and `data.patches` before changing the ConfigMap. Older binaries ignore the patch configuration.
-
-Within one ConfigMap update, add `manifests.agentio.kruise.io/type: gateway-patch` and the equivalent direct configuration in `data.patches`. This replaces all embedded EnvoyFilters from that ConfigMap. Legacy documents may remain for rollback; they are ignored by the patch reader while the gateway-patch type is selected. Keep target gateways and patch values equivalent. Set explicit priorities when order matters: legacy creation timestamps still affect equal-priority ordering, and the patch identity comes from the containing ConfigMap.
-
-Keep each intended patch in one source. Identical content in different ConfigMaps executes once per source. Conflicting logical identities between patch configurations and embedded EnvoyFilters in different ConfigMaps cause a validation failure. Ignored EnvoyFilters in the same ConfigMap do not cause an identity conflict.
-
-The existing Helm `agentiod.config.sources` value still contains legacy resource documents. Apply a separate ConfigMap for patches. Before rolling back to an older Agentiod binary, ensure the legacy label and documents contain the desired configuration. To switch back on an Agentiod supporting the gateway-patch type, remove the gateway-patch type label while retaining the legacy label and documents.
+- Deploy an `agentiod` version supporting the gateway-patch type label and `data.patches` before changing the ConfigMap; older binaries ignore the patch configuration.
+- Within one ConfigMap update, add `manifests.agentio.kruise.io/type: gateway-patch` and the equivalent direct configuration in `data.patches`. This replaces all embedded EnvoyFilters from that ConfigMap. Legacy documents may remain for rollback; they are ignored while the gateway-patch type is selected.
+- Keep target gateways and patch values equivalent. Set explicit priorities when order matters. Keep each intended patch in one source: identical content in different ConfigMaps executes once per source.
+- Apply a separate ConfigMap for patches; the Helm `agentiod.config.sources` value still contains legacy resource documents.
+- Before rolling back to an older binary, ensure the legacy label and documents contain the desired configuration. To switch back, remove the gateway-patch type label while retaining the legacy label and documents.

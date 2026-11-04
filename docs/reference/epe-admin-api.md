@@ -34,17 +34,15 @@ $ curl --fail --silent --request POST \
 {"apiKeyEntries":12,"stsEntries":3,"oauth2Entries":2}
 ```
 
-API-key, STS, and OAuth2 Resource entries for that exact remote `credentialProviderName` are invalidated across all current credential-provider connections, resources, and metadata/caller/scope variants. This name is not the local `EPEConfig.extensionProviders[].name`. `providerName` is required and must be non-empty.
-
-A successful `200 OK` response reports removed entries, including expired entries not yet reaped. Zero counts are successful and still prevent older in-flight fetches from refilling the affected caches. The response does **not** mean new credentials have been fetched. Subsequent entries use their normal lifetime unless both `CREDENTIAL_CACHE_INVALIDATION_WINDOW` and `CREDENTIAL_CACHE_INVALIDATION_MAX_TTL` are positive. When enabled, each invalidation restarts a window in which new entries are capped at the configured TTL. The window defaults to `30s` and the TTL cap to `5s`; a non-positive value for either setting disables this adjustment. See [the credential-provider contract](credential-provider.md#external-cache-invalidation) for cache semantics and adapter responsibilities.
+`providerName` is required and must be non-empty; it is the remote `credentialProviderName`, not the local `EPEConfig.extensionProviders[].name`. A successful `200 OK` response reports removed entries, including expired entries not yet reaped; zero counts are successful. The response does not mean new credentials have been fetched. For cache semantics and invalidation behavior, see [Credential provider](credential-provider.md#external-cache-invalidation).
 
 Requests must contain one JSON object of at most 4 KiB. Unknown fields, invalid types, trailing JSON, and missing or empty provider names return `400` without changing cache state. Other methods return `405` with `Allow: POST`. JSON responses carry `Cache-Control: no-store`.
 
-The interface is local to one process. Calling a load-balanced Service once does not invalidate every replica. Internal controllers or other trigger adapters must deliver to every instance and invalidate affected caches after missed events. No Kubernetes watches or provider-specific integrations are installed by EPE.
+The interface is local to one process. Calling a load-balanced Service once does not invalidate every replica; deliver invalidation to every instance. No Kubernetes watches or provider-specific integrations are installed by EPE.
 
 ## Runtime log level
 
-EPE supports agentiod's logging API format on its admin listener. EPE exposes one process-wide scope, `default`; component scopes such as `krt` are not available here.
+EPE supports `agentiod`'s logging API format on its admin listener. EPE exposes one process-wide scope, `default`; component scopes such as `krt` are not available here.
 
 | Request | Response |
 | --- | --- |
@@ -72,18 +70,24 @@ The PUT body may include `"name":"default"`, so a scope object returned by GET c
 
 | `output_level` value | Effect in EPE |
 | --- | --- |
-| `"debug"` | Enables EPE debug records at `V(1)`, including token-transformation and ext_proc diagnostics. |
-| `"info"` | Restores EPE's default verbosity, equivalent to `-v=0`. |
-| `"warn"`, `"error"` | Sets the corresponding Zap minimum level. |
+| `"debug"` | Enables EPE debug records at verbosity 1, including token-transformation and external-processing diagnostics. |
+| `"info"` | Restores EPE's default verbosity. |
+| `"warn"`, `"error"` | Sets the corresponding minimum level. |
 | `"none"` | Suppresses all log output. Panic/fatal control flow is unchanged. |
 
-EPE additionally accepts numeric strings from `"0"` through `"127"` for exact logr verbosity, and Zap's `"dpanic"`, `"panic"`, and `"fatal"` thresholds. For example, `"2"` enables trace records. GET reports verbosity 0 as `"info"` and verbosity 1 as `"debug"`; higher verbosity thresholds remain numeric, so reading and writing a scope preserves its exact threshold. Named levels match the startup `--zap-log-level` flag.
+EPE also accepts numeric strings from `"0"` through `"127"` for exact verbosity, and the `"dpanic"`, `"panic"`, and `"fatal"` thresholds. Named levels match the startup `--zap-log-level` flag.
+
+| Value form | Meaning |
+| --- | --- |
+| `"0"`–`"127"` | Exact verbosity (logr's `V(n)`); higher numbers are more verbose. `"2"` enables trace records. |
+| `"debug"`, `"info"` | Named levels. GET reports verbosity 0 as `"info"` and verbosity 1 as `"debug"`; higher verbosity thresholds remain numeric. |
+| `"dpanic"`, `"panic"`, `"fatal"` | Thresholds at or above panic. |
 
 Send exactly one JSON object with a non-empty `output_level` string and an optional `name`. Invalid values, unknown fields, a mismatched `name`, trailing JSON, and bodies larger than 4 KiB return `400` without changing the level. Unknown scopes return `400`; nested scope paths return `404`. Unsupported HTTP methods return `405` with `Allow: GET, HEAD, PUT`.
 
 To restore the default EPE verbosity, PUT `{"output_level":"info"}`. A runtime change applies immediately to existing loggers in the EPE process reached by this request; configure each replica separately if necessary. Changes are not persisted: a restart restores `-v` or the overriding `--zap-log-level`. Encoding, stacktrace thresholds, and startup sampling configuration stay unchanged.
 
-The endpoint controls EPE's shared Zap core, including existing controller-runtime loggers and the slog/klog bridge. Shared Agentio packages such as `pkg/krt` retain their separate INFO scope gate, so increasing EPE verbosity does not enable those packages' DEBUG records. This endpoint does not change agentiod logging.
+The endpoint controls EPE's shared logging core (Zap is the underlying logger; logr is the interface it implements), including existing controller-runtime loggers. Shared Agentio packages retain their separate INFO scope gate, so increasing EPE verbosity does not enable those packages' DEBUG records. This endpoint does not change `agentiod` logging.
 
 ## Profile inspection endpoint
 
