@@ -402,11 +402,7 @@ The Secret coordinates and gateway namespace must be consistent. See [MITM certi
 
 ### Upstream CA trust
 
-Use `upstreamTrustBundle.additionalSources` to trust private CAs while retaining
-the built-in public CA package. Each entry must select exactly one `configMapRef`
-or `secretRef`, with an explicit `name` and `key`. Both kinds are resolved in the
-**mesh root namespace**, even when the gateway is declared in another namespace.
-References do not accept a `namespace` field.
+Use `upstreamTrustBundle.additionalSources` to trust private CAs while retaining the built-in public CA package. Each entry must select exactly one `configMapRef` or `secretRef`, with an explicit `name` and `key`. Both kinds are resolved in the **mesh root namespace**, even when the gateway is declared in another namespace. References do not accept a `namespace` field.
 
 For example, create these sources in `agentio-system` when that is the root namespace:
 
@@ -447,35 +443,15 @@ egressGateways:
             key: ca.crt
 ```
 
-Each selected key must contain one or more PEM CA certificates; private keys,
-non-CA service certificates, empty sources, and malformed PEM are rejected.
-ConfigMaps use `data`; Secrets use `data` (or `stringData` when creating them).
-The controller merges and deduplicates these certificates with the built-in public
-CA package and sends the complete bundle through xDS to both destination and HTTPS
-proxy TLS origination clusters. Hostname verification remains enabled. This does
-not change the workload `clientTrustBundle` or the MITM signing CA.
+Each selected key must contain one or more PEM CA certificates; private keys, non-CA service certificates, empty sources, and malformed PEM are rejected. ConfigMaps use `data`; Secrets use `data` (or `stringData` when creating them). The controller merges and deduplicates these certificates with the built-in public CA package and sends the complete bundle through xDS to both destination and HTTPS proxy TLS origination clusters. Hostname verification remains enabled. This does not change the workload `clientTrustBundle` or the MITM signing CA.
 
-Source updates apply without restarting Agentiod or the gateway. If a source is
-missing, its selected key is absent, or its contents are invalid, compilation
-reports the gateway, source, key, and reason and retains the previous valid gateway
-output. An initially invalid configuration produces no gateway resources. Check
-compiler failures before relying on a trust change having taken effect.
+Source updates apply without restarting Agentiod or the gateway. If a source is missing, its selected key is absent, or its contents are invalid, compilation reports the gateway, source, key, and reason and retains the previous valid gateway output. An initially invalid configuration produces no gateway resources. Check compiler failures before relying on a trust change having taken effect.
 
-Remove entries, or set `additionalSources: []`, to remove their contribution.
-A CA remains trusted if it is still present in another source or the public
-package. Existing TLS connections can remain active until they close.
+Remove entries, or set `additionalSources: []`, to remove their contribution. A CA remains trusted if it is still present in another source or the public package. Existing TLS connections can remain active until they close.
 
-Additional sources require the embedded public CA package configured by
-`AGENTIO_CLIENT_TRUST_PACKAGE_PATH` in the standard Agentiod image. Without that
-package, the controller rejects additional sources rather than replacing a
-gateway-local public CA file. With no additional sources, existing local-file
-installations retain their previous behavior. Secret references reuse the shared
-Secret cache and the existing root-namespace read permissions; no wider Secret
-RBAC is required.
+Additional sources require the embedded public CA package configured by `AGENTIO_CLIENT_TRUST_PACKAGE_PATH` in the standard Agentiod image. Without that package, the controller rejects additional sources rather than replacing a gateway-local public CA file. With no additional sources, existing local-file installations retain their previous behavior. Secret references reuse the shared Secret cache and the existing root-namespace read permissions; no wider Secret RBAC is required.
 
-Gateway API `parametersRef` ConfigMaps accept the same `upstreamTrustBundle` block
-in `data.config`, without the `egressGateways` wrapper. Trust sources still resolve
-in the mesh root namespace, independently of the parameters ConfigMap namespace.
+Gateway API `parametersRef` ConfigMaps accept the same `upstreamTrustBundle` block in `data.config`, without the `egressGateways` wrapper. Trust sources still resolve in the mesh root namespace, independently of the parameters ConfigMap namespace.
 
 ### Upstream TLS defaults
 
