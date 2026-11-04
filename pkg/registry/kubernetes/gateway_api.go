@@ -55,7 +55,12 @@ func decodeEgressGateway(content string) (*configv1.EgressGateway, error) {
 	if value.GetName() != "" || value.GetNamespace() != "" {
 		return nil, fmt.Errorf("name and namespace must be omitted; Gateway metadata is authoritative")
 	}
-	if service := value.GetExtProc().GetService(); service != "" && strings.TrimSpace(service) == "" {
+	if err := model.ValidateExtProcServiceRef(value.GetExtProc()); err != nil {
+		return nil, fmt.Errorf("extProc: %w", err)
+	}
+	if service := value.GetExtProc().
+		GetService(); value.GetExtProc().GetServiceRef() == nil && service != "" &&
+		strings.TrimSpace(service) == "" {
 		return nil, fmt.Errorf("ext_proc service must not be whitespace-only")
 	}
 	if err := model.ValidateUpstreamTLS(value.GetTls().GetOrigination()); err != nil {

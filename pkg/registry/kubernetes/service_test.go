@@ -81,8 +81,8 @@ func TestWorkloadServicePortsNormalizeServiceAndEndpointIntent(t *testing.T) {
 	if got.TargetUID != "pod-a-uid" || got.TargetName != "pod-a" || got.TargetNamespace != "demo" || !got.HasTargetRef {
 		t.Fatalf("endpoint target = %+v", got)
 	}
-	if got.Ready {
-		t.Fatalf("terminating serving endpoint became ready: %+v", got)
+	if got.Ready || !got.Terminating {
+		t.Fatalf("terminating serving endpoint lost its conditions: %+v", got)
 	}
 }
 

@@ -195,6 +195,7 @@ func endpointsFromSlice(clusterDomain string, slice *discoveryv1.EndpointSlice) 
 	result := make([]model.Endpoint, 0, len(slice.Endpoints)*len(slice.Ports))
 	for _, endpoint := range slice.Endpoints {
 		ready := endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready
+		terminating := endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating
 		zone := ""
 		if endpoint.Zone != nil {
 			zone = *endpoint.Zone
@@ -235,6 +236,7 @@ func endpointsFromSlice(clusterDomain string, slice *discoveryv1.EndpointSlice) 
 					Port:            uint32(*port.Port),
 					Protocol:        string(protocol),
 					Ready:           ready,
+					Terminating:     terminating,
 					Zone:            zone,
 					HasTargetRef:    hasTargetRef,
 					TargetKind:      targetKind,

@@ -118,6 +118,7 @@ type Endpoint struct {
 	Port            uint32
 	Protocol        string
 	Ready           bool
+	Terminating     bool
 	Zone            string
 	HasTargetRef    bool
 	TargetKind      string

@@ -57,6 +57,8 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	ExtProcServices            []model.Service
+	ExtProcEndpoints           []model.Endpoint
 	GatewayPatches             []model.GatewayPatch
 	TelemetryRootNamespace     string
 	TelemetryClusterID         string
@@ -74,7 +76,24 @@ type effectiveConfig struct {
 	telemetry          *telemetry.Output
 }
 
+// GatewayResources retains endpoint targets alongside the static resource graph.
+type GatewayResources struct {
+	Resources      []model.Resource
+	ExtProcTargets map[string]*configv1.ExtProcProvider
+}
+
 func Build(inputs Inputs) ([]model.Resource, error) {
+	built, err := BuildGateway(inputs)
+	if err != nil {
+		return nil, err
+	}
+	return built.Resources, nil
+}
+
+// BuildGateway lets incremental callers retain accepted targets while refreshing EDS separately.
+//
+//nolint:gocyclo,funlen // Preserve the existing gateway assembly while exposing accepted EDS targets.
+func BuildGateway(inputs Inputs) (*GatewayResources, error) {
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
 	}
@@ -171,6 +190,23 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 		}
 		resources = append(resources, resource)
 	}
+	targets := make(map[string]*configv1.ExtProcProvider)
+	for i, provider := range append([]*configv1.ExtProcProvider{effective.extProc}, effective.additionalExtProcs...) {
+		if provider.GetServiceRef() == nil {
+			continue
+		}
+		name := ExtProcCluster
+		if i > 0 {
+			name = additionalExtProcName(provider)
+		}
+		targets[name] = provider
+		assignment := BuildExtProcLoadAssignment(name, provider, inputs.ExtProcServices, inputs.ExtProcEndpoints)
+		resource, err := scopedResource(inputs.Gateway, model.EndpointType, name, assignment)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, resource)
+	}
 	for _, message := range routes {
 		resource, err := scopedResource(inputs.Gateway, model.RouteType, message.GetName(), message)
 		if err != nil {
@@ -211,7 +247,7 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 			resources[i].Facts.AgentioEgress = true
 		}
 	}
-	return resources, nil
+	return &GatewayResources{Resources: resources, ExtProcTargets: targets}, nil
 }
 
 func validatePatchedMessages(
@@ -244,13 +280,15 @@ func validatePatchedGroup[T interface{ ValidateAll() error }](messages []T) erro
 func resolveConfig(gateway model.Gateway, globalExtProc *configv1.ExtProcProvider) (effectiveConfig, error) {
 	result := effectiveConfig{gateway: gateway.Config, gatewayIdentity: gateway.ResourceName()}
 	if override := gateway.Config.GetExtProc(); override != nil {
-		// An explicit empty service disables ext_proc for this gateway;
-		// only an absent override inherits the global provider.
-		if override.GetService() != "" {
+		// Only an absent override inherits the global provider.
+		if model.ExtProcEnabled(override) {
 			result.extProc = override
 		}
-	} else if globalExtProc.GetService() != "" {
+	} else if model.ExtProcEnabled(globalExtProc) {
 		result.extProc = globalExtProc
+	}
+	if err := model.ValidateExtProcServiceRef(result.extProc); err != nil {
+		return effectiveConfig{}, err
 	}
 	if err := model.ValidateExtProcTLS(result.extProc.GetTls()); err != nil {
 		return effectiveConfig{}, err
