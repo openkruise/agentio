@@ -21,7 +21,7 @@ COPY --from=sni-builder /src/.envoy-sdk/ ./.envoy-sdk/
 COPY extensions/envoy/network-limits/ ./
 RUN bash build.sh --build-only
 
-FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
