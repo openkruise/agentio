@@ -1,6 +1,6 @@
 # Copyright 2026 The Kruise Authors
 # SPDX-License-Identifier: Apache-2.0
-FROM rust:1.93-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY api/ api/

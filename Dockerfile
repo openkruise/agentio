@@ -11,7 +11,7 @@ ARG TRUST_PACKAGE_IMAGE=quay.io/jetstack/trust-pkg-debian-bookworm:20250419-deb1
 
 FROM ${TRUST_PACKAGE_IMAGE} AS trust-package
 
-FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
