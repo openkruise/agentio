@@ -17,7 +17,6 @@ package charts_test
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -34,55 +33,28 @@ import (
 )
 
 func TestClientTrustChartContract(t *testing.T) {
-	data, err := os.ReadFile("../../agentio.deps")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var pins []struct{ Name, Repository, Digest string }
-	if err = json.Unmarshal(data, &pins); err != nil {
-		t.Fatal(err)
-	}
-	var trustImage string
-	for _, p := range pins {
-		if p.Name == "TRUST_PACKAGE_IMAGE" {
-			trustImage = p.Repository + "@" + p.Digest
-		}
-	}
-	if trustImage == "" {
-		t.Fatal("missing CA package pin")
-	}
 	manifest := renderAgentio(t, "--set", "profile=sidecar", "--set", "agentiod.injector.clientTrust.enabled=true")
 	foundDeployment, foundConfig := false, false
 	for _, document := range bytes.Split([]byte(manifest), []byte("\n---")) {
 		var object renderedObject
-		if err = yaml.Unmarshal(document, &object); err != nil {
+		if err := yaml.Unmarshal(document, &object); err != nil {
 			t.Fatal(err)
 		}
 		if object.Kind == "Deployment" && object.Metadata.Name == "agentiod" {
 			foundDeployment = true
 			var deploy appsv1.Deployment
-			if err = yaml.Unmarshal(document, &deploy); err != nil {
+			if err := yaml.Unmarshal(document, &deploy); err != nil {
 				t.Fatal(err)
 			}
 			spec := deploy.Spec.Template.Spec
-			if len(spec.InitContainers) != 1 || spec.InitContainers[0].Image != trustImage {
-				t.Fatalf("CA package diverges from dependency pin: %+v", spec.InitContainers)
-			}
-			mounted := false
-			for _, m := range spec.Containers[0].VolumeMounts {
-				mounted = mounted || m.Name == "client-trust-package" && m.ReadOnly
-			}
-			if !mounted {
-				t.Fatal("discovery does not mount trust package read-only")
-			}
-			if spec.SecurityContext.FSGroup == nil {
-				t.Fatal("non-root trust init requires shared volume group")
+			if len(spec.InitContainers) != 0 || len(spec.Volumes) != 0 || len(spec.Containers[0].VolumeMounts) != 0 {
+				t.Fatal("public CA package must be built into the Agentiod image")
 			}
 		}
 		if object.Kind == "ConfigMap" && object.Metadata.Name == "agentio-sidecar-injector" {
 			foundConfig = true
 			var cm corev1.ConfigMap
-			if err = yaml.Unmarshal(document, &cm); err != nil {
+			if err := yaml.Unmarshal(document, &cm); err != nil {
 				t.Fatal(err)
 			}
 			config, err := inject.UnmarshalConfig([]byte(cm.Data["config"]))
@@ -124,9 +96,6 @@ func TestClientTrustChartRejectsInvalidConfiguration(t *testing.T) {
 		{"--set-json", `agentiod.injector.clientTrust.containers.include=["app?"]`},
 		{"--set-json", `agentiod.clientTrustBundle.sources=[{"defaultCAs":true,"agentioMITM":true}]`},
 		{"--set-json", `agentiod.injector.clientTrust.mounts=[{"name":"ca","mountPath":"/ca","secret":{"secretName":"ca"}}]`},
-		{"--set", "agentiod.trustPackage.image=example.invalid/unpinned:latest"},
-		{"--set", "agentiod.trustPackage.enabled=true"},
-		{"--set", "agentiod.trustPackage.enabled=false"},
 	} {
 		if output, err := helmTemplate(t, args...); err == nil {
 			t.Fatalf("invalid config rendered: %v\n%s", args, output)
@@ -227,10 +196,9 @@ func TestClientTrustMasterSwitch(t *testing.T) {
 		sources     string
 		enabled     bool
 		wantEnabled bool
-		wantPackage bool
 	}{
 		{name: "default-disabled", profile: "sidecar"},
-		{name: "enabled", profile: "sidecar", enabled: true, wantEnabled: true, wantPackage: true},
+		{name: "enabled", profile: "sidecar", enabled: true, wantEnabled: true},
 		{name: "ambient", profile: "ambient", enabled: true},
 		{
 			name:        "mitm-only",
@@ -258,7 +226,6 @@ func TestClientTrustMasterSwitch(t *testing.T) {
 ]`,
 			enabled:     true,
 			wantEnabled: true,
-			wantPackage: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -300,10 +267,10 @@ func TestClientTrustMasterSwitch(t *testing.T) {
 					}
 				}
 				if flagCount != 1 ||
-					(packageEnvCount > 0) != tc.wantPackage ||
-					(len(spec.InitContainers) > 0) != tc.wantPackage ||
-					(len(spec.Volumes) > 0) != tc.wantPackage ||
-					(len(spec.Containers[0].VolumeMounts) > 0) != tc.wantPackage {
+					packageEnvCount != 0 ||
+					len(spec.InitContainers) != 0 ||
+					len(spec.Volumes) != 0 ||
+					len(spec.Containers[0].VolumeMounts) != 0 {
 					t.Fatalf("inconsistent process gate or package resources: %+v", spec)
 				}
 			}

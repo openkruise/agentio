@@ -85,6 +85,9 @@ func (g Gateway) ValidateForUse() error {
 	if err := ValidateUpstreamTLS(g.Config.GetTls().GetOrigination()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
+	if err := ValidateUpstreamTrustBundle(g.Config.GetUpstreamTrustBundle()); err != nil {
+		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
+	}
 	if err := ValidateAccessLogFormat(g.Config.GetAccessLogFormat()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}

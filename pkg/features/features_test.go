@@ -57,9 +57,9 @@ func TestValidateDomains(t *testing.T) {
 		{
 			name: "networking",
 			mutate: func(t *testing.T) {
-				test.SetForTest(t, &GatewayRootCAPath, "certs/root.pem")
+				test.SetForTest(t, &ClientTrustPackagePath, " ")
 			},
-			wantErr: "gateway root CA path must be absolute",
+			wantErr: "public CA trust package path is required",
 		},
 		{
 			name: "ca rotation",
@@ -132,6 +132,54 @@ func TestValidatePreservesFirstErrorOrder(t *testing.T) {
 	}
 }
 
+func TestValidateNetworkingWithTrustPackage(t *testing.T) {
+	test.SetForTest(t, &ClientTrustPackagePath, "/packages/ca.json")
+	test.SetForTest(t, &GatewayRootCAPath, "unused-relative-path")
+	if err := validateNetworking(); err != nil {
+		t.Fatal(err)
+	}
+	test.SetForTest(t, &GatewayConnectTimeout, time.Duration(0))
+	if err := validateNetworking(); err == nil {
+		t.Fatal("trust package must not bypass connect timeout validation")
+	}
+}
+
+func TestClientTrustPackagePathEnvironment(t *testing.T) {
+	const expectedEnv = "AGENTIO_TEST_TRUST_PACKAGE_PATH"
+	if want, helper := os.LookupEnv(expectedEnv); helper {
+		if ClientTrustPackagePath != want {
+			t.Fatalf("ClientTrustPackagePath = %q, want %q", ClientTrustPackagePath, want)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"default", "", "/usr/local/share/agentio/trust-package/cert-manager-package-debian.json"},
+		{"override", "/packages/custom.json", "/packages/custom.json"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "-test.run=^TestClientTrustPackagePathEnvironment$")
+			for _, variable := range os.Environ() {
+				if !strings.HasPrefix(variable, "AGENTIO_CLIENT_TRUST_PACKAGE_PATH=") &&
+					!strings.HasPrefix(variable, expectedEnv+"=") {
+					command.Env = append(command.Env, variable)
+				}
+			}
+			command.Env = append(command.Env, expectedEnv+"="+tc.want)
+			if tc.name != "default" {
+				command.Env = append(command.Env, "AGENTIO_CLIENT_TRUST_PACKAGE_PATH="+tc.value)
+			}
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("environment test: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestValidateKubernetesAPILimits(t *testing.T) {
 	for _, qps := range []float64{0, -1, math.NaN(), math.Inf(1), math.MaxFloat64, math.SmallestNonzeroFloat64} {
 		t.Run("invalid QPS", func(t *testing.T) {
@@ -166,7 +214,7 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &ClientQueueSize, 1)
 	test.SetForTest(t, &MaxServerConnectionAge, 30*time.Minute)
 	test.SetForTest(t, &GatewayConnectTimeout, time.Second)
-	test.SetForTest(t, &GatewayRootCAPath, "/etc/ssl/certs/ca-certificates.crt")
+	test.SetForTest(t, &ClientTrustPackagePath, "/packages/ca.json")
 	test.SetForTest(t, &CARootLifetime, 10*time.Hour)
 	test.SetForTest(t, &CARenewBefore, 3*time.Hour)
 	test.SetForTest(t, &CARotationCheckInterval, time.Hour)

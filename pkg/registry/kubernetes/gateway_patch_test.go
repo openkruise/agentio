@@ -490,6 +490,8 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 		Pods:                       registry.Pods,
 		KubernetesServices:         registry.KubernetesServices,
 		EndpointSlices:             registry.EndpointSlices,
+		ConfigMaps:                 registry.ConfigMaps,
+		Secrets:                    registry.Secrets,
 		Sandboxes:                  registry.Sandboxes.Collection,
 		Workloads:                  registry.Workloads,
 		Services:                   registry.Services,

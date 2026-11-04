@@ -33,9 +33,10 @@ import (
 // resourceBuilder belongs to one build. Nested helpers record the first encoding
 // failure; the entry points discard the entire result if any extension failed.
 type resourceBuilder struct {
-	legacyGateway bool
-	extensions    []*corev3.TypedExtensionConfig
-	err           error
+	legacyGateway       bool
+	upstreamTrustBundle string
+	extensions          []*corev3.TypedExtensionConfig
+	err                 error
 }
 
 func (b *resourceBuilder) pack(message proto.Message) *anypb.Any {

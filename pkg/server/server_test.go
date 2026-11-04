@@ -17,20 +17,69 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"istio.io/istio/pkg/test"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/features"
 	agentlog "github.com/openkruise/agentio/pkg/log"
+	"github.com/openkruise/agentio/pkg/security/pki"
 	"github.com/openkruise/agentio/pkg/server/debug"
 )
+
+func TestLoadGatewayTrustBundle(t *testing.T) {
+	root, err := pki.NewSelfSignedCA("public test CA", 365*24*time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := string(root.CertificatePEM())
+	valid, err := json.Marshal(clienttrust.Package{Name: "test", Version: "1", Bundle: bundle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		want    string
+		wantErr string
+	}{
+		{name: "unconfigured", wantErr: "read gateway trust package"},
+		{name: "valid", data: valid, want: bundle},
+		{name: "missing", wantErr: "read gateway trust package"},
+		{name: "invalid JSON", data: []byte("invalid"), wantErr: "parse gateway trust package"},
+		{name: "invalid PEM", data: []byte(`{"name":"test","version":"1","bundle":"invalid"}`), wantErr: "non-certificate data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := ""
+			if tc.name != "unconfigured" {
+				path = filepath.Join(t.TempDir(), "package.json")
+				if tc.data != nil {
+					if err := os.WriteFile(path, tc.data, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			got, err := loadGatewayTrustBundle(path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("loadGatewayTrustBundle() = %q, %v; want %s", got, err, tc.wantErr)
+				}
+			} else if err != nil || got != tc.want {
+				t.Fatalf("loadGatewayTrustBundle() = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
 
 func TestStartupLogUsesEffectiveSettingsWithoutDumpingOptions(t *testing.T) {
 	var output bytes.Buffer

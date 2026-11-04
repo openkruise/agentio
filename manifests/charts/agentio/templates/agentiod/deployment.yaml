@@ -1,11 +1,5 @@
 {{- define "agentiod.deployment" -}}
 {{- $clientTrustEnabled := and (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled -}}
-{{- $useTrustPackage := false -}}
-{{- range .Values.agentiod.clientTrustBundle.sources -}}
-{{- if .defaultCAs -}}
-{{- $useTrustPackage = $clientTrustEnabled -}}
-{{- end -}}
-{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,29 +48,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $useTrustPackage }}
-      initContainers:
-        - name: client-trust-package
-          image: {{ .Values.agentiod.trustPackage.image | quote }}
-          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          args: ["/debian-package", "/packages"]
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            capabilities:
-              drop: [ALL]
-          resources:
-            requests: {cpu: 10m, memory: 16Mi}
-            limits: {memory: 64Mi}
-          volumeMounts:
-            - name: client-trust-package
-              mountPath: /packages
-      volumes:
-        - name: client-trust-package
-          emptyDir:
-            sizeLimit: 5Mi
-      {{- end }}
       containers:
         - name: discovery
           image: {{ include "agentiod.image" . | quote }}
@@ -121,10 +92,6 @@ spec:
             {{- end }}
             - name: AGENTIO_SANDBOX_MODE
               value: {{ .Values.sandbox.enabled | quote }}
-            {{- if $useTrustPackage }}
-            - name: AGENTIO_CLIENT_TRUST_PACKAGE_PATH
-              value: /var/run/agentio/trust-package/cert-manager-package-debian.json
-            {{- end }}
             - name: AGENTIO_LOG_LEVEL
               value: {{ .Values.agentiod.logging.level | quote }}
             - name: AGENTIO_LOG_FORMAT
@@ -181,12 +148,6 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
-          {{- if $useTrustPackage }}
-          volumeMounts:
-            - name: client-trust-package
-              mountPath: /var/run/agentio/trust-package
-              readOnly: true
-          {{- end }}
           resources:
             {{- toYaml .Values.agentiod.resources | nindent 12 }}
       {{- with .Values.agentiod.nodeSelector }}

@@ -17,7 +17,6 @@ package features
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,8 +34,7 @@ var (
 	GatewayRootCAPath = env.Register(
 		"AGENTIO_GATEWAY_ROOT_CA_PATH",
 		"",
-		"OS root CA bundle path used by gateway TLS origination. When empty the "+
-			"first existing well-known OS CA bundle is auto-detected.",
+		"Legacy gateway-local CA bundle path. Unused by Agentiod, which distributes its public CA trust package through xDS.",
 	).Get()
 	EnableSNITrafficPolicy = env.Register(
 		"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY",
@@ -94,12 +92,8 @@ func validateNetworking() error {
 	if GatewayConnectTimeout <= 0 {
 		return fmt.Errorf("gateway connect timeout must be positive")
 	}
-	rootCA := ResolveGatewayRootCAPath()
-	if strings.TrimSpace(rootCA) == "" {
-		return fmt.Errorf("gateway root CA path is required (no OS CA bundle found)")
-	}
-	if !filepath.IsAbs(rootCA) {
-		return fmt.Errorf("gateway root CA path must be absolute")
+	if strings.TrimSpace(ClientTrustPackagePath) == "" {
+		return fmt.Errorf("public CA trust package path is required (AGENTIO_CLIENT_TRUST_PACKAGE_PATH)")
 	}
 	return nil
 }

@@ -35,6 +35,8 @@ type Inputs struct {
 	Pods               krt.Collection[*corev1.Pod]
 	KubernetesServices krt.Collection[*corev1.Service]
 	EndpointSlices     krt.Collection[*discoveryv1.EndpointSlice]
+	ConfigMaps         krt.Collection[*corev1.ConfigMap]
+	Secrets            krt.Collection[*corev1.Secret]
 
 	Sandboxes krt.Collection[model.Sandbox]
 	Workloads krt.Collection[model.Workload]
@@ -50,9 +52,10 @@ type Inputs struct {
 
 	AgentioConfig krt.Collection[model.AgentioConfiguration]
 
-	Resolve          policy.HostnameResolver
-	DiscoveryAddress string
-	TrustDomain      string
+	Resolve            policy.HostnameResolver
+	DiscoveryAddress   string
+	TrustDomain        string
+	GatewayTrustBundle string
 }
 
 // Compiler turns registry state into an xDS snapshot. The derived collections
@@ -70,7 +73,8 @@ func New(inputs Inputs, options krt.OptionsBuilder) (*Compiler, error) {
 		inputs.Sandboxes = krt.NewStaticCollection[model.Sandbox](nil, nil, options.WithName("disabled-sandboxes")...)
 	}
 	if inputs.Sandboxes == nil || inputs.Workloads == nil || inputs.Pods == nil || inputs.KubernetesServices == nil ||
-		inputs.EndpointSlices == nil || inputs.Services == nil || inputs.Endpoints == nil ||
+		inputs.EndpointSlices == nil || inputs.ConfigMaps == nil || inputs.Secrets == nil ||
+		inputs.Services == nil || inputs.Endpoints == nil ||
 		inputs.Gateways == nil || inputs.TrafficPolicies == nil || inputs.SecurityProfiles == nil {
 		return nil, fmt.Errorf("all compiler input collections are required")
 	}

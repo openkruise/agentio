@@ -795,7 +795,6 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 			return nil, errors.New("agentiod deployment is missing apiVersion")
 		}
 		content = append([]byte("{{- define \"agentiod.deployment\" -}}\n"), content[start:]...)
-		removeBlock("{{- if $useTrustPackage }}")
 		for _, name := range []string{"AGENTIO_TRUSTED_NODE_ACCOUNTS", "AGENTIO_INJECTOR_CONFIGMAP_NAME", "AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME", "AGENTIO_NATIVE_SIDECARS"} {
 			content = regexp.MustCompile(`(?m)^            - name: `+name+`\n              value: [^\n]*\n`).ReplaceAll(content, nil)
 		}

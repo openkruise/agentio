@@ -1,6 +1,32 @@
 version: 2
 
 updates:
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /docker
+      - /extensions/epe/docker
+      - /extensions/porter/docker
+      - /extensions/envoy/sni-policy
+      - /test/fixtures/clienttrust
+      - /test/fixtures/extproc
+      - /bench/xds
+      - /bench/porter
+    target-branch: master
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: deps
+    ignore:
+      # Debian CA package revisions need their own comparator and BOM synchronization.
+      - dependency-name: quay.io/jetstack/trust-pkg-debian-bookworm
+
   - package-ecosystem: gomod
     directory: /
     target-branch: master

@@ -80,7 +80,7 @@ KRT debounce applies only to TrafficPolicy and SecurityProfile events, including
 | <code>AGENTIO_CA_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often the elected leader checks CA expiry. |
 | <code>AGENTIO_CA_SECRET_NAME</code> | String | <code>agentio-ca-secret</code> | Secret holding the workload root CA. |
 | <code>AGENTIO_CLIENT_QUEUE_SIZE</code> | Integer | <code>100</code> | Maximum requests queued per xDS client before the stream is considered stuck. |
-| <code>AGENTIO_CLIENT_TRUST_PACKAGE_PATH</code> | String | empty | Path to the versioned public CA trust package JSON. |
+| <code>AGENTIO_CLIENT_TRUST_PACKAGE_PATH</code> | String | <code>/usr/local/share/agentio/trust-package/cert-manager-package-debian.json</code> | Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution. Must be non-empty; an unreadable or invalid package prevents startup. |
 | <code>AGENTIO_CONFIGMAP_NAME</code> | String | <code>agentio-config</code> | ConfigMap name of Agentio configuration. |
 | <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection with the sidecar injector. |
 | <code>AGENTIO_ENABLE_DEBUG_ON_HTTP</code> | Boolean | <code>true</code> | Enable authenticated debug handlers on the monitoring HTTP listener. |
@@ -90,7 +90,7 @@ KRT debounce applies only to TrafficPolicy and SecurityProfile events, including
 | <code>AGENTIO_GATEWAY_CONNECT_TIMEOUT</code> | Duration | <code>10s</code> | Connect timeout for passthrough and dynamic-forward-proxy gateway clusters. |
 | <code>AGENTIO_GATEWAY_ENABLE_UDP_PROXY</code> | Boolean | <code>false</code> | If enabled, egress gateways terminate experimental IPv4 CONNECT-UDP sessions from ztunnel and forward datagrams directly to the MASQUE target without inspection. |
 | <code>AGENTIO_GATEWAY_LEASE_NAME</code> | String | <code>agentiod-gateway-deployer-leader</code> | Lease electing the single replica running the gateway deployment controller. |
-| <code>AGENTIO_GATEWAY_ROOT_CA_PATH</code> | String | empty | OS root CA bundle path used by gateway TLS origination. When empty the first existing well-known OS CA bundle is auto-detected. |
+| <code>AGENTIO_GATEWAY_ROOT_CA_PATH</code> | String | empty | Legacy gateway-local CA bundle path. Unused by Agentiod, which distributes its public CA trust package through xDS. |
 | <code>AGENTIO_IGNORE_RESOURCES</code> | String | empty | Comma-separated CRD names excluded from the CRD watcher; a &#34;&#42;.&#34; prefix excludes a whole group by suffix (e.g. &#34;&#42;.istio.io&#34;). |
 | <code>AGENTIO_INCLUDE_RESOURCES</code> | String | empty | Comma-separated CRD names always admitted to the CRD watcher, overriding AGENTIO&#95;IGNORE&#95;RESOURCES; same &#34;&#42;.&#34; group-suffix syntax. |
 | <code>AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME</code> | String | empty | Agentio MutatingWebhookConfiguration whose caBundle is kept in sync with the workload root. |

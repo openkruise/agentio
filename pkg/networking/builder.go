@@ -66,6 +66,9 @@ type Inputs struct {
 	TelemetryProviderOverrides *model.TelemetryProviderOverrides
 	DiscoveryAddress           string
 	TrustDomain                string
+	// UpstreamTrustBundle contains validated public and additional upstream CA PEM.
+	// Direct builders without a bundle use the legacy gateway-local CA file.
+	UpstreamTrustBundle string
 }
 
 type effectiveConfig struct {
@@ -122,12 +125,14 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 	if features.GatewayConnectTimeout <= 0 {
 		return nil, fmt.Errorf("gateway connect timeout must be positive")
 	}
-	rootCA := features.ResolveGatewayRootCAPath()
-	if strings.TrimSpace(rootCA) == "" {
-		return nil, fmt.Errorf("gateway root CA path is required (no OS CA bundle found)")
-	}
-	if !filepath.IsAbs(rootCA) {
-		return nil, fmt.Errorf("gateway root CA path must be absolute")
+	if inputs.UpstreamTrustBundle == "" {
+		rootCA := features.ResolveGatewayRootCAPath()
+		if strings.TrimSpace(rootCA) == "" {
+			return nil, fmt.Errorf("gateway root CA path is required (no OS CA bundle found)")
+		}
+		if !filepath.IsAbs(rootCA) {
+			return nil, fmt.Errorf("gateway root CA path must be absolute")
+		}
 	}
 	effective, err := resolveConfig(inputs.Gateway, inputs.GlobalExtProc)
 	if err != nil {
@@ -153,7 +158,7 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 			return nil, fmt.Errorf("build Gateway Telemetry: %w", err)
 		}
 	}
-	b := &resourceBuilder{legacyGateway: inputs.LegacyGateway}
+	b := &resourceBuilder{legacyGateway: inputs.LegacyGateway, upstreamTrustBundle: inputs.UpstreamTrustBundle}
 	clusters, err := b.clusters(effective)
 	if err != nil {
 		return nil, err

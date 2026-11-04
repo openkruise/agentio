@@ -91,10 +91,11 @@ func TestFeaturesValidateRejectsUnsafeValues(t *testing.T) {
 			t.Fatalf("Validate() error = %v, want gateway connect timeout error", err)
 		}
 	})
-	t.Run("relative gateway root CA path", func(t *testing.T) {
-		test.SetForTest(t, &features.GatewayRootCAPath, "certs/root.pem")
-		if err := features.Validate(); err == nil || !strings.Contains(err.Error(), "gateway root CA path must be absolute") {
-			t.Fatalf("Validate() error = %v, want absolute gateway root CA path error", err)
+	t.Run("empty public CA package path", func(t *testing.T) {
+		test.SetForTest(t, &features.ClientTrustPackagePath, "")
+		if err := features.Validate(); err == nil ||
+			!strings.Contains(err.Error(), "public CA trust package path is required") {
+			t.Fatalf("Validate() error = %v, want required public CA package path error", err)
 		}
 	})
 	t.Run("gateway deployer lease", func(t *testing.T) {

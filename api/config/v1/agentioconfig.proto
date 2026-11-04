@@ -115,6 +115,33 @@ message EgressGateway {
 
   // TLS origination settings. TLS interception remains in tls_termination.
   GatewayTlsSettings tls = 12;
+
+  // Additional CA sources for destination and HTTPS proxy TLS verification.
+  // The built-in public CA package is always retained.
+  UpstreamTrustBundle upstream_trust_bundle = 13;
+}
+
+// Configures the gateway's upstream CA union, independently of client trust.
+message UpstreamTrustBundle {
+  // Omitted or empty adds no extra CAs. Referenced ConfigMaps and Secrets are
+  // watched; invalid updates retain the last valid gateway output.
+  repeated UpstreamTrustSource additional_sources = 1;
+}
+
+message UpstreamTrustSource {
+  // Exactly one source is required.
+  oneof source {
+    TrustSourceReference config_map_ref = 1;
+    TrustSourceReference secret_ref = 2;
+  }
+}
+
+message TrustSourceReference {
+  // Required object name in Agentiod's mesh root namespace. Cross-namespace
+  // references are not supported.
+  string name = 1;
+  // Required data key containing one or more PEM CA certificates, without private keys.
+  string key = 2;
 }
 
 // CONNECT admission limits shared across workers/connections in one process.

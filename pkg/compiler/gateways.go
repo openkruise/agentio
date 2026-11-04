@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
@@ -25,6 +26,7 @@ import (
 
 	"istio.io/istio/pkg/util/sets"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
@@ -132,6 +134,12 @@ func newGatewayResources(
 	})
 	compiled := krt.NewCollection(gateways,
 		func(ctx krt.HandlerContext, item model.Gateway) *compiledGateway {
+			trustBundle, err := gatewayUpstreamTrustBundle(ctx, inputs, item)
+			if err != nil {
+				recordGatewayFailureIfCurrent(gateways, failures, item, err)
+				ctx.DiscardResult()
+				return nil
+			}
 			gatewayPatches := krt.Fetch(ctx, inputs.GatewayPatches,
 				krt.FilterIndex(base.gatewayPatchesByGateway, item.ResourceName()))
 			if err := validateGatewayPatches(
@@ -171,6 +179,7 @@ func newGatewayResources(
 				AdditionalExtProcs:         additional,
 				DiscoveryAddress:           inputs.DiscoveryAddress,
 				TrustDomain:                inputs.TrustDomain,
+				UpstreamTrustBundle:        trustBundle,
 				GatewayPatches:             gatewayPatches,
 				TelemetryClusterID:         inputs.ClusterID,
 				TelemetryRootNamespace:     inputs.RootNamespace,
@@ -232,6 +241,65 @@ func gatewayEndpointResources(
 		resources = append(resources, resource)
 	}
 	return resources, nil
+}
+
+func gatewayUpstreamTrustBundle(ctx krt.HandlerContext, inputs Inputs, gateway model.Gateway) (string, error) {
+	bundle := gateway.Config.GetUpstreamTrustBundle()
+	if err := model.ValidateUpstreamTrustBundle(bundle); err != nil {
+		return "", err
+	}
+	if len(bundle.GetAdditionalSources()) == 0 {
+		return inputs.GatewayTrustBundle, nil
+	}
+	// Additional sources must preserve the public CA baseline.
+	if inputs.GatewayTrustBundle == "" {
+		return "", fmt.Errorf(
+			"upstreamTrustBundle requires the built-in public CA package (AGENTIO_CLIENT_TRUST_PACKAGE_PATH)",
+		)
+	}
+	sources := [][]byte{[]byte(inputs.GatewayTrustBundle)}
+	for i, source := range bundle.GetAdditionalSources() {
+		ref := source.GetConfigMapRef()
+		kind := "ConfigMap"
+		if ref == nil {
+			ref = source.GetSecretRef()
+			kind = "Secret"
+		}
+		name := inputs.RootNamespace + "/" + ref.GetName()
+		field := fmt.Sprintf("upstreamTrustBundle.additionalSources[%d]: %s %s key %q", i, kind, name, ref.GetKey())
+		var data []byte
+		var found bool
+		if kind == "ConfigMap" {
+			cm := krt.FetchOne(ctx, inputs.ConfigMaps, krt.FilterKey(name))
+			if cm == nil {
+				return "", fmt.Errorf("%s: not found", field)
+			}
+			value, exists := (*cm).Data[ref.GetKey()]
+			data, found = []byte(value), exists
+		} else {
+			secret := krt.FetchOne(ctx, inputs.Secrets, krt.FilterKey(name))
+			if secret == nil {
+				return "", fmt.Errorf("%s: not found", field)
+			}
+			data, found = (*secret).Data[ref.GetKey()]
+		}
+		if !found {
+			return "", fmt.Errorf("%s: data key not found", field)
+		}
+		validated, warnings, err := clienttrust.Merge([][]byte{data}, time.Now())
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", field, err)
+		}
+		for _, warning := range warnings {
+			log.Warn("upstream CA warning", "gateway", gateway.ResourceName(), "source", field, "warning", warning)
+		}
+		sources = append(sources, validated)
+	}
+	merged, _, err := clienttrust.Merge(sources, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("upstreamTrustBundle: %w", err)
+	}
+	return string(merged), nil
 }
 
 func recordGatewayFailureIfCurrent(
