@@ -228,17 +228,17 @@ func TestGatewayAPIParameterUpdatePublishesIncrementalRoutesWithLegacyPolicyRefe
 }
 
 func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
-	const rootCAPath = "/etc/ssl/custom.pem"
+	const trustBundle = "public CA bundle supplied by agentiod"
 	test.SetForTest(t, &features.GatewayConnectTimeout, 7*time.Second)
-	test.SetForTest(t, &features.GatewayRootCAPath, rootCAPath)
 	resources, err := gatewayResourcesFor(networking.Inputs{
 		Gateway: model.Gateway{
 			Namespace: "agentio-system",
 			Name:      "egress",
 			Config:    &configv1.EgressGateway{},
 		},
-		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
-		TrustDomain:      "cluster.local",
+		DiscoveryAddress:    "agentiod.agentio-system.svc:15012",
+		TrustDomain:         "cluster.local",
+		UpstreamTrustBundle: trustBundle,
 	})
 	if err != nil {
 		t.Fatalf("gatewayResourcesFor: %v", err)
@@ -263,8 +263,8 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 		UnmarshalTo(tlsContext); err != nil {
 		t.Fatalf("unmarshal TLS origination context: %v", err)
 	}
-	if got := tlsContext.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename(); got != rootCAPath {
-		t.Fatalf("TLS origination root CA = %q, want %q", got, rootCAPath)
+	if got := tlsContext.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetInlineString(); got != trustBundle {
+		t.Fatalf("TLS origination root CA = %q, want %q", got, trustBundle)
 	}
 }
 

@@ -50,9 +50,10 @@ type Inputs struct {
 
 	AgentioConfig krt.Collection[model.AgentioConfiguration]
 
-	Resolve          policy.HostnameResolver
-	DiscoveryAddress string
-	TrustDomain      string
+	Resolve            policy.HostnameResolver
+	DiscoveryAddress   string
+	TrustDomain        string
+	GatewayTrustBundle string
 }
 
 // Compiler turns registry state into an xDS snapshot. The derived collections

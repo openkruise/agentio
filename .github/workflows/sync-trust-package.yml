@@ -1,0 +1,90 @@
+name: Sync public CA package
+
+on:
+  schedule:
+    - cron: "17 1 * * *" # 09:17 Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Resolve and validate the CA update without opening a pull request
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-trust-package
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'openkruise/agentio' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install crane
+        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.3
+      - name: Update public CA package
+        id: update
+        run: |
+          repository=$(jq -er '[.[] | select(.name == "TRUST_PACKAGE_IMAGE")] | if length == 1 then .[0].repository else error("expected one TRUST_PACKAGE_IMAGE") end' agentio.deps)
+          if [[ "$repository" != quay.io/jetstack/trust-pkg-debian-bookworm ]]; then
+            echo "Update the CA tag selection when changing the Debian distribution" >&2
+            exit 1
+          fi
+          tag=$(crane ls "$repository" | grep -E '^[0-9]{8}-deb12u[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          digest=$(crane digest "${repository}:${tag}")
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Invalid public CA image digest: $digest" >&2
+            exit 1
+          fi
+          image="${repository}:${tag}@${digest}"
+          jq --arg tag "$tag" --arg digest "$digest" \
+            'map(if .name == "TRUST_PACKAGE_IMAGE" then .tag = $tag | .digest = $digest else . end)' \
+            agentio.deps > agentio.deps.next
+          mv agentio.deps.next agentio.deps
+          sed "s|^ARG TRUST_PACKAGE_IMAGE=.*$|ARG TRUST_PACKAGE_IMAGE=${image}|" Dockerfile > Dockerfile.next
+          mv Dockerfile.next Dockerfile
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Validate CA build pin
+        run: go test ./internal/ci -run TestTrustPackageImagePin -count=1
+      - name: Create GitHub App token
+        if: inputs.dry_run != true
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENTIO_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENTIO_SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Create or update CA pull request
+        if: inputs.dry_run != true
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          base: master
+          branch: codex/trust-package-image
+          delete-branch: true
+          add-paths: |
+            agentio.deps
+            Dockerfile
+          commit-message: "deps: update public CA package"
+          title: "deps: update public CA package"
+          body: |
+            Updates the public CA package embedded in Agentiod, keeping the BOM and Dockerfile synchronized.
+
+            - Image: `${{ steps.update.outputs.image }}`
+            - Tracks Debian Bookworm package revisions, excluding signature tags.
+            - Existing presubmit builds and product E2E validate the candidate before merge.

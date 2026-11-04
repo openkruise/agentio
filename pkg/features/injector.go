@@ -27,7 +27,7 @@ var (
 	ClientTrustPackagePath = env.Register(
 		"AGENTIO_CLIENT_TRUST_PACKAGE_PATH",
 		"",
-		"Path to the versioned public CA trust package JSON.",
+		"Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution.",
 	).Get()
 	// EnableSidecarInjector enables the Pod admission endpoint.
 	EnableSidecarInjector = env.Register(

@@ -74,16 +74,6 @@
             }
           }
         },
-        "trustPackage": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "image": {
-              "type": "string",
-              "pattern": ".+@sha256:[a-f0-9]{64}$"
-            }
-          }
-        },
         "clientTrustBundle": {
           "type": "object",
           "additionalProperties": false,

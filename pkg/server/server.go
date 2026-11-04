@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	securityapi "istio.io/api/security/v1alpha1"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/compiler"
 	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
 	"github.com/openkruise/agentio/pkg/features"
@@ -71,6 +73,21 @@ func grpcServerKeepaliveParameters() keepalive.ServerParameters {
 	}
 }
 
+func loadGatewayTrustBundle(packagePath string) (string, error) {
+	if packagePath == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		return "", fmt.Errorf("read gateway trust package: %w", err)
+	}
+	p, err := clienttrust.ParsePackage(data)
+	if err != nil {
+		return "", fmt.Errorf("parse gateway trust package: %w", err)
+	}
+	return p.Bundle, nil
+}
+
 func run(ctx context.Context, options Options, opts ...Option) error {
 	started := time.Now()
 	composition := applyOptions(opts)
@@ -88,6 +105,10 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		return nil
 	}
 	logStartup(options)
+	gatewayTrustBundle, err := loadGatewayTrustBundle(features.ClientTrustPackagePath)
+	if err != nil {
+		return err
+	}
 	config, err := kube.LoadConfig(options.Kubeconfig)
 	if err != nil {
 		return err
@@ -241,6 +262,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		Resolve:                    resolver.Resolve,
 		DiscoveryAddress:           features.ServiceName + ":15012",
 		TrustDomain:                options.TrustDomain,
+		GatewayTrustBundle:         gatewayTrustBundle,
 	}, krtBuilder)
 	if err != nil {
 		return err

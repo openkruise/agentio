@@ -48,7 +48,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-
       containers:
         - name: discovery
           image: {{ include "agentio.agentiod.image" . | quote }}
@@ -89,7 +88,6 @@ spec:
             {{- end }}
             - name: AGENTIO_SANDBOX_MODE
               value: {{ .Values.agentio.sandbox.enabled | quote }}
-
             - name: AGENTIO_LOG_LEVEL
               value: {{ .Values.agentio.agentiod.logging.level | quote }}
             - name: AGENTIO_LOG_FORMAT
@@ -138,7 +136,6 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
-
           resources:
             {{- toYaml .Values.agentio.agentiod.resources | nindent 12 }}
       {{- with .Values.agentio.agentiod.nodeSelector }}

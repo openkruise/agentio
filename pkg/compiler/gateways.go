@@ -171,6 +171,7 @@ func newGatewayResources(
 				AdditionalExtProcs:         additional,
 				DiscoveryAddress:           inputs.DiscoveryAddress,
 				TrustDomain:                inputs.TrustDomain,
+				UpstreamTrustBundle:        inputs.GatewayTrustBundle,
 				GatewayPatches:             gatewayPatches,
 				TelemetryClusterID:         inputs.ClusterID,
 				TelemetryRootNamespace:     inputs.RootNamespace,

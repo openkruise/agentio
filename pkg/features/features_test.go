@@ -132,6 +132,18 @@ func TestValidatePreservesFirstErrorOrder(t *testing.T) {
 	}
 }
 
+func TestValidateNetworkingWithTrustPackage(t *testing.T) {
+	test.SetForTest(t, &ClientTrustPackagePath, "/packages/ca.json")
+	test.SetForTest(t, &GatewayRootCAPath, "unused-relative-path")
+	if err := validateNetworking(); err != nil {
+		t.Fatal(err)
+	}
+	test.SetForTest(t, &GatewayConnectTimeout, time.Duration(0))
+	if err := validateNetworking(); err == nil {
+		t.Fatal("trust package must not bypass connect timeout validation")
+	}
+}
+
 func TestValidateKubernetesAPILimits(t *testing.T) {
 	for _, qps := range []float64{0, -1, math.NaN(), math.Inf(1), math.MaxFloat64, math.SmallestNonzeroFloat64} {
 		t.Run("invalid QPS", func(t *testing.T) {

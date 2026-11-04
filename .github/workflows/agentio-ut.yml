@@ -58,7 +58,8 @@ jobs:
               (.lastStableSHA | test("^[0-9a-f]{40}$"))) and
             image_pin("CNI_IMAGE") and
             image_pin("PROXY_INIT_IMAGE") and
-            image_pin("GATEWAY_IMAGE")
+            image_pin("GATEWAY_IMAGE") and
+            image_pin("TRUST_PACKAGE_IMAGE")
           ' agentio.deps >/dev/null
       - name: Install Porter build tools
         run: |

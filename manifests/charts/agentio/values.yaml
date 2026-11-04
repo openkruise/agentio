@@ -110,10 +110,6 @@ agentiod:
     values: {}
     sourcesName: agentio-config-sources
     sources: ""
-  # Upstream trust-manager Debian package, 20250419~deb12u1.1. Pin updates by digest.
-  # Prepared automatically when client trust is enabled and sources include defaultCAs.
-  trustPackage:
-    image: "quay.io/jetstack/trust-pkg-debian-bookworm@sha256:36d3128ce4661ee863bfe0dac12826b092c14eb0a88f8242e60a1fad4c806acd"
   clientTrustBundle:
     # Store CA sources in the Agentio system namespace with the default RBAC.
     # References require namespace/name/key; sources do not grant additional Secret permissions.
@@ -126,7 +122,6 @@ agentiod:
   injector:
     clientTrust:
       # Master switch for client CA distribution and injection.
-      # The public CA package init is included when sources select defaultCAs.
       # Pod annotations can opt out, but cannot enable this feature when disabled here.
       # Independent of Gateway TLS termination and SNI traffic policy configuration.
       enabled: false

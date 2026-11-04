@@ -35,7 +35,7 @@ var (
 	GatewayRootCAPath = env.Register(
 		"AGENTIO_GATEWAY_ROOT_CA_PATH",
 		"",
-		"OS root CA bundle path used by gateway TLS origination. When empty the "+
+		"Gateway-local OS root CA bundle path used when no trust package is configured. When empty the "+
 			"first existing well-known OS CA bundle is auto-detected.",
 	).Get()
 	EnableSNITrafficPolicy = env.Register(
@@ -93,6 +93,9 @@ func getOSRootCAFilePath() string {
 func validateNetworking() error {
 	if GatewayConnectTimeout <= 0 {
 		return fmt.Errorf("gateway connect timeout must be positive")
+	}
+	if ClientTrustPackagePath != "" {
+		return nil
 	}
 	rootCA := ResolveGatewayRootCAPath()
 	if strings.TrimSpace(rootCA) == "" {
