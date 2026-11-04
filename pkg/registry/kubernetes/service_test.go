@@ -36,14 +36,22 @@ func BenchmarkEndpointSliceSorting(b *testing.B) {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			port, name := int32(8080), "http"
 			slice := &discoveryv1.EndpointSlice{
-				ObjectMeta:  metav1.ObjectMeta{Namespace: "sandbox-scale-001", Name: "sandbox-group-0-abcdef", Labels: map[string]string{discoveryv1.LabelServiceName: "sandbox-group-0"}},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "sandbox-scale-001",
+					Name:      "sandbox-group-0-abcdef",
+					Labels:    map[string]string{discoveryv1.LabelServiceName: "sandbox-group-0"},
+				},
 				AddressType: discoveryv1.AddressTypeIPv4,
 				Ports:       []discoveryv1.EndpointPort{{Name: &name, Port: &port}},
 			}
 			for i := range size {
 				slice.Endpoints = append(slice.Endpoints, discoveryv1.Endpoint{
 					Addresses: []string{fmt.Sprintf("172.24.%d.%d", (size-i)/256, (size-i)%256)},
-					TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: fmt.Sprintf("sandbox-%06d", i), UID: types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", i))},
+					TargetRef: &corev1.ObjectReference{
+						Kind: "Pod",
+						Name: fmt.Sprintf("sandbox-%06d", i),
+						UID:  types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", i)),
+					},
 				})
 			}
 			b.ReportAllocs()
@@ -60,7 +68,11 @@ func BenchmarkEndpointSliceSorting(b *testing.B) {
 func TestEndpointSliceResultUsesResourceNameOrder(t *testing.T) {
 	port, name := int32(8080), "http"
 	slice := &discoveryv1.EndpointSlice{
-		ObjectMeta:  metav1.ObjectMeta{Namespace: "demo", Name: "backend-abc", Labels: map[string]string{discoveryv1.LabelServiceName: "backend"}},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "demo",
+			Name:      "backend-abc",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "backend"},
+		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Ports:       []discoveryv1.EndpointPort{{Name: &name, Port: &port}},
 		Endpoints: []discoveryv1.Endpoint{
@@ -73,7 +85,10 @@ func TestEndpointSliceResultUsesResourceNameOrder(t *testing.T) {
 	if len(got) != 3 || got[0].Address != "10.0.0.10" || got[1].TargetName != "a" || got[2].TargetName != "z" {
 		t.Fatalf("unexpected endpoint order: %v", got)
 	}
-	if !slices.IsSortedFunc(got, func(a, b model.Endpoint) int { return strings.Compare(a.ResourceName(), b.ResourceName()) }) {
+	if !slices.IsSortedFunc(
+		got,
+		func(a, b model.Endpoint) int { return strings.Compare(a.ResourceName(), b.ResourceName()) },
+	) {
 		t.Fatal("endpoint keys are not sorted")
 	}
 }

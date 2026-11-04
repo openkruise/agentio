@@ -29,8 +29,25 @@ import (
 func BenchmarkDedicatedSandboxBulkPolicy(b *testing.B) {
 	for _, size := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
-			scope := model.ClientScope{Class: model.ClientDedicatedZTunnel, WorkloadUID: "worker-0", Source: model.SourceRef{Registry: "test", Key: "worker-0"}, Principal: serviceAccountPrincipal("workers", "default")}
-			worker := model.Resource{Key: model.ResourceKey{TypeURL: model.AddressType, Name: "worker-0"}, XDSName: "worker-0", Hash: "worker-0", Value: &anypb.Any{TypeUrl: model.AddressType}, Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: scope.WorkloadUID, Source: scope.Source, Principal: scope.Principal}}}
+			scope := model.ClientScope{
+				Class:       model.ClientDedicatedZTunnel,
+				WorkloadUID: "worker-0",
+				Source:      model.SourceRef{Registry: "test", Key: "worker-0"},
+				Principal:   serviceAccountPrincipal("workers", "default"),
+			}
+			worker := model.Resource{
+				Key:     model.ResourceKey{TypeURL: model.AddressType, Name: "worker-0"},
+				XDSName: "worker-0",
+				Hash:    "worker-0",
+				Value:   &anypb.Any{TypeUrl: model.AddressType},
+				Facts: model.ResourceFacts{
+					Workload: &model.WorkloadResourceFacts{
+						WorkloadUID: scope.WorkloadUID,
+						Source:      scope.Source,
+						Principal:   scope.Principal,
+					},
+				},
+			}
 			resources := []model.Resource{worker}
 			changes := make([]model.ResourceChange, 0, size)
 			for i := range size {
@@ -51,7 +68,14 @@ func BenchmarkDedicatedSandboxBulkPolicy(b *testing.B) {
 			}
 			update := <-sub.Updates()
 			generator := SandboxGenerator{}
-			initial := initializedSubscription(b, generator, scope, model.SandboxType, before, SubscriptionView{wildcard: true})
+			initial := initializedSubscription(
+				b,
+				generator,
+				scope,
+				model.SandboxType,
+				before,
+				SubscriptionView{wildcard: true},
+			)
 			server := &Server{resources: store, generators: map[string]ResourceGenerator{model.SandboxType: generator}}
 			stream := newFakeStream(b.Context(), 0)
 			watch := &watchState{wildcard: true, names: sets.New[string](), started: true}

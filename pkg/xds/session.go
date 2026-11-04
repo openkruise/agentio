@@ -102,17 +102,21 @@ func (d *deltaSession) run(first *discoveryv3.DeltaDiscoveryRequest, releaseAdmi
 				return err
 			}
 		case update := <-d.subscription.Updates():
-			// Bound per-stream merges before they copy a cluster-wide Address batch.
-			if d.scope.Class == model.ClientDedicatedZTunnel {
-				update = update.ForWorkload(d.scope.WorkloadUID, d.server.resources.Snapshot())
-			}
-			d.server.pushScheduler.Enqueue(d.connection, update)
+			d.enqueueUpdate(update)
 		case push := <-d.connection.pushes:
 			if err := d.handlePush(push); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (d *deltaSession) enqueueUpdate(update xdsstore.Update) {
+	// Bound per-stream merges before they copy a cluster-wide Address batch.
+	if d.scope.Class == model.ClientDedicatedZTunnel {
+		update = update.ForWorkload(d.scope.WorkloadUID, d.server.resources.Snapshot())
+	}
+	d.server.pushScheduler.Enqueue(d.connection, update)
 }
 
 // Poll before background work so ACKs and subscription changes keep moving.

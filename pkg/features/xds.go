@@ -27,8 +27,11 @@ import (
 )
 
 var (
+	// XDSClientClasses limits ADS admission by authenticated client class.
 	XDSClientClasses = env.Register(
-		"AGENTIO_XDS_CLIENT_CLASSES", "", "Comma-separated authenticated ADS client classes accepted by this process: shared-ztunnel,dedicated-ztunnel,egress-gateway,agentio-egress,epe. Empty accepts all classes. Does not restrict certificate issuance.",
+		"AGENTIO_XDS_CLIENT_CLASSES",
+		"",
+		"Comma-separated authenticated ADS client classes accepted by this process: shared-ztunnel,dedicated-ztunnel,egress-gateway,agentio-egress,epe. Empty accepts all classes. Does not restrict certificate issuance.",
 	).Get()
 	KRTDebounceAfter = env.Register(
 		"AGENTIO_KRT_DEBOUNCE",
@@ -66,18 +69,29 @@ var (
 		"Concurrency limit for initializing streams, background pushes, and streams awaiting xDS acknowledgements, with independent admission, initial-response, established-request, and background-response pools. "+
 			"Defaults to min(15 + 5 * GOMAXPROCS, 100).",
 	).Get()
-	XDSMaxPodStreams, xdsMaxPodStreamsErr                     = strconv.Atoi(env.Register("AGENTIO_XDS_MAX_POD_STREAMS", "0", "Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity.").Get())
+	XDSMaxPodStreams, xdsMaxPodStreamsErr = strconv.Atoi(
+		env.Register("AGENTIO_XDS_MAX_POD_STREAMS", "0", "Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity.").
+			Get(),
+	)
 	XDSInitialAdmissionTimeout, xdsInitialAdmissionTimeoutErr = time.ParseDuration(env.Register(
-		"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT", "1s", "Maximum wait for a new stream initialization slot before authentication; must be positive.",
+		"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT",
+		"1s",
+		"Maximum wait for a new stream initialization slot before authentication; must be positive.",
 	).Get())
 	XDSRateLimitTimeout, xdsRateLimitTimeoutErr = time.ParseDuration(env.Register(
-		"AGENTIO_XDS_RATE_LIMIT_TIMEOUT", "1s", "Maximum wait for new-stream rate admission before authentication; must be positive.",
+		"AGENTIO_XDS_RATE_LIMIT_TIMEOUT",
+		"1s",
+		"Maximum wait for new-stream rate admission before authentication; must be positive.",
 	).Get())
 	XDSSendTimeout, xdsSendTimeoutErr = time.ParseDuration(env.Register(
-		"AGENTIO_XDS_SEND_TIMEOUT", "5s", "Maximum duration of one xDS response send before closing the stream; must be positive.",
+		"AGENTIO_XDS_SEND_TIMEOUT",
+		"5s",
+		"Maximum duration of one xDS response send before closing the stream; must be positive.",
 	).Get())
 	XDSACKTimeout, xdsACKTimeoutErr = time.ParseDuration(env.Register(
-		"AGENTIO_XDS_ACK_TIMEOUT", "5s", "Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive.",
+		"AGENTIO_XDS_ACK_TIMEOUT",
+		"5s",
+		"Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive.",
 	).Get())
 	XDSCPUBudget = env.Register(
 		"AGENTIO_XDS_CPU_BUDGET",
@@ -159,12 +173,13 @@ func validateXDS() error {
 	return nil
 }
 
+// AllowedXDSClientClasses returns the configured classes; nil accepts all classes.
 func AllowedXDSClientClasses() []string {
 	if XDSClientClasses == "" {
 		return nil
 	}
 	var classes []string
-	for _, class := range strings.Split(XDSClientClasses, ",") {
+	for class := range strings.SplitSeq(XDSClientClasses, ",") {
 		classes = append(classes, strings.TrimSpace(class))
 	}
 	return classes

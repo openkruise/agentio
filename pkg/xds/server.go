@@ -123,7 +123,8 @@ func NewServer(
 			}
 			flowConfig.clientClasses = append(flowConfig.clientClasses, model.ClientClass(class))
 		}
-		if configured.InitialAdmission <= 0 || configured.RateLimit <= 0 || configured.Send <= 0 || configured.ACK <= 0 {
+		if configured.InitialAdmission <= 0 || configured.RateLimit <= 0 || configured.Send <= 0 ||
+			configured.ACK <= 0 {
 			return nil, fmt.Errorf("flow-control timeouts must be positive")
 		}
 		flowConfig.admissionWait = configured.InitialAdmission
@@ -273,7 +274,11 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	}
 	if allowed := s.flow.config.clientClasses; len(allowed) > 0 && !slices.Contains(allowed, scope.Class) {
 		metrics.Default.RecordXDSRequestRejection()
-		return status.Errorf(codes.PermissionDenied, "ADS client class %q is not served by this control-plane group", scope.Class)
+		return status.Errorf(
+			codes.PermissionDenied,
+			"ADS client class %q is not served by this control-plane group",
+			scope.Class,
+		)
 	}
 	if scope.Class == model.ClientDedicatedZTunnel {
 		releaseStream, err := s.flow.admitPodStream()

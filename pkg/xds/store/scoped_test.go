@@ -28,7 +28,19 @@ import (
 
 func TestWorkloadAddressNoticeRetainsDependenciesAndWithdrawals(t *testing.T) {
 	key := func(name string) model.ResourceKey { return model.ResourceKey{TypeURL: model.AddressType, Name: name} }
-	current := model.Resource{Key: key("own"), XDSName: "own", Hash: "own", Value: &anypb.Any{TypeUrl: model.AddressType}, Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: "own", ServiceKeys: []string{"svc-new"}, GatewayReferences: []string{"gw-new"}}}}
+	current := model.Resource{
+		Key:     key("own"),
+		XDSName: "own",
+		Hash:    "own",
+		Value:   &anypb.Any{TypeUrl: model.AddressType},
+		Facts: model.ResourceFacts{
+			Workload: &model.WorkloadResourceFacts{
+				WorkloadUID:       "own",
+				ServiceKeys:       []string{"svc-new"},
+				GatewayReferences: []string{"gw-new"},
+			},
+		},
+	}
 	snapshot, err := model.NewResourceSet([]model.Resource{current})
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +49,18 @@ func TestWorkloadAddressNoticeRetainsDependenciesAndWithdrawals(t *testing.T) {
 	add := func(name string, identity Identity) {
 		index[key(name)] = Candidate{Key: key(name), Identities: []Identity{identity}}
 	}
-	add("own", Identity{Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: "own", ServiceKeys: []string{"svc-old"}, GatewayReferences: []string{"gw-old"}}}})
+	add(
+		"own",
+		Identity{
+			Facts: model.ResourceFacts{
+				Workload: &model.WorkloadResourceFacts{
+					WorkloadUID:       "own",
+					ServiceKeys:       []string{"svc-old"},
+					GatewayReferences: []string{"gw-old"},
+				},
+			},
+		},
+	)
 	add("outside", Identity{Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: "outside"}}})
 	for _, name := range []string{"svc-old", "svc-new"} {
 		add(name, Identity{Facts: model.ResourceFacts{Service: &model.ServiceResourceFacts{ServiceKey: name}}})
@@ -84,7 +107,12 @@ func TestWorkloadAddressIndexIsLazyAndShared(t *testing.T) {
 	for i := range 16 {
 		uid := fmt.Sprint(i)
 		key := model.ResourceKey{TypeURL: model.AddressType, Name: uid}
-		candidates[key] = Candidate{Key: key, Identities: []Identity{{Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: uid}}}}}
+		candidates[key] = Candidate{
+			Key: key,
+			Identities: []Identity{
+				{Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: uid}}},
+			},
+		}
 	}
 	update := indexedUpdate("initial", candidates)
 	if update.addressScopes.addressesByWorkload != nil {
@@ -120,8 +148,13 @@ func BenchmarkWorkloadQueuedAddressMerge(b *testing.B) {
 	for i := range 10000 {
 		uid := fmt.Sprintf("workload-%05d", i)
 		key := model.ResourceKey{TypeURL: model.AddressType, Name: uid}
-		batches[i/5000][key] = Candidate{Key: key, Identities: []Identity{{Name: uid,
-			Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: uid}}}}}
+		batches[i/5000][key] = Candidate{
+			Key: key,
+			Identities: []Identity{{
+				Name:  uid,
+				Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: uid}},
+			}},
+		}
 	}
 	older, newer := indexedUpdate("older", batches[0]), indexedUpdate("newer", batches[1])
 	for _, scoped := range []bool{false, true} {

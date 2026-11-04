@@ -31,7 +31,9 @@ import (
 
 func TestWatchReconnectReusesPodAndTokenUntilRenewal(t *testing.T) {
 	kube := fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Name: "sandbox-000000", Namespace: "sandbox-scale-000", UID: "pod-uid",
+		Name:      "sandbox-000000",
+		Namespace: "sandbox-scale-000",
+		UID:       "pod-uid",
 	}})
 	tokens := 0
 	kube.PrependReactor("create", "serviceaccounts", func(action ktesting.Action) (bool, runtime.Object, error) {
@@ -40,14 +42,22 @@ func TestWatchReconnectReusesPodAndTokenUntilRenewal(t *testing.T) {
 		}
 		tokens++
 		return true, &authenticationv1.TokenRequest{Status: authenticationv1.TokenRequestStatus{
-			Token: "test-token", ExpirationTimestamp: metav1.NewTime(time.Now().Add(time.Hour)),
+			Token:               "test-token",
+			ExpirationTimestamp: metav1.NewTime(time.Now().Add(time.Hour)),
 		}}, nil
 	})
 	r := &runner{kube: kube, options: options{Action: "watch-sidecar", Prefix: "sandbox-scale"}}
 	credentials := &watchCredentials{}
 	for range 2 {
 		// A rejected connection must not mint another projected token.
-		if err := r.watchStream(context.Background(), 0, x509.NewCertPool(), nil, credentials); err == nil || !strings.Contains(err.Error(), "target and node.id") {
+		if err := r.watchStream(
+			context.Background(),
+			0,
+			x509.NewCertPool(),
+			nil,
+			credentials,
+		); err == nil ||
+			!strings.Contains(err.Error(), "target and node.id") {
 			t.Fatalf("watchStream = %v", err)
 		}
 	}

@@ -81,14 +81,26 @@ func (r *runner) policy(ctx context.Context) (any, error) {
 				action = "reject"
 			}
 			object = map[string]any{
-				"apiVersion": "agents.kruise.io/v1alpha1", "kind": "GlobalTrafficPolicy",
-				"metadata": map[string]any{"name": r.Prefix + "-policy"},
+				"apiVersion": "agents.kruise.io/v1alpha1",
+				"kind":       "GlobalTrafficPolicy",
+				"metadata":   map[string]any{"name": r.Prefix + "-policy"},
 				"spec": map[string]any{
 					"priority": 1,
-					"selector": map[string]any{"matchLabels": map[string]string{"bench.agentio.io/label-00": fmt.Sprintf("value-%d-0", r.Offset)}},
+					"selector": map[string]any{
+						"matchLabels": map[string]string{
+							"bench.agentio.io/label-00": fmt.Sprintf("value-%d-0", r.Offset),
+						},
+					},
 					"egress": map[string]any{"rules": []any{
-						map[string]any{"action": action, "to": []any{map[string]any{"cidr": "0.0.0.0/0"}}, "ports": []any{map[string]any{"protocol": "TCP", "port": 8080}}},
-						map[string]any{"action": "allow", "to": []any{map[string]any{"cidr": "0.0.0.0/0"}, map[string]any{"cidr": "::/0"}}},
+						map[string]any{
+							"action": action,
+							"to":     []any{map[string]any{"cidr": "0.0.0.0/0"}},
+							"ports":  []any{map[string]any{"protocol": "TCP", "port": 8080}},
+						},
+						map[string]any{
+							"action": "allow",
+							"to":     []any{map[string]any{"cidr": "0.0.0.0/0"}, map[string]any{"cidr": "::/0"}},
+						},
 					}},
 				},
 			}

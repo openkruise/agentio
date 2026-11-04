@@ -210,12 +210,11 @@ func (r *runner) watchNode(ctx context.Context, i int, roots *x509.CertPool, sta
 	}
 }
 
-func (r *runner) watchStream(ctx context.Context, i int, roots *x509.CertPool, stats *watchStats, credentials *watchCredentials) error {
-	name := fmt.Sprintf("node-proxy-%04d", i)
-	namespace, account, node := r.System, "ztunnel", r.node(i*100)
-	if r.Action == "watch-sidecar" {
-		name, namespace, account, node = resourceName(i), r.namespace(i), "sandbox", r.node(i)
-	}
+func (r *runner) refreshWatchCredentials(
+	ctx context.Context,
+	namespace, name, account string,
+	credentials *watchCredentials,
+) error {
 	if credentials.pod == nil {
 		pod, err := r.kube.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -233,6 +232,25 @@ func (r *runner) watchStream(ctx context.Context, i int, roots *x509.CertPool, s
 		}
 		credentials.token = token
 	}
+	return nil
+}
+
+func (r *runner) watchStream(
+	ctx context.Context,
+	i int,
+	roots *x509.CertPool,
+	stats *watchStats,
+	credentials *watchCredentials,
+) error {
+	name := fmt.Sprintf("node-proxy-%04d", i)
+	namespace, account, node := r.System, "ztunnel", r.node(i*100)
+	if r.Action == "watch-sidecar" {
+		name, namespace, account, node = resourceName(i), r.namespace(i), "sandbox", r.node(i)
+	}
+	if err := r.refreshWatchCredentials(ctx, namespace, name, account, credentials); err != nil {
+		return err
+	}
+	pod := credentials.pod
 	nodeMeta, err := structpb.NewStruct(
 		map[string]any{"POD_NAMESPACE": namespace, "POD_NAME": name, "NODE_NAME": node, "POD_UID": string(pod.UID)},
 	)

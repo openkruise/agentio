@@ -157,7 +157,9 @@ func (r *runner) traffic(ctx context.Context) (any, error) {
 		var e error
 		certs[j], e = r.issue(ctx, ca, r.Offset+j*r.Count/r.Active)
 		if e == nil && r.ReuseConnections {
-			transports[j] = r.gatewayTransport(gatewayTLS(roots, certs[j], "spiffe://cluster.local/ns/"+r.System+"/sa/egress-gateway"))
+			transports[j] = r.gatewayTransport(
+				gatewayTLS(roots, certs[j], "spiffe://cluster.local/ns/"+r.System+"/sa/egress-gateway"),
+			)
 		}
 		return e
 	}); err != nil {
@@ -225,7 +227,10 @@ func (r *runner) traffic(ctx context.Context) (any, error) {
 	}, err
 }
 
-func (r *runner) continuousTraffic(ctx context.Context, runBatch func(int, int, time.Duration) (load.Result, error)) (any, error) {
+func (r *runner) continuousTraffic(
+	ctx context.Context,
+	runBatch func(int, int, time.Duration) (load.Result, error),
+) (any, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Duration)
 	defer cancel()
 	batches, operations, failures := 0, 0, 0
@@ -253,7 +258,12 @@ func (r *runner) continuousTraffic(ctx context.Context, runBatch func(int, int, 
 		batches++
 		operations += result.Operations
 		failures += result.Errors
-		event := map[string]any{"action": "traffic-progress", "time": time.Now(), "result": result, "planned_requests": rate * 10}
+		event := map[string]any{
+			"action":           "traffic-progress",
+			"time":             time.Now(),
+			"result":           result,
+			"planned_requests": rate * 10,
+		}
 		if err != nil {
 			event["error"] = err.Error()
 		}
@@ -381,7 +391,11 @@ func (r *runner) credentials(ctx context.Context) (*grpc.ClientConn, *x509.CertP
 		r.CA,
 		grpc.WithTransportCredentials(
 			credentials.NewTLS(
-				&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: cmp.Or(r.CAServerName, "agentiod."+r.System+".svc")},
+				&tls.Config{
+					MinVersion: tls.VersionTLS13,
+					RootCAs:    roots,
+					ServerName: cmp.Or(r.CAServerName, "agentiod."+r.System+".svc"),
+				},
 			),
 		),
 	)

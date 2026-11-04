@@ -101,13 +101,23 @@ func parseOptions() options {
 	flag.IntVar(&o.Rate, "rate", 100, "offered CONNECT requests per second")
 	flag.IntVar(&o.Active, "active", 1000, "number of traffic identities")
 	flag.IntVar(&o.ConnectionRate, "connection-rate", 100, "new sidecar ADS connections per second")
-	flag.IntVar(&o.VirtualNodeCount, "virtual-node-count", 0, "reuse this many KWOK nodes as inventory grows; zero uses 100 Pods per node")
+	flag.IntVar(
+		&o.VirtualNodeCount,
+		"virtual-node-count",
+		0,
+		"reuse this many KWOK nodes as inventory grows; zero uses 100 Pods per node",
+	)
 	flag.BoolVar(&o.ReuseConnections, "reuse-connections", false, "reuse HTTP/2 connections per traffic identity")
 	flag.BoolVar(&o.Acknowledge, "ack", true, "acknowledge ADS responses; false simulates a non-ACKing client")
 	flag.DurationVar(&o.ReadDelay, "read-delay", 0, "delay the first ADS receive to simulate a slow receiver")
 	flag.DurationVar(&o.Duration, "duration", 3*time.Minute, "traffic deadline")
 	flag.StringVar(&o.StartFile, "start-file", "", "wait for this shared file after certificate preparation")
-	flag.StringVar(&o.TrafficRateFile, "traffic-rate-file", "", "continuous traffic: read QPS between 10-second batches; 0 pauses, -1 stops; preserve HTTP/2 connections")
+	flag.StringVar(
+		&o.TrafficRateFile,
+		"traffic-rate-file",
+		"",
+		"continuous traffic: read QPS between 10-second batches; 0 pauses, -1 stops; preserve HTTP/2 connections",
+	)
 	flag.StringVar(&o.Path, "path", "/", "HTTP request path inside CONNECT")
 	flag.StringVar(&o.ExpectedBody, "expected-body", "sandbox-scale-ok\n", "exact expected HTTP response body")
 	flag.IntVar(&o.ExpectedStatus, "expected-status", 200, "expected inner HTTP status")

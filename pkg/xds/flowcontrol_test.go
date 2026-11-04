@@ -132,7 +132,9 @@ func TestEstablishedCapacityWaitPreservesStreamAndLatestConfiguration(t *testing
 			stream.send(nodeRequest(model.ClusterType))
 			done = append(done, server.start(stream))
 			synctest.Wait()
-			stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: stream.sent()[0].Nonce})
+			stream.send(
+				&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: stream.sent()[0].Nonce},
+			)
 			synctest.Wait()
 		}
 		slow.send(request(model.ClusterType))
@@ -171,7 +173,12 @@ func TestEstablishedCapacityWaitPreservesStreamAndLatestConfiguration(t *testing
 		if len(responses) < 2 || responses[1].Resources[0].Version != latest.Hash {
 			t.Fatalf("queued request did not use latest snapshot: %+v", responses)
 		}
-		healthy.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.ClusterType, ResponseNonce: responses[len(responses)-1].Nonce})
+		healthy.send(
+			&discoveryv3.DeltaDiscoveryRequest{
+				TypeUrl:       model.ClusterType,
+				ResponseNonce: responses[len(responses)-1].Nonce,
+			},
+		)
 		synctest.Wait()
 		healthy.closeRequests()
 		if err := <-done[0]; err != nil {
@@ -258,21 +265,26 @@ func TestPodStreamLimitPreservesExistingAndSystemStreams(t *testing.T) {
 		server := newTestServerWithScheduler(t, ztunnelScope(), nil, nil, NewPushScheduler(1))
 		server.server.flow.streams = make(chan struct{}, 1)
 		original := server.server.authenticator
-		authenticator := &countingAuthenticator{caller:original.(fakeAuthenticator).caller}
+		authenticator := &countingAuthenticator{caller: original.(fakeAuthenticator).caller}
 		server.server.authenticator = authenticator
 		ctx, cancel := context.WithCancel(t.Context())
 		first := newFakeStream(ctx, 1)
 		first.send(nodeRequest(model.AddressType))
 		done := server.start(first)
 		synctest.Wait()
-		responses:=first.sent()
-		if len(responses)!=1 {t.Fatalf("first stream responses=%v",responses)}
+		responses := first.sent()
+		if len(responses) != 1 {
+			t.Fatalf("first stream responses=%v", responses)
+		}
 		response := responses[0]
 		first.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: response.Nonce})
 		synctest.Wait()
 		second := newFakeStream(t.Context(), 1)
 		second.send(nodeRequest(model.AddressType))
-		if err := <-server.start(second); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "active stream limit") {
+		if err := <-server.start(
+			second,
+		); status.Code(err) != codes.ResourceExhausted ||
+			!strings.Contains(err.Error(), "active stream limit") {
 			t.Fatalf("admission=%v", err)
 		}
 		if authenticator.calls != 2 || len(first.sent()) != 1 {
