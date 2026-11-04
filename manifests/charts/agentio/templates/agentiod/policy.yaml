@@ -1,0 +1,23 @@
+{{- if .Values.agentiod.policy.enabled }}
+{{- $values := deepCopy .Values }}
+{{- $name := include "agentiod.policyFullname" . }}
+{{- $policy := mergeOverwrite $values.agentiod (deepCopy .Values.agentiod.policy) }}
+{{- range $key := list "resources" "nodeSelector" "tolerations" "affinity" }}
+{{- $_ := set $policy $key (deepCopy (get $.Values.agentiod.policy $key)) }}
+{{- end }}
+{{- $_ := set $policy "nameOverride" $name }}
+{{- $_ := set $policy "fullnameOverride" $name }}
+{{- $_ := set $policy "controlPlanePool" "policy" }}
+{{- $_ := set $policy.serviceAccount "name" (include "agentiod.serviceAccountName" .) }}
+{{- $_ := set $policy.autoscaling "enabled" false }}
+{{- $_ := set $values "profile" "ambient" }}
+{{- $_ := set $values.egressGateway "mode" "disabled" }}
+{{- $context := merge (dict "Values" $values) (omit . "Values") }}
+{{ include "agentiod.deployment" $context }}
+---
+{{ include "agentiod.service" $context }}
+{{- if .Values.agentiod.networkPolicy.enabled }}
+---
+{{ include "agentiod.networkpolicy" $context }}
+{{- end }}
+{{- end }}

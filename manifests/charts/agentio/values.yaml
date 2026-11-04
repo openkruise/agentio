@@ -19,6 +19,16 @@ agentiod:
   nameOverride: agentiod
   fullnameOverride: ""
   replicaCount: 1
+  # Optional control plane for gateway and EPE ADS; ztunnel keeps using agentiod.
+  policy:
+    enabled: false
+    replicaCount: 2
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    env: {}
   image:
     repository: ""
     name: agentiod

@@ -107,8 +107,13 @@ func (p *templateProvider) updateFromInjectorConfig(rawConfig, rawValues string)
 		return fmt.Errorf("parse injector values: %w", err)
 	}
 	merged := mergeMaps(p.runtime, values)
+	if address := nestedString(merged, "global", "gatewayXdsAddress"); address != "" {
+		merged["global"].(map[string]any)["caAddress"] = address
+	}
 	proxyConfig := proto.Clone(p.proxyConfig).(*meshconfig.ProxyConfig)
-	if address := nestedString(merged, "global", "xdsAddress"); address != "" {
+	if address := nestedString(merged, "global", "gatewayXdsAddress"); address != "" {
+		proxyConfig.DiscoveryAddress = address
+	} else if address := nestedString(merged, "global", "xdsAddress"); address != "" {
 		proxyConfig.DiscoveryAddress = address
 	} else if address := nestedString(merged, "global", "caAddress"); address != "" {
 		proxyConfig.DiscoveryAddress = address

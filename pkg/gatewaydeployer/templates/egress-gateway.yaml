@@ -126,9 +126,9 @@ spec:
         - name: POD_UID
           valueFrom: {fieldRef: {fieldPath: metadata.uid}}
         - name: AGENTIO_XDS_ADDRESS
-          value: {{ .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.caAddress | quote }}
+          value: {{ .Values.global.gatewayXdsAddress | default .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.gatewayXdsAddress | default .Values.global.caAddress | quote }}
         - name: CA_ADDR
-          value: {{ .Values.global.caAddress | quote }}
+          value: {{ .Values.global.gatewayXdsAddress | default .Values.global.caAddress | quote }}
         - name: AGENTIO_GATEWAY_CONFIG
           value: {{ .Values.global.egressGateway.agentConfig | default (strdict) | toJson | quote }}
         - name: POD_NAME
@@ -248,7 +248,7 @@ spec:
         imagePullPolicy: {{ .Values.global.imagePullPolicy | quote }}
         args:
           - --domain=$(POD_NAMESPACE).svc.{{ .Values.global.proxy.clusterDomain }}
-          - --xds-address={{ .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.caAddress }}
+          - --xds-address={{ .Values.global.gatewayXdsAddress | default .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.caAddress }}
           - --cluster-id={{ .ClusterID }}
           - --grpc-port=9002
           - --grpc-health-port=9003

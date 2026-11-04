@@ -117,3 +117,31 @@ func TestProviderKeepsLastKnownGoodConfig(t *testing.T) {
 		t.Fatalf("invalid update replaced last known good config:\n%s", got)
 	}
 }
+
+func TestProviderSeparatesGatewayAndProxyEndpoints(t *testing.T) {
+	provider, err := newTemplateProvider(Options{CAAddress: "agentiod:15012"}, defaultProxyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.updateFromInjectorConfig(testInjectorConfig, `global:
+  hub: injector.example
+  xdsAddress: agentiod:15012
+  gatewayXdsAddress: agentiod-policy:15012
+`); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := provider.Renderer().Render(egressGatewayTemplateName, TemplateInput{DeploymentName: "egress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(docs, "\n"), `discovery-address: "agentiod-policy:15012"`) {
+		t.Fatalf("gateway endpoint did not switch: %v", docs)
+	}
+	values := provider.currentValues()
+	if got := nestedString(values, "global", "caAddress"); got != "agentiod-policy:15012" {
+		t.Fatalf("gateway CA = %q", got)
+	}
+	if got := nestedString(values, "global", "xdsAddress"); got != "agentiod:15012" {
+		t.Fatalf("proxy address changed to %q", got)
+	}
+}

@@ -42,6 +42,9 @@ data:
       imagePullPolicy: {{ .Values.global.imagePullPolicy | quote }}
       trustDomain: {{ .Values.global.trustDomain | quote }}
       caAddress: {{ printf "%s.%s.svc.%s:15012" (include "agentiod.fullname" .) .Release.Namespace .Values.global.clusterDomain | quote }}
+      {{- if .Values.agentiod.policy.enabled }}
+      gatewayXdsAddress: {{ include "gateway.xdsAddress" . | quote }}
+      {{- end }}
       xdsAddress: {{ printf "%s.%s.svc.%s:15012" (include "agentiod.fullname" .) .Release.Namespace .Values.global.clusterDomain | quote }}
       trustBundleName: {{ .Values.agentiod.ca.trustBundleConfigMapName | quote }}
       clusterTrustBundleName: {{ .Values.ztunnel.trustBundle.clusterTrustBundleName | quote }}
