@@ -30,6 +30,19 @@ import (
 	"github.com/openkruise/agentio/pkg/networking"
 )
 
+type compiledGateway struct {
+	Name string
+	networking.GatewayCompilation
+}
+
+func (g compiledGateway) ResourceName() string { return g.Name }
+
+func (g compiledGateway) Equals(other compiledGateway) bool {
+	return g.Name == other.Name &&
+		slices.EqualFunc(g.StaticResources, other.StaticResources, model.Resource.Equals) &&
+		slices.Equal(g.EndpointBindings, other.EndpointBindings)
+}
+
 type gatewayGlobalExtProc struct {
 	Provider   *configv1.ExtProcProvider
 	Additional []*configv1.ExtProcProvider
@@ -117,8 +130,8 @@ func newGatewayResources(
 			})
 		}
 	})
-	return krt.NewManyCollection(gateways,
-		func(ctx krt.HandlerContext, item model.Gateway) []model.Resource {
+	compiled := krt.NewCollection(gateways,
+		func(ctx krt.HandlerContext, item model.Gateway) *compiledGateway {
 			gatewayPatches := krt.Fetch(ctx, inputs.GatewayPatches,
 				krt.FilterIndex(base.gatewayPatchesByGateway, item.ResourceName()))
 			if err := validateGatewayPatches(
@@ -147,23 +160,23 @@ func newGatewayResources(
 					provider = current.Provider
 					additional = current.Additional
 				}
-			} else if override.GetService() != "" {
+			} else if model.ExtProcEnabled(override) {
 				if current := krt.FetchOne(ctx, additionalExtProcs); current != nil {
 					additional = current.Additional
 				}
 			}
-			resources, err := gatewayResourcesFor(
-				item,
-				provider,
-				additional,
-				inputs.DiscoveryAddress,
-				inputs.TrustDomain,
-				gatewayPatches,
-				inputs.ClusterID,
-				inputs.RootNamespace,
-				telemetry,
-				providerOverride,
-			)
+			resources, err := gatewayResourcesFor(networking.Inputs{
+				Gateway:                    item,
+				GlobalExtProc:              provider,
+				AdditionalExtProcs:         additional,
+				DiscoveryAddress:           inputs.DiscoveryAddress,
+				TrustDomain:                inputs.TrustDomain,
+				GatewayPatches:             gatewayPatches,
+				TelemetryClusterID:         inputs.ClusterID,
+				TelemetryRootNamespace:     inputs.RootNamespace,
+				Telemetry:                  telemetry,
+				TelemetryProviderOverrides: providerOverride,
+			})
 			if err != nil {
 				recordGatewayFailureIfCurrent(gateways, failures, item, err)
 				ctx.DiscardResult()
@@ -174,7 +187,51 @@ func newGatewayResources(
 				return current != nil && current.Equals(item)
 			})
 			return resources
-		}, options("gateway-resources")...)
+		}, options("compiled-gateways")...)
+	compiled.Register(func(event krt.Event[compiledGateway]) {
+		if event.New == nil {
+			failures.clear("GatewayEndpoints", event.Latest().ResourceName())
+		}
+	})
+	return krt.NewManyCollection(compiled, func(ctx krt.HandlerContext, item compiledGateway) []model.Resource {
+		resources, err := gatewayEndpointResources(ctx, inputs, base, item)
+		if err != nil {
+			failures.record("GatewayEndpoints", item.Name, err)
+			ctx.DiscardResult()
+			return nil
+		}
+		failures.clear("GatewayEndpoints", item.Name)
+		return resources
+	}, options("gateway-resources")...)
+}
+
+func gatewayEndpointResources(
+	ctx krt.HandlerContext,
+	inputs Inputs,
+	base baseIndexes,
+	gateway compiledGateway,
+) ([]model.Resource, error) {
+	resources := slices.Clone(gateway.StaticResources)
+	for _, binding := range gateway.EndpointBindings {
+		target := binding.Target
+		var services []model.Service
+		var endpoints []model.Endpoint
+		if service := krt.FetchOne(ctx, inputs.Services,
+			krt.FilterIndex(base.servicesByName, target.Namespace+"/"+target.Name)); service != nil {
+			services = []model.Service{*service}
+			endpoints = krt.Fetch(
+				ctx,
+				inputs.Endpoints,
+				krt.FilterIndex(base.endpointsByService, service.ResourceName()),
+			)
+		}
+		resource, err := binding.BuildResource(services, endpoints)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
 }
 
 func recordGatewayFailureIfCurrent(
@@ -190,42 +247,22 @@ func recordGatewayFailureIfCurrent(
 	})
 }
 
-func gatewayResourcesFor(
-	item model.Gateway,
-	globalExtProc *configv1.ExtProcProvider,
-	additional []*configv1.ExtProcProvider,
-	discoveryAddress string,
-	trustDomain string,
-	gatewayPatches []model.GatewayPatch,
-	clusterID string,
-	rootNamespace string,
-	telemetry []model.Telemetry,
-	providerOverrides *model.TelemetryProviderOverrides,
-) ([]model.Resource, error) {
-	inputs := networking.Inputs{
-		Gateway:                    item,
-		GlobalExtProc:              globalExtProc,
-		AdditionalExtProcs:         additional,
-		DiscoveryAddress:           discoveryAddress,
-		TrustDomain:                trustDomain,
-		GatewayPatches:             gatewayPatches,
-		TelemetryRootNamespace:     rootNamespace,
-		TelemetryClusterID:         clusterID,
-		Telemetry:                  telemetry,
-		TelemetryProviderOverrides: providerOverrides,
-	}
+func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
+	item := inputs.Gateway
 	var built []model.Resource
+	var bindings []networking.EndpointBinding
 	for _, legacy := range []bool{true, false} {
 		// Limits require the community module; do not publish an unprotected legacy variant.
 		if legacy && (item.Config.GetBandwidthLimit() != nil || item.Config.GetConnectConcurrencyLimit() != nil) {
 			continue
 		}
 		inputs.LegacyGateway = legacy
-		variant, err := networking.Build(inputs)
+		variant, err := networking.BuildGateway(inputs)
 		if err != nil {
 			return nil, fmt.Errorf("compile gateway %s (legacy=%t): %w", item.ResourceName(), legacy, err)
 		}
-		built = append(built, variant...)
+		built = append(built, variant.StaticResources...)
+		bindings = append(bindings, variant.EndpointBindings...)
 	}
 	result := make([]model.Resource, 0, len(built))
 	for _, resource := range built {
@@ -241,7 +278,13 @@ func gatewayResourcesFor(
 		}
 		result = append(result, normalized)
 	}
-	return result, nil
+	return &compiledGateway{
+		Name: item.ResourceName(),
+		GatewayCompilation: networking.GatewayCompilation{
+			StaticResources:  result,
+			EndpointBindings: bindings,
+		},
+	}, nil
 }
 
 func validateGatewayPatches(

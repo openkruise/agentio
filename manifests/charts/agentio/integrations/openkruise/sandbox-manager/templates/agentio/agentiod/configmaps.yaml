@@ -12,6 +12,9 @@
 {{- $request := dict "headerMode" "SEND" "attributes" (list "filter_state['agentio.sandbox.uid']" "filter_state['sandbox.token']" "filter_state['agentio.sandbox.metadata']" "filter_state['agentio.workload.uid']" "filter_state['sandbox.labels']" "filter_state['agentio.workload.name']" "filter_state['agentio.workload.namespace']" "filter_state['downstream_peer'].name" "filter_state['downstream_peer'].namespace" "destination.address" "destination.port" "source.address") -}}
 {{- $response := dict "headerMode" "SKIP" -}}
 {{- $provider := dict "service" (include "agentio.epeService" .) "port" (include "agentio.epePort" . | int) "messageTimeout" .Values.agentio.epe.messageTimeout "request" $request "response" $response -}}
+{{- if eq .Values.agentio.epe.mode "managed" -}}
+{{- $_ := set $provider "serviceRef" (dict "namespace" (include "agentio.namespace" .) "name" (include "agentio.epe.fullname" .)) -}}
+{{- end -}}
 {{- if .Values.agentio.epe.tls.enabled -}}
 {{- $peers := .Values.agentio.epe.tls.peerSpiffeIDs -}}
 {{- if and (empty $peers) (eq .Values.agentio.epe.mode "managed") -}}

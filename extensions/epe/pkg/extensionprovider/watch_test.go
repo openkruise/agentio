@@ -27,6 +27,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kwatch "k8s.io/apimachinery/pkg/watch"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certstest"
@@ -172,6 +175,16 @@ defaultProviders: {credentialProvider: additional}
 `, dynamic.Server.URL)},
 	}
 	client := kube.NewFakeClient()
+	fake := client.Kube().(*kubefake.Clientset)
+	watchStarted := make(chan struct{})
+	fake.PrependWatchReactor("configmaps", func(action ktesting.Action) (bool, kwatch.Interface, error) {
+		watcher, err := fake.Tracker().Watch(action.GetResource(), action.GetNamespace())
+		if err != nil {
+			return true, nil, err
+		}
+		close(watchStarted)
+		return true, watcher, nil
+	})
 	reg := watch(
 		t,
 		client,
@@ -188,6 +201,12 @@ defaultProviders: {credentialProvider: additional}
 	}
 	if token(t, registry, t.Context(), "") != "environment" {
 		t.Fatal("absent ConfigMap must use the environment provider")
+	}
+	// The fake tracker cannot replay a Create between the initial LIST and WATCH.
+	select {
+	case <-watchStarted:
+	case <-ctx.Done():
+		t.Fatal("ConfigMap watch did not start")
 	}
 	if _, err := client.Kube().CoreV1().ConfigMaps("system").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)

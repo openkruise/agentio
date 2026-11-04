@@ -17,6 +17,7 @@ package kubernetes
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -294,7 +295,8 @@ func TestApplyAgentioConfigRejectsInvalidStaticServiceEntries(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			content := "egressGateways:\n- name: egress\n  namespace: agentio-system\n  serviceEntries:\n" + test.entries + "\n"
+			content := "egressGateways:\n- name: egress\n  namespace: agentio-system\n  serviceEntries:\n  " +
+				strings.ReplaceAll(test.entries, "\n", "\n  ") + "\n"
 			if _, err := applyAgentioConfig(content, nil); err == nil {
 				t.Fatal("applyAgentioConfig() accepted an invalid static service entry")
 			}
@@ -470,10 +472,11 @@ func TestGatewayConfigurationAccessLogFormat(t *testing.T) {
 			} {
 				t.Run(name, func(t *testing.T) {
 					got, err := decode()
-					if (err != nil) != tt.invalid {
-						t.Fatalf("config error = %v, want invalid=%v", err, tt.invalid)
+					invalid := tt.invalid && !(name == "AgentioConfig" && tt.name == "unknown field")
+					if (err != nil) != invalid {
+						t.Fatalf("config error = %v, want invalid=%v", err, invalid)
 					}
-					if !tt.invalid && got.GetAccessLogFormat() == nil {
+					if !invalid && got.GetAccessLogFormat() == nil {
 						t.Fatal("missing access-log format")
 					}
 				})

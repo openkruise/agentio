@@ -21,6 +21,8 @@ import (
 
 // baseIndexes are the shared indexes over the registry input collections.
 type baseIndexes struct {
+	servicesByName               krt.Index[string, model.Service]
+	endpointsByService           krt.Index[string, model.Endpoint]
 	endpointsByAddress           krt.Index[string, model.Endpoint]
 	endpointsByTargetUID         krt.Index[string, model.Endpoint]
 	endpointsByTargetName        krt.Index[string, model.Endpoint]
@@ -67,6 +69,16 @@ func newBaseIndexes(inputs Inputs) baseIndexes {
 			return nil
 		})
 	return baseIndexes{
+		servicesByName: krt.NewIndex(inputs.Services, "servicesByName", func(service model.Service) []string {
+			return []string{service.Namespace + "/" + service.Name}
+		}),
+		endpointsByService: krt.NewIndex(
+			inputs.Endpoints,
+			"endpointsByService",
+			func(endpoint model.Endpoint) []string {
+				return []string{endpoint.ServiceKey}
+			},
+		),
 		endpointsByAddress:           endpointsByAddress,
 		endpointsByTargetUID:         endpointsByTargetUID,
 		endpointsByTargetName:        endpointsByTargetName,

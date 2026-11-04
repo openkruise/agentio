@@ -110,6 +110,7 @@ func (s Service) Equals(other Service) bool {
 
 // Endpoint relates a Service to a reachable network target. Runtime
 // targetRefs are routing inputs only; they never establish Attester authority.
+// Serving preserves readiness independently of publishNotReadyAddresses.
 type Endpoint struct {
 	ServiceKey      string
 	SourceKey       string
@@ -118,6 +119,8 @@ type Endpoint struct {
 	Port            uint32
 	Protocol        string
 	Ready           bool
+	Serving         bool
+	Terminating     bool
 	Zone            string
 	HasTargetRef    bool
 	TargetKind      string

@@ -231,27 +231,20 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 	const rootCAPath = "/etc/ssl/custom.pem"
 	test.SetForTest(t, &features.GatewayConnectTimeout, 7*time.Second)
 	test.SetForTest(t, &features.GatewayRootCAPath, rootCAPath)
-	resources, err := gatewayResourcesFor(
-		model.Gateway{
+	resources, err := gatewayResourcesFor(networking.Inputs{
+		Gateway: model.Gateway{
 			Namespace: "agentio-system",
 			Name:      "egress",
 			Config:    &configv1.EgressGateway{},
 		},
-		nil,
-		nil,
-		"agentiod.agentio-system.svc:15012",
-		"cluster.local",
-		nil,
-		"",
-		"",
-		nil,
-		nil,
-	)
+		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
+		TrustDomain:      "cluster.local",
+	})
 	if err != nil {
 		t.Fatalf("gatewayResourcesFor: %v", err)
 	}
 	clusters := make(map[string]*clusterv3.Cluster)
-	for _, resource := range resources {
+	for _, resource := range resources.StaticResources {
 		if resource.Key.TypeURL != model.ClusterType {
 			continue
 		}
@@ -1238,26 +1231,21 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 			if err := protojson.Unmarshal([]byte(raw), settings); err != nil {
 				t.Fatal(err)
 			}
-			resources, err := gatewayResourcesFor(
-				model.Gateway{Name: "egress", Namespace: "demo", Config: settings},
-				nil,
-				nil,
-				"agentiod:15012",
-				"cluster.local",
-				nil,
-				"Kubernetes",
-				"agentio-system",
-				nil,
-				nil,
-			)
+			resources, err := gatewayResourcesFor(networking.Inputs{
+				Gateway:                model.Gateway{Name: "egress", Namespace: "demo", Config: settings},
+				DiscoveryAddress:       "agentiod:15012",
+				TrustDomain:            "cluster.local",
+				TelemetryClusterID:     "Kubernetes",
+				TelemetryRootNamespace: "agentio-system",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(resources) == 0 {
+			if len(resources.StaticResources) == 0 {
 				t.Fatal("community gateway resources missing")
 			}
 			found := false
-			for _, resource := range resources {
+			for _, resource := range resources.StaticResources {
 				if !resource.Facts.AgentioEgress {
 					t.Fatalf("unsupported legacy variant published: %v", resource.Key)
 				}

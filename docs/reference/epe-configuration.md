@@ -2,11 +2,15 @@
 
 The Egress Policy Enforcer (EPE) is deployed by the Agentio chart as `agentio-epe` when `epe.mode` is `managed`. This reference separates the Helm surface from EPE process settings so operators can see which controls a normal chart upgrade can change.
 
+Managed mode configures gateways with a Kubernetes Service `serviceRef` and pushes EPE's ready, non-terminating Pod endpoints over EDS. The chart also keeps the DNS `service` field for older controllers. External mode continues to use DNS unless `agentiod.config.values.sandboxExtProc.serviceRef` is set. See [external processing configuration](agentio-configuration.md#external-processing-provider) for reference precedence and port mapping.
+
 ## Watched EPEConfig
 
 EPE always watches its base and primary configuration ConfigMaps and referenced Secrets, CA ConfigMaps, and certificate files. The chart selects `<epe-name>-config` and `<epe-name>-config-primary` in the installation namespace; standalone EPE defaults to `agentio-epe-config` and `agentio-epe-config-primary` in `agentio-system`. Set `epe.config` to have Helm create the base with global destination restrictions and named `httpCallout` and `credentialProvider` extensions. SecurityProfile rules select a named provider with `actions.httpCallout.provider.name`; see [HTTP callouts](security-profile.md#http-callouts). `epe.config: null` leaves the base externally managed; primary is always externally managed.
 
 Environment settings supply the default EPEConfig layer, alongside built-in destination restrictions, followed by base and primary. Missing ConfigMaps or blank `data.config` leave the lower layer unchanged; EPE watches for later creation. Invalid content is logged and discarded, retaining the last good configuration, or the defaults before any valid configuration has been loaded.
+
+Unknown EPEConfig fields are ignored with a warning listing their full paths. Known fields still undergo type and semantic validation; invalid enum names, duplicate YAML keys, and conflicting oneof members reject the update. Keep older versions' required fields when adding configuration for a newer version.
 
 `extensionProviders` merges by name across layers. New names are added; a same-name entry replaces the whole provider, including its type, timeout, and TLS settings. Omitted or null lists inherit the lower layer; an explicit `extensionProviders: []` clears the inherited list. Duplicate names within one layer are invalid. Each update recomputes from defaults: removing an entry or deleting a ConfigMap restores any lower-layer definition. Unchanged providers keep their clients and caches; replaced providers are recreated when restored.
 

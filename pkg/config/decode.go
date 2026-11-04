@@ -15,18 +15,23 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/golang/protobuf/jsonpb"            //nolint:staticcheck // Preserve AgentioConfig field replacement semantics.
 	legacyproto "github.com/golang/protobuf/proto" //nolint:staticcheck // jsonpb accepts the legacy message adapter.
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"sigs.k8s.io/yaml"
 )
 
 // Apply decodes YAML/JSON onto a copy of base, which must be non-nil. Omitted
 // and null fields preserve base; supplied fields replace lists and submessages.
-// Unknown fields, duplicate YAML keys, and conflicting oneof members are errors.
+// Unknown fields are ignored with a warning. Invalid known fields, duplicate
+// YAML keys, and conflicting oneof members are errors.
 func Apply[T proto.Message](content string, base T) (T, error) {
 	var zero T
 	data, err := yaml.YAMLToJSONStrict([]byte(content))
@@ -37,13 +42,82 @@ func Apply[T proto.Message](content string, base T) (T, error) {
 	if string(data) == "null" {
 		return value, nil
 	}
+	var document any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&document); err != nil {
+		return zero, fmt.Errorf("decode configuration JSON: %w", err)
+	}
+	unknown := discardUnknownFields(document, base.ProtoReflect().Descriptor(), "")
+	if len(unknown) > 0 {
+		data, err = json.Marshal(document)
+		if err != nil {
+			return zero, fmt.Errorf("encode known configuration fields: %w", err)
+		}
+	}
 	// jsonpb supplies presence-aware replacement, but accepts conflicting oneofs.
-	// Check the input with protojson before applying it to the cloned base.
+	// Keep protojson strict: DiscardUnknown also accepts invalid enum names.
 	if err := protojson.Unmarshal(data, base.ProtoReflect().New().Interface()); err != nil {
 		return zero, fmt.Errorf("decode configuration: %w", err)
 	}
 	if err := jsonpb.UnmarshalString(string(data), legacyproto.MessageV1(value)); err != nil {
 		return zero, fmt.Errorf("apply configuration: %w", err)
 	}
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		log.Warn(
+			"ignore unknown configuration fields",
+			"type",
+			base.ProtoReflect().Descriptor().FullName(),
+			"fields",
+			unknown,
+		)
+	}
 	return value, nil
+}
+
+func discardUnknownFields(value any, message protoreflect.MessageDescriptor, path string) []string {
+	// Well-known types have custom JSON encodings, including arbitrary Struct keys.
+	if message == nil || message.ParentFile().Package() == "google.protobuf" {
+		return nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var unknown []string
+	for name, value := range object {
+		fieldPath := name
+		if path != "" {
+			fieldPath = path + "." + name
+		}
+		field := message.Fields().ByJSONName(name)
+		if field == nil {
+			field = message.Fields().ByName(protoreflect.Name(name))
+		}
+		if field == nil {
+			delete(object, name)
+			unknown = append(unknown, fieldPath)
+			continue
+		}
+		switch {
+		case field.IsMap():
+			entries, _ := value.(map[string]any)
+			for key, entry := range entries {
+				unknown = append(
+					unknown,
+					discardUnknownFields(entry, field.MapValue().Message(), fmt.Sprintf("%s[%q]", fieldPath, key))...)
+			}
+		case field.IsList():
+			entries, _ := value.([]any)
+			for i, entry := range entries {
+				unknown = append(
+					unknown,
+					discardUnknownFields(entry, field.Message(), fmt.Sprintf("%s[%d]", fieldPath, i))...)
+			}
+		default:
+			unknown = append(unknown, discardUnknownFields(value, field.Message(), fieldPath)...)
+		}
+	}
+	return unknown
 }

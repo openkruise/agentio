@@ -220,7 +220,9 @@ spec:
 		request(t, 200, "c-1")
 	})
 	step("invalid_update_retains_last_good", func(t *testing.T) {
-		cm = applyConfig(t, config("a", "c")+"unknownProviderE2EField: true\n", kube.ReconcileOwned)
+		const invalidTimeout = "invalid-provider-e2e-timeout"
+		invalid := strings.ReplaceAll(config("b", "c"), "timeout: 2s", "timeout: "+invalidTimeout)
+		cm = applyConfig(t, invalid, kube.ReconcileOwned)
 		// Wait for rejection, so unchanged traffic cannot pass just because the
 		// ConfigMap event has not yet reached EPE.
 		harness.RetryAssertion(t, 30*time.Second, time.Second, func() error {
@@ -229,7 +231,7 @@ spec:
 				return err
 			}
 			if !strings.Contains(logs, "retain last-known-good configuration") ||
-				!strings.Contains(logs, "unknownProviderE2EField") {
+				!strings.Contains(logs, invalidTimeout) {
 				return fmt.Errorf("EPE has not rejected the invalid update")
 			}
 			return nil

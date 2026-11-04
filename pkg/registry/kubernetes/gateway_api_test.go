@@ -125,7 +125,38 @@ serviceEntries:
 	}
 }
 
-func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
+func TestExtProcServiceReferenceConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		ref     string
+		invalid bool
+	}{
+		{"{namespace: agentio-system, name: agentio-epe}", false},
+		{"{}", true},
+		{"{name: agentio-epe}", true},
+		{"{namespace: agentio-system}", true},
+		{"{namespace: agentio-system, name: epe.invalid}", true},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			provider := "    service: legacy.invalid\n    serviceRef: " + tc.ref + "\n    port: 9002\n"
+			for _, raw := range []string{
+				"sandboxExtProc:\n" + provider,
+				"egressGateways:\n- name: egress\n  namespace: agentio-system\n  extProc:\n" + provider,
+			} {
+				if _, err := applyAgentioConfig(raw, nil); (err != nil) != tc.invalid {
+					t.Fatalf("AgentioConfig error=%v, want invalid=%v", err, tc.invalid)
+				}
+			}
+			if _, err := decodeEgressGateway("extProc:\n" + provider); (err != nil) != tc.invalid {
+				t.Fatalf("Gateway parameters error=%v, want invalid=%v", err, tc.invalid)
+			}
+		})
+	}
+	if _, err := decodeEgressGateway("extProc: {serviceRef: {namespace: system, name: epe}}"); err != nil {
+		t.Fatalf("reference-only Gateway parameters: %v", err)
+	}
+}
+
+func TestGatewayConfigurationRemovedPaths(t *testing.T) {
 	for _, content := range []string{
 		"connectionPool: {tcp: {idleTimeout: 30s}}",
 		"upstreamTls: {minProtocolVersion: TLSV1_2}",
@@ -139,8 +170,8 @@ func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
 			if _, err := applyAgentioConfig(
 				"egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+content,
 				nil,
-			); err == nil {
-				t.Fatal("AgentioConfig accepted a removed path")
+			); err != nil {
+				t.Fatalf("AgentioConfig must ignore removed fields: %v", err)
 			}
 		})
 	}

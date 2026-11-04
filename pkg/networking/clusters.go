@@ -303,6 +303,17 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{httpProtocolOptionsType: protocolAny},
 	}
+	if provider.GetServiceRef() != nil {
+		cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_EDS}
+		cluster.LoadAssignment = nil
+		cluster.EdsClusterConfig = &clusterv3.Cluster_EdsClusterConfig{
+			ServiceName: name,
+			EdsConfig: &corev3.ConfigSource{
+				ResourceApiVersion:    corev3.ApiVersion_V3,
+				ConfigSourceSpecifier: &corev3.ConfigSource_Ads{Ads: &corev3.AggregatedConfigSource{}},
+			},
+		}
+	}
 	if provider.GetTls().GetMode() == configv1.ExtProcTLSSettings_MUTUAL {
 		secret := func(name string) *tlsv3.SdsSecretConfig {
 			return &tlsv3.SdsSecretConfig{Name: name, SdsConfig: workloadSDSConfigSource()}

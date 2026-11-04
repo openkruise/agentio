@@ -57,6 +57,8 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	Services                   []model.Service
+	Endpoints                  []model.Endpoint
 	GatewayPatches             []model.GatewayPatch
 	TelemetryRootNamespace     string
 	TelemetryClusterID         string
@@ -74,7 +76,32 @@ type effectiveConfig struct {
 	telemetry          *telemetry.Output
 }
 
+// GatewayCompilation retains static resources and accepted Service bindings for independent EDS updates.
+type GatewayCompilation struct {
+	StaticResources  []model.Resource
+	EndpointBindings []EndpointBinding
+}
+
 func Build(inputs Inputs) ([]model.Resource, error) {
+	built, err := BuildGateway(inputs)
+	if err != nil {
+		return nil, err
+	}
+	resources := built.StaticResources
+	for _, binding := range built.EndpointBindings {
+		resource, err := binding.BuildResource(inputs.Services, inputs.Endpoints)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
+}
+
+// BuildGateway compiles static resources and Service bindings without resolving live endpoints.
+//
+//nolint:gocyclo,funlen // Keep gateway assembly and accepted EDS bindings together.
+func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
 	}
@@ -171,6 +198,36 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 		}
 		resources = append(resources, resource)
 	}
+	resourcePrefix := inputs.Gateway.ResourceName() + "|"
+	if !inputs.LegacyGateway {
+		resourcePrefix += "agentio-egress|"
+	}
+	var bindings []EndpointBinding
+	for i, provider := range append([]*configv1.ExtProcProvider{effective.extProc}, effective.additionalExtProcs...) {
+		if provider.GetServiceRef() == nil {
+			continue
+		}
+		name := ExtProcCluster
+		if i > 0 {
+			name = additionalExtProcName(provider)
+		}
+		port := provider.GetPort()
+		if port == 0 {
+			port = 9002
+		}
+		target := ServiceTarget{
+			Namespace: provider.GetServiceRef().GetNamespace(),
+			Name:      provider.GetServiceRef().GetName(),
+			Port:      port,
+		}
+		bindings = append(bindings, EndpointBinding{
+			Key:           model.ResourceKey{TypeURL: model.EndpointType, Name: resourcePrefix + name},
+			XDSName:       name,
+			GatewayOwner:  inputs.Gateway.ResourceName(),
+			AgentioEgress: !inputs.LegacyGateway,
+			Target:        target,
+		})
+	}
 	for _, message := range routes {
 		resource, err := scopedResource(inputs.Gateway, model.RouteType, message.GetName(), message)
 		if err != nil {
@@ -207,11 +264,11 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 		// Same Envoy names, separate cache keys and selection facts. A mixed
 		// rollout must never replace the other proxy's resource graph.
 		for i := range resources {
-			resources[i].Key.Name = inputs.Gateway.ResourceName() + "|agentio-egress|" + resources[i].XDSName
+			resources[i].Key.Name = resourcePrefix + resources[i].XDSName
 			resources[i].Facts.AgentioEgress = true
 		}
 	}
-	return resources, nil
+	return &GatewayCompilation{StaticResources: resources, EndpointBindings: bindings}, nil
 }
 
 func validatePatchedMessages(
@@ -244,13 +301,15 @@ func validatePatchedGroup[T interface{ ValidateAll() error }](messages []T) erro
 func resolveConfig(gateway model.Gateway, globalExtProc *configv1.ExtProcProvider) (effectiveConfig, error) {
 	result := effectiveConfig{gateway: gateway.Config, gatewayIdentity: gateway.ResourceName()}
 	if override := gateway.Config.GetExtProc(); override != nil {
-		// An explicit empty service disables ext_proc for this gateway;
-		// only an absent override inherits the global provider.
-		if override.GetService() != "" {
+		// Only an absent override inherits the global provider.
+		if model.ExtProcEnabled(override) {
 			result.extProc = override
 		}
-	} else if globalExtProc.GetService() != "" {
+	} else if model.ExtProcEnabled(globalExtProc) {
 		result.extProc = globalExtProc
+	}
+	if err := model.ValidateExtProcServiceRef(result.extProc); err != nil {
+		return effectiveConfig{}, err
 	}
 	if err := model.ValidateExtProcTLS(result.extProc.GetTls()); err != nil {
 		return effectiveConfig{}, err

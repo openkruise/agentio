@@ -78,7 +78,7 @@ message EgressGateway {
   // Per-gateway ext_proc override. When set, this gateway uses its own
   // ext_proc endpoint instead of the global AgentioConfig.sandbox_ext_proc.
   // nil means fall back to the global configuration.
-  // An explicit provider with an empty service disables ext_proc for this gateway.
+  // An explicit provider without service or service_ref disables ext_proc for this gateway.
   ExtProcProvider ext_proc = 4;
 
   // Per-gateway connect rate limit. Controls the rate at which new
@@ -276,10 +276,11 @@ enum HeaderSendMode {
 
 // ExtProcProvider configures the external processing endpoint.
 message ExtProcProvider {
-  // Service hostname or address for the ext_proc endpoint.
+  // DNS hostname or address. Used only when service_ref is absent.
   string service = 1;
 
-  // Service port for the ext_proc endpoint.
+  // Service port for the ext_proc endpoint. Defaults to 9002.
+  // With service_ref, this is the Service port, mapped to EndpointSlice ports.
   uint32 port = 2;
 
   // Request processing mode options.
@@ -308,6 +309,17 @@ message ExtProcProvider {
   // independently of list position. The processor may request buffered bodies
   // using mode_override; the initial mode sends only request headers by default.
   string name = 9;
+
+  // Kubernetes Service discovered through EDS. Takes precedence over service.
+  // Both namespace and name are required. Missing Services or ready endpoints
+  // produce an empty endpoint assignment; they do not fall back to DNS.
+  ServiceReference service_ref = 10;
+}
+
+// ServiceReference identifies a Kubernetes Service for external processing.
+message ServiceReference {
+  string namespace = 1;
+  string name = 2;
 }
 
 // ExtProcTLSSettings configures the gateway's transport to an external processor.

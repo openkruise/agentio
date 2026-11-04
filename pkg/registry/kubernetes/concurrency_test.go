@@ -158,7 +158,7 @@ func TestConcurrencyValidationAtBothConfigEntrypoints(t *testing.T) {
 				),
 				nil,
 			)
-			if (err == nil) != tc.valid {
+			if (err == nil) != (tc.valid || tc.name == "unknown field") {
 				t.Fatalf("AgentioConfig error = %v", err)
 			}
 		})

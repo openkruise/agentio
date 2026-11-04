@@ -240,7 +240,7 @@ defaultProviders: {credentialProvider: a}
 	step("invalid_config_retains_last_good", func(t *testing.T) {
 		before := liveProvider(r, "a")
 		for _, raw := range []string{
-			"extensionProviders: [", "unknownField: true",
+			"extensionProviders: [", "extensionProviders: invalid",
 			strings.Replace(base, "timeout: 2s", "timeout: -1s", 1),
 			strings.Replace(base, "name: b", "name: a", 1),
 		} {
@@ -504,7 +504,8 @@ defaultProviders: {credentialProvider: a}
 
 	// Invalid authoring tries to move the dependencies. The retained version
 	// must continue watching material, including revocation and recreation.
-	update(t, strings.ReplaceAll(raw, "name: material", "name: unaccepted")+"unknownField: true\n")
+	invalid := strings.ReplaceAll(raw, "name: material", "name: unaccepted")
+	update(t, strings.Replace(invalid, "defaultProviders: {credentialProvider: a}", "defaultProviders: []", 1))
 	waitRejection(t, ctx, rejected)
 	if err := secrets.Delete(ctx, "material", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)

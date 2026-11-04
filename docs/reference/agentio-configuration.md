@@ -15,6 +15,8 @@ The sources are applied in this order:
 
 Both ConfigMaps are watched. A valid update is applied and distributed without restarting `agentiod`. If a layer cannot be parsed or validated, Agentio logs a warning and retains the last successfully applied effective configuration.
 
+Unknown fields are ignored with a warning listing their full paths, allowing older controllers to read configuration containing fields from a newer version. Known fields still undergo type and semantic validation; invalid enum names, duplicate YAML keys, and conflicting oneof members reject the update. Rejected updates preserve the entire previous effective configuration. Before any valid configuration has been loaded, rejection uses the startup defaults; retained configuration does not survive a process restart. During a mixed-version rollout, keep the fields required by the older controller alongside any new fields.
+
 ## Merge behavior
 
 Configuration is merged by protobuf field semantics:
@@ -188,8 +190,9 @@ An `ExtProcProvider` can be set globally at `sandboxExtProc`, in `additionalExtP
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | String | Empty | Required, unique DNS label for each additional processor; ignored for the primary provider. Identifies filters, clusters, and statistics independently of list position. |
-| `service` | String | Empty | Hostname or address of the gRPC external-processing service. Required for additional processors. |
-| `port` | Integer | `0` | Service port. |
+| `service` | String | Empty | DNS hostname or address of the gRPC processor. Used when `serviceRef` is absent. Additional processors require `service` or `serviceRef`. |
+| `serviceRef` | Service reference | Unset | Kubernetes Service identified by required `namespace` and `name`. Takes precedence over `service` and selects EDS discovery. |
+| `port` | Integer | `9002` | Service port. With `serviceRef`, mapped to the actual EndpointSlice port. |
 | `request.headerMode` | Enum | `SEND` | `DEFAULT`, `SEND`, or `SKIP` for request headers and trailers. `DEFAULT` uses Agentio's request default. |
 | `request.attributes` | `string[]` | Empty | Envoy attributes included with request processing messages. |
 | `response.headerMode` | Enum | `SKIP` | `DEFAULT`, `SEND`, or `SKIP` for response headers and trailers. `DEFAULT` uses Agentio's response default. |
@@ -199,9 +202,26 @@ An `ExtProcProvider` can be set globally at `sandboxExtProc`, in `additionalExtP
 | `clusterSettings.http.maxConcurrentStreams` | Integer | `1024` (Envoy default) | Maximum concurrent HTTP/2 streams per upstream connection. Agentio leaves the field unset when configured as `0`. |
 | `clusterSettings.http.maxRequestsPerConnection` | Integer | `0` | Maximum requests before closing an upstream connection. `0` means unlimited. |
 
-If an egress gateway has no `extProc` field, it inherits `sandboxExtProc`. A gateway-level provider replaces the global provider. A gateway-level `extProc: {}` has an empty `service` and disables external processing for that gateway.
+If an egress gateway has no `extProc` field, it inherits `sandboxExtProc`. A gateway-level provider replaces the global provider. A gateway-level `extProc: {}` has neither `service` nor `serviceRef` and disables external processing for that gateway.
+
+Use `serviceRef` for a Kubernetes Service whose Pod endpoints should be pushed to gateways over EDS:
+
+```yaml
+sandboxExtProc:
+  service: agentio-epe.agentio-system.svc.cluster.local
+  serviceRef:
+    namespace: agentio-system
+    name: agentio-epe
+  port: 9002
+```
+
+The reference always identifies a Service, including a headless Service. The controller matches `port` to a TCP Service port, then matches EndpointSlice ports by name and protocol. It sends the actual EndpointSlice ports, which may differ from the Service's numeric `targetPort` for manually managed slices. Endpoints must be ready, serving, and non-terminating; omitted `ready` and `serving` conditions are treated as true. An explicit `serving: false` excludes an endpoint even when `publishNotReadyAddresses` makes it ready. Changes to endpoints update EDS without rebuilding the cluster or listeners. If gateway compilation fails, EDS continues tracking the latest endpoints for the last successfully compiled target reference. Missing Services, missing ports, and empty endpoint sets produce an empty assignment; they never fall back to `service`. TLS and HTTP/2 settings apply to both discovery methods.
+
+Both fields may coexist during migration: controllers supporting `serviceRef` prefer EDS, while `release-0.1` ignores the unknown reference and uses `service`. Controllers predating unknown-field compatibility may reject the update instead, so upgrade those controllers before enabling the new field. EDS propagation is asynchronous; a graceful shutdown still needs time for endpoint withdrawal to reach gateways before EPE stops accepting new RPCs.
 
 The chart generates `sandboxExtProc` automatically when `epe.mode` is `managed` or `external`. Its generated `messageTimeout` is `5s`, rather than the raw API default of `200ms`; set `epe.messageTimeout` or use `agentiod.config.values.sandboxExtProc` to override it.
+
+Managed mode generates both `service` and `serviceRef`, using the actual EPE Service name and release namespace. External mode defaults to DNS; set `agentiod.config.values.sandboxExtProc.serviceRef` to reference an external processor's Kubernetes Service. To force DNS in managed mode, explicitly set `agentiod.config.values.sandboxExtProc.serviceRef: null`; changing `service` alone does not override a generated reference.
 
 See [EPE configuration](epe-configuration.md) for the deployed EPE service, listeners, Helm values, and process settings.
 
@@ -629,9 +649,11 @@ is now enabled by default; set `http.acceptHttp10: false` to disable it. Both
 values route HTTP/1.0 through the HTTP filter chain; disabling it rejects the
 request instead of forwarding it as opaque TCP.
 
-Old paths are configuration errors, not aliases. Invalid updates retain the
-last effective configuration. Migrate the configuration when deploying the new
-control plane; retained configuration does not survive a process restart.
+Old paths are not aliases. AgentioConfig ignores them with a warning, so their
+settings do not take effect. Gateway API `parametersRef` payloads reject unknown
+fields, including these old paths. Migrate both sources when deploying the new
+control plane. Invalid updates retain the last effective configuration;
+retained configuration does not survive a process restart.
 External processor `clusterSettings` and EPE HTTP-callout `connectionPool`
 settings are separate APIs and are unchanged.
 

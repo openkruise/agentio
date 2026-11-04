@@ -54,6 +54,13 @@ func TestCollectionDefaultsOverlaysAndLastGood(t *testing.T) {
 		Names:     []string{"base", "", "primary"},
 		Key:       "settings",
 		Defaults:  defaults,
+		Apply: func(content string, base *configv1.EPEConfig) (*configv1.EPEConfig, error) {
+			value, err := config.Apply(content, base)
+			if err != nil {
+				rejected <- struct{}{}
+			}
+			return value, err
+		},
 		Validate: func(value *configv1.EPEConfig) error {
 			if value.GetDefaultProviders().GetCredentialProvider() == "reject" {
 				rejected <- struct{}{}
@@ -96,7 +103,13 @@ func TestCollectionDefaultsOverlaysAndLastGood(t *testing.T) {
 	wantEvent("first")
 	sources.UpdateObject(cm("primary", "reject"))
 	waitRejection()
-	sources.UpdateObject(cm("primary", "recovered"))
+	malformed := cm("primary", "unused")
+	malformed.Data["settings"] = "futureOption: true\ndefaultProviders: {credentialProvider: []}"
+	sources.UpdateObject(malformed)
+	waitRejection()
+	recovered := cm("primary", "recovered")
+	recovered.Data["settings"] += "\nfutureOption: true"
+	sources.UpdateObject(recovered)
 	// No defaults or partial base may be published between the two valid versions.
 	wantEvent("recovered")
 	sources.DeleteObject("system/primary")

@@ -24,6 +24,29 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 )
 
+// ExtProcEnabled reports whether the provider selects a Service or a DNS endpoint.
+func ExtProcEnabled(provider *configv1.ExtProcProvider) bool {
+	return provider.GetServiceRef() != nil || provider.GetService() != ""
+}
+
+// ValidateExtProcServiceRef validates the Kubernetes Service reference and its port.
+func ValidateExtProcServiceRef(provider *configv1.ExtProcProvider) error {
+	ref := provider.GetServiceRef()
+	if ref == nil {
+		return nil
+	}
+	if errs := validation.IsDNS1123Label(ref.GetNamespace()); len(errs) > 0 {
+		return fmt.Errorf("serviceRef.namespace: %s", strings.Join(errs, "; "))
+	}
+	if errs := validation.IsDNS1123Label(ref.GetName()); len(errs) > 0 {
+		return fmt.Errorf("serviceRef.name: %s", strings.Join(errs, "; "))
+	}
+	if provider.GetPort() > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, or 0 for the default 9002")
+	}
+	return nil
+}
+
 // ValidateAdditionalExtProcs checks the named processor list at the configuration boundary.
 func ValidateAdditionalExtProcs(providers []*configv1.ExtProcProvider) error {
 	names := make(map[string]bool, len(providers))
@@ -37,8 +60,11 @@ func ValidateAdditionalExtProcs(providers []*configv1.ExtProcProvider) error {
 			return fmt.Errorf("%s.name: duplicate name %q", field, name)
 		}
 		names[name] = true
-		if strings.TrimSpace(provider.GetService()) == "" ||
-			strings.TrimSpace(provider.GetService()) != provider.GetService() {
+		if err := ValidateExtProcServiceRef(provider); err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+		if provider.GetServiceRef() == nil && (strings.TrimSpace(provider.GetService()) == "" ||
+			strings.TrimSpace(provider.GetService()) != provider.GetService()) {
 			return fmt.Errorf("%s.service must be non-empty without surrounding whitespace", field)
 		}
 		if provider.GetPort() > 65535 {

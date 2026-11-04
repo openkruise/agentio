@@ -299,12 +299,10 @@ func TestDecodeRejectsInvalidRegistry(t *testing.T) {
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {clientCertificateFiles: {}}}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {clientCertificateFiles: {certificateFile: /cert}}}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {insecureSkipVerify: true, peerSpiffeIDs: [spiffe://domain/server]}}}]",
-		"unknown: true",
 		"extensionProviders: [{name: a}, {name: a}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://example}, credentialProvider: {url: http://example}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://user:pass@example}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://example, timeout: -1s}}]",
-		"extensionProviders: [{name: a, credentialProvider: {url: http://example, cache: {}}}]",
 		"extensionProviders: [{name: a, credentialProvider: {url: http://example, tls: {}}}]",
 		"extensionProviders: [{name: a, credentialProvider: {url: https://example, tls: {caSecretRef: {}}}}]",
 	} {

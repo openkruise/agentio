@@ -100,7 +100,13 @@ defaultProviders: {credentialProvider: ""}`,
   credentialProvider: {url: https://two.example}`,
 			invalid: true,
 		},
-		{name: "reject unknown field", raw: "unknown: true", invalid: true},
+		{name: "ignore unknown field", raw: "unknown: true", want: baseYAML},
+		{
+			name: "ignore unknown provider field",
+			raw:  "extensionProviders: [{name: inherited, credentialProvider: {url: https://new.example, cache: {}}}]",
+			want: `extensionProviders: [{name: inherited, credentialProvider: {url: https://new.example}}]
+defaultProviders: {credentialProvider: inherited}`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ApplyConfig(tt.raw, base)
