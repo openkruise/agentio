@@ -20,11 +20,12 @@ import (
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"sigs.k8s.io/yaml"
 
-	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -48,8 +49,12 @@ var (
 )
 
 func decodeEgressGateway(content string) (*configv1.EgressGateway, error) {
-	value, err := config.Apply(content, &configv1.EgressGateway{})
+	data, err := yaml.YAMLToJSONStrict([]byte(content))
 	if err != nil {
+		return nil, fmt.Errorf("parse egress gateway YAML: %w", err)
+	}
+	value := &configv1.EgressGateway{}
+	if err := protojson.Unmarshal(data, value); err != nil {
 		return nil, fmt.Errorf("decode egress gateway: %w", err)
 	}
 	if value.GetName() != "" || value.GetNamespace() != "" {

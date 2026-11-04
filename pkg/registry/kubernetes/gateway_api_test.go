@@ -30,23 +30,24 @@ import (
 
 func TestGatewayUpstreamTrustSources(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		bundle  string
-		invalid bool
+		name              string
+		bundle            string
+		invalid           bool
+		parametersInvalid bool
 	}{
-		{"empty", "{}", false},
-		{"empty sources", "{additionalSources: []}", false},
-		{"ConfigMap", "{additionalSources: [{configMapRef: {name: company-ca, key: ca.crt}}]}", false},
-		{"Secret", "{additionalSources: [{secretRef: {name: partner-ca, key: ca.pem}}]}", false},
-		{"missing source", "{additionalSources: [{}]}", true},
-		{"null source", "{additionalSources: [null]}", true},
-		{"missing name", "{additionalSources: [{configMapRef: {key: ca.crt}}]}", true},
-		{"missing key", "{additionalSources: [{secretRef: {name: company-ca}}]}", true},
-		{"invalid name", "{additionalSources: [{configMapRef: {name: 'bad/name', key: ca.crt}}]}", true},
-		{"invalid key", "{additionalSources: [{secretRef: {name: company-ca, key: 'bad/key'}}]}", true},
-		{"unknown namespace ignored", "{additionalSources: [{configMapRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false},
-		{"unknown secret namespace ignored", "{additionalSources: [{secretRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false},
-		{"conflicting sources", "{additionalSources: [{configMapRef: {name: a, key: ca.crt}, secretRef: {name: b, key: ca.crt}}]}", true},
+		{"empty", "{}", false, false},
+		{"empty sources", "{additionalSources: []}", false, false},
+		{"ConfigMap", "{additionalSources: [{configMapRef: {name: company-ca, key: ca.crt}}]}", false, false},
+		{"Secret", "{additionalSources: [{secretRef: {name: partner-ca, key: ca.pem}}]}", false, false},
+		{"missing source", "{additionalSources: [{}]}", true, true},
+		{"null source", "{additionalSources: [null]}", true, true},
+		{"missing name", "{additionalSources: [{configMapRef: {key: ca.crt}}]}", true, true},
+		{"missing key", "{additionalSources: [{secretRef: {name: company-ca}}]}", true, true},
+		{"invalid name", "{additionalSources: [{configMapRef: {name: 'bad/name', key: ca.crt}}]}", true, true},
+		{"invalid key", "{additionalSources: [{secretRef: {name: company-ca, key: 'bad/key'}}]}", true, true},
+		{"unknown namespace", "{additionalSources: [{configMapRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false, true},
+		{"unknown secret namespace", "{additionalSources: [{secretRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false, true},
+		{"conflicting sources", "{additionalSources: [{configMapRef: {name: a, key: ca.crt}, secretRef: {name: b, key: ca.crt}}]}", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := "upstreamTrustBundle: " + tc.bundle
@@ -64,8 +65,12 @@ func TestGatewayUpstreamTrustSources(t *testing.T) {
 			} {
 				t.Run(name, func(t *testing.T) {
 					got, err := decode()
-					if (err != nil) != tc.invalid {
-						t.Fatalf("decode() = %v, %v; invalid=%t", got, err, tc.invalid)
+					invalid := tc.invalid
+					if name == "Gateway API parameters" {
+						invalid = tc.parametersInvalid
+					}
+					if (err != nil) != invalid {
+						t.Fatalf("decode() = %v, %v; invalid=%t", got, err, invalid)
 					}
 					if err == nil && got.GetUpstreamTrustBundle() == nil {
 						t.Fatal("upstreamTrustBundle was not decoded")

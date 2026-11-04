@@ -263,7 +263,10 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 		UnmarshalTo(tlsContext); err != nil {
 		t.Fatalf("unmarshal TLS origination context: %v", err)
 	}
-	if got := tlsContext.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetInlineString(); got != trustBundle {
+	if got := tlsContext.GetCommonTlsContext().
+		GetValidationContext().
+		GetTrustedCa().
+		GetInlineString(); got != trustBundle {
 		t.Fatalf("TLS origination root CA = %q, want %q", got, trustBundle)
 	}
 }
