@@ -381,40 +381,11 @@ func TestSandboxForwardHTTPConnect(t *testing.T) {
 	bootstrap := forwardproxy.Bootstrap()
 	systemNamespace := resolvedAgentioConfig.Namespace
 
-	envoyFilterYAML := fmt.Sprintf(`
-apiVersion: networking.istio.io/v1alpha3
-kind: EnvoyFilter
-metadata:
-  name: forward-http-connect-proxy-ca
-  namespace: %s
-spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: egress-gateway
-  configPatches:
-  - applyTo: CLUSTER
-    match:
-      cluster:
-        name: tls_proxy_originate
-    patch:
-      operation: MERGE
-      value:
-        transport_socket:
-          name: envoy.transport_sockets.tls
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-            common_tls_context:
-              validation_context:
-                trusted_ca:
-                  inline_string: %q
-`, systemNamespace, proxyCA)
-
 	e2econfig.New(scope).Eval(systemNamespace, map[string]any{
 		"EnvoyYAML":         bootstrap,
 		"ProxyKey":          proxyKey,
 		"ProxyCertChain":    proxyCertChain,
-		"EnvoyFilterYAML":   envoyFilterYAML,
+		"ProxyCA":           proxyCA,
 		"ForwardProxyImage": resolvedAgentioConfig.ForwardProxyImage,
 	}, `
 apiVersion: v1
@@ -471,13 +442,11 @@ spec:
     nodePort: 32129
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
   name: forward-http-connect-proxy-ca
-  labels:
-    manifests.agents.kruise.io/kube-source: "true"
-data:
-  sources: {{ printf "%q" .EnvoyFilterYAML }}
+stringData:
+  ca.crt: {{ printf "%q" .ProxyCA }}
 `).ApplyOrFail(t, kube.CreateOnly)
 
 	readyCtx, readyCancel := e2e.Context(t, 2*time.Minute)
@@ -515,6 +484,9 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
+      upstreamTrustBundle:
+        additionalSources:
+        - secretRef: {name: forward-http-connect-proxy-ca, key: ca.crt}
       tlsTermination:
         includeHosts:
         - "`+connectProxyHost+`"
@@ -561,9 +533,15 @@ data:
 		})
 	}
 
-	t.Run("HTTPS proxy certificate SAN mismatch", func(t *testing.T) {
+	assertTLSRejected := func(proxyHost string) {
+		t.Helper()
 		harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
-			stdout, stderr, curlErr := curlThroughProxy(invalidConnectProxyHost, "https", connectProxyHTTPSNodePort)
+			// An unencrypted proxy request remains a positive control for connectivity.
+			stdout, stderr, err := curlThroughProxy(connectProxyHost, "http", connectProxyHTTPNodePort)
+			if err != nil || strings.TrimSpace(stdout) != "200:200" {
+				return fmt.Errorf("HTTP proxy control: codes=%q error=%v stderr=%q", stdout, err, stderr)
+			}
+			stdout, stderr, curlErr := curlThroughProxy(proxyHost, "https", connectProxyHTTPSNodePort)
 			codes := strings.Split(strings.TrimSpace(stdout), ":")
 			if len(codes) != 2 {
 				return fmt.Errorf("parse curl target:CONNECT codes %q: curl error=%v stderr=%q", stdout, curlErr, stderr)
@@ -573,10 +551,39 @@ data:
 				return fmt.Errorf("parse curl CONNECT code %q: %v; curl error=%v stderr=%q", codes[1], err, curlErr, stderr)
 			}
 			if code < 500 || code > 599 {
-				return fmt.Errorf("SAN-mismatched HTTPS proxy returned CONNECT %d, want 5xx rejection; curl error=%v stderr=%q", code, curlErr, stderr)
+				return fmt.Errorf("untrusted HTTPS proxy returned CONNECT %d, want 5xx rejection; curl error=%v stderr=%q", code, curlErr, stderr)
 			}
 			return nil
 		})
+	}
+	t.Run("HTTPS proxy certificate SAN mismatch", func(t *testing.T) {
+		assertTLSRejected(invalidConnectProxyHost)
+	})
+	t.Run("Secret CA updates", func(t *testing.T) {
+		ctx, cancel := e2e.Context(t, 5*time.Minute)
+		defer cancel()
+		_, _, unrelatedCA := generateConnectProxyCertificate(t, connectProxyHost)
+		for _, ca := range []string{unrelatedCA, proxyCA} {
+			secret, err := environment.Cluster.Kube.CoreV1().Secrets(systemNamespace).Get(ctx, "forward-http-connect-proxy-ca", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret.Data["ca.crt"] = []byte(ca)
+			if _, err := environment.Cluster.Kube.CoreV1().Secrets(systemNamespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if ca == unrelatedCA {
+				assertTLSRejected(connectProxyHost)
+				continue
+			}
+			harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
+				stdout, stderr, err := curlThroughProxy(connectProxyHost, "https", connectProxyHTTPSNodePort)
+				if err != nil || strings.TrimSpace(stdout) != "200:200" {
+					return fmt.Errorf("restored HTTPS proxy CA: codes=%q error=%v stderr=%q", stdout, err, stderr)
+				}
+				return nil
+			})
+		}
 	})
 }
 
