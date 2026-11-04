@@ -507,6 +507,68 @@ func TestManagedEPE(t *testing.T) {
 	}
 }
 
+func TestManagedEPEGracefulShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		delay int64
+		grace int64
+		args  []string
+	}{
+		{name: "defaults", delay: 10, grace: 45},
+		{
+			name:  "custom budget",
+			delay: 5,
+			grace: 60,
+			args:  []string{"--set", "epe.preStopDelaySeconds=5,epe.terminationGracePeriodSeconds=60"},
+		},
+		{name: "disabled delay", grace: 45, args: []string{"--set", "epe.preStopDelaySeconds=0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(
+				[]string{"--set", "epe.mode=managed", "--show-only", "templates/epe/deployment.yaml"},
+				tc.args...)
+			var deployment appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(renderAgentio(t, args...)), &deployment); err != nil {
+				t.Fatal(err)
+			}
+			pod := deployment.Spec.Template.Spec
+			if pod.TerminationGracePeriodSeconds == nil || *pod.TerminationGracePeriodSeconds != tc.grace {
+				t.Fatalf("termination grace = %v, want %d", pod.TerminationGracePeriodSeconds, tc.grace)
+			}
+			var want *corev1.Lifecycle
+			if tc.delay > 0 {
+				want = &corev1.Lifecycle{
+					PreStop: &corev1.LifecycleHandler{Sleep: &corev1.SleepAction{Seconds: tc.delay}},
+				}
+			}
+			if got := pod.Containers[0].Lifecycle; !reflect.DeepEqual(got, want) {
+				t.Fatalf("EPE lifecycle = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestManagedEPERejectsInvalidShutdownBudget(t *testing.T) {
+	for _, values := range []string{
+		"epe.preStopDelaySeconds=-1",
+		"epe.preStopDelaySeconds=1.5",
+		"epe.preStopDelaySeconds=10s",
+		"epe.terminationGracePeriodSeconds=0",
+		"epe.terminationGracePeriodSeconds=-1",
+		"epe.terminationGracePeriodSeconds=1.5",
+	} {
+		t.Run(values, func(t *testing.T) {
+			field, _, _ := strings.Cut(values, "=")
+			requireRenderError(t, "/"+strings.ReplaceAll(field, ".", "/"),
+				"--set", "epe.mode=managed", "--set", values)
+		})
+	}
+	for _, grace := range []int{5, 10} {
+		requireRenderError(t, "epe.terminationGracePeriodSeconds must exceed epe.preStopDelaySeconds",
+			"--set", "epe.mode=managed", "--set", fmt.Sprintf("epe.terminationGracePeriodSeconds=%d", grace))
+	}
+}
+
 func TestManagedEPECanExplicitlySkipAuditWebhookTLSVerification(t *testing.T) {
 	manifest := renderAgentio(t,
 		"--set", "epe.mode=managed",

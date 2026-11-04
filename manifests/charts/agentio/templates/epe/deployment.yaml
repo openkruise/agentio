@@ -36,6 +36,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "epe.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.epe.terminationGracePeriodSeconds }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -113,6 +114,12 @@ spec:
             - {name: extproc, containerPort: {{ .Values.epe.service.grpcPort }}}
             - {name: health, containerPort: {{ .Values.epe.service.healthPort }}}
             - {name: metrics, containerPort: {{ .Values.epe.service.metricsPort }}}
+          {{- if gt (int .Values.epe.preStopDelaySeconds) 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.epe.preStopDelaySeconds }}
+          {{- end }}
           livenessProbe:
             grpc: {port: {{ .Values.epe.service.healthPort }}, service: liveness}
             initialDelaySeconds: 5

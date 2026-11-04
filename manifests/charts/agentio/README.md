@@ -16,6 +16,8 @@ Agentiod logging is configured with `agentiod.logging.level` (`debug`, `info`, `
 
 Agentiod closes long-lived gRPC connections after `agentiod.keepalive.maxServerConnectionAge` (default `30m`) so clients periodically reconnect and re-authenticate. Set it to `0s` to disable periodic connection expiry.
 
+Managed EPE waits `epe.preStopDelaySeconds` (default `10`) before SIGTERM so endpoint withdrawal can reach gateways. Its Pod termination budget is `epe.terminationGracePeriodSeconds` (default `45`), including that delay and EPE's 30-second gRPC drain window. The native sleep hook requires `PodLifecycleSleepAction`, enabled by default in Kubernetes 1.30+; set the delay to `0` to omit it on clusters without that feature. Use at least two EPE replicas for production availability. See [EPE configuration](../../../docs/reference/epe-configuration.md#rendered-kubernetes-behavior).
+
 See [the repository installation guide](../README.md) for complete mode, namespace enrollment, EPE, Gateway API, and upgrade examples.
 
 With `egressGateway.mode: gatewayAPI`, the deployer also supports `agentio-agentgateway` Gateways backed by native file configuration. Set the image and resources under `egressGateway.agentgateway`, and reference a same-namespace ConfigMap through the Gateway's `spec.infrastructure.parametersRef`. See [Deploy agentgateway](../../../docs/tasks/deploy-agentgateway.md) for the configuration contract and current scope.
