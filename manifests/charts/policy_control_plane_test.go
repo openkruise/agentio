@@ -62,7 +62,10 @@ func TestPolicyControlPlane(t *testing.T) {
 			if proxy.Spec.Replicas != nil {
 				t.Fatal("proxy HPA was disabled")
 			}
-			wantSelector := map[string]string{"app.kubernetes.io/name": "agentiod", "app.kubernetes.io/instance": "test"}
+			wantSelector := map[string]string{
+				"app.kubernetes.io/name":     "agentiod",
+				"app.kubernetes.io/instance": "test",
+			}
 			if !reflect.DeepEqual(proxy.Spec.Selector.MatchLabels, wantSelector) {
 				t.Fatalf("legacy Deployment selector changed: %v", proxy.Spec.Selector)
 			}
@@ -72,7 +75,8 @@ func TestPolicyControlPlane(t *testing.T) {
 					t.Fatalf("Service %s is missing", name)
 				}
 				for _, backend := range []appsv1.Deployment{proxy, policy} {
-					matches := labels.SelectorFromSet(service.Spec.Selector).Matches(labels.Set(backend.Spec.Template.Labels))
+					matches := labels.SelectorFromSet(service.Spec.Selector).
+						Matches(labels.Set(backend.Spec.Template.Labels))
 					if matches != (backend.Name == name) {
 						t.Fatalf("Service %s selects backend %s = %v", name, backend.Name, matches)
 					}
@@ -89,8 +93,10 @@ func TestPolicyControlPlane(t *testing.T) {
 				env[variable.Name] = variable.Value
 			}
 			for name, want := range map[string]string{
-				"AGENTIO_SERVICE_NAME": "agentiod-policy", "AGENTIO_CA_SECRET_NAME": "agentio-ca-secret",
-				"AGENTIO_ENABLE_SIDECAR_INJECTOR": "false", "AGENTIO_ENABLE_GATEWAY_DEPLOYER": "false",
+				"AGENTIO_SERVICE_NAME":                    "agentiod-policy",
+				"AGENTIO_CA_SECRET_NAME":                  "agentio-ca-secret",
+				"AGENTIO_ENABLE_SIDECAR_INJECTOR":         "false",
+				"AGENTIO_ENABLE_GATEWAY_DEPLOYER":         "false",
 				"AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR": "false",
 				"AGENTIO_XDS_CPU_BUDGET":                  "2",
 			} {
@@ -134,8 +140,15 @@ func TestPolicyControlPlane(t *testing.T) {
 				requireContains(t, manifest, `value: "agentiod.agentio-system.svc.cluster.local:15012"`)
 			}
 			var baseline appsv1.Deployment
-			baselineYAML := renderAgentio(t, "--show-only", "templates/agentiod/deployment.yaml", "--set", "profile="+profile,
-				"--set", "agentiod.resources.limits.cpu=4,agentiod.autoscaling.enabled=true")
+			baselineYAML := renderAgentio(
+				t,
+				"--show-only",
+				"templates/agentiod/deployment.yaml",
+				"--set",
+				"profile="+profile,
+				"--set",
+				"agentiod.resources.limits.cpu=4,agentiod.autoscaling.enabled=true",
+			)
 			if err := yaml.Unmarshal([]byte(baselineYAML), &baseline); err != nil {
 				t.Fatal(err)
 			}
@@ -147,7 +160,17 @@ func TestPolicyControlPlane(t *testing.T) {
 }
 
 func TestPolicyControlPlaneNamesAndValidation(t *testing.T) {
-	manifest := renderAgentio(t, "--set", "agentiod.policyPool.enabled=true,agentiod.fullnameOverride=custom-control,agentiod.serviceAccount.name=shared-control")
-	requireContains(t, manifest, "name: custom-control-policy", `value: "custom-control-policy"`, "serviceAccountName: shared-control")
+	manifest := renderAgentio(
+		t,
+		"--set",
+		"agentiod.policyPool.enabled=true,agentiod.fullnameOverride=custom-control,agentiod.serviceAccount.name=shared-control",
+	)
+	requireContains(
+		t,
+		manifest,
+		"name: custom-control-policy",
+		`value: "custom-control-policy"`,
+		"serviceAccountName: shared-control",
+	)
 	requireRenderError(t, "/agentiod/policyPool/replicaCount", "--set", "agentiod.policyPool.replicaCount=0")
 }

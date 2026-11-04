@@ -801,7 +801,11 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 		}
 		content = bytes.ReplaceAll(content, []byte("$clientTrustEnabled"), []byte("false"))
 	case "agentiod/policy.yaml":
-		content = bytes.ReplaceAll(content, []byte(`dict "Values" $values`), []byte(`dict "Values" (dict "agentio" $values)`))
+		content = bytes.ReplaceAll(
+			content,
+			[]byte(`dict "Values" $values`),
+			[]byte(`dict "Values" (dict "agentio" $values)`),
+		)
 	case "_helpers.tpl":
 		for _, prefix := range []string{"agentio-cni.", "ztunnel.", "agentiod.webhookName", "agentiod.componentImage", "agentio.sidecarEnabled"} {
 			for {
