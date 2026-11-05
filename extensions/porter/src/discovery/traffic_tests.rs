@@ -11,7 +11,7 @@ use crate::{
         },
         extproc,
         istio::workload::{Extension, Workload},
-        kruise::networking::extensions::v1::PolicyReference,
+        kruise::networking::extensions::v1::{PolicyReference, PolicyResourceReference},
     },
 };
 use prost::Message;
@@ -44,7 +44,13 @@ fn workload(names: Option<&[&str]>) -> Any {
                             "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference",
                             PolicyReference {
                                 type_url: view::TRAFFIC_POLICY.into(),
-                                resource_names: names.iter().map(|s| (*s).into()).collect(),
+                                resources: names
+                                    .iter()
+                                    .map(|name| PolicyResourceReference {
+                                        name: (*name).into(),
+                                        ..Default::default()
+                                    })
+                                    .collect(),
                             },
                         )),
                     }]

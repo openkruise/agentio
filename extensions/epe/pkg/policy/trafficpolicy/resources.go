@@ -233,11 +233,14 @@ func references(w *workload.Workload) ([]string, error) {
 		return nil, fmt.Errorf("native TrafficPolicy binding missing")
 	}
 	seen := map[string]bool{}
-	for _, name := range found.ResourceNames {
+	names := make([]string, 0, len(found.Resources))
+	for _, reference := range found.Resources {
+		name := reference.GetName()
 		if name == "" || seen[name] {
 			return nil, fmt.Errorf("invalid TrafficPolicy reference %q", name)
 		}
 		seen[name] = true
+		names = append(names, name)
 	}
-	return found.ResourceNames, nil
+	return names, nil
 }

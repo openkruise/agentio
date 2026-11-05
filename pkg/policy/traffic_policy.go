@@ -79,6 +79,7 @@ func CompileTrafficPolicy(
 	attachment, err := NewPolicyAttachment(PolicyAttachment{
 		Kind:            PolicyKindTrafficPolicy,
 		Name:            name,
+		UID:             source.UID,
 		Target:          target,
 		Priority:        source.Spec.Priority,
 		CreationTime:    source.CreationTime,

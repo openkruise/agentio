@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
@@ -37,8 +38,8 @@ func TestSecurityProfileReferencesDeltaDelivery(t *testing.T) {
 			resourceWithRefs := func(names ...string) model.Resource {
 				t.Helper()
 				reference := mustAny(&extensionsv1.PolicyReference{
-					TypeUrl:       model.SecurityProfileType,
-					ResourceNames: names,
+					TypeUrl:   model.SecurityProfileType,
+					Resources: policyResources(names...),
 				})
 				var value *anypb.Any
 				if typeURL == model.SandboxType {
@@ -113,7 +114,13 @@ func TestSecurityProfileReferencesDeltaDelivery(t *testing.T) {
 				if err := config.UnmarshalTo(refs); err != nil {
 					t.Fatal(err)
 				}
-				if refs.TypeUrl != model.SecurityProfileType || !slices.Equal(refs.ResourceNames, want) {
+				if !proto.Equal(
+					refs,
+					&extensionsv1.PolicyReference{
+						TypeUrl:   model.SecurityProfileType,
+						Resources: policyResources(want...),
+					},
+				) {
 					t.Fatalf("references %v, want type %s and names %v", refs, model.SecurityProfileType, want)
 				}
 			}

@@ -48,8 +48,15 @@ func TestWorkloadSecurityProfileBinding(t *testing.T) {
 			pack(
 				"security-profile-reference",
 				&ext.PolicyReference{
-					TypeUrl:       model.SecurityProfileType,
-					ResourceNames: []string{"global/g", "namespaced/ns/a"},
+					TypeUrl: model.SecurityProfileType,
+					Resources: []*ext.PolicyResourceReference{
+						{
+							Name:       "global/g",
+							Uid:        "source-g",
+							Extensions: []*anypb.Any{{TypeUrl: "test.example/Metadata", Value: []byte("metadata")}},
+						},
+						{Name: "namespaced/ns/a", Uid: "source-a"},
+					},
 				},
 			),
 			pack("workload-metadata", &ext.WorkloadMetadata{Labels: map[string]string{"app": "wds"}}),
@@ -124,8 +131,8 @@ func snapshotWorkload(t *testing.T, policy, version string) *workload.Workload {
 		name  string
 		value proto.Message
 	}{
-		{"traffic-policy-reference", &ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: []string{policy}}},
-		{"security-profile-reference", &ext.PolicyReference{TypeUrl: model.SecurityProfileType, ResourceNames: []string{"namespaced/ns/" + version}}},
+		{"traffic-policy-reference", &ext.PolicyReference{TypeUrl: model.TrafficPolicyType, Resources: []*ext.PolicyResourceReference{{Name: policy}}}},
+		{"security-profile-reference", &ext.PolicyReference{TypeUrl: model.SecurityProfileType, Resources: []*ext.PolicyResourceReference{{Name: "namespaced/ns/" + version}}}},
 		{"workload-metadata", &ext.WorkloadMetadata{Labels: map[string]string{"version": version}}},
 	} {
 		config, err := anypb.New(extension.value)

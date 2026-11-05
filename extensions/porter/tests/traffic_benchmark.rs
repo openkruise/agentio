@@ -14,7 +14,8 @@ use agentio_porter::{
         extproc,
         istio::workload::{Extension, Workload},
         kruise::networking::extensions::v1::{
-            PolicyReference, SniAction, SniMatch, SniRule, SniTrafficPolicy, WorkloadMetadata,
+            PolicyReference, PolicyResourceReference, SniAction, SniMatch, SniRule,
+            SniTrafficPolicy, WorkloadMetadata,
         },
     },
 };
@@ -150,7 +151,13 @@ fn inventory(
                     "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference",
                     PolicyReference {
                         type_url: TP.into(),
-                        resource_names: references,
+                        resources: references
+                            .into_iter()
+                            .map(|name| PolicyResourceReference {
+                                name,
+                                ..Default::default()
+                            })
+                            .collect(),
                     },
                 )),
             },
