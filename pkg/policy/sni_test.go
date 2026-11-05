@@ -29,19 +29,28 @@ import (
 func TestCompileSNIRulesPreservesTLSOrderAndMatchPorts(t *testing.T) {
 	rules := []agentsv1alpha1.SecurityRule{
 		{
-			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"SKIP.Example.COM."}, Ports: []int32{443, 8443}}},
-			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionPassthrough}},
+			Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"SKIP.Example.COM."}, Ports: []int32{443, 8443}}},
+			Actions: agentsv1alpha1.SecurityRuleActions{
+				TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionPassthrough},
+			},
 		},
 		{
 			Match: []agentsv1alpha1.RuleMatch{
-				{Domains: []string{"*.example.com"}, Ports: []int32{443}, Schemes: []string{"https"}, Methods: []string{"GET"}},
+				{
+					Domains: []string{"*.example.com"},
+					Ports:   []int32{443},
+					Schemes: []string{"https"},
+					Methods: []string{"GET"},
+				},
 				{Domains: []string{"skip.example.com"}, Ports: []int32{9443}},
 				{Domains: []string{"http.example.com"}, Schemes: []string{"http"}},
 			},
 		},
 		{
-			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"*"}}},
-			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny}},
+			Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"*"}}},
+			Actions: agentsv1alpha1.SecurityRuleActions{
+				TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny},
+			},
 		},
 	}
 	got, err := CompileSNIRules(rules)
@@ -49,9 +58,18 @@ func TestCompileSNIRulesPreservesTLSOrderAndMatchPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{
-		{Match: &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{443, 8443}}, Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH},
-		{Match: &extensionsv1.SniMatch{Sni: []string{"*.example.com"}, Ports: []uint32{443}}, Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION},
-		{Match: &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{9443}}, Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION},
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{443, 8443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+		},
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"*.example.com"}, Ports: []uint32{443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION,
+		},
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{9443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION,
+		},
 		{Match: &extensionsv1.SniMatch{Sni: []string{"*"}}, Action: extensionsv1.SniAction_SNI_ACTION_DENY},
 	}}
 	if !proto.Equal(got, want) {
@@ -95,11 +113,16 @@ func TestCompileSNIRulesRejectsInvalidTLSRules(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rule := agentsv1alpha1.SecurityRule{
-				Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"example.com"}}},
-				Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny}},
+				Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"example.com"}}},
+				Actions: agentsv1alpha1.SecurityRuleActions{
+					TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny},
+				},
 			}
 			tc.change(&rule)
-			if _, err := CompileSNIRules([]agentsv1alpha1.SecurityRule{rule}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := CompileSNIRules(
+				[]agentsv1alpha1.SecurityRule{rule},
+			); err == nil ||
+				!strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("compile error = %v, want %q", err, tc.want)
 			}
 		})

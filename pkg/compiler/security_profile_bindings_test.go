@@ -38,7 +38,10 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 	await := func(want *extensionsv1.SniTrafficPolicy) {
 		t.Helper()
 		eventually(t, func() bool {
-			resource, found := currentSnapshot(t, fixture.compiler).Get(model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID})
+			resource, found := currentSnapshot(
+				t,
+				fixture.compiler,
+			).Get(model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID})
 			if !found {
 				return false
 			}
@@ -93,7 +96,8 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	eventually(t, func() bool {
 		failures := fixture.compiler.Failures()
-		return failures["SecurityProfile/"+profile.ResourceName()] != "" && failures["SandboxPolicies/"+sandbox.UID] != ""
+		return failures["SecurityProfile/"+profile.ResourceName()] != "" &&
+			failures["SandboxPolicies/"+sandbox.UID] != ""
 	}, "invalid TLS updates are diagnosed")
 	await(&extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
 		Match:  &extensionsv1.SniMatch{Sni: []string{"api.example.com"}, Ports: []uint32{8443}},

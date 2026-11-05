@@ -62,7 +62,12 @@ func CompileSNIRules(rules []agentsv1alpha1.SecurityRule) (*extensionsv1.SniTraf
 			}
 			for _, port := range match.Ports {
 				if port < 1 || port > 65535 {
-					return nil, fmt.Errorf("rules[%d].match[%d]: invalid destination port %d", ruleIndex, matchIndex, port)
+					return nil, fmt.Errorf(
+						"rules[%d].match[%d]: invalid destination port %d",
+						ruleIndex,
+						matchIndex,
+						port,
+					)
 				}
 				matched.Ports = append(matched.Ports, uint32(port))
 			}
@@ -81,18 +86,16 @@ func CompileSNIRules(rules []agentsv1alpha1.SecurityRule) (*extensionsv1.SniTraf
 // ValidateTLSRule enforces the connection-only contract for CRDs and inline rules.
 func ValidateTLSRule(rule agentsv1alpha1.SecurityRule) error {
 	actions := rule.Actions
-	if actions.TLS == nil {
+	switch {
+	case actions.TLS == nil:
 		return nil
-	}
-	if actions.TLS.Action != agentsv1alpha1.TLSActionDeny && actions.TLS.Action != agentsv1alpha1.TLSActionPassthrough {
+	case actions.TLS.Action != agentsv1alpha1.TLSActionDeny && actions.TLS.Action != agentsv1alpha1.TLSActionPassthrough:
 		return fmt.Errorf("invalid TLS action %q", actions.TLS.Action)
-	}
-	if actions.Bypass || actions.Block != nil || actions.MCPToolPolicy != nil ||
-		actions.HeaderManipulation != nil || actions.HTTPCallout != nil ||
-		actions.TokenTransformation != nil || len(actions.Audit) > 0 {
+	case actions.Bypass, actions.Block != nil, actions.MCPToolPolicy != nil,
+		actions.HeaderManipulation != nil, actions.HTTPCallout != nil,
+		actions.TokenTransformation != nil, len(actions.Audit) > 0:
 		return fmt.Errorf("TLS action cannot be combined with HTTP actions or rule audit")
-	}
-	if len(rule.Match) == 0 {
+	case len(rule.Match) == 0:
 		return fmt.Errorf("TLS rule requires a match")
 	}
 	for i, match := range rule.Match {
