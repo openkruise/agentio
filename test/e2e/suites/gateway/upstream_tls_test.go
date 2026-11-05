@@ -116,7 +116,7 @@ data:
 		}
 		return nil
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name, settings               string
 		tls13, ecdhe, rsa128, rsa256 string
 	}{
@@ -127,8 +127,8 @@ data:
 		{"empty list restores defaults", "tls: {origination: {cipherSuites: []}}", "tls13", "ecdhe", "rsa128", "rsa256"},
 		{"omitted settings restore defaults", "", "tls13", "ecdhe", "rsa128", "rsa256"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			applySettings(t, tt.settings, true)
+		t.Run(tc.name, func(t *testing.T) {
+			applySettings(t, tc.settings, true)
 			// Check the complete matrix together on each retry so propagation errors
 			// cannot satisfy a negative assertion while all destinations are broken.
 			harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
@@ -136,7 +136,7 @@ data:
 					port int
 					want string
 				}{
-					{18443, tt.tls13}, {18444, tt.ecdhe}, {18445, tt.rsa128}, {18446, tt.rsa256},
+					{18443, tc.tls13}, {18444, tc.ecdhe}, {18445, tc.rsa128}, {18446, tc.rsa256},
 				} {
 					if err := call(host, endpoint.port, endpoint.want); err != nil {
 						return err

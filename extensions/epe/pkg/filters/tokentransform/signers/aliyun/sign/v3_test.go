@@ -283,9 +283,9 @@ func TestV3CanonicalURI_MatchesReferenceNormalization(t *testing.T) {
 		// An empty path signs as "/", matching the reference signer.
 		{"", "/"},
 	}
-	for _, tt := range tests {
-		if got := v3CanonicalURI(tt.in); got != tt.want {
-			t.Errorf("v3CanonicalURI(%q) = %q, want %q", tt.in, got, tt.want)
+	for _, tc := range tests {
+		if got := v3CanonicalURI(tc.in); got != tc.want {
+			t.Errorf("v3CanonicalURI(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -362,14 +362,14 @@ func TestSignV3_InvalidInput(t *testing.T) {
 			wantErr: "nil request snapshot",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := SignV3(tt.req, tt.triplet)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SignV3(tc.req, tc.triplet)
 			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -471,14 +471,14 @@ func TestComputeV3Signature_InvalidInput(t *testing.T) {
 			wantErr: "AccessKeySecret",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := computeV3Signature(tt.req, tt.triplet)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := computeV3Signature(tc.req, tc.triplet)
 			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}

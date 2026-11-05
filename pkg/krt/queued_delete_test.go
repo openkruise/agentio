@@ -75,7 +75,7 @@ func TestCollectionDiscardUsesRetainedUID(t *testing.T) {
 // Check intermediate deletions as well as convergence: a later Add can hide
 // an obsolete Delete that temporarily withdrew the replacement's output.
 func TestCollectionQueuedDelete(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name        string
 		replacement string
 		uid         types.UID
@@ -88,7 +88,7 @@ func TestCollectionQueuedDelete(t *testing.T) {
 		{name: "replacement no longer matches", replacement: "excluded", wantDeletes: 1},
 		{name: "parent remains deleted", wantDeletes: 1},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			stop := make(chan struct{})
 			defer close(stop)
 			opts := NewOptionsBuilder(stop, "queued-delete", nil)
@@ -130,11 +130,11 @@ func TestCollectionQueuedDelete(t *testing.T) {
 				t.Fatal("queue barrier timeout")
 			}
 			parent.UpdateObject(queuedDeleteItem{Name: "same-key", Value: "intermediate", UID: "old"})
-			if tt.uid != "old" {
+			if tc.uid != "old" {
 				parent.DeleteObject("same-key")
 			}
-			if tt.replacement != "" {
-				parent.UpdateObject(queuedDeleteItem{Name: "same-key", Value: tt.replacement, UID: tt.uid})
+			if tc.replacement != "" {
+				parent.UpdateObject(queuedDeleteItem{Name: "same-key", Value: tc.replacement, UID: tc.uid})
 			}
 			parent.UpdateObject(queuedDeleteItem{Name: "marker", Value: "queue drained"})
 			unblock()
@@ -150,12 +150,12 @@ func TestCollectionQueuedDelete(t *testing.T) {
 					if ev.Latest().Name != "marker" {
 						continue
 					}
-					if deletes != tt.wantDeletes {
-						t.Fatalf("got %d downstream Deletes, want %d", deletes, tt.wantDeletes)
+					if deletes != tc.wantDeletes {
+						t.Fatalf("got %d downstream Deletes, want %d", deletes, tc.wantDeletes)
 					}
 					got := out.GetKey("same-key")
-					if tt.wantValue != "" {
-						if got == nil || got.Value != tt.wantValue {
+					if tc.wantValue != "" {
+						if got == nil || got.Value != tc.wantValue {
 							t.Fatalf("replacement output missing or outdated: %v", got)
 						}
 					} else if got != nil {

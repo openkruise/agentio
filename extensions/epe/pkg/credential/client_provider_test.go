@@ -78,7 +78,7 @@ func TestGetTokenWithExtraMetadata_PartitionsCache(t *testing.T) {
 func TestGetToken_CacheExpiresInSeconds(t *testing.T) {
 	const cacheTTL = time.Hour
 
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		field   string        // rendered verbatim into the response JSON
 		wantTTL time.Duration // lifetime the entry should end up with
@@ -90,8 +90,8 @@ func TestGetToken_CacheExpiresInSeconds(t *testing.T) {
 		{name: "zero", field: `,"cacheExpiresInSeconds":0`, wantTTL: cacheTTL},
 		{name: "negative", field: `,"cacheExpiresInSeconds":-5`, wantTTL: cacheTTL},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			p := credentialtest.NewRawProvider(t, `{"requestId":"r","apiKey":"k1"`+tt.field+`}`)
+		t.Run(tc.name, func(t *testing.T) {
+			p := credentialtest.NewRawProvider(t, `{"requestId":"r","apiKey":"k1"`+tc.field+`}`)
 			cache := tokencache.NewCache(cacheTTL, 10)
 			now := time.Unix(1000, 0)
 			cache.SetClock(func() time.Time { return now })
@@ -107,12 +107,12 @@ func TestGetToken_CacheExpiresInSeconds(t *testing.T) {
 			}
 
 			// Just short of the expected lifetime: still cached.
-			now = now.Add(tt.wantTTL - time.Second)
+			now = now.Add(tc.wantTTL - time.Second)
 			if _, err := c.GetToken(context.Background(), "access", "client", "provider"); err != nil {
 				t.Fatalf("GetToken before expiry: %v", err)
 			}
 			if got := p.Calls.Load(); got != 1 {
-				t.Fatalf("provider calls = %d before %v elapsed, want 1 (entry expired early)", got, tt.wantTTL)
+				t.Fatalf("provider calls = %d before %v elapsed, want 1 (entry expired early)", got, tc.wantTTL)
 			}
 
 			// Just past it: refetched.
@@ -121,7 +121,7 @@ func TestGetToken_CacheExpiresInSeconds(t *testing.T) {
 				t.Fatalf("GetToken after expiry: %v", err)
 			}
 			if got := p.Calls.Load(); got != 2 {
-				t.Fatalf("provider calls = %d after %v elapsed, want 2 (entry outlived its TTL)", got, tt.wantTTL)
+				t.Fatalf("provider calls = %d after %v elapsed, want 2 (entry outlived its TTL)", got, tc.wantTTL)
 			}
 		})
 	}
@@ -186,10 +186,10 @@ func TestGetToken_Errors(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := tt.client(t).GetToken(context.Background(), "access", "client", "provider"); err == nil {
-				t.Fatalf("expected error for %s", tt.name)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.client(t).GetToken(context.Background(), "access", "client", "provider"); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
@@ -325,21 +325,21 @@ func TestGetSTSCredential_NotCached(t *testing.T) {
 			calls:      2,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := credentialtest.NewSTSProvider(t, "ak", "sk", "st", tt.expiration())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := credentialtest.NewSTSProvider(t, "ak", "sk", "st", tc.expiration())
 			c := p.Client() // no STS cache
-			if tt.withCache {
+			if tc.withCache {
 				c = stsClient(p)
 			}
 
-			for i := 0; i < tt.calls; i++ {
+			for i := 0; i < tc.calls; i++ {
 				if _, err := c.GetSTSCredential(context.Background(), "access", "client", "provider"); err != nil {
 					t.Fatalf("iter %d: %v", i, err)
 				}
 			}
-			if called := p.Calls.Load(); called != int64(tt.calls) {
-				t.Errorf("expected upstream to be called %d times (no caching), got %d", tt.calls, called)
+			if called := p.Calls.Load(); called != int64(tc.calls) {
+				t.Errorf("expected upstream to be called %d times (no caching), got %d", tc.calls, called)
 			}
 		})
 	}

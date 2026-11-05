@@ -24,6 +24,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -307,7 +308,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 	if !configurations.WaitUntilSynced(stop) {
 		t.Fatal("Gateway API configuration collection did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil &&
 			gateway.Source == model.GatewaySourceGatewayAPI &&
@@ -319,7 +320,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 			Data:       map[string]string{gatewayConfigKey: content},
 		})
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			gateway := configurations.GetKey("demo/egress")
 			if gateway == nil || gateway.ValidateForUse() != nil {
 				return false
@@ -335,7 +336,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 		Data:       map[string]string{gatewayConfigKey: "extProc: {service: before-overlay.demo.svc.cluster.local}"},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.Config.GetExtProc().GetService() == "before-overlay.demo.svc.cluster.local"
 	}, "proxy configuration before switching to deployment-only parameters")
@@ -343,7 +344,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 		Data:       map[string]string{"deployment": "spec: {replicas: 2}"},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.ValidateForUse() == nil && gateway.Config.GetExtProc() == nil
 	}, "deployment-only parameters use default proxy configuration")
@@ -395,7 +396,7 @@ func TestGatewayAPIConfigurationsRetainLastKnownGoodParameters(t *testing.T) {
 	if !configurations.WaitUntilSynced(stop) {
 		t.Fatal("Gateway API configuration collection did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.Config.GetExtProc().GetService() == "valid.demo.svc.cluster.local"
 	}, "valid initial Gateway parameters")

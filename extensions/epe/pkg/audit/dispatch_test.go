@@ -100,23 +100,23 @@ func TestDispatcher_DeliversAll(t *testing.T) {
 		{name: "single worker", workers: 1, items: 10},
 		{name: "multi worker", workers: 4, items: 32},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := newCollector(tt.items)
-			d := NewDispatcher("test", tt.items, tt.workers, c.handle, nil)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCollector(tc.items)
+			d := NewDispatcher("test", tc.items, tc.workers, c.handle, nil)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			started := make(chan error, 1)
 			go func() { started <- d.Start(ctx) }()
 
-			for i := 0; i < tt.items; i++ {
+			for i := 0; i < tc.items; i++ {
 				d.Enqueue(i)
 			}
 
 			select {
 			case <-c.done:
 			case <-time.After(2 * time.Second):
-				t.Fatalf("timed out: handled %d of %d items", len(c.snapshot()), tt.items)
+				t.Fatalf("timed out: handled %d of %d items", len(c.snapshot()), tc.items)
 			}
 			cancel()
 			select {
@@ -127,8 +127,8 @@ func TestDispatcher_DeliversAll(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("Start did not return after ctx cancel")
 			}
-			if got := len(c.snapshot()); got != tt.items {
-				t.Errorf("handled %d items, want %d", got, tt.items)
+			if got := len(c.snapshot()); got != tc.items {
+				t.Errorf("handled %d items, want %d", got, tc.items)
 			}
 		})
 	}
@@ -148,48 +148,48 @@ func TestDispatcher_OverflowDrops(t *testing.T) {
 		{name: "nil observer tolerated", buffer: 2, accepted: 2, overflow: 5, nilObserver: true},
 		{name: "zero capacity rolls pending back to idle", buffer: 0, accepted: 0, overflow: 1},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
 			var reasons []DropReason
 			var observe DropObserver
-			if !tt.nilObserver {
+			if !tc.nilObserver {
 				observe = func(reason DropReason) {
 					mu.Lock()
 					defer mu.Unlock()
 					reasons = append(reasons, reason)
 				}
 			}
-			d := NewDispatcher("test", tt.buffer, 1, func(context.Context, int) {}, observe)
+			d := NewDispatcher("test", tc.buffer, 1, func(context.Context, int) {}, observe)
 
 			// Workers are intentionally not started: exactly buffer sends
 			// succeed, the rest must drop without blocking.
-			for i := 0; i < tt.accepted+tt.overflow; i++ {
+			for i := 0; i < tc.accepted+tc.overflow; i++ {
 				d.Enqueue(i)
 			}
-			if got := d.Len(); got != tt.accepted {
-				t.Errorf("queue length = %d, want %d", got, tt.accepted)
+			if got := d.Len(); got != tc.accepted {
+				t.Errorf("queue length = %d, want %d", got, tc.accepted)
 			}
 			d.mu.Lock()
 			pending := d.pending
 			idle := d.idle
 			d.mu.Unlock()
-			if pending != int64(tt.accepted) {
-				t.Errorf("pending = %d, want %d", pending, tt.accepted)
+			if pending != int64(tc.accepted) {
+				t.Errorf("pending = %d, want %d", pending, tc.accepted)
 			}
-			if tt.accepted == 0 {
+			if tc.accepted == 0 {
 				select {
 				case <-idle:
 				default:
 					t.Error("dispatcher did not return to idle after buffer-full rollback")
 				}
 			}
-			if !tt.nilObserver {
+			if !tc.nilObserver {
 				mu.Lock()
 				got := append([]DropReason(nil), reasons...)
 				mu.Unlock()
-				if len(got) != tt.overflow {
-					t.Fatalf("observed %d drop reasons, want %d", len(got), tt.overflow)
+				if len(got) != tc.overflow {
+					t.Fatalf("observed %d drop reasons, want %d", len(got), tc.overflow)
 				}
 				for i, reason := range got {
 					if reason != DropBufferFull {
@@ -719,10 +719,10 @@ func TestDispatcher_EnqueueNilSafe(t *testing.T) {
 		{name: "nil receiver", d: nil},
 		{name: "zero value with nil channel", d: &Dispatcher[int]{}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// Must not panic.
-			tt.d.Enqueue(1)
+			tc.d.Enqueue(1)
 		})
 	}
 
@@ -756,14 +756,14 @@ func TestDispatcher_ConstructorNormalization(t *testing.T) {
 		{name: "negative buffer clamps to zero", buffer: -1, workers: 1, wantCap: 0, wantWorkers: 1},
 		{name: "non-positive workers clamp to one", buffer: 8, workers: 0, wantCap: 8, wantWorkers: 1},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := NewDispatcher("test", tt.buffer, tt.workers, func(context.Context, int) {}, nil)
-			if got := d.Cap(); got != tt.wantCap {
-				t.Errorf("Cap() = %d, want %d", got, tt.wantCap)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDispatcher("test", tc.buffer, tc.workers, func(context.Context, int) {}, nil)
+			if got := d.Cap(); got != tc.wantCap {
+				t.Errorf("Cap() = %d, want %d", got, tc.wantCap)
 			}
-			if got := d.Workers(); got != tt.wantWorkers {
-				t.Errorf("Workers() = %d, want %d", got, tt.wantWorkers)
+			if got := d.Workers(); got != tc.wantWorkers {
+				t.Errorf("Workers() = %d, want %d", got, tc.wantWorkers)
 			}
 		})
 	}

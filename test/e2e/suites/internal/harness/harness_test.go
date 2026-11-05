@@ -37,17 +37,17 @@ func TestDataplaneNamespaceConfig(t *testing.T) {
 		{name: "sidecar", profile: agentiocomponent.ProfileSidecar, wantMode: "sidecar"},
 		{name: "ambient", profile: agentiocomponent.ProfileAmbient, wantMode: "ambient"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := DataplaneNamespaceConfig(test.profile, "traffic")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DataplaneNamespaceConfig(tc.profile, "traffic")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Prefix != "traffic" || len(got.Labels) != 1 || got.Labels[DataplaneModeLabel] != test.wantMode {
+			if got.Prefix != "traffic" || len(got.Labels) != 1 || got.Labels[DataplaneModeLabel] != tc.wantMode {
 				t.Fatalf("dataplane namespace config = %#v", got)
 			}
 			got.Labels["example.com/mutated"] = "true"
-			again, err := DataplaneNamespaceConfig(test.profile, "traffic")
+			again, err := DataplaneNamespaceConfig(tc.profile, "traffic")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,10 +180,10 @@ func TestPreserveFailedScenario(t *testing.T) {
 		{name: "failed with immediate cleanup", failed: true, deferCleanup: false, want: false},
 		{name: "failed with deferred cleanup", failed: true, deferCleanup: true, want: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := preserveFailedScenario(tt.failed, tt.deferCleanup); got != tt.want {
-				t.Fatalf("preserveFailedScenario(%v, %v) = %v, want %v", tt.failed, tt.deferCleanup, got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preserveFailedScenario(tc.failed, tc.deferCleanup); got != tc.want {
+				t.Fatalf("preserveFailedScenario(%v, %v) = %v, want %v", tc.failed, tc.deferCleanup, got, tc.want)
 			}
 		})
 	}

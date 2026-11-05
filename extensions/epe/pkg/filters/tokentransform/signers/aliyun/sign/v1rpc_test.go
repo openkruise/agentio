@@ -118,14 +118,14 @@ func TestSignV1RPC_InvalidInput(t *testing.T) {
 			wantErr: "nil request snapshot",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := SignV1RPC(tt.req, tt.triplet)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SignV1RPC(tc.req, tc.triplet)
 			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -179,17 +179,17 @@ func TestSignV1RPC_POSTBodyEdgeCases(t *testing.T) {
 			body:        nil,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			req := &RequestSnapshot{
 				Method:   "POST",
 				Path:     "/",
 				RawQuery: "AccessKeyId=AK&SignatureMethod=HMAC-SHA1&SecurityToken=ST&Signature=stale&SignatureVersion=1.0",
 				Headers: map[string]string{
 					"host":         "ecs.aliyuncs.com",
-					"content-type": tt.contentType,
+					"content-type": tc.contentType,
 				},
-				Body: tt.body,
+				Body: tc.body,
 			}
 			tr := Triplet{AccessKeyID: "AK", AccessKeySecret: "SK", SecurityToken: "ST"}
 			res, err := SignV1RPC(req, tr)
@@ -245,10 +245,10 @@ func TestIsFormContentType(t *testing.T) {
 			want: false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isFormContentType(tt.ct); got != tt.want {
-				t.Errorf("isFormContentType(%q) = %v, want %v", tt.ct, got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFormContentType(tc.ct); got != tc.want {
+				t.Errorf("isFormContentType(%q) = %v, want %v", tc.ct, got, tc.want)
 			}
 		})
 	}
@@ -277,11 +277,11 @@ func TestMergeValues(t *testing.T) {
 			wantVal: []string{"1", "2", "3"},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mergeValues(tt.dst, tt.src)
-			if !slices.Equal(tt.dst[tt.wantKey], tt.wantVal) {
-				t.Errorf("dst[%q] = %v, want %v", tt.wantKey, tt.dst[tt.wantKey], tt.wantVal)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mergeValues(tc.dst, tc.src)
+			if !slices.Equal(tc.dst[tc.wantKey], tc.wantVal) {
+				t.Errorf("dst[%q] = %v, want %v", tc.wantKey, tc.dst[tc.wantKey], tc.wantVal)
 			}
 		})
 	}

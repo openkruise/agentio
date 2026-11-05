@@ -67,7 +67,7 @@ func BenchmarkControlPlaneScale(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			for _, scenario := range []struct {
+			for _, tc := range []struct {
 				name   string
 				names  []string
 				count  int
@@ -79,28 +79,28 @@ func BenchmarkControlPlaneScale(b *testing.B) {
 				{"shared-alias", []string{"shared-000000"}, 2, true},
 				{"service-expansion", []string{"service-alias"}, 500, true},
 			} {
-				b.Run(scenario.name, func(b *testing.B) {
+				b.Run(tc.name, func(b *testing.B) {
 					typ := model.AddressType
 					scope := ztunnelScope()
 					view := SubscriptionView{wildcard: true}
-					if scenario.direct {
+					if tc.direct {
 						typ = model.WorkloadType
 						scope = gatewayScope()
-						view = SubscriptionView{names: scenario.names}
+						view = SubscriptionView{names: tc.names}
 					}
 					request := GenerationRequest{
 						Scope:           scope,
 						Snapshot:        snapshot,
 						TypeURL:         typ,
 						Subscription:    view,
-						SubscribedNames: scenario.names,
+						SubscribedNames: tc.names,
 						Full:            true,
 					}
 					b.ReportAllocs()
 					for b.Loop() {
 						delta, err := (WorkloadGenerator{}).Generate(b.Context(), request)
-						if err != nil || len(delta.Resources) != scenario.count {
-							b.Fatalf("resources=%d want=%d err=%v", len(delta.Resources), scenario.count, err)
+						if err != nil || len(delta.Resources) != tc.count {
+							b.Fatalf("resources=%d want=%d err=%v", len(delta.Resources), tc.count, err)
 						}
 					}
 				})

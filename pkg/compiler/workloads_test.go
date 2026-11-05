@@ -25,6 +25,7 @@ import (
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -59,7 +60,7 @@ func TestEndpointEditReachesOnlyItsWorkload(t *testing.T) {
 		Ready:      true,
 	})
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return recorder.has(addressResourceName("alpha", "client"))
 	}, "endpoint reached its own workload")
 	settle()
@@ -91,7 +92,7 @@ func TestEndpointTargetUIDMovementAndStalePodReplacementKeepDependencies(t *test
 		addressResourceName("alpha", "pod-b"),
 		addressResourceName("alpha", "pod-c"),
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return workloadHasTargetPort(t, fixture.compiler, podA, 8080)
 	}, "UID-targeted endpoint attached to pod-a")
 	settle()
@@ -140,7 +141,7 @@ func TestEndpointTargetNameMovementKeepsUIDLessDependencies(t *testing.T) {
 		addressResourceName("alpha", "pod-b"),
 		addressResourceName("alpha", "pod-c"),
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return workloadHasTargetPort(t, fixture.compiler, podA, 8080)
 	}, "UID-less endpoint attached to pod-a by namespace/name")
 	settle()
@@ -175,7 +176,7 @@ func TestServicePortAddUpdateDeleteKeepsWorkloadDependency(t *testing.T) {
 	fixture.services.ConditionalUpdateObject(incrementalService("other", "other.alpha.svc.cluster.local", 7070))
 	waitSynced(t, fixture.compiler)
 	awaitSteadyState(t, fixture.compiler, addressResourceName("alpha", "pod-a"), addressResourceName("alpha", "pod-b"))
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return workloadHasTargetPort(t, fixture.compiler, podA, 8080)
 	}, "initial Service mapping compiled")
 	settle()
@@ -228,13 +229,13 @@ func TestDeletingInvalidWorkloadClearsDomainAndWDSFailures(t *testing.T) {
 		workload.TunnelProtocol = "unsupported"
 		fixture.workloads.ConditionalUpdateObject(workload)
 		waitSynced(t, fixture.compiler)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			_, found := fixture.compiler.Failures()["Workload/"+workload.UID]
 			return found
 		}, "invalid Workload failure")
 
 		fixture.workloads.DeleteObject(workload.UID)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			_, found := fixture.compiler.Failures()["Workload/"+workload.UID]
 			return !found
 		}, "deleted invalid Workload clears failure")
@@ -246,13 +247,13 @@ func TestDeletingInvalidWorkloadClearsDomainAndWDSFailures(t *testing.T) {
 		workload.Addresses = []string{"not-an-ip"}
 		fixture.workloads.ConditionalUpdateObject(workload)
 		waitSynced(t, fixture.compiler)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			_, found := fixture.compiler.Failures()["WDSWorkload/"+workload.UID]
 			return found
 		}, "invalid WDS projection failure")
 
 		fixture.workloads.DeleteObject(workload.UID)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			_, found := fixture.compiler.Failures()["WDSWorkload/"+workload.UID]
 			return !found
 		}, "deleted WDS input clears failure")
@@ -265,7 +266,7 @@ func TestWorkloadDeletionRemovesItsResources(t *testing.T) {
 	fixture := newIncrementalFixture(t)
 	fixture.workloads.ConditionalUpdateObject(testWorkload("alpha", "client", "10.1.0.1"))
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, fixture.compiler).Get(model.ResourceKey{
 			TypeURL: model.AddressType,
 			Name:    "cluster//Pod/alpha/client",
@@ -275,7 +276,7 @@ func TestWorkloadDeletionRemovesItsResources(t *testing.T) {
 
 	fixture.workloads.DeleteObject("cluster//Pod/alpha/client")
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, fixture.compiler)
 		_, address := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: "cluster//Pod/alpha/client"})
 		return !address
@@ -417,18 +418,18 @@ func TestWorkloadServicePortsPreserveServiceAndTargetPorts(t *testing.T) {
 			wantPorts: nil,
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			workload, _ := compileWorkloadServices(t,
-				[]model.ServicePort{test.service}, []model.Endpoint{test.endpoint},
+				[]model.ServicePort{tc.service}, []model.Endpoint{tc.endpoint},
 				[]model.Workload{testWDSWorkload("pod-a", "pod-a-uid", "10.0.0.1")},
 			)
 			got := workload.GetServices()[testServiceKey]
 			if got == nil {
 				t.Fatalf("service %q missing", testServiceKey)
 			}
-			if !reflect.DeepEqual(got.GetPorts(), test.wantPorts) {
-				t.Fatalf("ports = %+v, want %+v", got.GetPorts(), test.wantPorts)
+			if !reflect.DeepEqual(got.GetPorts(), tc.wantPorts) {
+				t.Fatalf("ports = %+v, want %+v", got.GetPorts(), tc.wantPorts)
 			}
 		})
 	}
@@ -694,7 +695,7 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 	}
 	expect := func(hosts ...string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			got := getPolicy()
 			if got == nil || len(got.Rules) != len(hosts) {
 				return false
@@ -731,7 +732,7 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 	}
 	// A missing replacement is omitted while unrelated policies keep enforcing.
 	bindings.UpdateObject(binding("second", "replacement"))
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return failures.snapshot()["WorkloadPolicies/"+workload.UID] != "" },
 		"missing replacement records a failure",
@@ -741,11 +742,11 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 	expect("second.example", "replacement.example")
 	// Removing the attachment removes the extension instead of retaining old rules.
 	bindings.UpdateObject(binding())
-	eventually(t, func() bool { return getPolicy() == nil }, "policy removal")
+	testutil.Eventually(t, func() bool { return getPolicy() == nil }, "policy removal")
 	bindings.UpdateObject(binding("first"))
 	expect("updated.example")
 	bindings.DeleteObject(workload.UID)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return getPolicy() == nil && len(resolved.List()) == 1 },
 		"binding removal preserves Workload networking",
@@ -755,7 +756,7 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 		t.Fatal("policy changes withdrew the Workload")
 	}
 	workloads.DeleteObject(workload.UID)
-	eventually(t, func() bool { return len(resolved.List()) == 0 }, "Workload deletion")
+	testutil.Eventually(t, func() bool { return len(resolved.List()) == 0 }, "Workload deletion")
 }
 
 func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadBindings(t *testing.T) {
@@ -834,7 +835,7 @@ func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadBindings(t *testing.T) {
 		}},
 	}
 	profiles.ConditionalUpdateObject(updated)
-	eventually(t, func() bool { return inlineUpdates.Load() == workloadCount }, "inline SNI payloads updated")
+	testutil.Eventually(t, func() bool { return inlineUpdates.Load() == workloadCount }, "inline SNI payloads updated")
 	settle()
 
 	if got := profileCompiles.Load(); got != 1 {
@@ -844,7 +845,7 @@ func TestSNIRulesOnlyUpdateDoesNotRecomputeWorkloadBindings(t *testing.T) {
 	updated.Spec = *updated.Spec.DeepCopy()
 	updated.Spec.Rules[0].Name = "renamed-rule"
 	profiles.ConditionalUpdateObject(updated)
-	eventually(t, func() bool { return profileCompiles.Load() == 2 }, "body change compiled once")
+	testutil.Eventually(t, func() bool { return profileCompiles.Load() == 2 }, "body change compiled once")
 	settle()
 
 	if got := bindingRecomputes.Load(); got != 0 {

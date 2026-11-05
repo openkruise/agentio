@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -185,7 +186,7 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	// templates; wait for it to accept.
 	review := buildReview(t, "demo", "hello")
 	var lastErr error
-	waitFor(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		response, err := postReview(t, httpClient, url, review)
 		if err != nil {
 			lastErr = err
@@ -193,7 +194,7 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 		}
 		lastErr = nil
 		return response != nil && response.Allowed
-	}, func() string { return fmt.Sprintf("webhook to accept injection requests (last error: %v)", lastErr) })
+	}, func() string { return fmt.Sprintf("webhook to accept injection requests (last error: %v)", lastErr) }())
 
 	response, err := postReview(t, httpClient, url, review)
 	if err != nil {
@@ -218,10 +219,10 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 		t.Fatalf("client trust injected=%v, process gate=%v", got, enableClientTrust)
 	}
 	if enableClientTrust {
-		waitFor(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			cm, err := coreClient.CoreV1().ConfigMaps("demo").Get(ctx, "agentio-client-ca", metav1.GetOptions{})
 			return err == nil && cm.Data["ca-bundle.pem"] == string(authority.RootPEM())
-		}, func() string { return "enabled client trust distributor to publish its bundle" })
+		}, func() string { return "enabled client trust distributor to publish its bundle" }())
 	} else {
 		for _, action := range coreClient.(*kubefake.Clientset).Actions() {
 			if action.GetResource().Resource == "namespaces" && (action.GetVerb() == "list" || action.GetVerb() == "watch") {
@@ -345,16 +346,4 @@ func findContainer(containers []corev1.Container, name string) *corev1.Container
 		}
 	}
 	return nil
-}
-
-func waitFor(t *testing.T, condition func() bool, message func() string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", message())
 }

@@ -100,7 +100,7 @@ func TestSelfIdentityUsesAuthorizer(t *testing.T) {
 	authority.UseDelegatedIdentityAuthorizer(authorizer)
 	caller := model.PeerIdentity{Kubernetes: model.KubernetesPeer{Namespace: "demo", ServiceAccount: "app"}}
 
-	target := mustTestPrincipal("cluster.local", "workload/app")
+	target := model.MustPrincipal("cluster.local", "workload/app")
 	request := requestWithCSR(t, target.String())
 	setRequestMetadata(t, request, target.String())
 	got, err := certificateIdentityForTest(t, authority, context.Background(), caller, request)
@@ -135,7 +135,7 @@ func TestDelegatedIdentityUsesAuthorizer(t *testing.T) {
 	if authorizer.caller != caller {
 		t.Fatalf("authorizer caller = %#v, want %#v", authorizer.caller, caller)
 	}
-	want := mustTestPrincipal("cluster.local", "workload/app")
+	want := model.MustPrincipal("cluster.local", "workload/app")
 	if authorizer.requested != want {
 		t.Fatalf("authorizer requested principal = %#v, want %#v", authorizer.requested, want)
 	}

@@ -94,12 +94,12 @@ func TestValidateCAKeyPair(t *testing.T) {
 		{name: "key prefixed garbage", certPEM: validCert, keyPEM: append([]byte("garbage\n"), validKey...), wantErr: "leading data"},
 		{name: "leading and trailing ASCII whitespace", certPEM: withASCIIWhitespace(validCert), keyPEM: withASCIIWhitespace(validKey)},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ca, err := ParseSigningCA(test.certPEM, test.keyPEM, now)
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("ParseSigningCA() error = %v, want containing %q", err, test.wantErr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ca, err := ParseSigningCA(tc.certPEM, tc.keyPEM, now)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("ParseSigningCA() error = %v, want containing %q", err, tc.wantErr)
 				}
 				return
 			}
@@ -151,7 +151,7 @@ func TestValidateTrustBundle(t *testing.T) {
 	expiredPEM, _ := testCAKeyPair(t, now.Add(-2*time.Hour), now.Add(-time.Hour), true, true, x509.KeyUsageCertSign)
 	nonSelfSignedPEM := testSignedCACertificate(t, activePEM, activeKey, now)
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name    string
 		bundle  []byte
 		wantErr string
@@ -169,16 +169,16 @@ func TestValidateTrustBundle(t *testing.T) {
 		{name: "expired entry", bundle: append(append([]byte(nil), activePEM...), expiredPEM...), wantErr: "expired"},
 		{name: "non-self-signed entry", bundle: append(append([]byte(nil), activePEM...), nonSelfSignedPEM...), wantErr: "not self-signed"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := ValidateTrustBundle(test.bundle, active, now)
-			if test.wantErr == "" {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateTrustBundle(tc.bundle, active, now)
+			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("ValidateTrustBundle() error = %v, want containing %q", err, test.wantErr)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("ValidateTrustBundle() error = %v, want containing %q", err, tc.wantErr)
 			}
 		})
 	}

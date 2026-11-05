@@ -183,11 +183,11 @@ func TestClassifyResponse(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			for _, upstreamMutation := range []bool{false, true} {
-				if got := classifyResponse(tt.resp, upstreamMutation); got != tt.want {
-					t.Errorf("classifyResponse(upstreamMutation=%v) = %v, want %v", upstreamMutation, got, tt.want)
+				if got := classifyResponse(tc.resp, upstreamMutation); got != tc.want {
+					t.Errorf("classifyResponse(upstreamMutation=%v) = %v, want %v", upstreamMutation, got, tc.want)
 				}
 			}
 		})
@@ -221,12 +221,12 @@ func TestMessageEffect_ObserveKeepsStrongest(t *testing.T) {
 		{"blocked then mutated holds", effectBlocked, effectMutated, effectBlocked},
 		{"none then none", effectNone, effectNone, effectNone},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.start
-			got.observe(tt.next)
-			if got != tt.want {
-				t.Errorf("observe() = %v, want %v", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.start
+			got.observe(tc.next)
+			if got != tc.want {
+				t.Errorf("observe() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -253,11 +253,11 @@ func TestDeriveOutcome(t *testing.T) {
 		// policy selected. Report the modification rather than hiding it.
 		{"mutation without matched units", effectMutated, false, 0, filter.DispositionMutated},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := deriveOutcome(tt.effect, tt.streamFailed, tt.matched)
-			if got != tt.want {
-				t.Errorf("deriveOutcome() = %q, want %q", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveOutcome(tc.effect, tc.streamFailed, tc.matched)
+			if got != tc.want {
+				t.Errorf("deriveOutcome() = %q, want %q", got, tc.want)
 			}
 		})
 	}

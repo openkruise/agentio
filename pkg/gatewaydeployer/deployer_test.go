@@ -195,20 +195,20 @@ func TestParseKubeVersion(t *testing.T) {
 		{major: "abc", minor: "33", wantErr: true},
 		{major: "1", minor: "xyz", wantErr: true},
 	}
-	for _, tt := range tests {
-		got, err := parseKubeVersion(tt.major, tt.minor)
-		if tt.wantErr {
+	for _, tc := range tests {
+		got, err := parseKubeVersion(tc.major, tc.minor)
+		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseKubeVersion(%q, %q) expected error, got %d", tt.major, tt.minor, got)
+				t.Errorf("parseKubeVersion(%q, %q) expected error, got %d", tc.major, tc.minor, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("parseKubeVersion(%q, %q) unexpected error: %v", tt.major, tt.minor, err)
+			t.Errorf("parseKubeVersion(%q, %q) unexpected error: %v", tc.major, tc.minor, err)
 			continue
 		}
-		if got != tt.want {
-			t.Errorf("parseKubeVersion(%q, %q) = %d, want %d", tt.major, tt.minor, got, tt.want)
+		if got != tc.want {
+			t.Errorf("parseKubeVersion(%q, %q) = %d, want %d", tc.major, tc.minor, got, tc.want)
 		}
 	}
 }

@@ -96,7 +96,7 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 	) {
 		t.Fatal("apply changed parent values outside the generated block")
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name             string
 		chartRegistry    string
 		globalRegistry   string
@@ -115,32 +115,32 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 		{name: "digest override", digest: digest, tag: "2.3.4", managerPrefix: "docker.io/openkruise/", controllerPrefix: "docker.io/openkruise/"},
 		{name: "tag override", chartRegistry: "mirror.example", tag: "2.3.4", managerPrefix: "mirror.example/openkruise/", controllerPrefix: "mirror.example/openkruise/"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			imageValues := map[string]any{"registry": test.imageRegistry}
-			if test.repository != "" {
-				imageValues["repository"] = test.repository
+		t.Run(tc.name, func(t *testing.T) {
+			imageValues := map[string]any{"registry": tc.imageRegistry}
+			if tc.repository != "" {
+				imageValues["repository"] = tc.repository
 			}
 			suffix := ":1.2.3"
-			if test.tag != "" {
-				imageValues["tag"] = test.tag
-				suffix = ":" + test.tag
+			if tc.tag != "" {
+				imageValues["tag"] = tc.tag
+				suffix = ":" + tc.tag
 			}
-			if test.digest != "" {
-				imageValues["digest"] = test.digest
-				suffix = "@" + test.digest
+			if tc.digest != "" {
+				imageValues["digest"] = tc.digest
+				suffix = "@" + tc.digest
 			}
 			managerValues := map[string]any{
-				"image": map[string]any{"registry": test.chartRegistry},
+				"image": map[string]any{"registry": tc.chartRegistry},
 				"agentio": map[string]any{
 					"enabled":       true,
-					"global":        map[string]any{"registry": test.globalRegistry},
+					"global":        map[string]any{"registry": tc.globalRegistry},
 					"agentiod":      map[string]any{"image": imageValues},
 					"epe":           map[string]any{"mode": "managed", "image": imageValues},
 					"egressGateway": map[string]any{"mode": "static", "image": imageValues, "porter": map[string]any{"image": imageValues}},
 				},
 			}
 			controllerValues := map[string]any{
-				"image": map[string]any{"registry": test.chartRegistry},
+				"image": map[string]any{"registry": tc.chartRegistry},
 				"agentio": map[string]any{
 					"trafficProxy": map[string]any{"image": imageValues, "initImage": imageValues},
 				},
@@ -151,8 +151,13 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 				values map[string]any
 				names  []string
 			}{
-				{manager, test.managerPrefix, managerValues, []string{"agentiod", "agentio-epe", "agentio-gateway", "agentio-porter"}},
-				{controller, test.controllerPrefix, controllerValues, []string{"ztunnel", "proxy-init"}},
+				{
+					manager,
+					tc.managerPrefix,
+					managerValues,
+					[]string{"agentiod", "agentio-epe", "agentio-gateway", "agentio-porter"},
+				},
+				{controller, tc.controllerPrefix, controllerValues, []string{"ztunnel", "proxy-init"}},
 			} {
 				all := ""
 				for _, content := range renderChart(t, chart.path, chart.values) {
@@ -160,8 +165,8 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 				}
 				for _, name := range chart.names {
 					want := chart.prefix + name + suffix
-					if test.repository != "" {
-						want = test.repository + suffix
+					if tc.repository != "" {
+						want = tc.repository + suffix
 					}
 					if !strings.Contains(all, `"`+want+`"`) {
 						t.Errorf("rendered chart does not contain image %s", want)
@@ -200,7 +205,7 @@ func TestApplyRequiresFixedReleaseTag(t *testing.T) {
 
 func testIntegrationEgressDefaults(t *testing.T, chart string) {
 	t.Helper()
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name    string
 		agentio map[string]any
 		policy  string
@@ -212,12 +217,12 @@ func testIntegrationEgressDefaults(t *testing.T, chart string) {
 		{name: "explicit empty routes", agentio: map[string]any{"agentiod": map[string]any{"config": map[string]any{"values": map[string]any{"egressPolicies": []any{}}}}}},
 		{name: "gateway and EPE disabled", agentio: map[string]any{"egressGateway": map[string]any{"mode": "disabled"}, "epe": map[string]any{"mode": "disabled"}}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if test.agentio == nil {
-				test.agentio = map[string]any{}
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.agentio == nil {
+				tc.agentio = map[string]any{}
 			}
-			test.agentio["enabled"] = true
-			rendered := renderChart(t, chart, map[string]any{"agentio": test.agentio})
+			tc.agentio["enabled"] = true
+			rendered := renderChart(t, chart, map[string]any{"agentio": tc.agentio})
 			found := false
 			for _, content := range rendered {
 				for doc := range strings.SplitSeq(content, "\n---") {
@@ -242,14 +247,16 @@ func testIntegrationEgressDefaults(t *testing.T, chart string) {
 					if err := yaml.Unmarshal([]byte(object.Data["config"]), &config); err != nil {
 						t.Fatal(err)
 					}
-					if test.policy == "" {
+					if tc.policy == "" {
 						if len(config.EgressPolicies) != 0 {
 							t.Fatal("unexpected default egress route")
 						}
-					} else if len(config.EgressPolicies) != 1 || config.EgressPolicies[0].Policy != test.policy || config.EgressPolicies[0].Gateway.Service != test.service {
+					} else if len(config.EgressPolicies) != 1 ||
+						config.EgressPolicies[0].Policy != tc.policy ||
+						config.EgressPolicies[0].Gateway.Service != tc.service {
 						t.Fatalf("unexpected egress policies: %+v", config.EgressPolicies)
 					}
-					if test.name == "default gateway and EPE" && len(config.SandboxExtProc) == 0 {
+					if tc.name == "default gateway and EPE" && len(config.SandboxExtProc) == 0 {
 						t.Fatal("default EPE provider missing")
 					}
 				}

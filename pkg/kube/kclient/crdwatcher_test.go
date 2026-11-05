@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	metadatafake "k8s.io/client-go/metadata/fake"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
@@ -94,21 +95,7 @@ func makeCRD(t *testing.T, fmc *metadatafake.FakeMetadataClient, g schema.GroupV
 func runWatcher(t *testing.T, w kclient.CrdWatcher, stop <-chan struct{}) {
 	t.Helper()
 	go w.Run(stop)
-	if !eventually(w.HasSynced, 10*time.Second) {
-		t.Fatal("crd watcher did not sync")
-	}
-}
-
-// eventually polls cond until it returns true or the timeout elapses.
-func eventually(cond func() bool, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return true
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return cond()
+	testutil.WaitFor(t, 10*time.Second, w.HasSynced, "crd watcher did not sync")
 }
 
 // TestCRDWatcherRace verifies callbacks added during a handler run are not skipped.
@@ -127,9 +114,8 @@ func TestCRDWatcherRace(t *testing.T) {
 	}()
 	makeCRD(t, fmc, virtualServiceGVR, nil)
 	runWatcher(t, w, stop)
-	if !eventually(func() bool { return calls.Load() == 1 }, 5*time.Second) {
-		t.Fatalf("expected 1 callback, got %d", calls.Load())
-	}
+	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+		fmt.Sprintf("expected 1 callback, got %d", calls.Load()))
 }
 
 func TestCRDWatcher(t *testing.T) {
@@ -148,9 +134,8 @@ func TestCRDWatcher(t *testing.T) {
 	}
 
 	runWatcher(t, w, stop)
-	if !eventually(func() bool { return vsCalls.Load() == 1 }, 5*time.Second) {
-		t.Fatalf("expected 1 virtualservices callback, got %d", vsCalls.Load())
-	}
+	testutil.WaitFor(t, 5*time.Second, func() bool { return vsCalls.Load() == 1 },
+		fmt.Sprintf("expected 1 virtualservices callback, got %d", vsCalls.Load()))
 
 	// created once running
 	if got := w.KnownOrCallback(gatewayClassGVR, func(s <-chan struct{}) {
@@ -169,9 +154,8 @@ func TestCRDWatcher(t *testing.T) {
 	}
 	makeCRD(t, fmc, serviceAccountGVR, nil)
 	// And call the callback when the CRD is created
-	if !eventually(func() bool { return saCalls.Load() == 1 }, 5*time.Second) {
-		t.Fatalf("expected 1 serviceaccounts callback, got %d", saCalls.Load())
-	}
+	testutil.WaitFor(t, 5*time.Second, func() bool { return saCalls.Load() == 1 },
+		fmt.Sprintf("expected 1 serviceaccounts callback, got %d", saCalls.Load()))
 }
 
 // TestCRDWatcherWaitForCRD exercises the blocking API the gateway deployer uses:
@@ -226,9 +210,8 @@ func TestCRDWatcherMinimumVersion(t *testing.T) {
 
 	// Upgrade it to v1.1, which is allowed
 	makeCRD(t, fmc, grpcRouteGVR, map[string]string{bundleVersionAnnotation: "v1.1.0"})
-	if !eventually(func() bool { return calls.Load() == 1 }, 5*time.Second) {
-		t.Fatalf("expected 1 grpcroutes callback after upgrade to v1.1.0, got %d", calls.Load())
-	}
+	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+		fmt.Sprintf("expected 1 grpcroutes callback after upgrade to v1.1.0, got %d", calls.Load()))
 }
 
 func TestCRDWatcherMaximumVersion(t *testing.T) {
@@ -275,9 +258,8 @@ func TestCRDWatcherMaximumVersion(t *testing.T) {
 			t.Fatalf("KnownOrCallback(tlsroutes) = %v, want false before sync", got)
 		}
 		runWatcher(t, w, stop)
-		if !eventually(func() bool { return calls.Load() == 1 }, 5*time.Second) {
-			t.Fatalf("expected 1 tlsroutes callback at maximum, got %d", calls.Load())
-		}
+		testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+			fmt.Sprintf("expected 1 tlsroutes callback at maximum, got %d", calls.Load()))
 	})
 }
 

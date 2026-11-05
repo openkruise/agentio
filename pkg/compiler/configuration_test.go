@@ -27,6 +27,7 @@ import (
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -51,7 +52,7 @@ func TestWorkloadMetadataConfigurationLifecycle(t *testing.T) {
 		ResourceVersion: "empty",
 		Value:           &configv1.AgentioConfig{},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		labels, found := compiledWorkloadMetadataLabels(t, fixture.compiler, workload.UID)
 		return found && maps.Equal(labels, workload.Labels)
 	}, "non-nil empty configuration publishes unfiltered metadata")
@@ -63,7 +64,7 @@ func TestWorkloadMetadataConfigurationLifecycle(t *testing.T) {
 		},
 	})
 	wantIgnoreA := map[string]string{"keep": "yes", "drop-b": "b"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		labels, found := compiledWorkloadMetadataLabels(t, fixture.compiler, workload.UID)
 		return found && maps.Equal(labels, wantIgnoreA)
 	}, "ignored-label update republishes filtered workload metadata")
@@ -78,7 +79,7 @@ func TestWorkloadMetadataConfigurationLifecycle(t *testing.T) {
 			}},
 		},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["AgentioConfig/configuration"]
 		current := fixture.compiler.graph.configuration.Get()
 		return failed && current != nil && current.ResourceVersion == "ignore-a"
@@ -99,7 +100,7 @@ func TestWorkloadMetadataConfigurationLifecycle(t *testing.T) {
 		},
 	})
 	wantRecovered := map[string]string{"keep": "yes", "drop-a": "a"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		labels, found := compiledWorkloadMetadataLabels(t, fixture.compiler, workload.UID)
 		return found && maps.Equal(labels, wantRecovered)
 	}, "valid recovery republishes workload metadata")
@@ -129,7 +130,7 @@ func TestDNSChangePropagatesThroughCollection(t *testing.T) {
 		Name:    "namespaces/alpha/trafficPolicies/fqdn",
 	}
 	var unresolvedHash string
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, fixture.compiler).Get(authorizationKey)
 		if found {
 			unresolvedHash = resource.Hash
@@ -139,7 +140,7 @@ func TestDNSChangePropagatesThroughCollection(t *testing.T) {
 
 	fixture.setResolved("api.example.com", netip.MustParseAddr("203.0.113.7"))
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, fixture.compiler).Get(authorizationKey)
 		return found && resource.Hash != unresolvedHash
 	}, "DNS resolution recompiled the authorization")
@@ -167,7 +168,7 @@ func TestDNSChangeOnlyRecompilesPoliciesForThatHostname(t *testing.T) {
 		})
 	}
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return fixture.resolutionCount("api.example.com") > 0 && fixture.resolutionCount("database.example.com") > 0
 	}, "both policies compiled")
 
@@ -176,7 +177,7 @@ func TestDNSChangeOnlyRecompilesPoliciesForThatHostname(t *testing.T) {
 		Name:    "namespaces/alpha/trafficPolicies/api",
 	}
 	var unresolvedHash string
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, fixture.compiler).Get(authorizationKey)
 		if found {
 			unresolvedHash = resource.Hash
@@ -186,7 +187,7 @@ func TestDNSChangeOnlyRecompilesPoliciesForThatHostname(t *testing.T) {
 	databaseCalls := fixture.resolutionCount("database.example.com")
 
 	fixture.setResolved("api.example.com", netip.MustParseAddr("203.0.113.7"))
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, fixture.compiler).Get(authorizationKey)
 		return found && resource.Hash != unresolvedHash
 	}, "API DNS resolution recompiled its authorization")
@@ -253,5 +254,5 @@ func TestDNSFlipUsesNarrowWorkloadConfigurationDependency(t *testing.T) {
 		host:    "api.example.com",
 		address: netip.MustParseAddr("10.1.0.2"),
 	})
-	eventually(t, func() bool { return addressUpdates.Load() == 1 }, "DNS update published one Address update")
+	testutil.Eventually(t, func() bool { return addressUpdates.Load() == 1 }, "DNS update published one Address update")
 }

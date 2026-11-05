@@ -70,7 +70,7 @@ func TestParseSelfSignedCAForRenewal(t *testing.T) {
 	}
 	// Same issuer and subject is insufficient: the self-signature must verify.
 	intermediate := testChildCA(t, parent, "test CA", now, time.Hour)
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name        string
 		cert        []byte
 		key         []byte
@@ -87,18 +87,18 @@ func TestParseSelfSignedCAForRenewal(t *testing.T) {
 		{name: "expired trailing root", cert: append(append([]byte(nil), validPEM...), expiredPEM...), key: validKey, allowBundle: true, wantErr: "expired"},
 		{name: "bundle disallowed", cert: append(append([]byte(nil), expiredPEM...), validPEM...), key: expiredKey, wantErr: "trailing data"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			ca, err := ParseSelfSignedCAForRenewal(tt.cert, tt.key, now, tt.allowBundle)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("parse renewal error = %v, want %q", err, tt.wantErr)
+		t.Run(tc.name, func(t *testing.T) {
+			ca, err := ParseSelfSignedCAForRenewal(tc.cert, tc.key, now, tc.allowBundle)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parse renewal error = %v, want %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ParseSigningCABundle(tt.cert, tt.key, now); err == nil {
+			if _, err := ParseSigningCABundle(tc.cert, tc.key, now); err == nil {
 				t.Fatal("normal loading accepted an expired root")
 			}
 			if _, err := ca.Sign(
@@ -112,7 +112,7 @@ func TestParseSelfSignedCAForRenewal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, oldTrailing := pem.Decode(tt.cert)
+			_, oldTrailing := pem.Decode(tc.cert)
 			_, newTrailing := pem.Decode(renewed.BundlePEM())
 			if !bytes.Equal(oldTrailing, newTrailing) {
 				t.Fatal("renewal changed staged roots")
@@ -123,7 +123,7 @@ func TestParseSelfSignedCAForRenewal(t *testing.T) {
 
 func TestLeafExpiryFollowsSigningChain(t *testing.T) {
 	now := time.Date(2026, time.October, 23, 12, 0, 0, 0, time.UTC)
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name         string
 		rootLifetime time.Duration
 		midLifetime  time.Duration
@@ -133,11 +133,11 @@ func TestLeafExpiryFollowsSigningChain(t *testing.T) {
 		{"intermediate expires first", time.Hour, 5 * time.Minute, 4 * time.Minute},
 		{"unrelated root expires first", time.Hour, time.Hour, 15 * time.Minute},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			rootPEM, rootKey := testCAKeyPair(
 				t,
 				now.Add(-time.Hour),
-				now.Add(tt.rootLifetime),
+				now.Add(tc.rootLifetime),
 				true,
 				true,
 				x509.KeyUsageCertSign,
@@ -146,7 +146,7 @@ func TestLeafExpiryFollowsSigningChain(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mid := testChildCA(t, root, "intermediate", now, tt.midLifetime)
+			mid := testChildCA(t, root, "intermediate", now, tc.midLifetime)
 			active := testChildCA(t, mid, "signing CA", now, 2*time.Hour)
 			// The unrelated root has the same subject as the real root. Matching
 			// names alone must not constrain the signing chain's lifetime.
@@ -176,7 +176,7 @@ func TestLeafExpiryFollowsSigningChain(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := now.Add(tt.wantLifetime); !leaf.NotAfter.Equal(want) {
+			if want := now.Add(tc.wantLifetime); !leaf.NotAfter.Equal(want) {
 				t.Fatalf("leaf expiry = %s, want %s", leaf.NotAfter, want)
 			}
 			roots := x509.NewCertPool()
@@ -193,7 +193,7 @@ func TestLeafExpiryFollowsSigningChain(t *testing.T) {
 			}
 			// Reuse the loaded snapshot after its ancestors enter the renewal
 			// window and expire; a Secret update must not be necessary to stop signing.
-			deadline := now.Add(min(tt.rootLifetime, tt.midLifetime))
+			deadline := now.Add(min(tc.rootLifetime, tc.midLifetime))
 			for _, at := range []time.Time{deadline.Add(-2 * time.Minute), deadline.Add(time.Second)} {
 				options.CurrentTime = at
 				if _, err := ca.Sign(context.Background(), active.privateKey.Public(), options); err == nil {

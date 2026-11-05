@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
@@ -123,14 +124,14 @@ func TestGatewayUpstreamTrustBundleUpdates(t *testing.T) {
 	}
 	assertBundle := func(want ...string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			return len(compiled.Failures()) == 0 && gatewayHasTrust(t, compiled, "demo/custom", want...) &&
 				gatewayHasTrust(t, compiled, "demo/default", certs["public"])
 		}, "gateway to publish the expected CA union")
 	}
 	assertRetained := func(wantError string, want ...string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			return strings.Contains(compiled.Failures()["Gateway/demo/custom"], wantError)
 		}, "source failure to identify the object and key")
 		if !gatewayHasTrust(t, compiled, "demo/custom", want...) ||
@@ -151,7 +152,7 @@ func TestGatewayUpstreamTrustBundleUpdates(t *testing.T) {
 		updated := cm.DeepCopy()
 		updated.Data["ca.crt"] = tc.value
 		configMaps.ConditionalUpdateObject(updated)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			return strings.Contains(compiled.Failures()["Gateway/demo/custom"], tc.reason)
 		}, "specific invalid PEM update to be rejected")
 		assertRetained(`ConfigMap agentio-system/company-ca key "ca.crt"`, certs["public"], certs["old"], certs["new"])
@@ -263,7 +264,7 @@ func TestGatewayUpstreamTrustMissingSourceHasNoInitialOutput(t *testing.T) {
 			if base == "" {
 				wantError = "AGENTIO_CLIENT_TRUST_PACKAGE_PATH"
 			}
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				return compiled.HasSynced() && strings.Contains(compiled.Failures()["Gateway/demo/missing"], wantError)
 			}, "invalid initial source to fail compilation")
 			if len(currentSnapshot(t, compiled).ListResourcesOwnedByGateway(model.ClusterType, "demo/missing")) != 0 {
@@ -274,7 +275,7 @@ func TestGatewayUpstreamTrustMissingSourceHasNoInitialOutput(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{Namespace: inputs.RootNamespace, Name: "missing"},
 					Data:       map[string]string{"ca.crt": string(ca.CertificatePEM())},
 				})
-				eventually(t, func() bool {
+				testutil.Eventually(t, func() bool {
 					return len(compiled.Failures()) == 0 &&
 						gatewayHasTrust(t, compiled, "demo/missing", inputs.GatewayTrustBundle)
 				}, "creating the missing source to publish the initial gateway output")

@@ -40,11 +40,11 @@ func TestWorkloadLabel(t *testing.T) {
 		{"absent", map[string]string{"app": "sleep"}, "missing", ""},
 		{"nil map", nil, "app", ""},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := Workload{Labels: tt.labels}
-			if got := p.Label(tt.key); got != tt.want {
-				t.Errorf("Label(%q) = %q, want %q", tt.key, got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Workload{Labels: tc.labels}
+			if got := p.Label(tc.key); got != tc.want {
+				t.Errorf("Label(%q) = %q, want %q", tc.key, got, tc.want)
 			}
 		})
 	}

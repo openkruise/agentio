@@ -61,13 +61,13 @@ func TestRouter_Enqueue_Drops(t *testing.T) {
 		{name: "unknown kind", audit: &Audit{Kind: "unknown_kind"}},
 		{name: "unregistered kind kafka", audit: &Audit{Kind: "kafka"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			r := NewRouter()
 			sink := &recordingSink{}
 			r.Register(SinkKindWebhook, sink)
 
-			r.Enqueue(Event{Audit: tt.audit})
+			r.Enqueue(Event{Audit: tc.audit})
 			if got := len(sink.snapshot()); got != 0 {
 				t.Errorf("expected 0 events, got %d", got)
 			}
@@ -88,23 +88,23 @@ func TestRouter_Enqueue_RoutesToCorrectSink(t *testing.T) {
 		{name: "kind constant delivers every event", kind: SinkKindWebhook, enqueues: 2, wantWebhook: 2, wantOther: 0},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			r := NewRouter()
 			webhookSink := &recordingSink{}
 			otherSink := &recordingSink{}
 			r.Register(SinkKindWebhook, webhookSink)
 			r.Register("custom", otherSink)
 
-			for i := 0; i < tt.enqueues; i++ {
-				r.Enqueue(Event{Audit: &Audit{Kind: tt.kind}})
+			for i := 0; i < tc.enqueues; i++ {
+				r.Enqueue(Event{Audit: &Audit{Kind: tc.kind}})
 			}
 
-			if got := len(webhookSink.snapshot()); got != tt.wantWebhook {
-				t.Errorf("webhook sink: want %d, got %d", tt.wantWebhook, got)
+			if got := len(webhookSink.snapshot()); got != tc.wantWebhook {
+				t.Errorf("webhook sink: want %d, got %d", tc.wantWebhook, got)
 			}
-			if got := len(otherSink.snapshot()); got != tt.wantOther {
-				t.Errorf("other sink: want %d, got %d", tt.wantOther, got)
+			if got := len(otherSink.snapshot()); got != tc.wantOther {
+				t.Errorf("other sink: want %d, got %d", tc.wantOther, got)
 			}
 		})
 	}

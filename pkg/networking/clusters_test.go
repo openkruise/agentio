@@ -200,7 +200,7 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 		"AES128-GCM-SHA256", "AES256-GCM-SHA384",
 	}
 	replacement := []string{"AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		settings *configv1.UpstreamTlsSettings
 		min, max tlsv3.TlsParameters_TlsProtocol
@@ -213,10 +213,10 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 		{"TLS 1.3 only", &configv1.UpstreamTlsSettings{MinProtocolVersion: configv1.UpstreamTlsSettings_TLSV1_3}, tlsv3.TlsParameters_TLSv1_3, tlsv3.TlsParameters_TLSv1_3, defaults},
 		{"replace ciphers in order", &configv1.UpstreamTlsSettings{CipherSuites: replacement}, tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, replacement},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			gateway := testGateway(&configv1.EgressGateway{
 				Tls: &configv1.GatewayTlsSettings{
-					Origination: tt.settings,
+					Origination: tc.settings,
 				},
 			})
 			before := proto.Clone(gateway.Config)
@@ -234,7 +234,7 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				minVersion, maxVersion, ciphers := tt.min, tt.max, tt.ciphers
+				minVersion, maxVersion, ciphers := tc.min, tc.max, tc.ciphers
 				if !selected {
 					minVersion, maxVersion, ciphers = tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, defaults
 				}

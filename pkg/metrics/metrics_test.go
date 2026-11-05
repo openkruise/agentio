@@ -168,15 +168,15 @@ func TestVersionLabelBoundsClientInput(t *testing.T) {
 		{"1.x", "unknown"},
 		{`1."injected`, "unknown"},
 	}
-	for _, tt := range tests {
-		if got := versionLabel(tt.version); got != tt.want {
-			t.Errorf("versionLabel(%q) = %q, want %q", tt.version, got, tt.want)
+	for _, tc := range tests {
+		if got := versionLabel(tc.version); got != tc.want {
+			t.Errorf("versionLabel(%q) = %q, want %q", tc.version, got, tc.want)
 		}
 	}
 	// Idempotence pairs an increment with its deferred decrement.
-	for _, tt := range tests {
-		if got := versionLabel(tt.want); got != tt.want {
-			t.Errorf("versionLabel(%q) = %q, want it to be idempotent", tt.want, got)
+	for _, tc := range tests {
+		if got := versionLabel(tc.want); got != tc.want {
+			t.Errorf("versionLabel(%q) = %q, want it to be idempotent", tc.want, got)
 		}
 	}
 }
@@ -249,7 +249,7 @@ func TestAgentioDashboardCompatibilityHistograms(t *testing.T) {
 
 func TestLegacyCompatibilityHistogramsUseAgentioBuckets(t *testing.T) {
 	body := scrape(t, NewRegistry())
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		want []string
 	}{
@@ -270,8 +270,8 @@ func TestLegacyCompatibilityHistogramsUseAgentioBuckets(t *testing.T) {
 			want: []string{"0.1", "0.5", "1", "3", "5", "10", "20", "30", "+Inf"},
 		},
 	} {
-		if got := histogramBucketBounds(body, test.name); !reflect.DeepEqual(got, test.want) {
-			t.Errorf("%s bucket bounds = %v, want %v", test.name, got, test.want)
+		if got := histogramBucketBounds(body, tc.name); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s bucket bounds = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

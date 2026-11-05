@@ -43,16 +43,10 @@ func run(t *testing.T, f authorizeFunc, host string, port int32) *filter.RouteMu
 	return &filter.RouteMutation{Upstream: target}
 }
 
-type lookupFunc func(context.Context, string, dns.Family) (dns.LookupResult, error)
-
-func (f lookupFunc) Lookup(ctx context.Context, host string, family dns.Family) (dns.LookupResult, error) {
-	return f(ctx, host, family)
-}
-
 func TestDNSUsesSharedCacheAndCustomRecords(t *testing.T) {
 	calls := 0
 	client := dns.NewClient(
-		lookupFunc(func(_ context.Context, host string, family dns.Family) (dns.LookupResult, error) {
+		dns.LookupFunc(func(_ context.Context, host string, family dns.Family) (dns.LookupResult, error) {
 			calls++
 			if host != "example.com" || family != dns.IPv4Only {
 				t.Fatalf("lookup(%q, %v)", host, family)
@@ -101,7 +95,7 @@ func TestDNSUsesSharedCacheAndCustomRecords(t *testing.T) {
 
 func TestInputFailuresDoNotProduceMutations(t *testing.T) {
 	lookupErr := errors.New("lookup unavailable")
-	client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, lookupErr
 	}), time.Second)
 	for _, tc := range []struct {
@@ -256,7 +250,7 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 }
 
 func TestAuthorizationAuditResolutionFailure(t *testing.T) {
-	client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("DNS unavailable")
 	}), time.Second)
 	stream := &filter.Stream{
@@ -298,7 +292,7 @@ func TestAggregateIPv4DNSAndDirectIPv6Destinations(t *testing.T) {
 				}
 				lookups := 0
 				client := dns.NewClient(
-					lookupFunc(func(_ context.Context, host string, family dns.Family) (dns.LookupResult, error) {
+					dns.LookupFunc(func(_ context.Context, host string, family dns.Family) (dns.LookupResult, error) {
 						lookups++
 						if host != tc.host || family != dns.IPv4Only {
 							t.Fatalf("lookup(%q, %v), want (%q, IPv4Only)", host, family, tc.host)
@@ -388,7 +382,7 @@ func TestAggregateRandomSelectionWithinPreferredFamily(t *testing.T) {
 				addresses = append(addresses, netip.MustParseAddr(ip))
 			}
 			lookups := 0
-			client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+			client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 				lookups++
 				return dns.LookupResult{Addresses: addresses, TTL: time.Minute}, nil
 			}), 0)
@@ -433,7 +427,7 @@ func TestAggregateRandomSelectionPreservesFixedTargets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lookups := 0
-			client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+			client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 				lookups++
 				return dns.LookupResult{Addresses: []netip.Addr{
 					netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2"),

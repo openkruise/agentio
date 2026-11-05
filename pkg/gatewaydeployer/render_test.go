@@ -247,16 +247,18 @@ func TestProxyImage(t *testing.T) {
 			want:    "example.com/agentio/customproxy:1.0.0-debug",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			global := map[string]any{
-				"hub": tt.hub, "tag": tt.tag, "proxy": map[string]any{"image": tt.image},
+				"hub":   tc.hub,
+				"tag":   tc.tag,
+				"proxy": map[string]any{"image": tc.image},
 			}
-			if tt.variant != "" {
-				global["variant"] = tt.variant
+			if tc.variant != "" {
+				global["variant"] = tc.variant
 			}
-			if got := proxyImage(map[string]any{"global": global}); got != tt.want {
-				t.Fatalf("proxyImage(image=%q) = %q, want %q", tt.image, got, tt.want)
+			if got := proxyImage(map[string]any{"global": global}); got != tc.want {
+				t.Fatalf("proxyImage(image=%q) = %q, want %q", tc.image, got, tc.want)
 			}
 		})
 	}
@@ -366,7 +368,7 @@ func TestRenderUsesAgentioProxyContainerName(t *testing.T) {
 }
 
 func TestRenderPrefersEgressGatewayValuesAndAcceptsLegacyWaypointValues(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		values map[string]any
 		want   string
@@ -387,12 +389,12 @@ func TestRenderPrefersEgressGatewayValuesAndAcceptsLegacyWaypointValues(t *testi
 			want: "pool: legacy",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			values := testValues(t, parityValuesOverlay())
 			global := values["global"].(map[string]any)
 			delete(global, "waypoint")
 			delete(global, "egressGateway")
-			for key, value := range test.values {
+			for key, value := range tc.values {
 				global[key] = value
 			}
 			rend := testRenderer(t, values)
@@ -412,8 +414,8 @@ func TestRenderPrefersEgressGatewayValuesAndAcceptsLegacyWaypointValues(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Join(docs, "\n---\n"); !strings.Contains(got, test.want) {
-				t.Fatalf("rendered gateway missing %q:\n%s", test.want, got)
+			if got := strings.Join(docs, "\n---\n"); !strings.Contains(got, tc.want) {
+				t.Fatalf("rendered gateway missing %q:\n%s", tc.want, got)
 			}
 		})
 	}
@@ -468,10 +470,10 @@ func TestEmptyMatchesSprigDefaultSemantics(t *testing.T) {
 		{name: "nil pointer interface", in: iface, want: true},
 		{name: "struct", in: struct{}{}, want: false},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := empty(tt.in); got != tt.want {
-				t.Fatalf("empty(%#v) = %v, want %v", tt.in, got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := empty(tc.in); got != tc.want {
+				t.Fatalf("empty(%#v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}

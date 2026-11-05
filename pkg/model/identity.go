@@ -63,6 +63,22 @@ func NewPrincipal(trustDomain, path string) (Principal, error) {
 	return ParsePrincipal("spiffe://"+canonicalTrustDomain(trustDomain)+"/"+path, trustDomain)
 }
 
+// MustPrincipal constructs a principal and panics on invalid input. It is
+// intended for tests and static declarations where the input is known valid.
+func MustPrincipal(trustDomain, path string) Principal {
+	principal, err := NewPrincipal(trustDomain, path)
+	if err != nil {
+		panic(err)
+	}
+	return principal
+}
+
+// MustServiceAccountPrincipal constructs the principal of a Kubernetes
+// ServiceAccount and panics on invalid input.
+func MustServiceAccountPrincipal(namespace, serviceAccount string) Principal {
+	return MustPrincipal("cluster.local", "ns/"+namespace+"/sa/"+serviceAccount)
+}
+
 // Preserve Agentio's configured trust-domain encoding at URI boundaries.
 func canonicalTrustDomain(trustDomain string) string {
 	return strings.ReplaceAll(trustDomain, "@", ".")

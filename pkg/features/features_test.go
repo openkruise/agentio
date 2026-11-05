@@ -110,12 +110,12 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "gateway deployer lease name is required",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			setValidFeatures(t)
-			tt.mutate(t)
-			if err := Validate(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
+			tc.mutate(t)
+			if err := Validate(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tc.wantErr)
 			}
 		})
 	}

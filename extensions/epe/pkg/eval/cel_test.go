@@ -55,20 +55,20 @@ func TestCompileBool(t *testing.T) {
 		{"syntax error", `pod.`, false, "compile when"},
 		{"unsupported response", `response.status == 503`, false, "undeclared reference to 'response'"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prog, err := CompileBool(tt.expr)
-			if tt.expectError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.expectError) {
-					t.Fatalf("expected error containing %q, got %v", tt.expectError, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prog, err := CompileBool(tc.expr)
+			if tc.expectError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.expectError) {
+					t.Fatalf("expected error containing %q, got %v", tc.expectError, err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if tt.wantNil != (prog == nil) {
-				t.Errorf("prog nil = %v, want %v", prog == nil, tt.wantNil)
+			if tc.wantNil != (prog == nil) {
+				t.Errorf("prog nil = %v, want %v", prog == nil, tc.wantNil)
 			}
 		})
 	}
@@ -82,7 +82,7 @@ func TestCompileValueRejectsAuditOnlyVariables(t *testing.T) {
 }
 
 func TestJSONDecode(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name      string
 		input     string
 		want      any
@@ -101,17 +101,17 @@ func TestJSONDecode(t *testing.T) {
 		{"empty", "", nil, true},
 		{"trailing value", `{} {}`, nil, true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			act := valueActivation("a", map[string]any{"json": tt.input})
+		t.Run(tc.name, func(t *testing.T) {
+			act := valueActivation("a", map[string]any{"json": tc.input})
 			got, err := EvalValue(mustCompileValue(t, `json.decode(inputs.json)`), act)
-			if tt.wantError {
+			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), "json.decode:") {
 					t.Fatalf("decode error = %v, want JSON error", err)
 				}
 				return
 			}
-			if err != nil || !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("decode = (%#v, %v), want %#v", got, err, tt.want)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("decode = (%#v, %v), want %#v", got, err, tc.want)
 			}
 		})
 	}
@@ -275,15 +275,15 @@ func TestEvalValueResultIsJSONNative(t *testing.T) {
 		}},
 		{"non-string map key", `{1: "one"}`, map[string]any{"1": "one"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			act := valueActivation("a", nil)
-			got, err := EvalValue(mustCompileValue(t, tt.expr), act)
+			got, err := EvalValue(mustCompileValue(t, tc.expr), act)
 			if err != nil {
 				t.Fatalf("eval: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("EvalValue = %#v, want %#v", got, tt.want)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("EvalValue = %#v, want %#v", got, tc.want)
 			}
 			if _, err := json.Marshal(got); err != nil {
 				t.Errorf("result is not JSON-marshalable: %v", err)

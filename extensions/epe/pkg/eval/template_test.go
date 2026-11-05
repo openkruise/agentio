@@ -101,24 +101,24 @@ func TestCompileTemplateAndRender(t *testing.T) {
 		},
 		{"syntax error", "{{ .Token", nil, "", "unclosed action"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpl, err := CompileTemplate("t", tt.raw)
-			if tt.expectError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.expectError) {
-					t.Fatalf("expected error containing %q, got %v", tt.expectError, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl, err := CompileTemplate("t", tc.raw)
+			if tc.expectError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.expectError) {
+					t.Fatalf("expected error containing %q, got %v", tc.expectError, err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected compile error: %v", err)
 			}
-			got, err := RenderToString(tmpl, tt.data)
+			got, err := RenderToString(tmpl, tc.data)
 			if err != nil {
 				t.Fatalf("unexpected render error: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("render = %q, want %q", got, tt.want)
+			if got != tc.want {
+				t.Errorf("render = %q, want %q", got, tc.want)
 			}
 		})
 	}

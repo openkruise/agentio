@@ -25,6 +25,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -198,7 +199,7 @@ func TestSandboxAttesterMovePreservesWorkloads(t *testing.T) {
 		Attester: &model.Attester{WorkloadUID: a.UID},
 	}
 	fixture.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, fixture.compiler)
 		_, hasA := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: a.UID})
 		_, hasB := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: b.UID})
@@ -207,7 +208,7 @@ func TestSandboxAttesterMovePreservesWorkloads(t *testing.T) {
 	baseline := currentSnapshot(t, fixture.compiler)
 	check := func(uid string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			snapshot := currentSnapshot(t, fixture.compiler)
 			for _, worker := range []model.Workload{a, b} {
 				r, ok := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: worker.UID})
@@ -276,7 +277,7 @@ func TestSandboxLifecyclePreservesWorkloadPolicies(t *testing.T) {
 	)
 	checkWorkloads := func() {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			snapshot := currentSnapshot(t, fixture.compiler)
 			for _, workload := range []model.Workload{host, ordinary} {
 				r, ok := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID})
@@ -313,13 +314,13 @@ func TestSandboxLifecyclePreservesWorkloadPolicies(t *testing.T) {
 			Attester:  &model.Attester{WorkloadUID: host.UID},
 		},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		manifest := manifestAt(t, fixture.compiler, "actor")
 		return manifest != nil && manifest.TrafficPolicy == nil && len(manifest.Extensions) == 1
 	}, "Sandbox only carries its own policies")
 	checkWorkloads()
 	fixture.sandboxes.DeleteObject("actor")
-	eventually(t, func() bool { return manifestAt(t, fixture.compiler, "actor") == nil }, "Sandbox removed")
+	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, "actor") == nil }, "Sandbox removed")
 	checkWorkloads() // Shared policies survive Sandbox deletion.
 }
 
@@ -343,7 +344,7 @@ func TestWorkloadOwnsOrderedTrafficPolicyBindings(t *testing.T) {
 		"namespaces/agentio-system/trafficPolicies/root",
 		"namespaces/demo/trafficPolicies/namespace",
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		binding := fixture.compiler.Bindings().GetKey(worker.UID)
 		manifest := manifestAt(t, fixture.compiler, "actor")
 		workload, _ := compatibilityWorkload(t, currentSnapshot(t, fixture.compiler), worker.UID)
@@ -372,7 +373,7 @@ func TestWorkloadTrafficPolicyBindingUpdates(t *testing.T) {
 	fixture.trafficPolicies.UpdateObject(selected)
 	check := func(want []string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			workload, _ := compatibilityWorkload(t, currentSnapshot(t, fixture.compiler), worker.UID)
 			refs := new(extensionsv1.PolicyReference)
 			return workload != nil && compatibilityExtension(t, workload, "traffic-policy-reference", refs) &&

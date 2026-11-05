@@ -25,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/security/internal/casecret"
 	"github.com/openkruise/agentio/pkg/security/pki"
@@ -99,7 +100,7 @@ func TestLoadOrCreateAuthorityBootstrapsMissingSecret(t *testing.T) {
 
 func TestLoadOrCreateAuthorityRejectsInvalidTrustBundle(t *testing.T) {
 	const namespace = "agentio-system"
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		bundle func(*testing.T) []byte
 	}{
@@ -111,9 +112,9 @@ func TestLoadOrCreateAuthorityRejectsInvalidTrustBundle(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			secret := newWorkloadCASecret(t, namespace, "workload", 24*time.Hour)
-			secret.Data[caBundleKey] = test.bundle(t)
+			secret.Data[caBundleKey] = tc.bundle(t)
 			client := kube.NewFakeClient(secret)
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
@@ -214,7 +215,7 @@ func TestCASecretDeletionDisablesSigningAndRetainsCommittedTrust(t *testing.T) {
 	if err := client.Kube().CoreV1().Secrets(namespace).Delete(ctx, "workload", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		authority.mu.RLock()
 		defer authority.mu.RUnlock()
 		return !authority.ca.Available()
@@ -231,16 +232,4 @@ func newWorkloadCASecret(t *testing.T, namespace, name string, lifetime time.Dur
 		t.Fatal(err)
 	}
 	return secret
-}
-
-func waitForCondition(t *testing.T, condition func() bool, description string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", description)
 }

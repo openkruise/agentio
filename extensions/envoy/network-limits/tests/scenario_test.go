@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/openkruise/agentio/bench/connect/fixture"
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 func streamTimeout() time.Duration {
@@ -186,14 +187,14 @@ func scenarioTransfers(t *testing.T, c fixture.Scenario) {
 	cancelled := make(map[int]bool)
 	if c.Kind == "reload" {
 		// Wait for real payload on every stream before moving queued work to a new grouping.
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			for _, x := range transfers {
 				if x.bytes.Load() == 0 {
 					return false
 				}
 			}
 			return true
-		})
+		}, "scenario transfers start")
 		r.reloadECDS(t, "agentio.bandwidth", func(p object) {
 			scenarioPolicy(p, c.Sandboxes, 2*rate)
 			nested(p["descriptors"].([]any)[0], "bandwidth_limit")["download_burst_bytes"] = 65536
@@ -316,7 +317,9 @@ func scenarioChurn(t *testing.T, c fixture.Scenario) {
 		}) {
 			return
 		}
-		eventually(t, func() bool { return r.stat(t, "cluster.plain.upstream_cx_active") == 0 })
+		testutil.Eventually(t, func() bool {
+			return r.stat(t, "cluster.plain.upstream_cx_active") == 0
+		}, "upstream connections drain")
 		// Allow the charged watermark batch to recover, then require ALL slots for new keys next cycle.
 		time.Sleep(300 * time.Millisecond)
 		memory := rss(t, r.cmd.Process.Pid)

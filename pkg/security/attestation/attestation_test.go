@@ -167,7 +167,7 @@ func TestDelegatedIdentityAuthorizersDispatchByCallerAttestation(t *testing.T) {
 	authorizers := DelegatedIdentityAuthorizers{model.AttestationKubernetes: kubernetes}
 	caller := kubernetesAttestedCaller()
 	requested := CertificateTarget{
-		Principal: mustTestPrincipal("cluster.local", "ns/demo/sa/app"),
+		Principal: model.MustPrincipal("cluster.local", "ns/demo/sa/app"),
 		Workload:  &WorkloadReference{Namespace: "demo", Name: "pod-a"},
 	}
 
@@ -189,7 +189,7 @@ func TestDelegatedIdentityAuthorizersDispatchByCallerAttestation(t *testing.T) {
 
 func TestDelegatedIdentityAuthorizersFailClosedOnNilEntry(t *testing.T) {
 	authorizers := DelegatedIdentityAuthorizers{model.AttestationKubernetes: nil}
-	requested := CertificateTarget{Principal: mustTestPrincipal("cluster.local", "ns/demo/sa/app")}
+	requested := CertificateTarget{Principal: model.MustPrincipal("cluster.local", "ns/demo/sa/app")}
 	if _, err := authorizers.Authorize(context.Background(), kubernetesAttestedCaller(), requested); err == nil {
 		t.Fatal("nil authorizer entry authorized a delegation")
 	}
@@ -198,7 +198,7 @@ func TestDelegatedIdentityAuthorizersFailClosedOnNilEntry(t *testing.T) {
 func TestDelegatedIdentityAuthorizersFailClosedOnTypedNilEntry(t *testing.T) {
 	var authorizer *fakeDelegatedIdentityAuthorizer
 	authorizers := DelegatedIdentityAuthorizers{model.AttestationKubernetes: authorizer}
-	requested := CertificateTarget{Principal: mustTestPrincipal("cluster.local", "ns/demo/sa/app")}
+	requested := CertificateTarget{Principal: model.MustPrincipal("cluster.local", "ns/demo/sa/app")}
 	if _, err := authorizers.Authorize(context.Background(), kubernetesAttestedCaller(), requested); err == nil {
 		t.Fatal("typed nil authorizer entry authorized a delegation")
 	}

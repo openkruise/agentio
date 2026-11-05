@@ -56,11 +56,11 @@ func TestRouteSettingsForStaticHostUsesEnvoyDomainPrecedence(t *testing.T) {
 		{host: "www.example.com", want: 5 * time.Second},
 		{host: "API.EXAMPLE.COM", want: 6 * time.Second},
 	}
-	for _, test := range tests {
-		t.Run(test.host, func(t *testing.T) {
-			got := routeSettingsForHost(settings, test.host).GetTimeout().AsDuration()
-			if got != test.want {
-				t.Fatalf("route settings timeout = %s, want %s", got, test.want)
+	for _, tc := range tests {
+		t.Run(tc.host, func(t *testing.T) {
+			got := routeSettingsForHost(settings, tc.host).GetTimeout().AsDuration()
+			if got != tc.want {
+				t.Fatalf("route settings timeout = %s, want %s", got, tc.want)
 			}
 		})
 	}
@@ -223,33 +223,33 @@ func TestForwardRouteConvertsSupportedAgentioRetryFields(t *testing.T) {
 			wantRetryOn: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			policy := forwardRoute(
 				"test",
-				&configv1.HttpRouteSettings{Retries: test.retries},
+				&configv1.HttpRouteSettings{Retries: tc.retries},
 			).GetRoute().
 				GetRetryPolicy()
-			if test.wantNil {
+			if tc.wantNil {
 				if policy != nil {
 					t.Fatalf("retry policy = %+v, want nil", policy)
 				}
 				return
 			}
-			if policy.GetRetryOn() != test.wantRetryOn ||
-				!slices.Equal(policy.GetRetriableStatusCodes(), test.wantCodes) {
+			if policy.GetRetryOn() != tc.wantRetryOn ||
+				!slices.Equal(policy.GetRetriableStatusCodes(), tc.wantCodes) {
 				t.Errorf(
 					"retry-on/codes = %q/%v, want %q/%v",
 					policy.GetRetryOn(),
 					policy.GetRetriableStatusCodes(),
-					test.wantRetryOn,
-					test.wantCodes,
+					tc.wantRetryOn,
+					tc.wantCodes,
 				)
 			}
-			if got := len(policy.GetRetryHostPredicate()) == 1; got != test.wantPreviousHosts {
-				t.Errorf("previous-host predicate = %v, want %v", got, test.wantPreviousHosts)
+			if got := len(policy.GetRetryHostPredicate()) == 1; got != tc.wantPreviousHosts {
+				t.Errorf("previous-host predicate = %v, want %v", got, tc.wantPreviousHosts)
 			}
-			if test.wantRemote {
+			if tc.wantRemote {
 				config := &previousprioritiesv3.PreviousPrioritiesConfig{}
 				if policy.GetRetryPriority().GetName() != "envoy.retry_priorities.previous_priorities" {
 					t.Fatalf("retry priority = %+v", policy.GetRetryPriority())

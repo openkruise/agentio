@@ -71,10 +71,10 @@ func TestSink_Enqueue_NilSafe(t *testing.T) {
 		{name: "nil sink", s: nil},
 		{name: "nil dispatcher", s: NewSink(nil, logr.Discard())},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// Must not panic.
-			tt.s.Enqueue(audit.Event{
+			tc.s.Enqueue(audit.Event{
 				Audit: &audit.Audit{
 					Webhook: &audit.Webhook{
 						URL: template.Must(template.New("url").Parse("http://x")),
@@ -129,12 +129,12 @@ func TestSink_Enqueue_DropsInvalid(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			rec := &recordingDispatcher{}
 			s := newTestSink(rec)
 
-			s.Enqueue(audit.Event{Audit: tt.audit})
+			s.Enqueue(audit.Event{Audit: tc.audit})
 			if got := len(rec.snapshot()); got != 0 {
 				t.Errorf("expected 0 events, got %d", got)
 			}

@@ -38,22 +38,27 @@ func TestSnapshotFromStream_CarriesWireQueryVerbatim(t *testing.T) {
 		{"repeated key", "k=a&k=b"},
 		{"plus in value", "q=a+b"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// The adapter keeps whatever ParseQuery could extract, which for
 			// these inputs is lossy or re-encoded; RawQuery must be untouched.
-			parsed, _ := url.ParseQuery(tt.rawQuery)
+			parsed, parseErr := url.ParseQuery(tc.rawQuery)
+			if parseErr != nil {
+				// Rejection is expected for some inputs; the partial result is
+				// exactly what makes this fixture meaningful.
+				t.Logf("ParseQuery rejected %q: %v", tc.rawQuery, parseErr)
+			}
 			st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 				Method:   "GET",
 				Host:     "bucket.oss-cn-hangzhou.aliyuncs.com",
 				Path:     "/obj",
-				RawQuery: tt.rawQuery,
+				RawQuery: tc.rawQuery,
 				Query:    parsed,
 				Headers:  map[string]string{":authority": "bucket.oss-cn-hangzhou.aliyuncs.com"},
 			}}}
 			snap := snapshotFromStream(st)
-			if snap.RawQuery != tt.rawQuery {
-				t.Errorf("RawQuery = %q, want the wire form %q", snap.RawQuery, tt.rawQuery)
+			if snap.RawQuery != tc.rawQuery {
+				t.Errorf("RawQuery = %q, want the wire form %q", snap.RawQuery, tc.rawQuery)
 			}
 		})
 	}

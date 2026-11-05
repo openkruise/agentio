@@ -32,6 +32,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/yaml"
+
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 func agentgatewayFixture() (*gatewayv1.Gateway, *corev1.ConfigMap) {
@@ -215,7 +217,7 @@ func TestAgentgatewayConfigUpdatesChangeRolloutHash(t *testing.T) {
 	if _, err := rig.kubeClient.CoreV1().ConfigMaps(cm.Namespace).Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, time.Second, func() bool {
+	testutil.WaitFor(t, time.Second, func() bool {
 		return d.agentgatewayInput(&input) == nil && input.AgentgatewayConfigHash != first
 	}, "updated config hash")
 }

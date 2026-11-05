@@ -296,20 +296,20 @@ func TestProviderHostRejectsHostlessURL(t *testing.T) {
 		{name: "bare host has no host", url: "provider.example.com/creds", wantErr: true},
 		{name: "malformed", url: "http://[::1", wantErr: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := providerHost(tt.url)
-			if tt.wantErr {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := providerHost(tc.url)
+			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("providerHost(%q) = %q, want an error", tt.url, got)
+					t.Fatalf("providerHost(%q) = %q, want an error", tc.url, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("providerHost(%q): %v", tt.url, err)
+				t.Fatalf("providerHost(%q): %v", tc.url, err)
 			}
-			if got != tt.want {
-				t.Errorf("providerHost(%q) = %q, want %q", tt.url, got, tt.want)
+			if got != tc.want {
+				t.Errorf("providerHost(%q) = %q, want %q", tc.url, got, tc.want)
 			}
 		})
 	}

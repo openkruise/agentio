@@ -294,7 +294,7 @@ func TestSNIHostMismatchConditionUsesProxyAuthorityForConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name, method, host string
 		want               bool
 	}{
@@ -302,16 +302,16 @@ func TestSNIHostMismatchConditionUsesProxyAuthorityForConnect(t *testing.T) {
 		{name: "CONNECT target differs from proxy SNI", method: "CONNECT", host: "target.example:443", want: false},
 		{name: "ordinary match allowed", method: "GET", host: "proxy.example:8443", want: false},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			result, _, err := program.Eval(map[string]any{
-				"request":      map[string]any{"method": test.method, "host": test.host},
+				"request":      map[string]any{"method": tc.method, "host": tc.host},
 				"filter_state": map[string][]byte{outerSNIKey: []byte("proxy.example")},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, ok := result.Value().(bool); !ok || got != test.want {
-				t.Fatalf("condition = %v (%T), want %v", result.Value(), result.Value(), test.want)
+			if got, ok := result.Value().(bool); !ok || got != tc.want {
+				t.Fatalf("condition = %v (%T), want %v", result.Value(), result.Value(), tc.want)
 			}
 		})
 	}

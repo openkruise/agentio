@@ -163,7 +163,7 @@ func TestWorkloadDemandFullDiffResendsOnlyRequestedResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name      string
 		requested []string
 		initial   bool
@@ -200,19 +200,19 @@ func TestWorkloadDemandFullDiffResendsOnlyRequestedResources(t *testing.T) {
 			want:      []string{"a", "b"},
 		},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			names := sets.New("shared", "unrelated")
-			names.InsertAll(tt.requested...)
+			names.InsertAll(tc.requested...)
 			sent := make(map[string]string)
-			if !tt.initial {
+			if !tc.initial {
 				for _, resource := range projected {
 					sent[resource.XDSName] = resource.Hash
 				}
-				if slices.Contains(tt.requested, "gone") {
+				if slices.Contains(tc.requested, "gone") {
 					sent["gone"] = "deleted-version"
 				}
 			}
-			if tt.changed {
+			if tc.changed {
 				sent["b"] = "old-version"
 			}
 			delta, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
@@ -224,7 +224,7 @@ func TestWorkloadDemandFullDiffResendsOnlyRequestedResources(t *testing.T) {
 					names:    sets.SortedList(names),
 					sent:     sent,
 				},
-				SubscribedNames: tt.requested,
+				SubscribedNames: tc.requested,
 				Full:            true,
 			})
 			if err != nil {
@@ -234,10 +234,10 @@ func TestWorkloadDemandFullDiffResendsOnlyRequestedResources(t *testing.T) {
 			for _, resource := range delta.Resources {
 				got = append(got, resource.XDSName)
 			}
-			if !slices.Equal(got, tt.want) || !slices.Equal(delta.Removed, tt.removed) {
+			if !slices.Equal(got, tc.want) || !slices.Equal(delta.Removed, tc.removed) {
 				t.Fatalf(
 					"resources=%v removed=%v, want resources=%v removed=%v",
-					got, delta.Removed, tt.want, tt.removed,
+					got, delta.Removed, tc.want, tc.removed,
 				)
 			}
 		})

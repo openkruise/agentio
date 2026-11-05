@@ -824,9 +824,9 @@ func TestInvalidModesFailRendering(t *testing.T) {
 			args: []string{"--set", "epe.mode=managed", "--set", "epe.credentialProvider.mtls.source=secret"},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			requireRenderError(t, tt.want, tt.args...)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			requireRenderError(t, tc.want, tc.args...)
 		})
 	}
 }

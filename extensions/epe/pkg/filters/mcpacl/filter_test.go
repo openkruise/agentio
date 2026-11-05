@@ -121,13 +121,13 @@ func TestFilter_WhitelistDecisions(t *testing.T) {
 		{"batch body denied as framing violation", `[{"method":"tools/call"}]`, filter.KindStop},
 		{"multi-document body denied as framing violation", `{"method":"ping"}{"method":"tools/call","params":{"name":"evil"}}`, filter.KindStop},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			act := runBody(t, whitelistCfg(), st, tt.body)
-			if act.Kind() != tt.want {
-				t.Errorf("Kind = %v, want %v", act.Kind(), tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			act := runBody(t, whitelistCfg(), st, tc.body)
+			if act.Kind() != tc.want {
+				t.Errorf("Kind = %v, want %v", act.Kind(), tc.want)
 			}
-			if tt.want == filter.KindStop {
+			if tc.want == filter.KindStop {
 				r, _ := act.Reply()
 				if r.Status != 451 || string(r.Body) != "denied-by-whitelist" {
 					t.Errorf("Reply = %+v, want the policy deny response", r)
@@ -240,12 +240,12 @@ func TestFastPath(t *testing.T) {
 		{"old version non-governed still needs body", "2025-11-25", "tools/list", "", whitelistCfg(), filter.KindNeedBody},
 		{"old version tools/call still needs body", "2025-11-25", "tools/call", "allowed-tool", whitelistCfg(), filter.KindNeedBody},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			st := streamWithHeaders(tt.version, tt.method, tt.toolName)
-			act := runHeaders(t, tt.cfg, st)
-			if act.Kind() != tt.want {
-				t.Errorf("Kind = %v, want %v", act.Kind(), tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := streamWithHeaders(tc.version, tc.method, tc.toolName)
+			act := runHeaders(t, tc.cfg, st)
+			if act.Kind() != tc.want {
+				t.Errorf("Kind = %v, want %v", act.Kind(), tc.want)
 			}
 		})
 	}

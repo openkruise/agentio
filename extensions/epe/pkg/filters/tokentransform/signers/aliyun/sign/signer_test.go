@@ -107,17 +107,17 @@ func TestSignerResign_DispatchRewritesAuthorization(t *testing.T) {
 			wantPrefix: "OSS4-HMAC-SHA256 ",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			s := New()
 			tr := Triplet{AccessKeyID: "STS.NEWAK", AccessKeySecret: "NEWSECRET", SecurityToken: "NEWTOKEN"}
-			res, err := s.Resign(tt.version, tt.req, tr)
+			res, err := s.Resign(tc.version, tc.req, tr)
 			if err != nil {
-				t.Fatalf("%s dispatch: %v", tt.name, err)
+				t.Fatalf("%s dispatch: %v", tc.name, err)
 			}
 			authz := findHeader(t, res, "authorization")
-			if !strings.HasPrefix(authz, tt.wantPrefix) {
-				t.Fatalf("%s authorization not rewritten: %q", tt.name, authz)
+			if !strings.HasPrefix(authz, tc.wantPrefix) {
+				t.Fatalf("%s authorization not rewritten: %q", tc.name, authz)
 			}
 		})
 	}
@@ -188,23 +188,23 @@ func TestExtractOSSV4Region(t *testing.T) {
 			expectError: "no Credential=",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			region, err := extractOSSV4Region(tt.req)
-			if tt.expectError != "" {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			region, err := extractOSSV4Region(tc.req)
+			if tc.expectError != "" {
 				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+					t.Fatalf("expected error containing %q, got nil", tc.expectError)
 				}
-				if !strings.Contains(err.Error(), tt.expectError) {
-					t.Errorf("error = %v, want substring %q", err, tt.expectError)
+				if !strings.Contains(err.Error(), tc.expectError) {
+					t.Errorf("error = %v, want substring %q", err, tc.expectError)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("extractOSSV4Region: %v", err)
 			}
-			if region != tt.wantRegion {
-				t.Errorf("region = %q, want %q", region, tt.wantRegion)
+			if region != tc.wantRegion {
+				t.Errorf("region = %q, want %q", region, tc.wantRegion)
 			}
 		})
 	}
@@ -223,10 +223,10 @@ func TestSignatureVersion_String(t *testing.T) {
 		{name: "Unknown", v: SignatureUnknown, want: "unknown"},
 		{name: "out of range", v: SignatureVersion(99), want: "unknown"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.v.String(); got != tt.want {
-				t.Errorf("String() = %q, want %q", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.v.String(); got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
 			}
 		})
 	}

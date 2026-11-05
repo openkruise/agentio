@@ -59,7 +59,7 @@ func BenchmarkWorkloadQuery(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		query WorkloadQuery
 		want  bool
@@ -73,10 +73,10 @@ func BenchmarkWorkloadQuery(b *testing.B) {
 		{"principal", WorkloadQuery{Principal: &principal}, true},
 		{"global", WorkloadQuery{AuthorizationRefsOnly: true}, true},
 	} {
-		b.Run(test.name, func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if snapshot.HasWorkload(AddressType, test.query) != test.want {
+				if snapshot.HasWorkload(AddressType, tc.query) != tc.want {
 					b.Fatal("incorrect query result")
 				}
 			}

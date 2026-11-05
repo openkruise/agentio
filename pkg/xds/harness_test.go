@@ -563,7 +563,7 @@ func addressResource(t testing.TB, name, payload string, aliases ...string) mode
 			WorkloadUID: "cluster//Pod/demo/client-pod",
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: "cluster//Pod/demo/client-pod"},
 			NodeName:    "node-a",
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		}})
 	if err != nil {
 		t.Fatal(err)
@@ -602,7 +602,7 @@ func gatewayScope() model.ClientScope {
 		Class:       model.ClientEgressGateway,
 		WorkloadUID: "gw",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "pod"},
-		Principal:   serviceAccountPrincipal("demo", "egress"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "egress"),
 		GatewayKey:  "demo/egress",
 	}
 }
@@ -610,14 +610,10 @@ func gatewayScope() model.ClientScope {
 func ztunnelScope() model.ClientScope {
 	return model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "cluster//Pod/demo/client-pod",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "cluster//Pod/demo/client-pod"},
 	}
-}
-
-func serviceAccountPrincipal(namespace, serviceAccount string) model.Principal {
-	return mustTestPrincipal("cluster.local", "ns/"+(namespace)+"/sa/"+(serviceAccount))
 }
 
 func resourceNames(response *discoveryv3.DeltaDiscoveryResponse) []string {
@@ -746,7 +742,7 @@ func selectionWorkload(t *testing.T, uid, namespace, node, service, policyName s
 		WorkloadUID: uid,
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: uid},
 		NodeName:    node,
-		Principal:   serviceAccountPrincipal(namespace, "default"),
+		Principal:   model.MustServiceAccountPrincipal(namespace, "default"),
 	}}
 	if service != "" {
 		facts.Workload.ServiceKeys = []string{"demo/" + service}
@@ -872,7 +868,7 @@ func scaleWorkloadTransition(t testing.TB, resourceCount int) (
 				WorkloadUID: name,
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 				NodeName:    fmt.Sprintf("node-%03d", index%100),
-				Principal:   serviceAccountPrincipal("demo", "default"),
+				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			}},
 		})
 	}

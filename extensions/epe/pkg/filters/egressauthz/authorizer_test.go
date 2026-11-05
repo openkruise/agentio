@@ -63,10 +63,13 @@ func TestGlobalDeniedCIDRs(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				lookups := 0
-				client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
-					lookups++
-					return dns.LookupResult{Addresses: tc.ips}, nil
-				}), 0)
+				client := dns.NewClient(
+					dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+						lookups++
+						return dns.LookupResult{Addresses: tc.ips}, nil
+					}),
+					0,
+				)
 				stream := &filter.Stream{
 					RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 15000}},
 					StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
@@ -109,7 +112,7 @@ func TestGlobalUpdateAndWorkloadPolicies(t *testing.T) {
 	denied := Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}}
 	global := NewStaticAuthorizer(denied)
 	workload := Config{}
-	client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{Addresses: []netip.Addr{
 			netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("192.0.2.1"),
 		}}, nil
@@ -204,7 +207,7 @@ func TestAggregateRequiresCommonCandidate(t *testing.T) {
 				))
 			}
 			lookups := 0
-			client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+			client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 				lookups++
 				return dns.LookupResult{Addresses: ips}, nil
 			}), 0)
@@ -288,7 +291,7 @@ func TestAggregateStopsAfterDenialOrError(t *testing.T) {
 }
 
 func TestAggregateAuditsSelectedCandidate(t *testing.T) {
-	client := dns.NewClient(lookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{Addresses: []netip.Addr{
 			netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2"),
 		}}, nil

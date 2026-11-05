@@ -200,7 +200,7 @@ func TestSandboxSecurityRulesRejectInvalidAnnotation(t *testing.T) {
 }
 
 func TestSandboxUIDHonorsDeliveryIdentity(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name    string
 		sandbox *agentsv1alpha1.Sandbox
 		want    string
@@ -241,10 +241,10 @@ func TestSandboxUIDHonorsDeliveryIdentity(t *testing.T) {
 			name: "nil",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, found := sandboxUID(test.sandbox)
-			if got != test.want || found != test.found {
-				t.Fatalf("sandboxUID() = %q, %v, want %q, %v", got, found, test.want, test.found)
+		t.Run(tc.name, func(t *testing.T) {
+			got, found := sandboxUID(tc.sandbox)
+			if got != tc.want || found != tc.found {
+				t.Fatalf("sandboxUID() = %q, %v, want %q, %v", got, found, tc.want, tc.found)
 			}
 		})
 	}
@@ -366,7 +366,7 @@ func TestKruiseSandboxProducesPodAttesterBinding(t *testing.T) {
 
 	// Phase and generation observations may lag the running Pod. Its attester
 	// must remain available throughout Pending transitions and timeout updates.
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name       string
 		phase      agentsv1alpha1.SandboxPhase
 		generation int64
@@ -378,9 +378,9 @@ func TestKruiseSandboxProducesPodAttesterBinding(t *testing.T) {
 		{"timeout observed", agentsv1alpha1.SandboxRunning, 4, 4},
 	} {
 		changed := sandbox.DeepCopy()
-		changed.Status.Phase = test.phase
-		changed.Generation = test.generation
-		changed.Status.ObservedGeneration = test.observed
+		changed.Status.Phase = tc.phase
+		changed.Generation = tc.generation
+		changed.Status.ObservedGeneration = tc.observed
 		stripped, err := stripSandbox(changed)
 		if err != nil {
 			t.Fatal(err)
@@ -406,7 +406,7 @@ func TestKruiseSandboxProducesPodAttesterBinding(t *testing.T) {
 		if err != nil {
 			t.Fatalf(
 				"%s did not retain the Pod binding: Sandbox = %+v, error = %v",
-				test.name,
+				tc.name,
 				sandboxes.GetKey("kruise:delivery-uid"),
 				err,
 			)

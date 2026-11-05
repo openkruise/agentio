@@ -371,14 +371,14 @@ func TestHandleRequestHeaders_BodyModeSelection(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := New(t, Options{Filters: tt.filters(t)})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(t, Options{Filters: tc.filters(t)})
 			h.Fixture.ApplyProfile(securityProfile("p1", "default", nil, map[string]string{"app": "blocked"}, []v1alpha1.SecurityRule{
 				{
 					Name:    "body-rule",
 					Match:   []v1alpha1.RuleMatch{{Domains: []string{"mcp-server.example.com"}}},
-					Actions: tt.actions,
+					Actions: tc.actions,
 				},
 			}))
 
@@ -391,8 +391,8 @@ func TestHandleRequestHeaders_BodyModeSelection(t *testing.T) {
 			if verdict.ModeOverride == nil {
 				t.Fatal("expected ModeOverride")
 			}
-			if verdict.ModeOverride.RequestBodyMode != tt.wantMode {
-				t.Fatalf("RequestBodyMode = %v, want %v", verdict.ModeOverride.RequestBodyMode, tt.wantMode)
+			if verdict.ModeOverride.RequestBodyMode != tc.wantMode {
+				t.Fatalf("RequestBodyMode = %v, want %v", verdict.ModeOverride.RequestBodyMode, tc.wantMode)
 			}
 		})
 	}

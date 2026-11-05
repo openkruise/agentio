@@ -47,16 +47,11 @@ func preferenceHarness(
 	}
 	address := netip.MustParseAddrPort(target)
 	units := []engine.Unit{{Cfgs: []any{route.Config{Upstream: &filter.UpstreamTarget{Address: &address}}, nil}}}
-	definitions = append(
-		definitions,
-		filter.Define(filter.Descriptor[bool]{Name: "bodycheck",
-			Phases: filter.PhaseRequestHeaders | filter.PhaseRequestBody,
-			New:    func(filter.RuleConfig[bool]) filter.Filter { return &preferenceBodyCheck{} }},
-			func(json.RawMessage) (bool, error) { return false, nil }),
-	)
+	definitions = append(definitions, enginetest.BodyGate())
 	next := engine.Unit{Cfgs: []any{nil, nil}}
 	if buffered {
-		next.Cfgs[1] = true
+		// A false config enables the gate without denying the body.
+		next.Cfgs[1] = false
 	}
 	units = append(units, next)
 	regs, err := filter.Build(definitions...)
@@ -70,12 +65,6 @@ func preferenceHarness(
 			return engine.Resolution{Units: units}, nil
 		},
 	})
-}
-
-type preferenceBodyCheck struct{ filter.PassThrough }
-
-func (*preferenceBodyCheck) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
 }
 
 func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {

@@ -25,10 +25,10 @@ func TestPrefixCIDRUsesLiteralNetworkBoundaries(t *testing.T) {
 		{bits: 24, want: "10.20.30.0/24"},
 		{bits: 16, want: "10.20.0.0/16"},
 	}
-	for _, test := range tests {
-		got, err := PrefixCIDR("10.20.30.40", test.bits)
-		if err != nil || got != test.want {
-			t.Fatalf("prefix /%d = %q, %v; want %q", test.bits, got, err, test.want)
+	for _, tc := range tests {
+		got, err := PrefixCIDR("10.20.30.40", tc.bits)
+		if err != nil || got != tc.want {
+			t.Fatalf("prefix /%d = %q, %v; want %q", tc.bits, got, err, tc.want)
 		}
 	}
 	if _, err := PrefixCIDR("not-an-ip", 24); err == nil {
@@ -37,7 +37,7 @@ func TestPrefixCIDRUsesLiteralNetworkBoundaries(t *testing.T) {
 }
 
 func TestHostCIDRUsesAddressFamilyWidth(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name, input, want string
 		wantError         bool
 	}{
@@ -46,16 +46,16 @@ func TestHostCIDRUsesAddressFamilyWidth(t *testing.T) {
 		{name: "headless", input: "None", wantError: true},
 		{name: "invalid", input: "service.invalid", wantError: true},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := HostCIDR(test.input)
-			if test.wantError {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := HostCIDR(tc.input)
+			if tc.wantError {
 				if err == nil {
-					t.Fatalf("HostCIDR(%q) = %q, want error", test.input, got)
+					t.Fatalf("HostCIDR(%q) = %q, want error", tc.input, got)
 				}
 				return
 			}
-			if err != nil || got != test.want {
-				t.Fatalf("HostCIDR(%q) = %q, %v; want %q", test.input, got, err, test.want)
+			if err != nil || got != tc.want {
+				t.Fatalf("HostCIDR(%q) = %q, %v; want %q", tc.input, got, err, tc.want)
 			}
 		})
 	}

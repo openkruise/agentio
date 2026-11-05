@@ -76,15 +76,9 @@ func requireDenied(t *testing.T, v *enginetest.Verdict) {
 	}
 }
 
-type scenarioLookup func(context.Context, string, dns.Family) (dns.LookupResult, error)
-
-func (f scenarioLookup) Lookup(ctx context.Context, host string, family dns.Family) (dns.LookupResult, error) {
-	return f(ctx, host, family)
-}
-
 func TestScenario_EgressAuthzFirstMatchAndLiveReordering(t *testing.T) {
 	calls := 0
-	client := dns.NewClient(scenarioLookup(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		calls++
 		return dns.LookupResult{
 			Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")},
@@ -121,7 +115,7 @@ func TestScenario_EgressAuthzFirstMatchAndLiveReordering(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzPinsOnlyAuthorizedCustomAddress(t *testing.T) {
-	client := dns.NewClient(scenarioLookup(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("unexpected DNS lookup")
 	}), time.Second)
 	setRecord := func(addresses ...string) {
@@ -150,7 +144,7 @@ func TestScenario_EgressAuthzPinsOnlyAuthorizedCustomAddress(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzChecksLiteralCONNECTDestination(t *testing.T) {
-	client := dns.NewClient(scenarioLookup(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("literal target must not query DNS")
 	}), time.Second)
 	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
@@ -165,7 +159,7 @@ func TestScenario_EgressAuthzChecksLiteralCONNECTDestination(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzReplacesCallerPolicySnapshots(t *testing.T) {
-	client := dns.NewClient(scenarioLookup(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("unexpected DNS lookup")
 	}), time.Second)
 	if err := client.SetRecord("api.example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")}); err != nil {
@@ -207,7 +201,7 @@ func TestScenario_EgressAuthzReplacesCallerPolicySnapshots(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzDNSFailureNeverEmitsTarget(t *testing.T) {
-	client := dns.NewClient(scenarioLookup(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("DNS unavailable")
 	}), time.Second)
 	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
@@ -223,7 +217,7 @@ func TestScenario_EgressAuthzDNSFailureNeverEmitsTarget(t *testing.T) {
 func TestScenario_EgressAuthzLoadsCurrentPolicyAfterDNS(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	calls := 0
-	client := dns.NewClient(scenarioLookup(func(ctx context.Context, _ string, _ dns.Family) (dns.LookupResult, error) {
+	client := dns.NewClient(dns.LookupFunc(func(ctx context.Context, _ string, _ dns.Family) (dns.LookupResult, error) {
 		calls++
 		close(started)
 		select {

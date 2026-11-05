@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
@@ -406,8 +407,8 @@ func TestDecodeTelemetryRejectsUnsupportedAttachmentsAndMalformedCEL(t *testing.
 			want: "CEL",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			configMap := telemetryConfigMap("invalid", `
 apiVersion: telemetry.istio.io/v1
 kind: Telemetry
@@ -415,9 +416,9 @@ metadata:
   namespace: demo
   name: invalid
 spec:
-  `+test.spec)
-			if _, err := decodeTelemetries(configMap); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("decode error = %v, want containing %q", err, test.want)
+  `+tc.spec)
+			if _, err := decodeTelemetries(configMap); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("decode error = %v, want containing %q", err, tc.want)
 			}
 		})
 	}
@@ -439,7 +440,11 @@ func TestTelemetryCollectionUsesAllLabelledConfigMapsAndRetainsPerSourceLastKnow
 	if !policies.WaitUntilSynced(stop) {
 		t.Fatal("Telemetry collection did not sync")
 	}
-	eventually(t, func() bool { return len(policies.List()) == 2 }, "both labelled ConfigMaps publish Telemetry")
+	testutil.Eventually(
+		t,
+		func() bool { return len(policies.List()) == 2 },
+		"both labelled ConfigMaps publish Telemetry",
+	)
 
 	broken := first.DeepCopy()
 	broken.ResourceVersion = "2"
@@ -452,7 +457,7 @@ metadata:
 spec:
   selector: {}`
 	configMaps.ConditionalUpdateObject(broken)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		items := policies.List()
 		if len(items) != 2 {
 			return false
@@ -466,7 +471,7 @@ spec:
 	}, "malformed replacement retains only that source's previous Telemetry")
 
 	configMaps.DeleteObject("agentio-system/first-arbitrary-name")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		items := policies.List()
 		return len(items) == 1 && items[0].Name == "second"
 	}, "deleting one source removes only its Telemetry")

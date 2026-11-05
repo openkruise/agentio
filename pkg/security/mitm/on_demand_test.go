@@ -42,10 +42,6 @@ type fakeGatewayAuthorizer struct {
 	err   error
 }
 
-func serviceAccountPrincipal(namespace, serviceAccount string) model.Principal {
-	return mustTestPrincipal("cluster.local", "ns/"+(namespace)+"/sa/"+(serviceAccount))
-}
-
 func (f *fakeGatewayAuthorizer) Authorize(scope model.ClientScope) error {
 	f.mu.Lock()
 	f.calls++
@@ -449,7 +445,7 @@ func TestOnDemandIssuerUsesGatewayAuthorizer(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 
 	_, err = issuer.Get(context.Background(), scope, "api.example.com")
@@ -477,7 +473,7 @@ func TestOnDemandIssuerGetReturnsIndependentCertificateValue(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	first, err := issuer.Get(context.Background(), scope, "api.example.com")
 	if err != nil {
@@ -525,7 +521,7 @@ func TestOnDemandIssuerCanceledLoneWaiterDiscardsSignerResult(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -675,7 +671,7 @@ func TestOnDemandIssuerCancellationDiscardsBlockedSignerResult(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	result := make(chan error, 1)
 	go func() {
@@ -727,7 +723,7 @@ func TestOnDemandIssuerAuthorizesGatewayAndCachesCertificate(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	first, err := issuer.Get(context.Background(), scope, "api.example.com")
 	if err != nil {
@@ -1085,7 +1081,7 @@ func TestOnDemandIssuerCapsCacheEntries(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
 		if _, err := issuer.Get(context.Background(), scope, domain); err != nil {
@@ -1127,7 +1123,7 @@ func TestOnDemandIssuerLimitsSignConcurrency(t *testing.T) {
 	scope := model.ClientScope{
 		Class:      model.ClientEgressGateway,
 		GatewayKey: "agentio-system/egress",
-		Principal:  serviceAccountPrincipal("agentio-system", "egress"),
+		Principal:  model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 	results := make(chan error, 2)
 	for _, domain := range []string{"one.example.com", "two.example.com"} {
@@ -1228,8 +1224,8 @@ func assertSignInFlightNeverExceeds(t *testing.T, signer *concurrencyTrackingSig
 }
 
 func TestOnDemandIssuerRetriesSupersededCAError(t *testing.T) {
-	for _, scenario := range []string{"rotate", "stable", "cancel"} {
-		t.Run(scenario, func(t *testing.T) {
+	for _, tc := range []string{"rotate", "stable", "cancel"} {
+		t.Run(tc, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				release := make(chan struct{})
 				signErr := errors.New("old CA expired")
@@ -1257,19 +1253,19 @@ func TestOnDemandIssuerRetriesSupersededCAError(t *testing.T) {
 					result <- err
 				}()
 				synctest.Wait()
-				if scenario != "stable" {
+				if tc != "stable" {
 					signer.rotate("two")
 				}
-				if scenario == "cancel" {
+				if tc == "cancel" {
 					cancel()
 				}
 				close(release)
 				synctest.Wait()
 				wantCalls := 1
 				wantErr := signErr
-				if scenario == "rotate" {
+				if tc == "rotate" {
 					wantCalls, wantErr = 2, nil
-				} else if scenario == "cancel" {
+				} else if tc == "cancel" {
 					wantErr = context.Canceled
 				}
 				if err := <-result; !errors.Is(err, wantErr) {

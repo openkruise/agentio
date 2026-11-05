@@ -134,18 +134,18 @@ func TestEvalWhen_RequestFieldAccess(t *testing.T) {
 			want:  true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prog, err := eval.CompileBool(tt.expr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prog, err := eval.CompileBool(tc.expr)
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
-			got, err := EvalWhen(prog, &tt.scope)
+			got, err := EvalWhen(prog, &tc.scope)
 			if err != nil {
 				t.Fatalf("eval: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("want %v, got %v", tt.want, got)
+			if got != tc.want {
+				t.Errorf("want %v, got %v", tc.want, got)
 			}
 		})
 	}

@@ -123,14 +123,14 @@ func TestSignOSSV4_ValidationEdgeCases(t *testing.T) {
 			expectError: "empty region",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := SignOSSV4(tt.req, tt.triplet, tt.params)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SignOSSV4(tc.req, tc.triplet, tc.params)
 			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				t.Fatalf("expected error containing %q, got nil", tc.expectError)
 			}
-			if !strings.Contains(err.Error(), tt.expectError) {
-				t.Errorf("error = %v, want substring %q", err, tt.expectError)
+			if !strings.Contains(err.Error(), tc.expectError) {
+				t.Errorf("error = %v, want substring %q", err, tc.expectError)
 			}
 		})
 	}

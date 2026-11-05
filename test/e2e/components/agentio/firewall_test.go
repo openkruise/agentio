@@ -96,12 +96,12 @@ func TestVerifyFirewallBackendRejectsMismatchAndMissingInjection(t *testing.T) {
 			want:   "no agentio-proxy container",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			client := fake.NewClientset(test.objects...)
-			err := verifyFirewallBackend(context.Background(), client, test.config)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("verifyFirewallBackend() error = %v, want substring %q", err, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewClientset(tc.objects...)
+			err := verifyFirewallBackend(context.Background(), client, tc.config)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("verifyFirewallBackend() error = %v, want substring %q", err, tc.want)
 			}
 		})
 	}

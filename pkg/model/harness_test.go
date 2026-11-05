@@ -57,5 +57,5 @@ func testWorkloadResource(
 }
 
 func testPrincipal() Principal {
-	return mustTestPrincipal("cluster.local", "ns/"+("demo")+"/sa/"+("default"))
+	return MustServiceAccountPrincipal("demo", "default")
 }

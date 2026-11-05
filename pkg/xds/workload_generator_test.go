@@ -146,7 +146,11 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 		principal model.Principal
 		policy    string
 	}{
-		{name: "authenticated workload", principal: serviceAccountPrincipal("demo", "default"), policy: "demo/auth"},
+		{
+			name:      "authenticated workload",
+			principal: model.MustServiceAccountPrincipal("demo", "default"),
+			policy:    "demo/auth",
+		},
 		{name: "discovery-only workload"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -200,7 +204,7 @@ func TestWildcardDirectWorkloadFullRegenerationOmitsUnchangedResources(t *testin
 	facts := model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 		WorkloadUID: "uid-a",
 		NodeName:    "node-a",
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 	}}
 	// Two map entries exercise deterministic marshaling of the projected value.
 	address, err := model.NewResource(
@@ -321,7 +325,7 @@ func TestDedicatedZTunnelReceivesOnlyWorkloadScope(t *testing.T) {
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -352,7 +356,7 @@ func TestWorkloadReferencedGatewaySelection(t *testing.T) {
 	})
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -401,7 +405,7 @@ func TestNamedWorkloadAlwaysIncludesReferencedGateways(t *testing.T) {
 	snapshot := selectionSnapshot(t, []model.Resource{own, gateway})
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -418,7 +422,7 @@ func TestNamedWorkloadAlwaysIncludesReferencedGateways(t *testing.T) {
 func TestNamedReferencedGatewayIncremental(t *testing.T) {
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -485,7 +489,7 @@ func TestSharedZTunnelReceivesNodeWorkloads(t *testing.T) {
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("agentio-system", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("agentio-system", "ztunnel"),
 		NodeName:  "node-a",
 	}
 
@@ -508,7 +512,7 @@ func TestNodeNamedSubscriptionAddsLocalAndExplicitRemoteWorkloads(t *testing.T) 
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("agentio-system", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("agentio-system", "ztunnel"),
 		NodeName:  "node-a",
 	}
 
@@ -556,7 +560,7 @@ func TestNamedServiceSubscriptionExpandsSelectedEndpointWorkloads(t *testing.T) 
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -595,7 +599,7 @@ func TestGatewayNamedWorkloadSelectionDoesNotAllocateSnapshotScale(t *testing.T)
 			Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: name,
 				NodeName:    "node-a",
-				Principal:   serviceAccountPrincipal("demo", "default"),
+				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			}},
 		})
 	}
@@ -686,7 +690,7 @@ func TestNodeNamedServiceRemotePayloadUpdateUsesChangedKey(t *testing.T) {
 	}})
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	sent := make(map[string]string, 10_002)
@@ -734,7 +738,7 @@ func TestNodeNamedServiceRemoteToLocalMoveUpdatesWorkload(t *testing.T) {
 	}})
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	watch := &watchState{
@@ -810,7 +814,7 @@ func TestDedicatedWorkloadNamedServiceMembershipLossReconcilesRemovals(t *testin
 				}})
 				scope := model.ClientScope{
 					Class:       client.class,
-					Principal:   serviceAccountPrincipal("demo", "default"),
+					Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 					WorkloadUID: "uid-local",
 					Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-local"},
 				}
@@ -894,7 +898,7 @@ func TestGatewayWorkloadIncrementalUsesResourceFamily(t *testing.T) {
 
 func TestIncrementalPublicationTransitionAtTenThousandResources(t *testing.T) {
 	_, after, update, target := scaleWorkloadTransition(t, 10_000)
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		scope model.ClientScope
 	}{
@@ -915,9 +919,9 @@ func TestIncrementalPublicationTransitionAtTenThousandResources(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			delta, err := (WorkloadGenerator{}).Generate(context.Background(), GenerationRequest{
-				Scope:        test.scope,
+				Scope:        tc.scope,
 				TypeURL:      model.AddressType,
 				Subscription: SubscriptionView{wildcard: true},
 				Snapshot:     after,

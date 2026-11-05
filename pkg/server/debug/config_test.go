@@ -32,6 +32,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/compiler"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -202,7 +203,7 @@ func TestConfigDebugSnapshotReportsCompilerFailures(t *testing.T) {
 		}}, krt.WithStop(stop))
 		return sources
 	}, true)
-	waitForConfigDebugCondition(t, func() bool { return len(fixture.compiler.Failures()) == 2 })
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) == 2 }, "config debug condition")
 
 	got, err := configDebugSnapshotAt(configDebugTestTime, fixture.sources, fixture.compiler, configDebugFilter{
 		Kind: "Gateway",
@@ -243,10 +244,10 @@ func TestConfigDebugSnapshotRemovesRecoveredCompilerFailures(t *testing.T) {
 		sources.TrafficPolicies = policies.AsCollection()
 		return sources
 	}, true)
-	waitForConfigDebugCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["TrafficPolicy/namespaced/demo/recovering"]
 		return found
-	})
+	}, "config debug condition")
 	before, err := configDebugSnapshotAt(configDebugTestTime, fixture.sources, fixture.compiler, configDebugFilter{})
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +261,7 @@ func TestConfigDebugSnapshotRemovesRecoveredCompilerFailures(t *testing.T) {
 		Namespace: "demo",
 		Spec:      validConfigDebugTrafficPolicySpec(),
 	})
-	waitForConfigDebugCondition(t, func() bool { return len(fixture.compiler.Failures()) == 0 })
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) == 0 }, "config debug condition")
 	after, err := configDebugSnapshotAt(configDebugTestTime, fixture.sources, fixture.compiler, configDebugFilter{})
 	if err != nil {
 		t.Fatal(err)
@@ -551,17 +552,6 @@ func validConfigDebugTrafficPolicySpec() agentsv1alpha1.TrafficPolicySpec {
 		Egress: &agentsv1alpha1.TrafficPolicyDirection{Rules: []agentsv1alpha1.TrafficPolicyRule{{
 			Action: agentsv1alpha1.RuleActionAllow,
 		}}},
-	}
-}
-
-func waitForConfigDebugCondition(t *testing.T, condition func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !condition() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition did not become true")
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 

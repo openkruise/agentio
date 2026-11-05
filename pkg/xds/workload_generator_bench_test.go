@@ -45,21 +45,21 @@ func BenchmarkWorkloadGeneratorGatewayUpdate(b *testing.B) {
 				model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 					WorkloadUID: name,
 					Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
-					Principal:   serviceAccountPrincipal("other", "default"),
+					Principal:   model.MustServiceAccountPrincipal("other", "default"),
 				}}))
 		}
 		resources = append(resources, resource("uid-a", "workload",
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID:       "uid-a",
 				Source:            model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
-				Principal:         serviceAccountPrincipal("demo", "default"),
+				Principal:         model.MustServiceAccountPrincipal("demo", "default"),
 				GatewayReferences: []string{"agentio-system/egress-a"},
 			}}))
 		oldGateway := resource("gateway-a", "old",
 			model.ResourceFacts{
 				Workload: &model.WorkloadResourceFacts{
 					WorkloadUID: "gateway-a",
-					Principal:   serviceAccountPrincipal("agentio-system", "gateway"),
+					Principal:   model.MustServiceAccountPrincipal("agentio-system", "gateway"),
 				},
 				GatewayOwner: "agentio-system/egress-a",
 			})
@@ -67,7 +67,7 @@ func BenchmarkWorkloadGeneratorGatewayUpdate(b *testing.B) {
 			model.ResourceFacts{
 				Workload: &model.WorkloadResourceFacts{
 					WorkloadUID: "gateway-a",
-					Principal:   serviceAccountPrincipal("agentio-system", "gateway"),
+					Principal:   model.MustServiceAccountPrincipal("agentio-system", "gateway"),
 				},
 				GatewayOwner: "agentio-system/egress-a",
 			})
@@ -84,7 +84,7 @@ func BenchmarkWorkloadGeneratorGatewayUpdate(b *testing.B) {
 		request := GenerationRequest{
 			Scope: model.ClientScope{
 				Class:       model.ClientDedicatedZTunnel,
-				Principal:   serviceAccountPrincipal("demo", "default"),
+				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 				WorkloadUID: "uid-a",
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 			},

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/attestation"
@@ -65,7 +66,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 	auth := r.DelegatedIdentityAuthorizer()
 	scopeResolver := r.PodScopeResolver(r.Workloads)
 	sds := r.GatewayCertificateAuthorizer()
-	gid := mustTestPrincipal("cluster.local", "ns/system/sa/egress")
+	gid := model.MustServiceAccountPrincipal("system", "egress")
 	oldPeer := gatewayTestPeer(pod)
 	if err := authorizeCertificate(auth, ctx, oldPeer, attestation.CertificateTarget{Principal: gid}); err != nil {
 		t.Fatal(err)
@@ -87,7 +88,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 		t.Fatal(err)
 	}
 	peer := gatewayTestPeer(replacement)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current, err := scopeResolver.ResolveScope(peer, "")
 		return authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil &&
 			authorizeCertificate(auth, ctx, oldPeer, attestation.CertificateTarget{Principal: gid}) != nil &&
@@ -106,7 +107,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 			Update(ctx, changed, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			scope, err := scopeResolver.ResolveScope(peer, "")
 			return authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil &&
 				err == nil &&
@@ -124,7 +125,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 			Update(ctx, replacement, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			current, err := scopeResolver.ResolveScope(peer, "")
 			return err == nil && current.Class == model.ClientEgressGateway &&
 				current.GatewayKey == "system/egress" &&
@@ -137,7 +138,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 		Update(ctx, replacement, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		w := r.Workloads.GetKey("test//Pod/system/gateway")
 		return w != nil && w.Principal == gid && w.GatewayKey == "system/egress" && !w.Ready &&
 			authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) != nil
@@ -147,7 +148,7 @@ func TestGatewayMembershipIgnoresServiceSelectionAndTracksPodLifecycle(t *testin
 		Delete(ctx, service.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool {
 			w := r.Workloads.GetKey("test//Pod/system/gateway")
@@ -263,7 +264,7 @@ func TestGatewayMembershipRejectsAmbiguousAndUnregisteredPods(t *testing.T) {
 				t.Context(),
 				gatewayTestPeer(p),
 				attestation.CertificateTarget{
-					Principal: mustTestPrincipal("cluster.local", "ns/"+p.Namespace+"/sa/"+p.Spec.ServiceAccountName),
+					Principal: model.MustServiceAccountPrincipal(p.Namespace, p.Spec.ServiceAccountName),
 					Workload:  &attestation.WorkloadReference{Namespace: p.Namespace, Name: p.Name},
 				},
 			)
@@ -320,11 +321,11 @@ func TestGatewayAPIMembershipTracksGatewayAndClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.Run(ctx.Done())
-	eventually(t, r.HasSynced, "registry sync")
-	gid := mustTestPrincipal("cluster.local", "ns/demo/sa/egress")
+	testutil.Eventually(t, r.HasSynced, "registry sync")
+	gid := model.MustServiceAccountPrincipal("demo", "egress")
 	auth := r.DelegatedIdentityAuthorizer()
 	peer := gatewayTestPeer(pod)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool {
 			return authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil
@@ -341,7 +342,7 @@ func TestGatewayAPIMembershipTracksGatewayAndClass(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := controller == agentioGatewayController
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			scope, err := r.PodScopeResolver(r.Workloads).ResolveScope(peer, "")
 			return err == nil && (scope.Class == model.ClientEgressGateway) == want &&
 				authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil
@@ -358,7 +359,7 @@ func TestGatewayAPIMembershipTracksGatewayAndClass(t *testing.T) {
 		Create(ctx, collision, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		w := r.Workloads.GetKey("test//Pod/demo/gateway")
 		return w != nil && w.Principal == gid && w.GatewayKey == "" &&
 			authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil
@@ -369,7 +370,7 @@ func TestGatewayAPIMembershipTracksGatewayAndClass(t *testing.T) {
 		Delete(ctx, collision.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool {
 			return authorizeCertificate(auth, ctx, peer, attestation.CertificateTarget{Principal: gid}) == nil
@@ -382,7 +383,7 @@ func TestGatewayAPIMembershipTracksGatewayAndClass(t *testing.T) {
 		Delete(ctx, gateway.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool {
 			w := r.Workloads.GetKey("test//Pod/demo/gateway")

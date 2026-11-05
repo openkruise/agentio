@@ -33,7 +33,7 @@ func BenchmarkDedicatedSandboxBulkPolicy(b *testing.B) {
 				Class:       model.ClientDedicatedZTunnel,
 				WorkloadUID: "worker-0",
 				Source:      model.SourceRef{Registry: "test", Key: "worker-0"},
-				Principal:   serviceAccountPrincipal("workers", "default"),
+				Principal:   model.MustServiceAccountPrincipal("workers", "default"),
 			}
 			worker := model.Resource{
 				Key:     model.ResourceKey{TypeURL: model.AddressType, Name: "worker-0"},
