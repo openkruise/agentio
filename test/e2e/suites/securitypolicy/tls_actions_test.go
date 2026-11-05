@@ -147,7 +147,7 @@ func TestSecurityProfileTLSActions(t *testing.T) {
 			assertTLSTerminated(t, target.client, terminatedHost)
 
 			var active *e2econfig.Plan
-			for _, tc := range sniTLSCases {
+			for index, tc := range sniTLSCases {
 				if !t.Run(tc.name, func(t *testing.T) {
 					active = e2econfig.New(scope).Eval(target.namespace, map[string]any{
 						"Kind":     target.kind,
@@ -156,7 +156,11 @@ func TestSecurityProfileTLSActions(t *testing.T) {
 						"Selector": target.selector,
 						"Rules":    tc.rules,
 					}, sniTLSProfileYAML)
-					active.ApplyOrFail(t, kube.ReconcileOwned)
+					mode := kube.ReconcileOwned
+					if index == 0 {
+						mode = kube.CreateOnly
+					}
+					active.ApplyOrFail(t, mode)
 					for _, check := range []struct {
 						host   string
 						action string
