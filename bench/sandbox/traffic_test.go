@@ -81,7 +81,7 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if req.Method != "CONNECT" || req.Host != "backend:8080" ||
-					req.Header.Get("X-Agentio-Sandbox-Uid") != "kruise:sandbox-000042" {
+					req.Header.Get("X-Agentio-Sandbox-Id") != "kruise:sandbox-000042" {
 					t.Errorf("incorrect tunnel request: %s %s %v", req.Method, req.Host, req.Header)
 				}
 				w.WriteHeader(tc.connect)

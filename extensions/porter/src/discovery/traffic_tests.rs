@@ -125,7 +125,7 @@ fn request(sandbox: &str, udp: bool) -> extproc::ProcessingRequest {
                         view::string("spiffe://cluster.local/ns/demo/sa/default"),
                     ),
                     (
-                        "filter_state['agentio.sandbox.uid']".into(),
+                        "filter_state['agentio.sandbox.id']".into(),
                         view::string(sandbox),
                     ),
                 ]),

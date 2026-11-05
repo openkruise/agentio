@@ -1231,7 +1231,7 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 				limit = `"maxConcurrentStreams":2`
 				filterName = "agentio.connect_concurrency"
 			}
-			raw := `{"` + field + `":{"rateLimits":[{"actions":[{"filterState":{"key":"agentio.sandbox.uid","descriptorKey":"sandbox"}}]}],"descriptors":[{"entries":[{"key":"sandbox"}],` + limit + `}]}}`
+			raw := `{"` + field + `":{"rateLimits":[{"actions":[{"filterState":{"key":"agentio.sandbox.id","descriptorKey":"sandbox"}}]}],"descriptors":[{"entries":[{"key":"sandbox"}],` + limit + `}]}}`
 			if err := protojson.Unmarshal([]byte(raw), settings); err != nil {
 				t.Fatal(err)
 			}

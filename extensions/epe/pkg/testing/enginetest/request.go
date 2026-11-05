@@ -235,7 +235,7 @@ func (b *RequestBuilder) Attrs() map[string]*structpb.Struct {
 		setString(attributes.FilterStateSandboxLabels, encoded)
 	}
 	if sandbox := b.subject.Sandbox; sandbox != nil {
-		setString(attributes.FilterStateSandboxUID, sandbox.UID)
+		setString(attributes.FilterStateSandboxID, sandbox.UID)
 	}
 	setString(attributes.FilterStateSandboxToken, b.sandboxToken)
 	setString(attributes.FilterStateSandboxMetadata, b.sandboxMetadata)

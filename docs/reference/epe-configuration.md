@@ -176,7 +176,7 @@ sandboxExtProc:
   request:
     headerMode: SEND
     attributes:
-      - filter_state['agentio.sandbox.uid']
+      - filter_state['agentio.sandbox.id']
       - filter_state['sandbox.token']
       - filter_state['agentio.sandbox.metadata']
       - filter_state['agentio.workload.uid']

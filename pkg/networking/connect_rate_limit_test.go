@@ -31,7 +31,7 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
       "rateLimits": [
         {"actions": [
           {"filterState": {"key": "tenant.id", "descriptorKey": "tenant"}},
-          {"filterState": {"key": "agentio.sandbox.uid", "descriptorKey": "sandbox"}}
+          {"filterState": {"key": "agentio.sandbox.id", "descriptorKey": "sandbox"}}
         ]},
         {"actions": [{"genericKey": {"descriptorKey": "scope", "descriptorValue": "gateway"}}]},
         {"actions": [{"filterState": {"key": "other.id", "descriptorKey": "sandbox"}}]}
@@ -68,7 +68,7 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 		key        string
 	}{
 		{"tenant", "tenant.id"},
-		{"sandbox", "agentio.sandbox.uid"},
+		{"sandbox", "agentio.sandbox.id"},
 	} {
 		expression := new(rlexprv3.Descriptor)
 		if err := first[i].GetExtension().GetTypedConfig().UnmarshalTo(expression); err != nil {
@@ -100,7 +100,7 @@ func TestConnectRateLimitIndependentActionGroups(t *testing.T) {
 func TestConnectRateLimitRejectsMixedLegacyCELAtCompilation(t *testing.T) {
 	settings := &configv1.LocalRateLimitSettings{
 		RateLimits: []*configv1.NetworkLimitRule{{Actions: []*configv1.NetworkLimitAction{{
-			FilterState: &configv1.NetworkLimitFilterStateAction{Key: "agentio.sandbox.uid", DescriptorKey: "sandbox"},
+			FilterState: &configv1.NetworkLimitFilterStateAction{Key: "agentio.sandbox.id", DescriptorKey: "sandbox"},
 		}}}},
 		Descriptors: []*configv1.RateLimitDescriptor{{Entries: []*configv1.RateLimitEntry{{
 			Key: "sandbox",
