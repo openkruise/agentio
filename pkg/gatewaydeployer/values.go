@@ -21,7 +21,11 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	meshconfig "istio.io/api/mesh/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
+
+	"github.com/openkruise/agentio/pkg/krt"
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 const (
@@ -36,8 +40,18 @@ type Options struct {
 	TrustDomain           string
 	ClusterDomain         string
 	// CAAddress is the fallback CA and xDS address when injector values omit both.
-	CAAddress string
-	LeaseName string
+	CAAddress    string
+	LeaseName    string
+	Agentgateway AgentgatewaySources
+}
+
+// AgentgatewaySources reuses the registry's validated configuration and discovery caches.
+type AgentgatewaySources struct {
+	Config      krt.Collection[model.AgentioConfiguration]
+	Services    krt.Collection[model.Service]
+	Endpoints   krt.Collection[model.Endpoint]
+	Secrets     krt.Collection[*corev1.Secret]
+	TrustBundle string
 }
 
 // templateProvider serves the gateway templates and shared values from

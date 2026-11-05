@@ -62,6 +62,7 @@ async fn workload_and_sandbox_share_connect_deadline() {
     .unwrap();
     let client = client(100, Duration::from_secs(60));
     let processor = Processor {
+        gateway: crate::processor::Gateway::AgentioEgress,
         client: client.clone(),
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
@@ -473,6 +474,7 @@ async fn matches_wire_contract_corpus() {
             drop(lease);
         }
         let p = Processor {
+            gateway: crate::processor::Gateway::AgentioEgress,
             client: c.clone(),
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_millis(100),

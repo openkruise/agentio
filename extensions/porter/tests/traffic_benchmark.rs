@@ -28,15 +28,19 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{
     Request, Response, Status, Streaming,
-    transport::{Identity, Server, ServerTlsConfig},
+    transport::{Identity, Server, ServerTlsConfig, server::TcpIncoming},
 };
 
 const WDS: &str = "type.googleapis.com/istio.workload.Workload";
 const TP: &str = "type.googleapis.com/agentio.security.TrafficPolicy";
+
+// Match the allocator used by the Linux Porter binary.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn pack(type_url: &str, value: impl Message) -> Any {
     Any {
@@ -278,7 +282,8 @@ async fn connect_traffic_policy_benchmark() {
                     ),
                 )
                 .serve_with_incoming_shutdown(
-                    TcpListenerStream::new(ads_listener),
+                    // Supplied streams bypass tonic's TCP_NODELAY setting; match production.
+                    TcpIncoming::from(ads_listener).with_nodelay(Some(true)),
                     stop.clone().cancelled_owned(),
                 ),
         );
@@ -310,6 +315,7 @@ async fn connect_traffic_policy_benchmark() {
         .await
         .unwrap();
         let processor = Processor {
+            gateway: agentio_porter::processor::Gateway::AgentioEgress,
             client,
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_secs(4),
@@ -345,7 +351,7 @@ async fn connect_traffic_policy_benchmark() {
                     extproc::external_processor_server::ExternalProcessorServer::new(processor),
                 )
                 .serve_with_incoming_shutdown(
-                    TcpListenerStream::new(listener),
+                    TcpIncoming::from(listener).with_nodelay(Some(true)),
                     stop.clone().cancelled_owned(),
                 ),
         );

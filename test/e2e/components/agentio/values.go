@@ -126,9 +126,9 @@ func chartValues(config Config) ([]byte, error) {
 		values["cni"] = map[string]any{"image": cniImage}
 	}
 	if config.GatewayDataplane == "agentgateway" {
-		values["agentiod"].(map[string]any)["enableSNITrafficPolicy"] = false
 		values["egressGateway"] = map[string]any{
 			"mode":       "gatewayAPI",
+			"porter":     map[string]any{"image": porterImage},
 			"gatewayAPI": map[string]any{"create": false},
 			"agentgateway": map[string]any{
 				"image":        config.GatewayImage,

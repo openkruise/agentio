@@ -124,6 +124,9 @@ func applyOverlay(object string, overlaysList []map[string]string) (string, erro
 	var data any
 	var key string
 	switch kind.Kind {
+	case "ConfigMap":
+		// Generated native configuration is not a Kubernetes resource customization surface.
+		return object, nil
 	case "Deployment":
 		data = &appsv1.Deployment{}
 		key = "deployment"

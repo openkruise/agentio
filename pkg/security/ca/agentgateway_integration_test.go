@@ -54,7 +54,7 @@ import (
 
 // Tests agentgateway certificate issuance and rotation against Agentiod's CA over TLS.
 // TokenReview and target authorization are faked; the proxy obtains its own certificates.
-// Run with AGENTIO_AGENTGATEWAY_BINARY=/absolute/path/to/agentgateway-v1.5.0.
+// Run with AGENTIO_AGENTGATEWAY_BINARY=/absolute/path/to/agentgateway-v1.7.0.
 func TestAgentgatewayNativeCACertificateRotation(t *testing.T) {
 	binary := os.Getenv("AGENTIO_AGENTGATEWAY_BINARY")
 	if binary == "" {
@@ -68,13 +68,13 @@ func TestAgentgatewayNativeCACertificateRotation(t *testing.T) {
 		Version     string `json:"version"`
 		GitRevision string `json:"git_revision"`
 	}
-	const upstreamRevision = "fe6732474a96a0363dfb9822859af4e9bab360fa" // v1.5.0
+	const upstreamRevision = "26f5aebe99a36a037fe54f8080a608aca5547e15" // v1.7.0
 	if err := json.Unmarshal(
 		version,
 		&build,
 	); err != nil ||
-		(build.Version != "1.5.0" && build.GitRevision != upstreamRevision) {
-		t.Fatalf("this contract pins agentgateway 1.5.0, got %s (%v)", version, err)
+		(build.Version != "1.7.0" && !strings.HasPrefix(build.Version, "1.7.0-agentio") && build.GitRevision != upstreamRevision) {
+		t.Fatalf("this contract pins agentgateway 1.7.0, got %s (%v)", version, err)
 	}
 
 	const audience = "gateway-test-ca"
@@ -320,7 +320,7 @@ binds:
 	t.Log("renewed certificate served on new HBONE connections without restarting the process")
 
 	// Pin upstream's fail-closed behavior on renewal errors and its retry recovery.
-	// v1.5.0 replaces the cached certificate state with the CA error, even before
+	// v1.7.0 replaces the cached certificate state with the CA error, even before
 	// the previous certificate expires. Do not promise old-certificate fallback.
 	denyToken.Store(true)
 	agentgatewayEventually(t, 50*time.Second, func() error {

@@ -36,6 +36,9 @@ rules:
     verbs: ["get", "list", "watch", "update"]
   {{- end }}
   {{- if eq .Values.egressGateway.mode "gatewayAPI" }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["patch"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways/status", "gatewayclasses/status"]
     verbs: ["get", "update", "patch"]

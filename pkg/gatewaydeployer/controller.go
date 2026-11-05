@@ -86,7 +86,7 @@ type controllerClients struct {
 	// other managed kind.
 	HPAs kclient.Informer[*autoscalingv2.HorizontalPodAutoscaler]
 	PDBs kclient.Informer[*policyv1.PodDisruptionBudget]
-	// File configuration is supplied by the operator, never adopted or written.
+	// Native input is operator-owned; translated output is Gateway-owned.
 	ConfigMaps kclient.Informer[*corev1.ConfigMap]
 	// Patcher abstracts SSA so tests can capture patches.
 	Patcher func(gvr schema.GroupVersionResource, name, namespace string, data []byte, subresources ...string) error
@@ -125,6 +125,18 @@ func (g serviceGetter) get(name, namespace string) (map[string]string, string, b
 
 type serviceAccountGetter struct {
 	c kclient.Client[*corev1.ServiceAccount]
+}
+
+type configMapGetter struct {
+	c kclient.Informer[*corev1.ConfigMap]
+}
+
+func (g configMapGetter) get(name, namespace string) (map[string]string, string, bool) {
+	cm := g.c.Get(name, namespace)
+	if controllers.IsNil(cm) {
+		return nil, "", false
+	}
+	return cm.GetLabels(), cm.GetResourceVersion(), true
 }
 
 func (g serviceAccountGetter) get(name, namespace string) (map[string]string, string, bool) {
@@ -175,7 +187,8 @@ type DeploymentController struct {
 	kubeVersion     int
 	queue           controllers.Queue
 
-	targets map[string]kindTarget
+	targets             map[string]kindTarget
+	agentgatewaySources AgentgatewaySources
 }
 
 // NewDeploymentController wires event handlers; requeueAll registers the
@@ -192,6 +205,10 @@ func NewDeploymentController(clients controllerClients, renderer *renderer,
 		kubeVersion:     kubeVersion,
 	}
 	d.targets = map[string]kindTarget{
+		"ConfigMap": {
+			gvr: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"},
+			get: configMapGetter{clients.ConfigMaps},
+		},
 		"Deployment":              {gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, get: deploymentGetter{clients.Deployments}},
 		"Service":                 {gvr: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}, get: serviceGetter{clients.Services}},
 		"ServiceAccount":          {gvr: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}, get: serviceAccountGetter{clients.ServiceAccounts}},
@@ -226,6 +243,9 @@ func NewDeploymentController(clients controllerClients, renderer *renderer,
 	clients.PDBs.AddEventHandler(parentHandler)
 	clients.ConfigMaps.AddEventHandler(controllers.FromEventHandler(func(e controllers.Event) {
 		o := e.Latest()
+		if owner := gatewayOwnerRef(o); owner != "" {
+			d.queue.Add(types.NamespacedName{Namespace: o.GetNamespace(), Name: owner})
+		}
 		// This may be a per-Gateway parametersRef or a global GatewayClass default.
 		key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
 		for _, gw := range gatewaysByParamsRef.Lookup(key.String()) {
@@ -234,6 +254,7 @@ func NewDeploymentController(clients controllerClients, renderer *renderer,
 		if o.GetNamespace() != d.systemNamespace {
 			return
 		}
+		d.requeueAgentgateways()
 		// Reconcile both classes when the default label changes or is removed.
 		affectedClasses := map[string]struct{}{}
 		for _, obj := range []controllers.Object{e.Old, e.New} {
@@ -507,7 +528,7 @@ func (d *DeploymentController) setGatewayControllerVersion(gw gatewayv1.Gateway)
 			Namespace:   gw.Namespace,
 			Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)},
 		},
-		"status": map[string]any{"addresses": gw.Status.Addresses},
+		"status": map[string]any{"addresses": append([]gatewayv1.GatewayStatusAddress{}, gw.Status.Addresses...)},
 	})
 	if err != nil {
 		return err
@@ -574,7 +595,7 @@ func (d *DeploymentController) setGatewayStatus(gw gatewayv1.Gateway, input Temp
 		Annotations: map[string]string{ControllerVersionAnnotation: fmt.Sprint(ControllerVersion)},
 	}}
 	patch.Status.Conditions = conditions
-	patch.Status.Addresses = addresses
+	patch.Status.Addresses = append([]gatewayv1.GatewayStatusAddress{}, addresses...)
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err
@@ -669,7 +690,10 @@ func (d *DeploymentController) apply(controller string, doc string, input Templa
 	kind := us.GetKind()
 	target, ok := d.targets[kind]
 	if !ok {
-		return fmt.Errorf("unexpected object kind %q, only Deployment, Service, ServiceAccount, HorizontalPodAutoscaler, PodDisruptionBudget are allowed", kind)
+		return fmt.Errorf(
+			"unexpected object kind %q, only ConfigMap, Deployment, Service, ServiceAccount, HorizontalPodAutoscaler, PodDisruptionBudget are allowed",
+			kind,
+		)
 	}
 
 	objNamespace := us.GetNamespace()
@@ -678,7 +702,8 @@ func (d *DeploymentController) apply(controller string, doc string, input Templa
 	}
 
 	objName := us.GetName()
-	validName := objName == input.DeploymentName || objName == input.ServiceAccount || strings.HasPrefix(objName, input.Name)
+	validName := objName == input.DeploymentName || objName == input.ServiceAccount ||
+		strings.HasPrefix(objName, input.Name) || kind == "ConfigMap" && objName == input.AgentgatewayConfigName
 	if !validName {
 		return fmt.Errorf("object name %q does not match expected pattern (expected %q or %q, or a prefix of %q)",
 			objName, input.DeploymentName, input.ServiceAccount, input.Name)

@@ -461,6 +461,14 @@ func TestAgentgatewayGatewayAPIConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentgatewayDefaultVersion(t *testing.T) {
+	manifest := renderAgentio(t,
+		"--set", "egressGateway.mode=gatewayAPI",
+		"--show-only", "templates/agentiod/injector.yaml",
+	)
+	requireContains(t, manifest, "cr.agentgateway.dev/agentgateway:v1.7.0")
+}
+
 func TestManagedEPE(t *testing.T) {
 	manifest := renderAgentio(t,
 		"--set", "global.tag=0.1.0",

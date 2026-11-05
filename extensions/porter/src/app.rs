@@ -30,6 +30,7 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
     let mut terminate = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
     let mut interrupt = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
     info!(
+        gateway = ?config.gateway,
         node_id = %config.transport.node.id,
         xds_address = %config.transport.address,
         grpc_address = %config.grpc_address,
@@ -45,6 +46,7 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
     let metrics = Metrics::new();
     let client = Client::new(config.cache, metrics.clone());
     let processor = Processor {
+        gateway: config.gateway,
         client: client.clone(),
         cluster_id: config.cluster_id,
         timeout: config.request_timeout,

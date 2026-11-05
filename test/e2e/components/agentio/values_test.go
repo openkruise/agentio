@@ -263,10 +263,13 @@ func TestAgentgatewayChartValues(t *testing.T) {
 	if gw["agentgateway"].(map[string]any)["image"] != config.GatewayImage {
 		t.Fatalf("native image missing: %v", gw)
 	}
+	if _, found := gw["agentgateway"].(map[string]any)["agentioImage"]; found {
+		t.Fatal("native gateways must not require a custom image")
+	}
 	if gw["agentgateway"].(map[string]any)["ca"].(map[string]any)["enabled"] != true {
 		t.Fatal("agentgateway must obtain its own workload certificate")
 	}
-	if values["agentiod"].(map[string]any)["enableSNITrafficPolicy"] != false {
-		t.Fatal("dynamic SNI is outside the native suite's scope")
+	if gw["porter"].(map[string]any)["image"].(map[string]any)["digest"] == "" {
+		t.Fatal("identity-enabled native gateways need the tested Porter image")
 	}
 }
