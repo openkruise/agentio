@@ -129,7 +129,7 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if test.traffic {
+			if tc.traffic {
 				r.PolicyKind = "traffic"
 				r.ExpectedStatus = http.StatusForbidden
 			}
@@ -142,8 +142,8 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 			defer transport.CloseIdleConnections()
 			for range 2 {
 				err := r.requestOn(ctx, transport.RoundTrip, 42)
-				if (err != nil) != test.wantError {
-					t.Fatalf("reused request error=%v, want error=%t", err, test.wantError)
+				if (err != nil) != tc.wantError {
+					t.Fatalf("reused request error=%v, want error=%t", err, tc.wantError)
 				}
 			}
 			if got := connections.Load(); got != 2 {
