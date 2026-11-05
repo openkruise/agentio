@@ -227,7 +227,8 @@ func TestTrafficPolicyEmptyPeerSemantics(t *testing.T) {
 						if ingress && len(body.Rules) != 0 {
 							t.Fatal("unresolved ingress must not match")
 						}
-						if !ingress && (len(body.Rules) != 1 || !slices.Equal(body.Rules[0].Match.DestinationFqdns, []string{"missing.example"}) || len(body.Rules[0].Match.DestinationIps) != 0) {
+						if !ingress &&
+							(len(body.Rules) != 1 || !slices.Equal(body.Rules[0].Match.DestinationFqdns, []string{"missing.example"}) || len(body.Rules[0].Match.DestinationIps) != 0) {
 							t.Fatalf("lost FQDN-only egress: %v", body)
 						}
 					}

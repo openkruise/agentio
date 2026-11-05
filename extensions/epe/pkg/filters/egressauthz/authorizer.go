@@ -74,7 +74,12 @@ func (c Config) Authorize(
 	// DNS evidence describes the original HBONE destination, not a rewritten route.
 	original := stream.Request.OriginalDestination.Addr()
 	if strings.EqualFold(stream.Request.Method, "CONNECT") {
-		original, _ = netip.ParseAddr(stream.Request.Host)
+		if ip, err := netip.ParseAddr(stream.Request.Host); err == nil {
+			original = ip
+		} else {
+			// Hostname authorities provide no original-IP binding for DNS evidence.
+			original = netip.Addr{}
+		}
 	}
 	var last Decision
 	for _, candidate := range candidates {

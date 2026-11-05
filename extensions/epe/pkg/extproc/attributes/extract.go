@@ -128,7 +128,9 @@ func Extract(
 	}
 
 	req := parseHTTPRequest(ctx, extractHeaderMap(headers))
-	if candidates, err := parseDNSCandidates(extractFilterStateString(attrs, FilterStateDestinationDNSCandidates)); err != nil {
+	if candidates, err := parseDNSCandidates(
+		extractFilterStateString(attrs, FilterStateDestinationDNSCandidates),
+	); err != nil {
 		loggerD.Info("invalid destination DNS candidates", "error", err)
 	} else {
 		req.DNSCandidates = candidates

@@ -37,14 +37,24 @@ func TestExtractDNSCandidates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attrs := makeAttrs(t, map[string]any{FilterStateDestinationDNSCandidates: tc.raw})
-			headers := makeHTTPHeaders(map[string]string{":method": "GET", ":authority": "original.example", "x-agentio-destination-dns-candidates": `"spoof.example"`})
+			headers := makeHTTPHeaders(
+				map[string]string{
+					":method":                              "GET",
+					":authority":                           "original.example",
+					"x-agentio-destination-dns-candidates": `"spoof.example"`,
+				},
+			)
 			_, req := Extract(t.Context(), headers, attrs)
 			if !reflect.DeepEqual(req.DNSCandidates, tc.want) || req.Host != "original.example" {
 				t.Fatalf("request=%+v, want=%v", req, tc.want)
 			}
 		})
 	}
-	_, req := Extract(t.Context(), makeHTTPHeaders(map[string]string{"x-agentio-destination-dns-candidates": `"spoof.example"`}), nil)
+	_, req := Extract(
+		t.Context(),
+		makeHTTPHeaders(map[string]string{"x-agentio-destination-dns-candidates": `"spoof.example"`}),
+		nil,
+	)
 	if len(req.DNSCandidates) != 0 {
 		t.Fatal("application header became DNS evidence")
 	}

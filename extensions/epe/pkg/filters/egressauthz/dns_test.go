@@ -19,10 +19,11 @@
 package egressauthz
 
 import (
-	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
-	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"net/netip"
 	"testing"
+
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 )
 
 func TestDNSCandidatesMatchOriginalIPOnly(t *testing.T) {
@@ -38,14 +39,34 @@ func TestDNSCandidatesMatchOriginalIPOnly(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Evaluate(original).Action != Deny || cfg.Evaluate(original, "API.EXAMPLE.COM.").Action != Allow || cfg.Evaluate(netip.MustParseAddrPort("192.0.2.9:80"), "api.example.com").Action != Deny {
+	if cfg.Evaluate(original).Action != Deny || cfg.Evaluate(original, "API.EXAMPLE.COM.").Action != Allow ||
+		cfg.Evaluate(netip.MustParseAddrPort("192.0.2.9:80"), "api.example.com").Action != Deny {
 		t.Fatal("FQDN/port matching failed")
 	}
-	for _, method := range []string{"GET", "CONNECT"} {
-		stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "192.0.2.9", Method: method, Port: 443, OriginalDestination: original, DNSCandidates: []string{"api.example.com"}}}, StreamRuntime: filter.StreamRuntime{Info: &filter.StreamInfo{}}}
+	for _, tc := range []struct {
+		method string
+		host   string
+		want   int
+	}{
+		{"GET", "api.example.com", 1},
+		{"CONNECT", "192.0.2.9", 1},
+		{"CONNECT", "api.example.com", 0},
+	} {
+		stream := &filter.Stream{
+			RequestContext: filter.RequestContext{
+				Request: httpreq.HTTPRequest{
+					Host:                tc.host,
+					Method:              tc.method,
+					Port:                443,
+					OriginalDestination: original,
+					DNSCandidates:       []string{"api.example.com"},
+				},
+			},
+			StreamRuntime: filter.StreamRuntime{Info: &filter.StreamInfo{}},
+		}
 		got, err := cfg.Authorize(t.Context(), stream, []netip.AddrPort{original, rewritten})
-		if err != nil || len(got) != 1 || got[0] != original {
-			t.Fatalf("%s: got=%v err=%v", method, got, err)
+		if err != nil || len(got) != tc.want || (len(got) > 0 && got[0] != original) {
+			t.Fatalf("%s %s: got=%v err=%v", tc.method, tc.host, got, err)
 		}
 	}
 	cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}

@@ -255,7 +255,8 @@ func TestRequestAfterMutationsKeepsOriginalMatchingInput(t *testing.T) {
 			original.OriginalDestination = netip.MustParseAddrPort("192.0.2.1:80")
 			original.DNSCandidates = []string{"api.example.com"}
 			got := RequestAfterMutations(t.Context(), original, tc.ops)
-			if got.Host != tc.host || got.Port != tc.port || got.OriginalDestination.IsValid() != tc.keepOriginal || (len(got.DNSCandidates) > 0) != tc.keepOriginal {
+			if got.Host != tc.host || got.Port != tc.port || got.OriginalDestination.IsValid() != tc.keepOriginal ||
+				(len(got.DNSCandidates) > 0) != tc.keepOriginal {
 				t.Fatalf("effective request=%+v", got)
 			}
 			if original.Host != "example.com" || original.Port != 80 || headers[":authority"] != "example.com" ||

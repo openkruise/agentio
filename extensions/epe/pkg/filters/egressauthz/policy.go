@@ -16,10 +16,11 @@ package egressauthz
 
 import (
 	"fmt"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"net/netip"
 	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Policy preserves one source policy's identity and ordered rules. Name is a
