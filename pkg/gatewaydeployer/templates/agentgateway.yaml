@@ -194,6 +194,7 @@ spec:
         image: {{ $porter.image | quote }}
         imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" | quote }}
         args:
+        - --gateway=agentgateway
         - --domain=$(POD_NAMESPACE).svc.{{ .Values.global.proxy.clusterDomain }}
         - --xds-address={{ .Values.global.gatewayXdsAddress | default .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.caAddress }}
         - --cluster-id={{ .ClusterID }}

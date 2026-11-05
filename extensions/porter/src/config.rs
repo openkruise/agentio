@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, env, net::SocketAddr, time::Duration};
 
 use agentio_porter::{
     discovery::{CacheConfig, TransportConfig},
+    processor::Gateway,
     view,
     wire::ads::Node,
 };
@@ -14,6 +15,7 @@ use clap::Parser;
 use crate::telemetry;
 
 pub struct Config {
+    pub gateway: Gateway,
     pub grpc_address: SocketAddr,
     pub health_address: SocketAddr,
     pub metrics_address: SocketAddr,
@@ -32,6 +34,8 @@ pub struct Config {
     about = "Connection identity and policy discovery for Agentio gateways"
 )]
 struct Args {
+    #[arg(long, value_enum, default_value = "agentio-egress")]
+    gateway: Gateway,
     #[arg(long, default_value_t = 9002)]
     grpc_port: u16,
     #[arg(long, default_value_t = 9003)]
@@ -131,6 +135,7 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         }),
     };
     Ok(Config {
+        gateway: args.gateway,
         grpc_address: SocketAddr::from(([127, 0, 0, 1], args.grpc_port)),
         health_address: SocketAddr::from(([0, 0, 0, 0], args.grpc_health_port)),
         metrics_address: SocketAddr::from(([0, 0, 0, 0], args.metrics_port)),
@@ -181,10 +186,34 @@ mod tests {
             config.transport.node.id,
             "agentio-porter~10.0.0.1~gateway.agentio~agentio.svc.cluster.local"
         );
+        assert_eq!(config.gateway, Gateway::AgentioEgress);
         assert_eq!(config.cache.idle_ttl, Duration::from_secs(600));
         assert_eq!(config.cache.max_entries, 0);
         assert_eq!(config.worker_threads, 2);
         assert_eq!(config.grpc_address.to_string(), "127.0.0.1:9002");
+    }
+
+    #[test]
+    fn selects_gateway_independently_of_traffic_policy() {
+        for gateway in ["agentio-egress", "agentgateway"] {
+            for enabled in ["false", "true"] {
+                let config = config(
+                    &["--gateway", gateway],
+                    &[("ENABLE_TRAFFIC_POLICY", enabled)],
+                )
+                .unwrap();
+                assert_eq!(
+                    config.gateway,
+                    if gateway == "agentgateway" {
+                        Gateway::Agentgateway
+                    } else {
+                        Gateway::AgentioEgress
+                    }
+                );
+                assert_eq!(config.enable_traffic_policy, enabled == "true");
+            }
+        }
+        assert!(config(&["--gateway", "unknown"], &[]).is_err());
     }
 
     #[test]

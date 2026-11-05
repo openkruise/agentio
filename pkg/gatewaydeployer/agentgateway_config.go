@@ -234,7 +234,8 @@ func agentgatewayHTTPListener(
 			"host":        "127.0.0.1:9002",
 			"failureMode": "failClosed",
 			"requestAttributes": map[string]string{
-				"agentio.identity.mode":        `"http"`,
+				"destination.address":          "string(destination.address)",
+				"destination.port":             "destination.port",
 				model.AttributePeerCertificate: `has(source.certificate) ? source.certificate : ""`,
 				model.AttributePeerIP:          "string(source.rawAddress)",
 				model.AttributePeerPrincipal:   `has(source.spiffeId) ? source.spiffeId : ""`,

@@ -12,13 +12,13 @@ Certificate renewal and failure recovery are covered separately by `TestAgentgat
 
 `TestAgentgatewayStaticTLSInterception` checks static SNI-selected interception, static upstream endpoints, private upstream CA trust, and standard request/response external processing after decryption. It then enables Workload identity on the same gateway and checks EPE block/allow decisions after TLS decryption.
 
-`TestAgentgatewayPorterEPEIdentity` checks trusted Workload enrichment through Porter's HTTP identity mode and workload-selected EPE policy, including forged application identity headers.
+`TestAgentgatewayPorterEPEIdentity` checks trusted Workload enrichment through Porter's `--gateway=agentgateway` contract and workload-selected EPE policy, including forged application identity headers.
 
 The suite uses the official agentgateway image without patches. It does not cover Sandbox identity, dynamic SNI decisions or Agentio-specific EPE target binding, which are not implemented for this data plane.
 
 ## Run
 
-Use an isolated Kubernetes cluster with Gateway API v1.4.1 standard CRDs already installed. As with the other suites, provide immutable images for Agentiod, EPE, Porter, ext-proc, ztunnel, proxy-init, and CNI using the component flags or an `-agentio.config` file. Porter must support HTTP identity mode. Set `gateway-image` to an official agentgateway v1.7.0 digest. From `test/e2e`:
+Use an isolated Kubernetes cluster with Gateway API v1.4.1 standard CRDs already installed. As with the other suites, provide immutable images for Agentiod, EPE, Porter, ext-proc, ztunnel, proxy-init, and CNI using the component flags or an `-agentio.config` file. Porter must support `--gateway=agentgateway`. Set `gateway-image` to an official agentgateway v1.7.0 digest. From `test/e2e`:
 
 ```bash
 AGENTIO_E2E=1 go test ./suites/agentgateway -v -timeout=25m \

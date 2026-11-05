@@ -87,6 +87,7 @@ fn seed(c: &Arc<Client>, kind: ResourceKind, name: &str, body: Any) {
 
 fn processor() -> Processor {
     Processor {
+        gateway: crate::processor::Gateway::AgentioEgress,
         client: Client::new(CacheConfig::default(), Metrics::new()),
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
@@ -141,23 +142,20 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
     )
 }
 
-#[tokio::test]
-async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() {
-    let mut p = processor();
-    p.enable_traffic_policy = false;
-    seed(
-        &p.client,
-        ResourceKind::Workload,
-        "/10.0.0.1",
-        workload(None),
-    );
+fn http_request(address: &str, port: f64) -> extproc::ProcessingRequest {
     let mut req = request("", false);
     let fields = &mut req
         .attributes
         .get_mut("envoy.filters.http.ext_proc")
         .unwrap()
         .fields;
-    fields.insert("agentio.identity.mode".into(), view::string("http"));
+    fields.insert("destination.address".into(), view::string(address));
+    fields.insert(
+        "destination.port".into(),
+        prost_types::Value {
+            kind: Some(prost_types::value::Kind::NumberValue(port)),
+        },
+    );
     let headers = &mut req
         .request_headers
         .as_mut()
@@ -168,14 +166,34 @@ async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() 
         .headers;
     headers
         .iter_mut()
-        .find(|header| header.key == ":method")
+        .find(|h| h.key == ":method")
         .unwrap()
         .value = "GET".into();
+    headers
+        .iter_mut()
+        .find(|h| h.key == ":authority")
+        .unwrap()
+        .value = "other.example:8443".into();
     headers.push(extproc::HeaderValue {
         key: "x-agentio-workload-name".into(),
         value: "forged".into(),
         ..Default::default()
     });
+    req
+}
+
+#[tokio::test]
+async fn agentgateway_resolves_identity_without_sni_or_connect_metrics() {
+    let mut p = processor();
+    p.gateway = crate::processor::Gateway::Agentgateway;
+    p.enable_traffic_policy = false;
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(None),
+    );
+    let req = http_request("192.0.2.1", 443.0);
     let result = p.handle(req.clone()).await.unwrap();
     let Some(prost_types::value::Kind::StructValue(agentio)) =
         &result.dynamic_metadata.unwrap().fields["agentio"].kind
@@ -188,25 +206,25 @@ async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() 
     };
     assert_eq!(identity.fields["uid"], view::string(UID));
     assert_eq!(identity.fields["name"], view::string("source"));
+    assert!(!agentio.fields.contains_key("sni"));
+    let metrics = p.client.metrics.encode().unwrap();
+    assert!(!metrics.contains("agentio_porter_connect_requests_total{"));
 
-    let mut unmarked = req.clone();
-    unmarked
+    p.gateway = crate::processor::Gateway::AgentioEgress;
+    let mut forged = req.clone();
+    // Neither the removed request attribute nor application headers can select the gateway.
+    forged
         .attributes
         .get_mut("envoy.filters.http.ext_proc")
         .unwrap()
         .fields
-        .remove("agentio.identity.mode");
+        .insert("agentio.identity.mode".into(), view::string("http"));
     assert_eq!(
-        p.handle(unmarked).await.unwrap_err().code(),
+        p.handle(forged).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
     );
-    p.enable_traffic_policy = true;
-    assert_eq!(
-        p.handle(req.clone()).await.unwrap_err().code(),
-        tonic::Code::InvalidArgument
-    );
-    p.enable_traffic_policy = false;
-
+    p.gateway = crate::processor::Gateway::Agentgateway;
+    let mut req = req;
     let fields = &mut req
         .attributes
         .get_mut("envoy.filters.http.ext_proc")
@@ -220,6 +238,14 @@ async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() 
         p.handle(req.clone()).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
     );
+    assert!(
+        !p.client
+            .metrics
+            .encode()
+            .unwrap()
+            .contains("result=\"canceled\""),
+        "invalid Sandbox attributes must not be counted as canceled processing"
+    );
     let fields = &mut req
         .attributes
         .get_mut("envoy.filters.http.ext_proc")
@@ -232,6 +258,106 @@ async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() 
         view::string("invalid"),
     );
     assert!(!allowed(p.handle(req).await.unwrap()));
+}
+
+#[tokio::test]
+async fn agentgateway_authorizes_the_original_destination_not_http_authority() {
+    let mut p = processor();
+    p.gateway = crate::processor::Gateway::Agentgateway;
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["egress"])),
+    );
+    seed(
+        &p.client,
+        ResourceKind::TrafficPolicy,
+        "egress",
+        any(
+            view::TRAFFIC_POLICY,
+            TrafficPolicy {
+                egress: Some(proto::RuleSet {
+                    rules: vec![proto::Rule {
+                        action: proto::Action::Allow as i32,
+                        r#match: Some(proto::Match {
+                            destination_ips: vec![proto::Address {
+                                address: vec![192, 0, 2, 1],
+                                length: 32,
+                            }],
+                            ports: vec![proto::PortMatch {
+                                protocol: proto::Protocol::Tcp as i32,
+                                port: Some(443),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }),
+                    }],
+                }),
+                ..Default::default()
+            },
+        ),
+    );
+    for (address, port, expect_allowed) in [
+        ("192.0.2.1", 443.0, true),
+        ("192.0.2.2", 443.0, false),
+        ("192.0.2.1", 8443.0, false),
+        ("::ffff:192.0.2.1", 443.0, true),
+        ("2001:db8::1", 443.0, false),
+    ] {
+        assert_eq!(
+            allowed(p.handle(http_request(address, port)).await.unwrap()),
+            expect_allowed,
+            "{address}:{port}"
+        );
+    }
+    // An explicit policy binding remains required, even without a Sandbox.
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(None),
+    );
+    assert!(!allowed(
+        p.handle(http_request("192.0.2.1", 443.0)).await.unwrap()
+    ));
+    p.enable_traffic_policy = false;
+    assert!(allowed(
+        p.handle(http_request("192.0.2.2", 8443.0)).await.unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn agentgateway_rejects_missing_or_invalid_proxy_destination() {
+    let mut p = processor();
+    p.gateway = crate::processor::Gateway::Agentgateway;
+    for (address, port) in [
+        ("example.com", 443.0),
+        ("", 443.0),
+        ("192.0.2.1", 0.0),
+        ("192.0.2.1", 65536.0),
+        ("192.0.2.1", 443.5),
+    ] {
+        assert_eq!(
+            p.handle(http_request(address, port))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+    for field in ["destination.address", "destination.port"] {
+        let mut req = http_request("192.0.2.1", 443.0);
+        req.attributes
+            .get_mut("envoy.filters.http.ext_proc")
+            .unwrap()
+            .fields
+            .remove(field);
+        assert_eq!(
+            p.handle(req).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -691,7 +817,7 @@ async fn policy_logs_identify_destination_binding_and_final_decision() {
     for event in &events {
         assert_eq!(event["level"], "info");
         assert_eq!(event["event"], "traffic_policy_decision");
-        assert_eq!(event["message"], "CONNECT policy evaluated");
+        assert_eq!(event["message"], "request target policy evaluated");
         assert_eq!(event["scope"], "agentio_porter::policy");
         assert_eq!(event["workload"], UID);
         assert_eq!(event["destination"], "192.0.2.1:443");

@@ -17,6 +17,7 @@ package gatewaydeployer
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,7 +94,9 @@ extProc:
 		t.Fatalf("identity must be resolved locally before EPE: %v", porter)
 	}
 	attributes := porter["requestAttributes"].(map[string]any)
-	if attributes["agentio.identity.mode"] != `"http"` ||
+	if attributes["agentio.identity.mode"] != nil ||
+		attributes["destination.address"] != "string(destination.address)" ||
+		attributes["destination.port"] != "destination.port" ||
 		attributes[model.AttributePeerCertificate] != `has(source.certificate) ? source.certificate : ""` {
 		t.Fatalf("Porter must receive the authenticated connection certificate: %v", attributes)
 	}
@@ -110,6 +113,9 @@ extProc:
 		deployment.Spec.Template.Spec.InitContainers[0].Name != "agentio-porter" ||
 		deployment.Spec.Template.Annotations["gateway.agentio.kruise.io/config-hash"] != "generated-v1.7.0-identity" {
 		t.Fatalf("identity mode must deploy Porter and change the rollout marker: %+v", deployment.Spec.Template)
+	}
+	if !slices.Contains(deployment.Spec.Template.Spec.InitContainers[0].Args, "--gateway=agentgateway") {
+		t.Fatal("Porter must select the agentgateway contract at startup")
 	}
 	if deployment.Spec.Template.Spec.Containers[0].Image != "example.com/agentgateway:tested" {
 		t.Fatal("identity mode changed the official proxy image setting")
