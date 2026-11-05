@@ -20,9 +20,20 @@ spec:
     - jsonPath: .spec.priority
       name: Priority
       type: integer
+    - jsonPath: .status.conditions[?(@.type=="Programmed")].status
+      name: Programmed
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.conditions[?(@.type=="Accepted")].status
+      name: Accepted
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="ResolvedRefs")].status
+      name: ResolvedRefs
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -468,7 +479,7 @@ spec:
                 default: 1000
                 description: |-
                   Priority determines the evaluation order when multiple TrafficPolicies
-                  match the same pod. Lower values are evaluated first. When two
+                  match the same pod. Higher values are evaluated first. When two
                   policies share the same priority, the result is implementation-defined.
                 format: int32
                 minimum: 0

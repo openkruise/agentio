@@ -93,7 +93,16 @@ func awaitResult(
 		return got != nil && got.Conditions[0].Status == accepted &&
 			got.Conditions[1].Status == refs && got.Conditions[1].Reason == reason
 	}, true)
-	assert.Equal(t, len(got.Conditions), 2)
+	assert.Equal(t, len(got.Conditions), 3)
+	programmed := got.Conditions[2]
+	assert.Equal(t, programmed.Type, "Programmed")
+	assert.Equal(t, programmed.Status, accepted)
+	if accepted == metav1.ConditionTrue {
+		assert.Equal(t, programmed.Reason, "Programmed")
+	} else {
+		assert.Equal(t, programmed.Reason, got.Conditions[0].Reason)
+		assert.Equal(t, programmed.Message, got.Conditions[0].Message)
+	}
 	for _, condition := range got.Conditions {
 		assert.Equal(t, got.Source.Metadata.Generation, condition.ObservedGeneration)
 	}
@@ -132,7 +141,7 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	r.ConfigMaps, r.Secrets = maps.AsCollection(), secrets.AsCollection()
 	s := profileSource(
 		t,
-		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
+		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}},"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
 		"demo",
 	)
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(s)}, krt.WithStop(t.Context().Done()))
@@ -146,7 +155,38 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ConfigMapNotFound")
 }
 
-func TestUnobservableProfileReferences(t *testing.T) {
+func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
+	for _, namespace := range []string{"demo", ""} {
+		s := profileSource(t, `{}`, namespace)
+		t.Run(s.Kind, func(t *testing.T) {
+			c, _ := testController(t, false)
+			sources := krt.NewMutableCollection(nil, []source{s}, krt.WithStop(t.Context().Done()))
+			profiles := krt.NewCollection(
+				sources.AsCollection(),
+				func(_ krt.HandlerContext, s source) *compiledProfile {
+					return c.compileProfile(s)
+				},
+				krt.WithStop(t.Context().Done()),
+			)
+			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+
+			invalid := s
+			invalid.Profile = s.Profile.DeepCopy()
+			priority := int32(-1)
+			invalid.Profile.Priority = &priority
+			invalid.Metadata.Generation++
+			sources.UpdateObject(invalid)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+
+			s.Metadata.Generation = invalid.Metadata.Generation + 1
+			sources.UpdateObject(s)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+		})
+	}
+}
+
+func TestProfileReferenceCheckScope(t *testing.T) {
 	c, _ := testController(t, true)
 	for _, tc := range []struct {
 		name      string
@@ -157,9 +197,9 @@ func TestUnobservableProfileReferences(t *testing.T) {
 		reason    string
 	}{
 		{"scoped secret", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"kind":"Secret","name":"cred"},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "OutsideWatchScope"},
-		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
-		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
-		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
+		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
+		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
+		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
 		{"disabled transform", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"disabled":true}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
 		{"invalid global configmap", "", `{"inputs":[{"name":"config","configMap":{"name":"config"}}]}`, metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked"},
 	} {
@@ -210,6 +250,34 @@ func TestTrafficReferencesAndValidation(t *testing.T) {
 	s.Traffic = invalid
 	sources.UpdateObject(s)
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+}
+
+func TestTrafficProgrammedTracksSpecChanges(t *testing.T) {
+	for _, namespace := range []string{"demo", ""} {
+		kind, resource := "TrafficPolicy", "trafficpolicies"
+		if namespace == "" {
+			kind, resource = "GlobalTrafficPolicy", "globaltrafficpolicies"
+		}
+		t.Run(kind, func(t *testing.T) {
+			c, _ := testController(t, false)
+			s := *policySource(metav1.ObjectMeta{Name: "test", Namespace: namespace, Generation: 3},
+				kind, resource, nil, &agents.TrafficPolicySpec{})
+			sources := krt.NewMutableCollection(nil, []source{s}, krt.WithStop(t.Context().Done()))
+			results := krt.NewCollection(sources.AsCollection(), c.trafficStatus, krt.WithStop(t.Context().Done()))
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+
+			invalid := s
+			invalid.Traffic = s.Traffic.DeepCopy()
+			invalid.Traffic.Priority = -1
+			invalid.Metadata.Generation++
+			sources.UpdateObject(invalid)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+
+			s.Metadata.Generation = invalid.Metadata.Generation + 1
+			sources.UpdateObject(s)
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+		})
+	}
 }
 
 func TestSourcesExcludeStatusUpdates(t *testing.T) {

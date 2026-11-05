@@ -38,7 +38,7 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 	sandbox := model.Sandbox{UID: "inline-tls", Namespace: "demo"}
 	await := func(want *extensionsv1.SniTrafficPolicy) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			resource, found := currentSnapshot(
 				t,
 				fixture.compiler,
@@ -95,7 +95,7 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: profile.Spec.Rules}
 	fixture.securityProfiles.ConditionalUpdateObject(profile)
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		failures := fixture.compiler.Failures()
 		return failures["SecurityProfile/"+profile.ResourceName()] != "" &&
 			failures["SandboxPolicies/"+sandbox.UID] != ""
