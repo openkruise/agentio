@@ -48,10 +48,12 @@ struct Rule {
 struct SniMatch {
     #[serde(default)]
     sni: Vec<String>,
+    #[serde(default)]
+    ports: Vec<u32>,
 }
 
 impl Policy {
-    pub fn evaluate(&self, sni: Option<&str>) -> Action {
+    pub fn evaluate(&self, sni: Option<&str>, port: Option<u32>) -> Action {
         // This JSON crosses the CONNECT boundary. Reject a malformed policy as a
         // whole, including invalid rules after the first match.
         if self
@@ -59,6 +61,11 @@ impl Policy {
             .iter()
             .flat_map(|r| &r.r#match.sni)
             .any(|p| !valid_pattern(p))
+            || self
+                .rules
+                .iter()
+                .flat_map(|r| &r.r#match.ports)
+                .any(|p| !(1..=65535).contains(p))
         {
             return Action::Deny;
         }
@@ -66,7 +73,10 @@ impl Policy {
         let name = name.strip_suffix('.').unwrap_or(name);
         self.rules
             .iter()
-            .find(|r| r.r#match.sni.iter().any(|p| pattern_matches(p, name)))
+            .find(|r| {
+                (r.r#match.ports.is_empty() || port.is_some_and(|p| r.r#match.ports.contains(&p)))
+                    && r.r#match.sni.iter().any(|p| pattern_matches(p, name))
+            })
             .map_or(Action::Passthrough, |r| r.action)
     }
 }
@@ -129,9 +139,9 @@ mod tests {
             ("example.com.evil", Action::Deny),
             ("", Action::Passthrough),
         ] {
-            assert_eq!(policy.evaluate(Some(name)), want, "{name}");
+            assert_eq!(policy.evaluate(Some(name), None), want, "{name}");
         }
-        assert_eq!(policy.evaluate(None), Action::Passthrough);
+        assert_eq!(policy.evaluate(None, None), Action::Passthrough);
     }
 
     #[test]
@@ -142,7 +152,45 @@ mod tests {
             r#"{"rules":[{"match":{"sni":["exact.test"]},"action":"SNI_ACTION_TLS_TERMINATION"}]}"#,
         ] {
             let policy: Policy = serde_json::from_str(json).unwrap();
-            assert_eq!(policy.evaluate(Some("different.test")), Action::Passthrough);
+            assert_eq!(
+                policy.evaluate(Some("different.test"), None),
+                Action::Passthrough
+            );
+        }
+    }
+
+    #[test]
+    fn original_destination_port_restricts_each_ordered_match() {
+        let policy: Policy = serde_json::from_str(r#"{"rules":[
+          {"match":{"sni":["skip.example.com"],"ports":[443,8443]},"action":"SNI_ACTION_PASSTHROUGH"},
+          {"match":{"sni":["*.example.com"],"ports":[443]},"action":"SNI_ACTION_TLS_TERMINATION"},
+          {"match":{"sni":["*"]},"action":"SNI_ACTION_DENY"}
+        ]}"#).unwrap();
+        for (name, port, want) in [
+            (Some("skip.example.com"), Some(443), Action::Passthrough),
+            (Some("skip.example.com"), Some(8443), Action::Passthrough),
+            (Some("skip.example.com"), Some(9443), Action::Deny),
+            (Some("api.example.com"), Some(443), Action::Terminate),
+            (Some("api.example.com"), Some(8443), Action::Deny),
+            (Some("api.example.com"), None, Action::Deny),
+            (None, Some(443), Action::Passthrough),
+        ] {
+            assert_eq!(policy.evaluate(name, port), want, "{name:?}:{port:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_later_port_rejects_entire_policy() {
+        for port in [0, 65536] {
+            let policy: Policy = serde_json::from_value(serde_json::json!({"rules":[
+                {"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},
+                {"match":{"sni":["*"],"ports":[port]},"action":"SNI_ACTION_DENY"}
+            ]}))
+            .unwrap();
+            assert_eq!(
+                policy.evaluate(Some("api.example.com"), Some(443)),
+                Action::Deny
+            );
         }
     }
 
@@ -178,7 +226,7 @@ mod tests {
             ]});
             let policy: Policy = serde_json::from_value(json).unwrap();
             assert_eq!(
-                policy.evaluate(Some("allowed.test")),
+                policy.evaluate(Some("allowed.test"), None),
                 Action::Deny,
                 "{pattern}"
             );

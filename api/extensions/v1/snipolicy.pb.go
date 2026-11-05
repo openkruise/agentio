@@ -248,7 +248,10 @@ type SniMatch struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Values are ORed. Supported forms are exact names, a leading wildcard,
 	// and "*" for any non-empty SNI.
-	Sni           []string `protobuf:"bytes,1,rep,name=sni,proto3" json:"sni,omitempty"`
+	Sni []string `protobuf:"bytes,1,rep,name=sni,proto3" json:"sni,omitempty"`
+	// Original destination ports are ORed and ANDed with SNI. Empty means any
+	// port; a missing destination port never matches a non-empty list.
+	Ports         []uint32 `protobuf:"varint,2,rep,packed,name=ports,proto3" json:"ports,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -290,6 +293,13 @@ func (x *SniMatch) GetSni() []string {
 	return nil
 }
 
+func (x *SniMatch) GetPorts() []uint32 {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
 var File_api_extensions_v1_snipolicy_proto protoreflect.FileDescriptor
 
 const file_api_extensions_v1_snipolicy_proto_rawDesc = "" +
@@ -302,9 +312,10 @@ const file_api_extensions_v1_snipolicy_proto_rawDesc = "" +
 	"\x05rules\x18\x01 \x03(\v2(.kruise.networking.extensions.v1.SniRuleR\x05rules\"\x8e\x01\n" +
 	"\aSniRule\x12?\n" +
 	"\x05match\x18\x01 \x01(\v2).kruise.networking.extensions.v1.SniMatchR\x05match\x12B\n" +
-	"\x06action\x18\x02 \x01(\x0e2*.kruise.networking.extensions.v1.SniActionR\x06action\"\x1c\n" +
+	"\x06action\x18\x02 \x01(\x0e2*.kruise.networking.extensions.v1.SniActionR\x06action\"2\n" +
 	"\bSniMatch\x12\x10\n" +
-	"\x03sni\x18\x01 \x03(\tR\x03sni*x\n" +
+	"\x03sni\x18\x01 \x03(\tR\x03sni\x12\x14\n" +
+	"\x05ports\x18\x02 \x03(\rR\x05ports*x\n" +
 	"\tSniAction\x12\x1a\n" +
 	"\x16SNI_ACTION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aSNI_ACTION_TLS_TERMINATION\x10\x01\x12\x1a\n" +

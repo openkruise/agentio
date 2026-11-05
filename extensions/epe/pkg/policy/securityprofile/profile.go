@@ -37,6 +37,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // pathMatcher is a pre-compiled path matcher for a single PathMatch entry.
@@ -306,8 +307,14 @@ func (cr *Rule) MatchingIndex(req *httpreq.HTTPRequest) int {
 // compiled profile would apply some of its author's intent and silently drop
 // the rest.
 func compileRules(rules []v1alpha1.SecurityRule) ([]Rule, error) {
-	compiled := make([]Rule, len(rules))
-	for i, rule := range rules {
+	compiled := make([]Rule, 0, len(rules))
+	for _, rule := range rules {
+		if err := policy.ValidateTLSRule(rule); err != nil {
+			return nil, fmt.Errorf("rule %q: %w", rule.Name, err)
+		}
+		if rule.Actions.TLS != nil {
+			continue
+		}
 		cr := Rule{
 			Name:    rule.Name,
 			Actions: rule.Actions,
@@ -319,7 +326,7 @@ func compileRules(rules []v1alpha1.SecurityRule) ([]Rule, error) {
 			}
 			cr.Matches = append(cr.Matches, cm)
 		}
-		compiled[i] = cr
+		compiled = append(compiled, cr)
 	}
 	return compiled, nil
 }

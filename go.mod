@@ -17,7 +17,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/miekg/dns v1.1.72
-	github.com/openkruise/agents-api v0.7.0-alpha1
+	github.com/openkruise/agents-api v0.7.0-alpha1.0.20261105015851-cf861932520e
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	go.uber.org/atomic v1.11.0

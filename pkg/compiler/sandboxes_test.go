@@ -83,9 +83,14 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 				if err := manifest.Extensions[i].UnmarshalTo(payload); err != nil {
 					t.Fatal(err)
 				}
-				if len(payload.Rules) != 1 ||
-					payload.Rules[0].Action != extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION ||
-					!reflect.DeepEqual(payload.Rules[0].GetMatch().GetSni(), want) {
+				var got []string
+				for _, rule := range payload.Rules {
+					if rule.Action != extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION {
+						return false
+					}
+					got = append(got, rule.GetMatch().GetSni()...)
+				}
+				if !reflect.DeepEqual(got, want) {
 					return false
 				}
 			}

@@ -41,6 +41,7 @@ def config(port, legacy_port, plain_port, tls_port, cert, key):
     inner = {"name": "inner", "internal_listener": {}, "listener_filters_timeout": "1s",
         "continue_on_listener_filters_timeout": False,
         "listener_filters": [
+            {"name": "envoy.filters.listener.original_dst", "typed_config": typed("envoy.extensions.filters.listener.original_dst.v3.OriginalDst")},
             {"name": "envoy.filters.listener.tls_inspector", "typed_config": typed("envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector")},
             {"name": "envoy.filters.listener.http_inspector", "typed_config": typed("envoy.extensions.filters.listener.http_inspector.v3.HttpInspector")},
             {"name": "envoy.filters.listener.dynamic_modules", "typed_config": typed(
@@ -54,6 +55,9 @@ def config(port, legacy_port, plain_port, tls_port, cert, key):
     # A production ext_proc integration can use %DYNAMIC_METADATA(...)% instead.
     state = {"name": "envoy.filters.http.set_filter_state", "typed_config": typed(
         "envoy.extensions.filters.http.set_filter_state.v3.Config", on_request_headers=[{
+            "object_key": "envoy.filters.listener.original_dst.local_ip",
+            "shared_with_upstream": "ONCE",
+            "format_string": {"text_format_source": {"inline_string": "%REQ(:AUTHORITY)%"}}}, {
             "object_key": "agentio.sni.policy", "factory_key": "envoy.hashable_string",
             "shared_with_upstream": "ONCE", "skip_if_empty": True,
             "format_string": {"text_format_source": {"inline_string": "%REQ(x-agentio-sni-policy)%"}}}])}
@@ -108,7 +112,7 @@ class Echo(socketserver.StreamRequestHandler):
 def connect(port, policy):
     sock = socket.create_connection(("127.0.0.1", port), timeout=5)
     headers = "" if policy is None else f"x-agentio-sni-policy: {policy}\r\n"
-    sock.sendall((f"CONNECT origin.example:443 HTTP/1.1\r\nHost: origin.example:443\r\n{headers}\r\n").encode())
+    sock.sendall((f"CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n{headers}\r\n").encode())
     response = bytearray()
     while not response.endswith(b"\r\n\r\n"):
         byte = sock.recv(1)
@@ -189,6 +193,8 @@ def main():
                 ("no match", policy, "other.test", "tls", False),
                 ("no SNI", policy, None, "tls", False),
                 ("explicit deny", policy, "denied.example.com", "deny", False),
+                ("original port match", '{"rules":[{"match":{"sni":["*"],"ports":[443]},"action":"SNI_ACTION_DENY"}]}', "api.example.com", "deny", False),
+                ("original port mismatch", '{"rules":[{"match":{"sni":["*"],"ports":[8443]},"action":"SNI_ACTION_DENY"}]}', "api.example.com", "tls", False),
                 ("empty policy", "{}", "api.example.com", "tls", False),
                 ("missing policy", None, "api.example.com", "deny", False),
                 ("malformed policy", "not-json", "api.example.com", "deny", False),

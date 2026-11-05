@@ -163,6 +163,8 @@ github.com/openkruise/agents-api v0.6.1-0.20261020035116-99864256d5f2 h1:7xOEPv3
 github.com/openkruise/agents-api v0.6.1-0.20261020035116-99864256d5f2/go.mod h1:miBwK1VGqScPXj/0cqow44tIjRyw5FyY9jcMFcfTlOI=
 github.com/openkruise/agents-api v0.7.0-alpha1 h1:IlCFy/XKdzmXh+k6YeZCqCDmiRJuNrKNTaHfKVQ+J3g=
 github.com/openkruise/agents-api v0.7.0-alpha1/go.mod h1:miBwK1VGqScPXj/0cqow44tIjRyw5FyY9jcMFcfTlOI=
+github.com/openkruise/agents-api v0.7.0-alpha1.0.20261105015851-cf861932520e h1:zguxOD7w8sWpZGAt646nhBDrGPjBmsI14RMU9S2h71c=
+github.com/openkruise/agents-api v0.7.0-alpha1.0.20261105015851-cf861932520e/go.mod h1:miBwK1VGqScPXj/0cqow44tIjRyw5FyY9jcMFcfTlOI=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240409071808-615f978279ca h1:ujRGEVWJEoaxQ+8+HMl8YEpGaDAgohgZxJ5S+d2TTFQ=

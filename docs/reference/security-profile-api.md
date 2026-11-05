@@ -12,7 +12,7 @@ Resource types in `agents.kruise.io/v1alpha1`:
 
 ## GlobalSecurityProfile
 
-GlobalSecurityProfile defines cluster-scoped L7 security policy for
+GlobalSecurityProfile defines cluster-scoped TLS and HTTP security policy for
 selected Pods in all namespaces. Global and namespaced profiles share the
 same priority ordering.
 
@@ -49,7 +49,7 @@ same priority ordering.
 <td>object</td>
 <td>
 
-SecurityProfileSpec defines L7 security policy for selected Pods.
+SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
 
 </td>
 <td>false</td>
@@ -69,7 +69,7 @@ SecurityProfileStatus captures the observed state of a SecurityProfile.
 
 ### GlobalSecurityProfile.spec
 
-SecurityProfileSpec defines L7 security policy for selected Pods.
+SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
 
 <table>
 <thead>
@@ -98,7 +98,7 @@ selector matches every Pod in scope.
 <td>
 
 Audit defines the audit actions inherited by rules that do not configure
-their own Audit list.
+their own Audit list. Applies only to HTTP rules, never TLS rules.
 
 </td>
 <td>false</td>
@@ -134,9 +134,10 @@ namespace. Defaults to DefaultSecurityProfilePriority.
 <td>[]object</td>
 <td>
 
-Rules is the ordered rule chain. Every matching rule executes until an
-action terminates the request. Rules from matching profiles are combined
-in profile evaluation order. An empty list forwards all traffic.
+Rules is the ordered rule chain. TLS selection uses the first matching
+rule; HTTP processing accumulates matching HTTP rules until a terminal
+action. Rules from matching profiles are combined in profile evaluation
+order. An empty list preserves the existing default traffic behavior.
 
 </td>
 <td>false</td>
@@ -586,7 +587,11 @@ uses its own namespace. A GlobalSecurityProfile must set this field.
 
 SecurityRule is one entry in the ordered rule chain.
 
-Every matching rule executes in order until an action terminates the
+During TLS connection selection, the first matching rule decides: explicit
+TLS rules allow only domains and ports in each match entry, and deny or
+pass through matched connections. HTTP rules select TLS termination when the matching entry
+has no schemes or includes https. HTTP-only conditions are deferred.
+During HTTP processing, every matching HTTP rule executes until an action terminates the
 request. Mutations from earlier rules are preserved by Bypass and discarded
 by Block. A wildcard match does not prevent later, more specific rules from
 matching.
@@ -728,6 +733,17 @@ immediate response or a fail-closed error occurs. For example:
 MCPToolPolicy defines inline MCP tool access control rules.
 Non-terminal when the policy allows; terminal (like Block) when
 denied.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b><a href="#globalsecurityprofilespecrulesactionstls">tls</a></b></td>
+<td>object</td>
+<td>
+
+TLS selects a connection action using visible SNI and the original
+destination port. This rule does not participate in HTTP processing.
 
 </td>
 <td>false</td>
@@ -1739,6 +1755,38 @@ StatusCode is the HTTP status returned to the client. Defaults to 403.
 </tbody>
 </table>
 
+### GlobalSecurityProfile.spec.rules[].actions.tls
+
+TLS selects a connection action using visible SNI and the original
+destination port. This rule does not participate in HTTP processing.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>action</b></td>
+<td>enum</td>
+<td>
+
+Action is required and has no default. Deny rejects the connection;
+it does not promise an HTTP response or a specific TLS alert.
+Passthrough forwards without decryption or HTTP rule processing.
+Both actions stop further TLS rule selection.
+
+<i>Enum</i>: Deny, Passthrough<br/>
+</td>
+<td>true</td>
+</tr>
+</tbody>
+</table>
+
 ### GlobalSecurityProfile.spec.rules[].actions.tokenTransformation
 
 TokenTransformation rewrites request credentials.
@@ -2567,8 +2615,9 @@ Domains is required. All other fields further restrict the match.
 <td>[]string</td>
 <td>
 
-Domains lists target host names. Supports "*" (any domain) and
-"*.example.com" wildcard prefixes.
+Domains lists target host names. Supports "*" (any non-empty domain) and
+"*.example.com" wildcard prefixes. TLS connections match visible SNI;
+HTTP requests match Host / authority. Missing SNI never matches.
 
 CAUTION: wildcard and specific domains can both match the same request
 under Default Continue semantics, so rule ordering matters.
@@ -2613,7 +2662,9 @@ string is excluded from path matching.
 <td>[]integer</td>
 <td>
 
-Ports lists destination ports. Multiple entries are ORed.
+Ports lists destination ports. Multiple entries are ORed. Omitted or
+empty ports impose no restriction. TLS connection selection uses the
+original destination port, with no default.
 
 An explicit authority port is used directly. Otherwise, HTTP defaults
 to 80 and HTTPS defaults to 443. Other schemes have no default port.
@@ -2921,7 +2972,7 @@ with respect to the current state of the instance.
 
 ## SecurityProfile
 
-SecurityProfile defines namespaced L7 security policy for selected Pods.
+SecurityProfile defines namespaced TLS and HTTP security policy for selected Pods.
 
 <table>
 <thead>
@@ -2956,7 +3007,7 @@ SecurityProfile defines namespaced L7 security policy for selected Pods.
 <td>object</td>
 <td>
 
-SecurityProfileSpec defines L7 security policy for selected Pods.
+SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
 
 </td>
 <td>false</td>
@@ -2976,7 +3027,7 @@ SecurityProfileStatus captures the observed state of a SecurityProfile.
 
 ### SecurityProfile.spec
 
-SecurityProfileSpec defines L7 security policy for selected Pods.
+SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
 
 <table>
 <thead>
@@ -3005,7 +3056,7 @@ selector matches every Pod in scope.
 <td>
 
 Audit defines the audit actions inherited by rules that do not configure
-their own Audit list.
+their own Audit list. Applies only to HTTP rules, never TLS rules.
 
 </td>
 <td>false</td>
@@ -3041,9 +3092,10 @@ namespace. Defaults to DefaultSecurityProfilePriority.
 <td>[]object</td>
 <td>
 
-Rules is the ordered rule chain. Every matching rule executes until an
-action terminates the request. Rules from matching profiles are combined
-in profile evaluation order. An empty list forwards all traffic.
+Rules is the ordered rule chain. TLS selection uses the first matching
+rule; HTTP processing accumulates matching HTTP rules until a terminal
+action. Rules from matching profiles are combined in profile evaluation
+order. An empty list preserves the existing default traffic behavior.
 
 </td>
 <td>false</td>
@@ -3493,7 +3545,11 @@ uses its own namespace. A GlobalSecurityProfile must set this field.
 
 SecurityRule is one entry in the ordered rule chain.
 
-Every matching rule executes in order until an action terminates the
+During TLS connection selection, the first matching rule decides: explicit
+TLS rules allow only domains and ports in each match entry, and deny or
+pass through matched connections. HTTP rules select TLS termination when the matching entry
+has no schemes or includes https. HTTP-only conditions are deferred.
+During HTTP processing, every matching HTTP rule executes until an action terminates the
 request. Mutations from earlier rules are preserved by Bypass and discarded
 by Block. A wildcard match does not prevent later, more specific rules from
 matching.
@@ -3635,6 +3691,17 @@ immediate response or a fail-closed error occurs. For example:
 MCPToolPolicy defines inline MCP tool access control rules.
 Non-terminal when the policy allows; terminal (like Block) when
 denied.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b><a href="#securityprofilespecrulesactionstls">tls</a></b></td>
+<td>object</td>
+<td>
+
+TLS selects a connection action using visible SNI and the original
+destination port. This rule does not participate in HTTP processing.
 
 </td>
 <td>false</td>
@@ -4646,6 +4713,38 @@ StatusCode is the HTTP status returned to the client. Defaults to 403.
 </tbody>
 </table>
 
+### SecurityProfile.spec.rules[].actions.tls
+
+TLS selects a connection action using visible SNI and the original
+destination port. This rule does not participate in HTTP processing.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>action</b></td>
+<td>enum</td>
+<td>
+
+Action is required and has no default. Deny rejects the connection;
+it does not promise an HTTP response or a specific TLS alert.
+Passthrough forwards without decryption or HTTP rule processing.
+Both actions stop further TLS rule selection.
+
+<i>Enum</i>: Deny, Passthrough<br/>
+</td>
+<td>true</td>
+</tr>
+</tbody>
+</table>
+
 ### SecurityProfile.spec.rules[].actions.tokenTransformation
 
 TokenTransformation rewrites request credentials.
@@ -5474,8 +5573,9 @@ Domains is required. All other fields further restrict the match.
 <td>[]string</td>
 <td>
 
-Domains lists target host names. Supports "*" (any domain) and
-"*.example.com" wildcard prefixes.
+Domains lists target host names. Supports "*" (any non-empty domain) and
+"*.example.com" wildcard prefixes. TLS connections match visible SNI;
+HTTP requests match Host / authority. Missing SNI never matches.
 
 CAUTION: wildcard and specific domains can both match the same request
 under Default Continue semantics, so rule ordering matters.
@@ -5520,7 +5620,9 @@ string is excluded from path matching.
 <td>[]integer</td>
 <td>
 
-Ports lists destination ports. Multiple entries are ORed.
+Ports lists destination ports. Multiple entries are ORed. Omitted or
+empty ports impose no restriction. TLS connection selection uses the
+original destination port, with no default.
 
 An explicit authority port is used directly. Otherwise, HTTP defaults
 to 80 and HTTPS defaults to 443. Other schemes have no default port.
