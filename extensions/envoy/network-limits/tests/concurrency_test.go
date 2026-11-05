@@ -33,7 +33,7 @@ func concurrencyConfig(t *testing.T, l object, combined bool) {
 		"rate_limits": []any{
 			object{
 				"actions": []any{
-					object{"filter_state": object{"key": "agentio.sandbox.uid", "descriptor_key": "sandbox"}},
+					object{"filter_state": object{"key": "agentio.sandbox.id", "descriptor_key": "sandbox"}},
 				},
 			},
 			object{

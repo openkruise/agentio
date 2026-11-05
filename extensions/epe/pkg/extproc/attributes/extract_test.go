@@ -591,7 +591,7 @@ func TestExtractPolicyIdentitiesFromCapturedContext(t *testing.T) {
 		fields := map[string]any{FilterStateWorkloadNamespace: "ns", FilterStateWorkloadName: "pod"}
 		if captured {
 			fields[FilterStateWorkloadUID] = "native:workload"
-			fields[FilterStateSandboxUID] = "kruise:sandbox"
+			fields[FilterStateSandboxID] = "kruise:sandbox"
 		}
 		caller, _ := Extract(context.Background(), headers, makeAttrs(t, fields))
 		subject := caller.Subject

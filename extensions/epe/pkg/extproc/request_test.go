@@ -75,7 +75,7 @@ func TestWorkloadBindingBeforePolicyResolution(t *testing.T) {
 }
 
 func TestUIDOnlyIdentityReachesResolver(t *testing.T) {
-	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxUID} {
+	for _, attribute := range []string{attributes.FilterStateWorkloadUID, attributes.FilterStateSandboxID} {
 		t.Run(attribute, func(t *testing.T) {
 			called := false
 			unavailable := errors.New("binding unavailable")

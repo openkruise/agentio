@@ -888,11 +888,11 @@
                             "sharedWithUpstream": "ONCE"
                           },
                           {
-                            "objectKey": "agentio.sandbox.uid",
+                            "objectKey": "agentio.sandbox.id",
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%REQ(X-AGENTIO-SANDBOX-UID)%"
+                                "inlineString": "%REQ(X-AGENTIO-SANDBOX-ID)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -949,7 +949,7 @@
                           "responseTrailerMode": "SKIP"
                         },
                         "requestAttributes": [
-                          "filter_state['agentio.sandbox.uid']",
+                          "filter_state['agentio.sandbox.id']",
                           "filter_state['agentio.downstream.ip']",
                           "filter_state['agentio.peer.principal']",
                           "filter_state['agentio.peer.certificate']"
@@ -1513,11 +1513,11 @@
                       "skipIfEmpty": true
                     },
                     {
-                      "objectKey": "agentio.sandbox.uid",
+                      "objectKey": "agentio.sandbox.id",
                       "factoryKey": "envoy.hashable_string",
                       "formatString": {
                         "textFormatSource": {
-                          "inlineString": "%FILTER_STATE(agentio.sandbox.uid:PLAIN)%"
+                          "inlineString": "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
                         },
                         "omitEmptyValues": true
                       },

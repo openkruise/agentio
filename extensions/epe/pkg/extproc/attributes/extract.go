@@ -46,7 +46,7 @@ const (
 	// FilterStateWorkloadNamespace carries the source workload namespace captured on HBONE CONNECT.
 	FilterStateWorkloadNamespace = "filter_state['agentio.workload.namespace']"
 	FilterStateWorkloadUID       = "filter_state['agentio.workload.uid']"
-	FilterStateSandboxUID        = "filter_state['agentio.sandbox.uid']"
+	FilterStateSandboxID         = "filter_state['agentio.sandbox.id']"
 	// AttrSourceAddress is Envoy's standard CEL attribute for the
 	// connection caller (the source workload, from the egress gateway's
 	// perspective). It is delivered as "<ip>:<port>"; only the IP half is
@@ -99,7 +99,7 @@ func Extract(
 		IP:        extractWorkloadIP(attrs),
 	}
 	caller := filter.CallerContext{}
-	if uid := extractFilterStateString(attrs, FilterStateSandboxUID); uid != "" {
+	if uid := extractFilterStateString(attrs, FilterStateSandboxID); uid != "" {
 		caller.Subject.Sandbox = &subject.Sandbox{UID: uid}
 	}
 	labelsKey := FilterStateSandboxLabels

@@ -313,7 +313,7 @@ func (r *runner) requestOn(ctx context.Context, roundTrip func(*http.Request) (*
 		Method: http.MethodConnect,
 		URL:    &url.URL{Scheme: "https", Host: r.Target},
 		Host:   r.Target,
-		Header: http.Header{"X-Agentio-Sandbox-Uid": []string{"kruise:" + resourceName(i)}},
+		Header: http.Header{"X-Agentio-Sandbox-Id": []string{"kruise:" + resourceName(i)}},
 		Body:   reader,
 	}
 	response, err := roundTrip(req.WithContext(ctx))

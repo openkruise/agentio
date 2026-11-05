@@ -655,7 +655,7 @@ func message(mode string, i int) *extproc.ProcessingRequest {
 		}
 	}
 	if mode == "sandbox" {
-		attrs.Fields["filter_state['agentio.sandbox.uid']"] = structpb.NewStringValue(
+		attrs.Fields["filter_state['agentio.sandbox.id']"] = structpb.NewStringValue(
 			fmt.Sprintf("kruise:sandbox-%05d", i),
 		)
 	}

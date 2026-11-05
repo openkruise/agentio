@@ -498,7 +498,7 @@ Use the same `rateLimits[].actions[]` and `descriptors[].entries[]` grouping for
 connectRateLimit:
   rateLimits:
     - actions:
-        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.id, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -534,7 +534,7 @@ Burst is already supported through `maxTokens`: for example, `maxTokens: 100`, `
 connectConcurrencyLimit:
   rateLimits:
     - actions:
-        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.id, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -576,7 +576,7 @@ egressGateways:
       rateLimits:
         - actions:
             - filterState:
-                key: agentio.sandbox.uid
+                key: agentio.sandbox.id
                 descriptorKey: sandbox
       descriptors:
         - entries:

@@ -155,7 +155,7 @@ func TestWorkloadStateTLSRelay(t *testing.T) {
 		t.Fatal("unused workload instance must not be relayed")
 	}
 	for _, key := range []string{
-		model.FilterStateSandboxUID, "sandbox.token", "agentio.sandbox.metadata",
+		model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
 		model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
 		model.FilterStateWorkloadUID,
 	} {
@@ -166,7 +166,7 @@ func TestWorkloadStateTLSRelay(t *testing.T) {
 			state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE {
 			t.Errorf("%s must survive TLS termination but stop sharing at main_forward: %v", key, state)
 		}
-		if wantSkip := key != model.FilterStateSandboxUID &&
+		if wantSkip := key != model.FilterStateSandboxID &&
 			key != "sandbox.token"; state.GetSkipIfEmpty() != wantSkip {
 			t.Errorf("%s skip_if_empty = %v, want %v", key, state.GetSkipIfEmpty(), wantSkip)
 		}

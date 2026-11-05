@@ -129,7 +129,7 @@ func TestBandwidthValidationAtBothConfigEntrypoints(t *testing.T) {
 	valid := `bandwidthLimit:
   rateLimits:
   - actions:
-    - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
+    - filterState: {key: agentio.sandbox.id, descriptorKey: sandbox}
     - genericKey: {descriptorKey: class, descriptorValue: default}
   descriptors:
   - entries: [{key: sandbox}, {key: class, value: default}]
@@ -148,7 +148,7 @@ func TestBandwidthValidationAtBothConfigEntrypoints(t *testing.T) {
 		{"burst without download", strings.Replace(valid, "uploadBytesPerSecond: 100", "uploadBytesPerSecond: 100, downloadBurstBytes: 500", 1), false},
 		{"zero rate", strings.Replace(valid, "uploadBytesPerSecond: 100", "uploadBytesPerSecond: 0", 1), false},
 		{"missing rate", strings.Replace(valid, "{uploadBytesPerSecond: 100}", "{}", 1), false},
-		{"empty source", strings.Replace(valid, "key: agentio.sandbox.uid", `key: ""`, 1), false},
+		{"empty source", strings.Replace(valid, "key: agentio.sandbox.id", `key: ""`, 1), false},
 		{"wrong order", strings.Replace(valid, "[{key: sandbox}, {key: class, value: default}]", "[{key: class, value: default}, {key: sandbox}]", 1), false},
 		{"two sources", strings.Replace(valid, "    - genericKey:", "      genericKey:", 1), false},
 		{"zero capacity", valid + "  maxDynamicBuckets: 0\n", false},
