@@ -229,6 +229,7 @@ func agentgatewayHTTPListener(
 	policies := map[string]any{}
 	if agentgatewayWorkloadIdentity(gateway.GetExtProc()) {
 		// Resolve authenticated connection identity before the HTTP policy processor runs.
+		maps.Copy(primary["requestAttributes"].(map[string]string), agentgatewayWorkloadAttributes)
 		policies["extProc"] = map[string]any{
 			"host":        "127.0.0.1:9002",
 			"failureMode": "failClosed",
@@ -604,9 +605,6 @@ func agentgatewayExtProc(provider *configv1.ExtProcProvider) (map[string]any, er
 		"source.address":      agentgatewaySourceAddress,
 		"destination.address": "string(destination.address)",
 		"destination.port":    "destination.port",
-	}
-	if agentgatewayWorkloadIdentity(provider) {
-		maps.Copy(attributes, agentgatewayWorkloadAttributes)
 	}
 	for _, attribute := range provider.GetRequest().GetAttributes() {
 		expression, err := agentgatewayExtProcAttribute(attribute, false)
