@@ -46,7 +46,12 @@ func TestInvoke_CountsByOutcome(t *testing.T) {
 		{"error", func(context.Context) (filter.Action, error) { return filter.Continue(), errors.New("boom") }, "error"},
 	}
 	for _, tc := range tests {
-		if _, err := e.invoke(context.Background(), nil, newFilterMetrics("p", phaseRequestHeaders), tc.call); err != nil && tc.wantOutcome != "error" {
+		if _, err := e.invoke(
+			context.Background(),
+			nil,
+			newFilterMetrics("p", phaseRequestHeaders),
+			tc.call,
+		); err != nil && tc.wantOutcome != "error" {
 			t.Fatalf("%s: unexpected error: %v", tc.name, err)
 		}
 		got := testutil.ToFloat64(pluginCallsTotal.WithLabelValues("p", phaseRequestHeaders, tc.wantOutcome))

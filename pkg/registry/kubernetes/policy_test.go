@@ -460,7 +460,11 @@ func TestGatewayConfigurationAccessLogFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
 				"AgentioConfig": func() (*configv1.EgressGateway, error) {
-					got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  accessLogFormat: "+tc.format, nil)
+					config := "egressGateways:\n" +
+						"- name: egress\n" +
+						"  namespace: agentio-system\n" +
+						"  accessLogFormat: " + tc.format
+					got, err := applyAgentioConfig(config, nil)
 					if err != nil {
 						return nil, err
 					}
@@ -508,7 +512,11 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 		{"duplicate", "{cipherSuites: [AES128-GCM-SHA256, AES128-GCM-SHA256]}", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			config := "egressGateways:\n- name: egress-gw\n  namespace: agentio-system\n  tls:\n    origination: " + tc.settings
+			config := "egressGateways:\n" +
+				"- name: egress-gw\n" +
+				"  namespace: agentio-system\n" +
+				"  tls:\n" +
+				"    origination: " + tc.settings
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
 				"AgentioConfig": func() (*configv1.EgressGateway, error) {
 					got, err := applyAgentioConfig(config, defaultAgentioConfiguration())

@@ -114,7 +114,8 @@ func TestCRDWatcherRace(t *testing.T) {
 	}()
 	makeCRD(t, fmc, virtualServiceGVR, nil)
 	runWatcher(t, w, stop)
-	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 }, fmt.Sprintf("expected 1 callback, got %d", calls.Load()))
+	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+		fmt.Sprintf("expected 1 callback, got %d", calls.Load()))
 }
 
 func TestCRDWatcher(t *testing.T) {
@@ -133,7 +134,8 @@ func TestCRDWatcher(t *testing.T) {
 	}
 
 	runWatcher(t, w, stop)
-	testutil.WaitFor(t, 5*time.Second, func() bool { return vsCalls.Load() == 1 }, fmt.Sprintf("expected 1 virtualservices callback, got %d", vsCalls.Load()))
+	testutil.WaitFor(t, 5*time.Second, func() bool { return vsCalls.Load() == 1 },
+		fmt.Sprintf("expected 1 virtualservices callback, got %d", vsCalls.Load()))
 
 	// created once running
 	if got := w.KnownOrCallback(gatewayClassGVR, func(s <-chan struct{}) {
@@ -152,7 +154,8 @@ func TestCRDWatcher(t *testing.T) {
 	}
 	makeCRD(t, fmc, serviceAccountGVR, nil)
 	// And call the callback when the CRD is created
-	testutil.WaitFor(t, 5*time.Second, func() bool { return saCalls.Load() == 1 }, fmt.Sprintf("expected 1 serviceaccounts callback, got %d", saCalls.Load()))
+	testutil.WaitFor(t, 5*time.Second, func() bool { return saCalls.Load() == 1 },
+		fmt.Sprintf("expected 1 serviceaccounts callback, got %d", saCalls.Load()))
 }
 
 // TestCRDWatcherWaitForCRD exercises the blocking API the gateway deployer uses:
@@ -207,7 +210,8 @@ func TestCRDWatcherMinimumVersion(t *testing.T) {
 
 	// Upgrade it to v1.1, which is allowed
 	makeCRD(t, fmc, grpcRouteGVR, map[string]string{bundleVersionAnnotation: "v1.1.0"})
-	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 }, fmt.Sprintf("expected 1 grpcroutes callback after upgrade to v1.1.0, got %d", calls.Load()))
+	testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+		fmt.Sprintf("expected 1 grpcroutes callback after upgrade to v1.1.0, got %d", calls.Load()))
 }
 
 func TestCRDWatcherMaximumVersion(t *testing.T) {
@@ -254,7 +258,8 @@ func TestCRDWatcherMaximumVersion(t *testing.T) {
 			t.Fatalf("KnownOrCallback(tlsroutes) = %v, want false before sync", got)
 		}
 		runWatcher(t, w, stop)
-		testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 }, fmt.Sprintf("expected 1 tlsroutes callback at maximum, got %d", calls.Load()))
+		testutil.WaitFor(t, 5*time.Second, func() bool { return calls.Load() == 1 },
+			fmt.Sprintf("expected 1 tlsroutes callback at maximum, got %d", calls.Load()))
 	})
 }
 

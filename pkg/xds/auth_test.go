@@ -91,7 +91,15 @@ func TestScopeAllowsGatewayOwnedResources(t *testing.T) {
 		{name: "shared client", scope: model.ClientScope{Class: model.ClientSharedZTunnel, GatewayKey: "demo/egress"}, owner: "demo/egress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resource := model.Resource{Key: model.ResourceKey{TypeURL: model.SecretType, Name: "secret"}, Facts: model.ResourceFacts{GatewayOwner: tc.owner}}
+			resource := model.Resource{
+				Key: model.ResourceKey{
+					TypeURL: model.SecretType,
+					Name:    "secret",
+				},
+				Facts: model.ResourceFacts{
+					GatewayOwner: tc.owner,
+				},
+			}
 			if got := scopeAllows(tc.scope, resource); got != tc.allowed {
 				t.Fatalf("scopeAllows() = %v, want %v", got, tc.allowed)
 			}

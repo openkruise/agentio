@@ -577,8 +577,13 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				patch := Patch{Target: model.RouteConfigurationPatch{Match: tc.match}}
-				if got := routeConfigurationMatches(&routev3.RouteConfiguration{Name: tc.configuration}, patch); got != tc.want {
+				patch := Patch{
+					Target: model.RouteConfigurationPatch{
+						Match: tc.match,
+					},
+				}
+				rc := &routev3.RouteConfiguration{Name: tc.configuration}
+				if got := routeConfigurationMatches(rc, patch); got != tc.want {
 					t.Fatalf("routeConfigurationMatches() = %v, want %v", got, tc.want)
 				}
 			})
@@ -601,7 +606,13 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				patch := Patch{Target: model.VirtualHostPatch{Match: &model.RouteConfigurationMatch{VirtualHost: tc.match}}}
+				patch := Patch{
+					Target: model.VirtualHostPatch{
+						Match: &model.RouteConfigurationMatch{
+							VirtualHost: tc.match,
+						},
+					},
+				}
 				if got := virtualHostMatches(tc.host, patch); got != tc.want {
 					t.Fatalf("virtualHostMatches() = %v, want %v", got, tc.want)
 				}
@@ -625,7 +636,15 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				patch := Patch{Target: model.HTTPRoutePatch{Match: &model.RouteConfigurationMatch{VirtualHost: &model.VirtualHostMatch{Route: &tc.match}}}}
+				patch := Patch{
+					Target: model.HTTPRoutePatch{
+						Match: &model.RouteConfigurationMatch{
+							VirtualHost: &model.VirtualHostMatch{
+								Route: &tc.match,
+							},
+						},
+					},
+				}
 				if got := httpRouteMatches(tc.route, patch); got != tc.wanted {
 					t.Fatalf("httpRouteMatches() = %v, want %v", got, tc.wanted)
 				}

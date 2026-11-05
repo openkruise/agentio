@@ -63,10 +63,13 @@ func TestGlobalDeniedCIDRs(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				lookups := 0
-				client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
-					lookups++
-					return dns.LookupResult{Addresses: tc.ips}, nil
-				}), 0)
+				client := dns.NewClient(
+					dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
+						lookups++
+						return dns.LookupResult{Addresses: tc.ips}, nil
+					}),
+					0,
+				)
 				stream := &filter.Stream{
 					RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 15000}},
 					StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},

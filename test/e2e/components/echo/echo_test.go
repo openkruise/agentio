@@ -244,7 +244,12 @@ func TestCommandArgsForProtocolsAndGRPC(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.protocol), func(t *testing.T) {
-			got, err := commandArgs(CallOptions{Protocol: tc.protocol, Address: tc.address, Count: 2, Timeout: 3 * time.Second})
+			got, err := commandArgs(CallOptions{
+				Protocol: tc.protocol,
+				Address:  tc.address,
+				Count:    2,
+				Timeout:  3 * time.Second,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

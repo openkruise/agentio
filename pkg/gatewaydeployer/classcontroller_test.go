@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agentio/internal/testutil"
-	"github.com/openkruise/agentio/pkg/kube/kclient"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +31,9 @@ import (
 	gatewayfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
 	gatewayclientv1 "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1"
+
+	"github.com/openkruise/agentio/internal/testutil"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
 func TestClassControllerReportsAcceptedForOwnedClass(t *testing.T) {

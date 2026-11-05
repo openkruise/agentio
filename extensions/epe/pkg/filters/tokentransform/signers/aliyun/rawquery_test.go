@@ -42,7 +42,12 @@ func TestSnapshotFromStream_CarriesWireQueryVerbatim(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// The adapter keeps whatever ParseQuery could extract, which for
 			// these inputs is lossy or re-encoded; RawQuery must be untouched.
-			parsed, _ := url.ParseQuery(tc.rawQuery)
+			parsed, parseErr := url.ParseQuery(tc.rawQuery)
+			if parseErr != nil {
+				// Rejection is expected for some inputs; the partial result is
+				// exactly what makes this fixture meaningful.
+				t.Logf("ParseQuery rejected %q: %v", tc.rawQuery, parseErr)
+			}
 			st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 				Method:   "GET",
 				Host:     "bucket.oss-cn-hangzhou.aliyuncs.com",

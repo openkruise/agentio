@@ -538,7 +538,11 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 	if _, err := client.Kube().CoreV1().ConfigMaps(cm.Namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Eventually(t, func() bool { return c.Failures()["Gateway/demo/egress"] != "" }, "invalid final resources recorded")
+	testutil.Eventually(
+		t,
+		func() bool { return c.Failures()["Gateway/demo/egress"] != "" },
+		"invalid final resources recorded",
+	)
 	if !maps.Equal(patchGatewayHashes(t, c, "demo/egress"), lastGood) {
 		t.Fatal("invalid resources replaced last-known-good graph")
 	}

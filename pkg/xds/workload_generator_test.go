@@ -146,7 +146,11 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 		principal model.Principal
 		policy    string
 	}{
-		{name: "authenticated workload", principal: model.MustServiceAccountPrincipal("demo", "default"), policy: "demo/auth"},
+		{
+			name:      "authenticated workload",
+			principal: model.MustServiceAccountPrincipal("demo", "default"),
+			policy:    "demo/auth",
+		},
 		{name: "discovery-only workload"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -227,7 +227,8 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.gatewayPatches.ConditionalUpdateObject(patch)
-	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) > 0 }, "patch rejects gateway compilation")
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) > 0 },
+		"patch rejects gateway compilation")
 	fixture.endpoints.DeleteObject(ep.ResourceName())
 	expectEndpoints(nil)
 	fixture.endpoints.ConditionalUpdateObject(ep)
@@ -258,7 +259,8 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 	}
 	fixture.gatewayPatches.DeleteObject(patch.ResourceName())
 	expectEndpoints([]string{replacementEP.Address})
-	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) == 0 }, "patch recovery commits the new target")
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) == 0 },
+		"patch recovery commits the new target")
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "deleted", Value: &configv1.AgentioConfig{}},
 	)

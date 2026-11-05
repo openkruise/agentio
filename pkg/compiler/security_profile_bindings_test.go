@@ -198,7 +198,8 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 		return refs != nil && len(refs.ResourceNames) == 0
 	}, "owned profile deletion publishes an explicit empty binding")
 	fixture.sandboxes.DeleteObject(sandbox.UID)
-	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil }, "Sandbox deletion")
+	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil },
+		"Sandbox deletion")
 }
 
 func TestSecurityProfileBindingsPublishEmptyReferences(t *testing.T) {

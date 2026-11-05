@@ -46,7 +46,11 @@ egressGateways:
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
 
-	testutil.Eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways derived without Pods")
+	testutil.Eventually(
+		t,
+		func() bool { return len(r.Gateways.List()) == 2 },
+		"configured gateways derived without Pods",
+	)
 	for _, key := range []string{"demo/egress-a", "other/egress-b"} {
 		gateway := r.Gateways.GetKey(key)
 		if gateway == nil {
@@ -183,7 +187,11 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-a") != nil }, "initial configured gateway")
+	testutil.Eventually(
+		t,
+		func() bool { return r.Gateways.GetKey("demo/egress-a") != nil },
+		"initial configured gateway",
+	)
 	recorder := newGatewayRecorder(r.Gateways)
 
 	config.Data["config"] = `egressGateways:
@@ -195,7 +203,11 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") != nil }, "gateway configuration add")
+	testutil.Eventually(
+		t,
+		func() bool { return r.Gateways.GetKey("demo/egress-b") != nil },
+		"gateway configuration add",
+	)
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 1 || got[0] != "demo/egress-b" {
 		t.Fatalf("gateway add changed %v, want only demo/egress-b", got)
@@ -230,7 +242,11 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") == nil }, "gateway configuration delete")
+	testutil.Eventually(
+		t,
+		func() bool { return r.Gateways.GetKey("demo/egress-b") == nil },
+		"gateway configuration delete",
+	)
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 1 || got[0] != "demo/egress-b" {
 		t.Fatalf("gateway delete changed %v, want only demo/egress-b", got)
@@ -260,7 +276,11 @@ func TestUnrelatedGatewayPodChangeDoesNotInvalidateConfiguredGraphs(t *testing.T
 	if _, err := r.client.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Eventually(t, func() bool { return r.Pods.GetKey("demo/unrelated") != nil }, "unrelated Pod reaches identity cache")
+	testutil.Eventually(
+		t,
+		func() bool { return r.Pods.GetKey("demo/unrelated") != nil },
+		"unrelated Pod reaches identity cache",
+	)
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 0 {
 		t.Fatalf("unrelated Pod changed gateway graphs %v", got)

@@ -440,7 +440,11 @@ func TestTelemetryCollectionUsesAllLabelledConfigMapsAndRetainsPerSourceLastKnow
 	if !policies.WaitUntilSynced(stop) {
 		t.Fatal("Telemetry collection did not sync")
 	}
-	testutil.Eventually(t, func() bool { return len(policies.List()) == 2 }, "both labelled ConfigMaps publish Telemetry")
+	testutil.Eventually(
+		t,
+		func() bool { return len(policies.List()) == 2 },
+		"both labelled ConfigMaps publish Telemetry",
+	)
 
 	broken := first.DeepCopy()
 	broken.ResourceVersion = "2"

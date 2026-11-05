@@ -78,7 +78,15 @@ func TestCertificateAttestationBindsSourceAndGatewayMembership(t *testing.T) {
 		allow bool
 	}{
 		{"own pod", caller(a), aid, true},
-		{"unregistered principal", caller(a), attestation.CertificateTarget{Principal: model.MustServiceAccountPrincipal("demo", "app"), Workload: aid.Workload}, false},
+		{
+			"unregistered principal",
+			caller(a),
+			attestation.CertificateTarget{
+				Principal: model.MustServiceAccountPrincipal("demo", "app"),
+				Workload:  aid.Workload,
+			},
+			false,
+		},
 		{"same SA different pod", caller(a), bid, false},
 		{"gateway role forgery", caller(a), gid, false},
 		{"bound gateway with matching SA", caller(gateway), gid, true},

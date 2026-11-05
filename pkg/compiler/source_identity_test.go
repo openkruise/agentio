@@ -74,7 +74,8 @@ func TestSandboxInvalidUpdateWithdrawsObsoleteResult(t *testing.T) {
 			}
 			f.sandboxes.UpdateObject(sandbox)
 			waitSynced(t, f.compiler)
-			testutil.Eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) != nil }, "initial Sandbox")
+			testutil.Eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) != nil },
+				"initial Sandbox")
 			sandbox.Policies = &model.SandboxPolicies{InputError: "invalid"}
 			switch change {
 			case "unbind":

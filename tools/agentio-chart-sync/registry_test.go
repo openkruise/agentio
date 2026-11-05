@@ -151,7 +151,12 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 				values map[string]any
 				names  []string
 			}{
-				{manager, tc.managerPrefix, managerValues, []string{"agentiod", "agentio-epe", "agentio-gateway", "agentio-porter"}},
+				{
+					manager,
+					tc.managerPrefix,
+					managerValues,
+					[]string{"agentiod", "agentio-epe", "agentio-gateway", "agentio-porter"},
+				},
 				{controller, tc.controllerPrefix, controllerValues, []string{"ztunnel", "proxy-init"}},
 			} {
 				all := ""
@@ -246,7 +251,9 @@ func testIntegrationEgressDefaults(t *testing.T, chart string) {
 						if len(config.EgressPolicies) != 0 {
 							t.Fatal("unexpected default egress route")
 						}
-					} else if len(config.EgressPolicies) != 1 || config.EgressPolicies[0].Policy != tc.policy || config.EgressPolicies[0].Gateway.Service != tc.service {
+					} else if len(config.EgressPolicies) != 1 ||
+						config.EgressPolicies[0].Policy != tc.policy ||
+						config.EgressPolicies[0].Gateway.Service != tc.service {
 						t.Fatalf("unexpected egress policies: %+v", config.EgressPolicies)
 					}
 					if tc.name == "default gateway and EPE" && len(config.SandboxExtProc) == 0 {

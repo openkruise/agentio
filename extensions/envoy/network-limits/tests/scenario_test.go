@@ -317,7 +317,9 @@ func scenarioChurn(t *testing.T, c fixture.Scenario) {
 		}) {
 			return
 		}
-		testutil.Eventually(t, func() bool { return r.stat(t, "cluster.plain.upstream_cx_active") == 0 }, "upstream connections drain")
+		testutil.Eventually(t, func() bool {
+			return r.stat(t, "cluster.plain.upstream_cx_active") == 0
+		}, "upstream connections drain")
 		// Allow the charged watermark batch to recover, then require ALL slots for new keys next cycle.
 		time.Sleep(300 * time.Millisecond)
 		memory := rss(t, r.cmd.Process.Pid)

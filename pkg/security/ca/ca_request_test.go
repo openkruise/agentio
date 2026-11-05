@@ -219,7 +219,11 @@ func TestCallerPrincipalRequiresKubernetesEvidence(t *testing.T) {
 
 func TestCertificateIdentityRejectsMalformedRequest(t *testing.T) {
 	caller := peerIdentity("demo", "app")
-	callerIdentity := model.MustServiceAccountPrincipal(caller.Kubernetes.Namespace, caller.Kubernetes.ServiceAccount).String()
+	callerPrincipal := model.MustServiceAccountPrincipal(
+		caller.Kubernetes.Namespace,
+		caller.Kubernetes.ServiceAccount,
+	)
+	callerIdentity := callerPrincipal.String()
 	tests := []struct {
 		name   string
 		build  func(*testing.T) *securityapi.IstioCertificateRequest

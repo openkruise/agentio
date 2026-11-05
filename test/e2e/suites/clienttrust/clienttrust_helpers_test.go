@@ -243,8 +243,26 @@ func (s *scenario) pod(name string) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			// Idle client fixtures have no state to drain during scenario cleanup.
 			TerminationGracePeriodSeconds: ptr.To[int64](5),
-			Containers:                    []corev1.Container{{Name: "app-main", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}, {Name: "app-metrics", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}},
-			InitContainers:                []corev1.Container{{Name: "bootstrap", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent, Command: []string{"sh", "-c", `test -r "$SSL_CERT_FILE"`}}},
+			Containers: []corev1.Container{
+				{
+					Name:            "app-main",
+					Image:           clientImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+				},
+				{
+					Name:            "app-metrics",
+					Image:           clientImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+				},
+			},
+			InitContainers: []corev1.Container{
+				{
+					Name:            "bootstrap",
+					Image:           clientImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"sh", "-c", `test -r "$SSL_CERT_FILE"`},
+				},
+			},
 		}}
 }
 

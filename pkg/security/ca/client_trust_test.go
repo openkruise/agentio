@@ -172,13 +172,21 @@ func TestClientTrustDisableAndReenable(t *testing.T) {
 	configuration := *rig.configuration.Get()
 	configuration.Client.Enabled = false
 	rig.configuration.Set(&configuration)
-	testutil.Eventually(t, func() bool { return len(rig.distributor.targets.List()) == 0 }, "disabled distribution targets")
+	testutil.Eventually(
+		t,
+		func() bool { return len(rig.distributor.targets.List()) == 0 },
+		"disabled distribution targets",
+	)
 	next := clientTrustTestCA(t)
 	rig.signer.Set(&mitm.TrustBundle{PEM: next})
 	if _, err := rig.client.Kube().CoreV1().Namespaces().Create(rig.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "new"}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Eventually(t, func() bool { return rig.distributor.namespaces.Get("new", "") != nil }, "new namespace cache")
+	testutil.Eventually(
+		t,
+		func() bool { return rig.distributor.namespaces.Get("new", "") != nil },
+		"new namespace cache",
+	)
 	for _, ns := range []string{"app", "new"} {
 		if err := rig.distributor.reconcile(rig.ctx, types.NamespacedName{Namespace: ns, Name: "agentio-client-ca"}); err != nil {
 			t.Fatal(err)

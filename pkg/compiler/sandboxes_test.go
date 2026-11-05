@@ -254,7 +254,8 @@ func TestCompilerUsesOnlyProvidedSandboxes(t *testing.T) {
 			Namespace: "sandbox-namespace",
 		},
 	)
-	testutil.Eventually(t, func() bool { return manifestAt(t, compiler, workload.UID) != nil }, "provider Sandbox appears")
+	testutil.Eventually(t, func() bool { return manifestAt(t, compiler, workload.UID) != nil },
+		"provider Sandbox appears")
 	sandboxes.DeleteObject(workload.UID)
 	testutil.Eventually(t, func() bool {
 		return manifestAt(t, compiler, workload.UID) == nil && compiler.Bindings().GetKey(workload.UID) != nil

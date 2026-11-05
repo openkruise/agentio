@@ -1016,7 +1016,9 @@ func TestDecisionValidateRejectsInvalidContract(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.decision.Validate(tc.phase); err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+			err := tc.decision.Validate(tc.phase)
+			if err == nil ||
+				!strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
 				t.Fatalf("Validate error = %v, want one containing %q", err, tc.wantErr)
 			}
 		})

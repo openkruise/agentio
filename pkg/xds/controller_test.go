@@ -593,7 +593,8 @@ func TestFailedCompilePreservesLastKnownGood(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- controller.Run(ctx) }()
 
-	testutil.Eventually(t, func() bool { return store.Snapshot().Version() == good.Version() }, "good snapshot published")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Version() == good.Version() },
+		"good snapshot published")
 	subscriptionCtx, cancelSubscription := context.WithCancel(context.Background())
 	t.Cleanup(cancelSubscription)
 	subscription := store.Subscribe(subscriptionCtx, model.ClientScope{})

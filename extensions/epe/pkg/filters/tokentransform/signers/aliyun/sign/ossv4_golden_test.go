@@ -506,7 +506,11 @@ func TestSignOSSV4_Oss2GoldenAdditionalHeaders(t *testing.T) {
 				return
 			}
 			if !strings.Contains(authz, "AdditionalHeaders="+tc.wantSegment) {
-				t.Fatalf("AdditionalHeaders segment mismatch\n got  %s\n want substring AdditionalHeaders=%s", authz, tc.wantSegment)
+				t.Fatalf(
+					"AdditionalHeaders segment mismatch\n got  %s\n want substring AdditionalHeaders=%s",
+					authz,
+					tc.wantSegment,
+				)
 			}
 		})
 	}
