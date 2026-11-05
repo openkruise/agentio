@@ -34,6 +34,7 @@ import (
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/grpc"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/security/mitm"
 )
 
@@ -273,7 +274,7 @@ func runEnvoyCertificateLoad(
 	start, cpuStart, sentBefore, signBefore := time.Now(), cpuSeconds(), wire.resources.Load(), counted.calls.Load()
 	restoredBefore, overlapBefore, responsesBefore := wire.restored.Load(), wire.overlapped.Load(), wire.responses.Load()
 	restartADS()
-	waitCertificateReplay(t, func() bool {
+	testutil.WaitFor(t, 90*time.Second, func() bool {
 		return wire.restored.Load()-restoredBefore >= int64(count) && wire.responses.Load() > responsesBefore
 	}, "warm reconciliation")
 	if wire.overlapped.Load()-overlapBefore < int64(count) {
@@ -304,7 +305,7 @@ func runEnvoyCertificateLoad(
 	}
 	closeCompatibilityConnection(t, fresh)
 	t.Logf("REPLAY fresh_demand_latency=%s", time.Since(freshStart))
-	waitCertificateReplay(t, func() bool {
+	testutil.WaitFor(t, 90*time.Second, func() bool {
 		return wire.restored.Load()-restoredBefore >= int64(count) && wire.responses.Load() > responsesBefore
 	}, "cold reconciliation")
 	if wire.overlapped.Load()-overlapBefore < int64(count) || wire.resources.Load() != sentBefore {
@@ -336,21 +337,9 @@ func runEnvoyCertificateLoad(
 	}
 	// To test expiry without generating replacements, keep the current stream;
 	// the functional test separately reconnects at its short TTL boundary.
-	waitCertificateReplay(t, func() bool { return secretCount() == 0 }, "all Envoy resources expire")
+	testutil.WaitFor(t, 90*time.Second, func() bool { return secretCount() == 0 }, "all Envoy resources expire")
 	runtime.GC()
 	reportMemory("after-expiry")
 	t.Logf("EXPIRY active_secrets=0 domains=%d", count)
 	populate("after-expiry-cold")
-}
-
-func waitCertificateReplay(t *testing.T, condition func() bool, description string) {
-	t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("timeout waiting for %s", description)
 }

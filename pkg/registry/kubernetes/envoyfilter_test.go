@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -249,7 +250,7 @@ spec:
 	if !filters.WaitUntilSynced(stop) {
 		t.Fatal("EnvoyFilter collection did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		items := filters.List()
 		return len(items) == 1 && items[0].ResourceVersion == "1"
 	}, "valid EnvoyFilter is published")
@@ -564,9 +565,9 @@ spec:
 `,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := decodeEnvoyFilters(deployedEnvoyFilterConfigMap(tt.yaml)); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := decodeEnvoyFilters(deployedEnvoyFilterConfigMap(tc.yaml)); err == nil {
 				t.Fatal("invalid EnvoyFilter accepted")
 			}
 		})

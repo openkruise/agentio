@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
 )
@@ -48,7 +49,7 @@ func TestExtProcEndpointsFollowServiceAndReadiness(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	expectEndpoints := func(owner, name string, want []string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			count := 0
 			for _, resource := range currentSnapshot(t, fixture.compiler).ListResourcesOwnedByGateway(model.EndpointType, owner) {
 				if resource.XDSName != name {
@@ -136,7 +137,7 @@ func TestExtProcEndpointsFollowServiceAndReadiness(t *testing.T) {
 	next := proto.Clone(config).(*configv1.AgentioConfig)
 	next.SandboxExtProc.ServiceRef = nil
 	fixture.agentioConfig.ConditionalUpdateObject(model.AgentioConfiguration{ResourceVersion: "DNS", Value: next})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		for _, resource := range currentSnapshot(t, fixture.compiler).ListResourcesOwnedByGateway(model.EndpointType, "demo/egress-a") {
 			if resource.XDSName == networking.ExtProcCluster {
 				return false
@@ -187,7 +188,7 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	expectEndpoints := func(want []string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			count := 0
 			for _, resource := range currentSnapshot(t, fixture.compiler).ListResourcesOwnedByGateway(model.EndpointType, "demo/egress") {
 				assignment := &endpointv3.ClusterLoadAssignment{}
@@ -226,7 +227,7 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.gatewayPatches.ConditionalUpdateObject(patch)
-	eventually(t, func() bool { return len(fixture.compiler.Failures()) > 0 }, "patch rejects gateway compilation")
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) > 0 }, "patch rejects gateway compilation")
 	fixture.endpoints.DeleteObject(ep.ResourceName())
 	expectEndpoints(nil)
 	fixture.endpoints.ConditionalUpdateObject(ep)
@@ -257,11 +258,11 @@ func TestExtProcEndpointsUpdateDuringGatewayFailure(t *testing.T) {
 	}
 	fixture.gatewayPatches.DeleteObject(patch.ResourceName())
 	expectEndpoints([]string{replacementEP.Address})
-	eventually(t, func() bool { return len(fixture.compiler.Failures()) == 0 }, "patch recovery commits the new target")
+	testutil.Eventually(t, func() bool { return len(fixture.compiler.Failures()) == 0 }, "patch recovery commits the new target")
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "deleted", Value: &configv1.AgentioConfig{}},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return len(
 			currentSnapshot(t, fixture.compiler).ListResourcesOwnedByGateway(model.EndpointType, "demo/egress"),
 		) == 0

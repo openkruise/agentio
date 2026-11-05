@@ -40,6 +40,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/openkruise/agentio/bench/connect/fixture"
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 const rate = 128 * 1024
@@ -74,16 +75,6 @@ func freePort(t *testing.T) int {
 	port := l.Addr().(*net.TCPAddr).Port
 	must(t, l.Close())
 	return port
-}
-func eventually(t *testing.T, f func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !f() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition did not become true within 10s")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
 
 type origin struct {
@@ -396,14 +387,14 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 			t.Log(string(data))
 		}
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", r.port), 100*time.Millisecond)
 		if err != nil {
 			return false
 		}
 		must(t, c.Close())
 		return true
-	})
+	}, "Envoy listener accepts connections")
 	return r
 }
 func (r *runtime) counter(t *testing.T, name string) int {
@@ -448,7 +439,7 @@ func (r *runtime) reload(t *testing.T, edit func(object), reject bool) {
 	}
 	before := r.counter(t, name)
 	r.writeLDS(t, listener)
-	eventually(t, func() bool { return r.counter(t, name) > before })
+	testutil.Eventually(t, func() bool { return r.counter(t, name) > before }, "LDS counter increments")
 }
 
 type stream struct {
@@ -502,7 +493,7 @@ func (c *h2client) open(t *testing.T, tenant, sandbox, target string, expected i
 func (c *h2client) eventuallyOpen(t *testing.T, sandbox string) *stream {
 	t.Helper()
 	var s *stream
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		s = c.open(t, "test", sandbox, "plain:80", 0)
 		if s.response.StatusCode == 200 {
 			return true
@@ -512,7 +503,7 @@ func (c *h2client) eventuallyOpen(t *testing.T, sandbox string) *stream {
 		}
 		s.close()
 		return false
-	})
+	}, "stream admission succeeds")
 	return s
 }
 func finish(t *testing.T, s *stream) {
@@ -581,7 +572,7 @@ func (r *runtime) reloadECDS(t *testing.T, name string, edit func(object), rejec
 	}
 	before := r.stat(t, stat)
 	r.writeECDS(t, name, filter)
-	eventually(t, func() bool { return r.stat(t, stat) > before })
+	testutil.Eventually(t, func() bool { return r.stat(t, stat) > before }, "ECDS counter increments")
 	if !reject {
 		r.extensions[name] = filter
 	}
@@ -621,6 +612,6 @@ func (r *runtime) routeGate(t *testing.T, name string, enabled bool) {
 	}
 	before := r.stat(t, "rds.*update_success")
 	r.writeRDS(t, routes)
-	eventually(t, func() bool { return r.stat(t, "rds.*update_success") > before })
+	testutil.Eventually(t, func() bool { return r.stat(t, "rds.*update_success") > before }, "RDS counter increments")
 	r.routes = routes
 }

@@ -25,6 +25,7 @@ import (
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -84,7 +85,7 @@ func TestSecurityProfileBindingsLifecycle(t *testing.T) {
 	await := func(want ...string) string {
 		t.Helper()
 		var hash string
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			refs, current := securityReferencesAt(t, fixture.compiler, key)
 			hash = current
 			return refs != nil && slices.Equal(refs.ResourceNames, want)
@@ -123,7 +124,7 @@ func TestSecurityProfileBindingsLifecycle(t *testing.T) {
 		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "app", Operator: "Invalid"}},
 	}
 	fixture.securityProfiles.ConditionalUpdateObject(shared)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return fixture.compiler.Failures()["SecurityProfile/"+shared.ResourceName()] != "" },
 		"invalid selection diagnosed",
@@ -132,7 +133,7 @@ func TestSecurityProfileBindingsLifecycle(t *testing.T) {
 	shared.Spec.Selector = metav1.LabelSelector{MatchLabels: map[string]string{"app": "other"}}
 	fixture.securityProfiles.ConditionalUpdateObject(shared)
 	await(global.ResourceName())
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return fixture.compiler.Failures()["SecurityProfile/"+shared.ResourceName()] == "" },
 		"valid selection clears diagnostic",
@@ -161,11 +162,11 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	fixture.securityProfiles.ConditionalUpdateObject(shared)
 	waitSynced(t, fixture.compiler)
 	key := model.ResourceKey{TypeURL: model.SandboxType, Name: sandbox.UID}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, fixture.compiler, key)
 		return refs != nil && slices.Equal(refs.ResourceNames, []string{profileName})
 	}, "Sandbox binds owned profile without SNI rules")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(
 			t,
 			fixture.compiler,
@@ -173,7 +174,7 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 		)
 		return refs != nil && len(refs.ResourceNames) == 0
 	}, "sibling does not inherit dedicated profile")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(
 			t,
 			fixture.compiler,
@@ -183,7 +184,7 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	}, "host carries only shared bindings")
 	sandbox.Attester = &model.Attester{WorkloadUID: "new-host"}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return manifestAt(t, fixture.compiler, sandbox.UID).GetAttester().GetWorkloadUid() == "new-host"
 	}, "Sandbox migration")
 	refs, _ := securityReferencesAt(t, fixture.compiler, key)
@@ -192,12 +193,12 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	}
 	sandbox.Policies = nil
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, fixture.compiler, key)
 		return refs != nil && len(refs.ResourceNames) == 0
 	}, "owned profile deletion publishes an explicit empty binding")
 	fixture.sandboxes.DeleteObject(sandbox.UID)
-	eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil }, "Sandbox deletion")
+	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil }, "Sandbox deletion")
 }
 
 func TestSecurityProfileBindingsPublishEmptyReferences(t *testing.T) {
@@ -207,7 +208,7 @@ func TestSecurityProfileBindingsPublishEmptyReferences(t *testing.T) {
 	fixture.sandboxes.ConditionalUpdateObject(model.Sandbox{UID: "kruise:one", Namespace: "demo"})
 	waitSynced(t, fixture.compiler)
 	for _, key := range []model.ResourceKey{{TypeURL: model.AddressType, Name: workload.UID}, {TypeURL: model.SandboxType, Name: "kruise:one"}} {
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			refs, hash := securityReferencesAt(t, fixture.compiler, key)
 			return hash != "" && refs != nil && len(refs.ResourceNames) == 0
 		}, "explicit empty SecurityProfile binding")
@@ -245,7 +246,7 @@ func TestSecurityProfileBindingDrivesSNIProjection(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	await := func(workload model.Workload, names, hosts []string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			if !slices.Equal(
 				fixture.compiler.PolicyNames(workload.UID, model.PolicyKindSecurityProfile),
 				names,
@@ -284,7 +285,7 @@ func TestSecurityProfileBindingDrivesSNIProjection(t *testing.T) {
 	selected.Spec.Selector.MatchLabels["app"] = "other"
 	selected.Spec.Rules[0].Match[0].Domains = []string{"*invalid.example"}
 	fixture.securityProfiles.ConditionalUpdateObject(selected)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return fixture.compiler.Failures()["SecurityProfile/"+selected.ResourceName()] != "" },
 		"invalid SNI diagnosed",

@@ -31,6 +31,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	kubetesting "k8s.io/client-go/testing"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -113,7 +114,7 @@ func clientTrustTestCA(t *testing.T) string {
 func (r *clientTrustTest) waitBundle(t *testing.T, namespace string, expected string) *corev1.ConfigMap {
 	t.Helper()
 	var result *corev1.ConfigMap
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		cm, err := r.client.Kube().CoreV1().ConfigMaps(namespace).Get(r.ctx, "agentio-client-ca", metav1.GetOptions{})
 		if err != nil || cm.Data["ca-bundle.pem"] != expected {
 			return false
@@ -171,13 +172,13 @@ func TestClientTrustDisableAndReenable(t *testing.T) {
 	configuration := *rig.configuration.Get()
 	configuration.Client.Enabled = false
 	rig.configuration.Set(&configuration)
-	waitForCondition(t, func() bool { return len(rig.distributor.targets.List()) == 0 }, "disabled distribution targets")
+	testutil.Eventually(t, func() bool { return len(rig.distributor.targets.List()) == 0 }, "disabled distribution targets")
 	next := clientTrustTestCA(t)
 	rig.signer.Set(&mitm.TrustBundle{PEM: next})
 	if _, err := rig.client.Kube().CoreV1().Namespaces().Create(rig.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "new"}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, func() bool { return rig.distributor.namespaces.Get("new", "") != nil }, "new namespace cache")
+	testutil.Eventually(t, func() bool { return rig.distributor.namespaces.Get("new", "") != nil }, "new namespace cache")
 	for _, ns := range []string{"app", "new"} {
 		if err := rig.distributor.reconcile(rig.ctx, types.NamespacedName{Namespace: ns, Name: "agentio-client-ca"}); err != nil {
 			t.Fatal(err)
@@ -218,7 +219,7 @@ func TestClientTrustBundleEvents(t *testing.T) {
 	defer registration.UnregisterHandler()
 	rig.signer.Set(&mitm.TrustBundle{PEM: next + rig.initial + next, Revision: "equivalent"})
 	rig.signer.Set(&mitm.TrustBundle{PEM: "-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----\n" + next})
-	waitForCondition(t, func() bool { c := rig.distributor.candidates.Get(); return c != nil && c.Error != "" }, "invalid source event")
+	testutil.Eventually(t, func() bool { c := rig.distributor.candidates.Get(); return c != nil && c.Error != "" }, "invalid source event")
 	if _, err := rig.client.Kube().CoreV1().Namespaces().Create(rig.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "during-error"}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +271,7 @@ func TestClientTrustReconcileCancellation(t *testing.T) {
 	writes := 0
 	client.Kube().(*kubefake.Clientset).PrependReactor("create", "configmaps", func(kubetesting.Action) (bool, runtime.Object, error) { writes++; cancel(); return false, nil, nil })
 	rig := newClientTrustTestWithClient(t, client, "")
-	waitForCondition(t, rig.distributor.targets.HasSynced, "desired targets")
+	testutil.Eventually(t, rig.distributor.targets.HasSynced, "desired targets")
 	if err := rig.distributor.reconcile(cycle, types.NamespacedName{Namespace: "first", Name: "agentio-client-ca"}); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +305,7 @@ func TestClientTrustWaitsForSecretCache(t *testing.T) {
 	rig := newClientTrustTestWithClient(t, client, "agentio-system")
 	stop := rig.run(t)
 	// Even with a valid MITM bundle, the worker requires its shared Secret cache.
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return attempts.Load() >= 2 && rig.distributor.targets.HasSynced()
 	}, "Secret list retries while distribution waits for cache sync")
 	if rig.distributor.options.Secrets.HasSynced() {
@@ -363,7 +364,7 @@ func TestClientTrustSourceEvents(t *testing.T) {
 	if _, err = fake.CoreV1().Secrets("source").Update(rig.ctx, secret, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		result := rig.distributor.candidates.Get()
 		return result != nil && strings.Contains(result.Error, "non-certificate")
 	}, "invalid Secret source")
@@ -371,7 +372,7 @@ func TestClientTrustSourceEvents(t *testing.T) {
 	if err = fake.CoreV1().Secrets("source").Delete(rig.ctx, "private", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		result := rig.distributor.candidates.Get()
 		return result != nil && strings.Contains(result.Error, "unavailable")
 	}, "deleted Secret source")
@@ -424,7 +425,7 @@ func TestClientTrustSharedSecretCache(t *testing.T) {
 	disabled := *rig.configuration.Get()
 	disabled.Client.Enabled = false
 	rig.configuration.Set(&disabled)
-	waitForCondition(t, func() bool { return len(rig.distributor.targets.List()) == 0 }, "disabled distribution")
+	testutil.Eventually(t, func() bool { return len(rig.distributor.targets.List()) == 0 }, "disabled distribution")
 	secret, err := fake.CoreV1().Secrets("other").Get(rig.ctx, "second", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -434,7 +435,7 @@ func TestClientTrustSharedSecretCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The shared cache continues observing changes while this consumer is disabled.
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		value := rig.distributor.options.Secrets.GetKey("other/second")
 		return value != nil && string((*value).Data["ca"]) == first
 	}, "shared cache updated while distribution was disabled")
@@ -473,7 +474,7 @@ func TestClientTrustOutOfScopeSourceRemoval(t *testing.T) {
 	rig.waitBundle(t, "app", rig.initial)
 	healthy := clienttrust.Source{Secret: &clienttrust.Reference{Namespace: "agentio-system", Name: "roots", Key: "ca"}}
 	rig.setSources(clienttrust.Source{Secret: &clienttrust.Reference{Namespace: "unreadable", Name: "roots", Key: "ca"}}, healthy)
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		result := rig.distributor.candidates.Get()
 		return result != nil && strings.Contains(result.Error, "Secret unreadable/roots is unavailable")
 	}, "source outside the shared cache")
@@ -495,7 +496,7 @@ func TestClientTrustInvalidTargetChange(t *testing.T) {
 	next.Bundle.Target.ConfigMapName = "new-client-ca"
 	next.Bundle.Sources = []clienttrust.Source{{ConfigMap: &clienttrust.Reference{Namespace: "missing", Name: "missing", Key: "ca"}}}
 	rig.configuration.Set(&next)
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		result := rig.distributor.candidates.Get()
 		return result != nil && result.Bundle.Target.ConfigMapName == "new-client-ca" && result.Error != ""
 	}, "invalid target revision")
@@ -505,7 +506,7 @@ func TestClientTrustInvalidTargetChange(t *testing.T) {
 	valid := next
 	valid.Bundle.Sources = []clienttrust.Source{{AgentioMITM: true}}
 	rig.configuration.Set(&valid)
-	waitForCondition(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		cm, err := rig.client.Kube().CoreV1().ConfigMaps("app").Get(rig.ctx, "new-client-ca", metav1.GetOptions{})
 		return err == nil && cm.Data["ca-bundle.pem"] == rig.initial
 	}, "new valid target")

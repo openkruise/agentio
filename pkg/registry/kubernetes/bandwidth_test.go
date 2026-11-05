@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
 )
@@ -55,7 +56,7 @@ func TestBandwidthConfigWatchAndGeneratedListener(t *testing.T) {
 			}
 		}
 		var gateway *model.Gateway
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			gateway = r.Gateways.GetKey("agentio-system/agentio-egress")
 			return gateway != nil &&
 				gateway.Config.GetBandwidthLimit().GetDescriptors()[0].GetBandwidthLimit().

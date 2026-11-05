@@ -26,20 +26,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube"
 )
-
-func waitFor(t *testing.T, condition func() bool, message string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", message)
-}
 
 func TestWatcherLoadsAndKeepsLastKnownGoodConfig(t *testing.T) {
 	template, err := os.ReadFile("testdata/ztunnel-injection-template.yaml")
@@ -78,7 +67,7 @@ func TestWatcherLoadsAndKeepsLastKnownGoodConfig(t *testing.T) {
 		defer webhook.mu.RUnlock()
 		return webhook.config != nil && len(webhook.config.Templates) == 1
 	}
-	waitFor(t, configLoaded, "injection configuration to load")
+	testutil.Eventually(t, configLoaded, "injection configuration to load")
 
 	// An unparsable update must not replace the last known good config.
 	broken := &corev1.ConfigMap{
@@ -165,10 +154,10 @@ func TestCABundlePatcher(t *testing.T) {
 			return len(current.Webhooks) == 2
 		}
 	}
-	waitFor(t, expectBundle("root-one"), "initial caBundle patch")
+	testutil.Eventually(t, expectBundle("root-one"), "initial caBundle patch")
 
 	// A rotation commit notifies the patcher through Sync.
 	bundle = []byte("root-two")
 	patcher.Sync()
-	waitFor(t, expectBundle("root-two"), "caBundle refresh after rotation")
+	testutil.Eventually(t, expectBundle("root-two"), "caBundle refresh after rotation")
 }

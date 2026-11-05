@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/istio/pkg/util/sets"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -131,7 +132,7 @@ func TestSandboxNotificationBatchAndCancellation(t *testing.T) {
 	}
 	<-sub.Updates()
 	cancel()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		store.mu.RLock()
 		defer store.mu.RUnlock()
 		return len(store.subscribers) == 0 && len(store.subscribersByType) == 0 &&

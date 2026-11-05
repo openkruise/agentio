@@ -26,6 +26,7 @@ import (
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -73,7 +74,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	awaitHosts := func(uid string, hosts ...[]string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			manifest := manifestAt(t, fixture.compiler, uid)
 			if manifest == nil || len(manifest.Extensions) != len(hosts)+1 {
 				return false
@@ -122,7 +123,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	}
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return fixture.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
 	}, "invalid SNI records a compilation failure")
 	awaitHosts("inline", []string{"updated.example"})
@@ -136,7 +137,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	awaitHosts("inline")
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return fixture.compiler.Failures()["SandboxPolicies/"+sandbox.UID] == "" },
 		"valid rules clear the failure",
@@ -161,7 +162,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 		t.Fatal("inline security rules changed another Sandbox")
 	}
 	fixture.sandboxes.DeleteObject("inline")
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return manifestAt(t, fixture.compiler, "inline") == nil },
 		"Sandbox deletion removes its SNI rules",
@@ -184,14 +185,14 @@ func TestMultiSandboxDeletionAndShrinkRetainNetworking(t *testing.T) {
 	fixture.sandboxes.ConditionalUpdateObject(b)
 	fixture.workloads.ConditionalUpdateObject(worker)
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		ma, mb := manifestAt(t, fixture.compiler, a.UID), manifestAt(t, fixture.compiler, b.UID)
 		return ma != nil && mb != nil && mb.GetAttester().GetWorkloadUid() == worker.UID && len(mb.Extensions) == 1
 	}, "both Sandboxes retain their Workload binding")
 	a.Attester = nil
 	fixture.sandboxes.ConditionalUpdateObject(a)
 	fixture.workloads.ConditionalUpdateObject(worker)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		r, ok := currentSnapshot(
 			t,
 			fixture.compiler,
@@ -199,7 +200,7 @@ func TestMultiSandboxDeletionAndShrinkRetainNetworking(t *testing.T) {
 		return ok && r.Facts.Workload != nil && manifestAt(t, fixture.compiler, b.UID) != nil
 	}, "unbinding one Sandbox preserves networking")
 	fixture.sandboxes.DeleteObject(b.UID)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return manifestAt(t, fixture.compiler, b.UID) == nil },
 		"deleted actor must not become an implicit Pod Sandbox",
@@ -218,13 +219,13 @@ func TestMalformedSandboxUIDDoesNotStopCompiler(t *testing.T) {
 	fixture.sandboxes.ConditionalUpdateObject(model.Sandbox{UID: " ", Namespace: "tenant"})
 	fixture.sandboxes.ConditionalUpdateObject(model.Sandbox{UID: "valid", Namespace: "tenant"})
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Sandbox/ "]
 		valid := manifestAt(t, fixture.compiler, "valid")
 		return failed && valid != nil
 	}, "invalid UID is isolated from valid Sandboxes")
 	fixture.sandboxes.DeleteObject(" ")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Sandbox/ "]
 		return !failed
 	}, "removed malformed UID clears diagnostic")
@@ -253,9 +254,9 @@ func TestCompilerUsesOnlyProvidedSandboxes(t *testing.T) {
 			Namespace: "sandbox-namespace",
 		},
 	)
-	eventually(t, func() bool { return manifestAt(t, compiler, workload.UID) != nil }, "provider Sandbox appears")
+	testutil.Eventually(t, func() bool { return manifestAt(t, compiler, workload.UID) != nil }, "provider Sandbox appears")
 	sandboxes.DeleteObject(workload.UID)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return manifestAt(t, compiler, workload.UID) == nil && compiler.Bindings().GetKey(workload.UID) != nil
 	}, "Sandbox deletion preserves the surviving Workload binding")
 	settle()
@@ -285,7 +286,7 @@ func TestWorkloadSelectorMetadataUpdateRecomputesBindings(t *testing.T) {
 		},
 	})
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		binding := fixture.compiler.Bindings().GetKey(sandbox.UID)
 		return binding != nil && reflect.DeepEqual(
 			binding.PolicyNames(policy.PolicyKindTrafficPolicy),
@@ -295,7 +296,7 @@ func TestWorkloadSelectorMetadataUpdateRecomputesBindings(t *testing.T) {
 
 	workload.Labels = map[string]string{"app": "other"}
 	fixture.workloads.ConditionalUpdateObject(workload)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		binding := fixture.compiler.Bindings().GetKey(sandbox.UID)
 		return binding != nil && len(binding.PolicyNames(policy.PolicyKindTrafficPolicy)) == 0
 	}, "Workload label update removes selector-derived binding")
@@ -318,7 +319,7 @@ func TestSandboxTrafficPolicyTracksPeerUpdates(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	awaitAddress := func(last byte) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			rules := manifestAt(t, fixture.compiler, "a").GetTrafficPolicy().GetEgress().GetRules()
 			return len(rules) == 1 && len(rules[0].Match.DestinationIps) == 1 &&
 				reflect.DeepEqual(rules[0].Match.DestinationIps[0].Address, []byte{192, 0, 2, last})
@@ -334,7 +335,7 @@ func TestSandboxTrafficPolicyTracksPeerUpdates(t *testing.T) {
 	}
 	sandbox.Attester = &model.Attester{WorkloadUID: "new-worker"}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return manifestAt(t, fixture.compiler, "a").GetAttester().GetWorkloadUid() == "new-worker"
 	}, "binding and inline rules publish together")
 	awaitAddress(1)

@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -45,7 +46,7 @@ egressGateways:
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
 
-	eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways derived without Pods")
+	testutil.Eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways derived without Pods")
 	for _, key := range []string{"demo/egress-a", "other/egress-b"} {
 		gateway := r.Gateways.GetKey(key)
 		if gateway == nil {
@@ -81,7 +82,7 @@ egressGateways:
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
+	testutil.Eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
 
 	a := r.Gateways.GetKey("demo/egress-a")
 	b := r.Gateways.GetKey("demo/egress-b")
@@ -118,7 +119,7 @@ egressGateways:
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
+	testutil.Eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
 	recorder := newGatewayRecorder(r.Gateways)
 
 	config.Data["config"] = `sandboxExtProc:
@@ -133,7 +134,7 @@ egressGateways:
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return r.AgentioConfig.GetKey("effective").Value.GetSandboxExtProc().GetService() ==
 			"epe-new.agentio-system.svc.cluster.local"
 	}, "shared fallback updates independently")
@@ -162,7 +163,7 @@ func TestGatewayProjectionMarksDuplicateConfiguredEntriesAsConflict(t *testing.T
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := r.Gateways.GetKey("demo/egress")
 		return gateway != nil && gateway.Source == model.GatewaySourceConflict && gateway.Config == nil
 	}, "duplicate configured gateway conflict")
@@ -182,7 +183,7 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-a") != nil }, "initial configured gateway")
+	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-a") != nil }, "initial configured gateway")
 	recorder := newGatewayRecorder(r.Gateways)
 
 	config.Data["config"] = `egressGateways:
@@ -194,7 +195,7 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") != nil }, "gateway configuration add")
+	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") != nil }, "gateway configuration add")
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 1 || got[0] != "demo/egress-b" {
 		t.Fatalf("gateway add changed %v, want only demo/egress-b", got)
@@ -212,7 +213,7 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := r.Gateways.GetKey("demo/egress-b")
 		return gateway != nil && len(gateway.Config.GetTlsTermination().GetIncludeHosts()) == 1
 	}, "gateway configuration update")
@@ -229,7 +230,7 @@ func TestGatewayConfigChangesAffectOnlyItsIdentity(t *testing.T) {
 	if _, err := r.client.CoreV1().ConfigMaps(config.Namespace).Update(ctx, config, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") == nil }, "gateway configuration delete")
+	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress-b") == nil }, "gateway configuration delete")
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 1 || got[0] != "demo/egress-b" {
 		t.Fatalf("gateway delete changed %v, want only demo/egress-b", got)
@@ -252,14 +253,14 @@ func TestUnrelatedGatewayPodChangeDoesNotInvalidateConfiguredGraphs(t *testing.T
 `},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{config}, nil)
-	eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
+	testutil.Eventually(t, func() bool { return len(r.Gateways.List()) == 2 }, "configured gateways")
 	recorder := newGatewayRecorder(r.Gateways)
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "unrelated"}}
 	if _, err := r.client.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool { return r.Pods.GetKey("demo/unrelated") != nil }, "unrelated Pod reaches identity cache")
+	testutil.Eventually(t, func() bool { return r.Pods.GetKey("demo/unrelated") != nil }, "unrelated Pod reaches identity cache")
 	time.Sleep(200 * time.Millisecond)
 	if got := recorder.names(); len(got) != 0 {
 		t.Fatalf("unrelated Pod changed gateway graphs %v", got)
