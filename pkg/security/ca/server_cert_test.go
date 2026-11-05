@@ -15,7 +15,12 @@
 package ca
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/tls"
 	"crypto/x509"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -24,7 +29,7 @@ import (
 )
 
 // newTestAuthority builds an Authority directly without the Kubernetes plumbing LoadOrCreateAuthority needs.
-func newTestAuthority(t *testing.T, leafLifetime, leafRenewBefore time.Duration) *Authority {
+func newTestAuthority(t testing.TB, leafLifetime, leafRenewBefore time.Duration) *Authority {
 	t.Helper()
 	now := time.Now()
 	secret, err := casecret.New("agentio-system", "ca", workloadCAKeys, "Agentio Root CA", 10*365*24*time.Hour, now)
@@ -49,6 +54,71 @@ func newTestAuthority(t *testing.T, leafLifetime, leafRenewBefore time.Duration)
 		t.Fatal(err)
 	}
 	return authority
+}
+
+func TestServerCertificateSupportsTLS12AndTLS13WithP256(t *testing.T) {
+	authority := newTestAuthority(t, time.Hour, 20*time.Minute)
+	key, ok := authority.serverCert.Leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok || key.Curve != elliptic.P256() {
+		t.Fatal("serving certificate must use P-256")
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(authority.rootPEM)
+	server := httptest.NewUnstartedServer(http.NotFoundHandler())
+	server.TLS = authority.TLSConfig()
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
+		conn, err := tls.Dial("tcp", server.Listener.Addr().String(), &tls.Config{
+			RootCAs:    roots,
+			ServerName: "localhost",
+			MinVersion: version,
+			MaxVersion: version,
+			NextProtos: []string{"h2"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if conn.ConnectionState().Version != version || conn.ConnectionState().NegotiatedProtocol != "h2" {
+			t.Fatal("unexpected TLS negotiation", conn.ConnectionState())
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkServerTLSHandshake(b *testing.B) {
+	authority := newTestAuthority(b, time.Hour, 20*time.Minute)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(authority.rootPEM)
+	server := httptest.NewUnstartedServer(http.NotFoundHandler())
+	server.TLS = authority.TLSConfig()
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	config := &tls.Config{
+		RootCAs:    roots,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{"h2"},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			conn, err := tls.Dial("tcp", server.Listener.Addr().String(), config)
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			if err := conn.Close(); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
 }
 
 // Renewal must depend on the certificate's own expiry, not on a CA change.
