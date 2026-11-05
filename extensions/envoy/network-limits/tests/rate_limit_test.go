@@ -31,7 +31,7 @@ func TestEnvoyGeneratedConnectRateLimit(t *testing.T) {
 	settings := new(configv1.EgressGateway)
 	must(t, protojson.Unmarshal([]byte(`{"connectRateLimit": {
       "rateLimits": [
-        {"actions": [{"filterState": {"key": "agentio.sandbox.uid", "descriptorKey": "sandbox"}}]},
+        {"actions": [{"filterState": {"key": "agentio.sandbox.id", "descriptorKey": "sandbox"}}]},
         {"actions": [{"genericKey": {"descriptorKey": "scope", "descriptorValue": "gateway"}}]}
       ],
       "descriptors": [

@@ -271,18 +271,18 @@ func TestExtract(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attrs := makeAttrs(t, tt.attrFields)
-			gotCaller, gotReq := Extract(context.Background(), makeHTTPHeaders(tt.headers), attrs)
-			if !reflect.DeepEqual(gotCaller, tt.wantCaller) {
-				t.Errorf("Extract() caller = %+v, want %+v", gotCaller, tt.wantCaller)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			attrs := makeAttrs(t, tc.attrFields)
+			gotCaller, gotReq := Extract(context.Background(), makeHTTPHeaders(tc.headers), attrs)
+			if !reflect.DeepEqual(gotCaller, tc.wantCaller) {
+				t.Errorf("Extract() caller = %+v, want %+v", gotCaller, tc.wantCaller)
 			}
-			if !reflect.DeepEqual(gotReq, tt.wantReq) {
-				t.Errorf("Extract() request = %+v, want %+v", gotReq, tt.wantReq)
+			if !reflect.DeepEqual(gotReq, tc.wantReq) {
+				t.Errorf("Extract() request = %+v, want %+v", gotReq, tc.wantReq)
 			}
-			if gotCaller.Subject.HasIdentity() != tt.wantValid {
-				t.Errorf("Valid() = %t, want %t", gotCaller.Subject.HasIdentity(), tt.wantValid)
+			if gotCaller.Subject.HasIdentity() != tc.wantValid {
+				t.Errorf("Valid() = %t, want %t", gotCaller.Subject.HasIdentity(), tc.wantValid)
 			}
 		})
 	}
@@ -454,19 +454,19 @@ func TestExtractWorkloadIP(t *testing.T) {
 		{"malformed bracket", "[", "["},
 		{"empty brackets", "[]", ""},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			var attrs map[string]*structpb.Struct
-			if tt.raw != "" {
+			if tc.raw != "" {
 				inner := map[string]interface{}{
-					AttrSourceAddress: tt.raw,
+					AttrSourceAddress: tc.raw,
 				}
 				s, _ := structpb.NewStruct(inner)
 				attrs = map[string]*structpb.Struct{ExtProcAttrsKey: s}
 			}
 			got := extractWorkloadIP(attrs)
-			if got != tt.expected {
-				t.Errorf("extractWorkloadIP(%q) = %q, want %q", tt.raw, got, tt.expected)
+			if got != tc.expected {
+				t.Errorf("extractWorkloadIP(%q) = %q, want %q", tc.raw, got, tc.expected)
 			}
 		})
 	}
@@ -491,7 +491,7 @@ func TestExtractAttributeInt_ZeroValue(t *testing.T) {
 }
 
 func TestExtractWorkloadIdentityPrecedence(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		fields map[string]any
 		want   types.NamespacedName
@@ -552,7 +552,7 @@ func TestExtractWorkloadIdentityPrecedence(t *testing.T) {
 		},
 		{name: "application headers alone cannot supply identity", fields: map[string]any{}},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			// These inner request headers must never override the captured
 			// CONNECT context, including when that context is missing.
 			headers := makeHTTPHeaders(map[string]string{
@@ -562,13 +562,13 @@ func TestExtractWorkloadIdentityPrecedence(t *testing.T) {
 				"x-agentio-workload-name":      "application-pod",
 				"x-agentio-workload-namespace": "application-ns",
 			})
-			caller, req := Extract(context.Background(), headers, makeAttrs(t, tt.fields))
+			caller, req := Extract(context.Background(), headers, makeAttrs(t, tc.fields))
 			workload := caller.Subject.Workload
 			got := types.NamespacedName{Namespace: workload.Namespace, Name: workload.Name}
-			if got != tt.want {
-				t.Fatalf("source workload = %v, want %v", got, tt.want)
+			if got != tc.want {
+				t.Fatalf("source workload = %v, want %v", got, tc.want)
 			}
-			wantValid := tt.want.Name != "" && tt.want.Namespace != ""
+			wantValid := tc.want.Name != "" && tc.want.Namespace != ""
 			if caller.Subject.HasIdentity() != wantValid {
 				t.Fatalf("Valid = %t, want %t", caller.Subject.HasIdentity(), wantValid)
 			}
@@ -591,7 +591,7 @@ func TestExtractPolicyIdentitiesFromCapturedContext(t *testing.T) {
 		fields := map[string]any{FilterStateWorkloadNamespace: "ns", FilterStateWorkloadName: "pod"}
 		if captured {
 			fields[FilterStateWorkloadUID] = "native:workload"
-			fields[FilterStateSandboxUID] = "kruise:sandbox"
+			fields[FilterStateSandboxID] = "kruise:sandbox"
 		}
 		caller, _ := Extract(context.Background(), headers, makeAttrs(t, fields))
 		subject := caller.Subject

@@ -101,13 +101,13 @@ func TestStreamLog_SkippedNamesTheReasonAndTheRule(t *testing.T) {
 		{"filter errored and the policy admitted the request", filter.ActionErrorOpen},
 		{"filter asked for a body that never arrived", filter.ActionNeedBody},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			got := logOne(t, func(info *filter.StreamInfo) {
-				info.RecordUnitAction(testUnit, "mcpacl", tt.kind)
+				info.RecordUnitAction(testUnit, "mcpacl", tc.kind)
 			})
 
-			want := "mcpacl:" + string(tt.kind) + ":" + testUnit.String()
+			want := "mcpacl:" + string(tc.kind) + ":" + testUnit.String()
 			if !slices.Equal(got.Skipped, []string{want}) {
 				t.Errorf("Skipped = %v, want [%s]", got.Skipped, want)
 			}
@@ -132,16 +132,16 @@ func TestStreamLog_ResolvedNeedBodyIsNotAlsoReported(t *testing.T) {
 		{"resolved by failing open", filter.ActionErrorOpen, filter.ActionErrorOpen, false},
 		{"resolved by failing closed", filter.ActionErrorClosed, filter.ActionErrorClosed, true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			got := logOne(t, func(info *filter.StreamInfo) {
 				info.RecordUnitAction(testUnit, "mcpacl", filter.ActionNeedBody)
-				info.RecordUnitAction(testUnit, "mcpacl", tt.resolve)
+				info.RecordUnitAction(testUnit, "mcpacl", tc.resolve)
 			})
 
-			want := "mcpacl:" + string(tt.wantKind) + ":" + testUnit.String()
+			want := "mcpacl:" + string(tc.wantKind) + ":" + testUnit.String()
 			field, other := got.Actions, got.Skipped
-			if !tt.acted {
+			if !tc.acted {
 				field, other = got.Skipped, got.Actions
 			}
 			if !slices.Equal(field, []string{want}) {

@@ -95,6 +95,13 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "token audience is required",
 		},
 		{
+			name: "Kubernetes workload authentication mode",
+			mutate: func(t *testing.T) {
+				test.SetForTest(t, &KubernetesWorkloadAuthMode, "unsupported")
+			},
+			wantErr: "unsupported Kubernetes workload authentication mode",
+		},
+		{
 			name: "gateway deployer",
 			mutate: func(t *testing.T) {
 				test.SetForTest(t, &EnableGatewayDeployer, true)
@@ -103,12 +110,12 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "gateway deployer lease name is required",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			setValidFeatures(t)
-			tt.mutate(t)
-			if err := Validate(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
+			tc.mutate(t)
+			if err := Validate(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -119,6 +126,14 @@ func TestValidateAllowsDisabledMaxServerConnectionAge(t *testing.T) {
 	test.SetForTest(t, &MaxServerConnectionAge, time.Duration(0))
 	if err := Validate(); err != nil {
 		t.Fatalf("Validate() rejected disabled max server connection age: %v", err)
+	}
+}
+
+func TestValidateAllowsLocalJWTAuthentication(t *testing.T) {
+	setValidFeatures(t)
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "local")
+	if err := Validate(); err != nil {
+		t.Fatalf("Validate() rejected local JWT authentication: %v", err)
 	}
 }
 
@@ -235,6 +250,7 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &WorkloadCertLifetime, 2*time.Hour)
 	test.SetForTest(t, &WorkloadCertRenewBefore, time.Hour)
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "tokenreview")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
 }

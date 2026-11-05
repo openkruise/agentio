@@ -79,9 +79,9 @@ func TestCheck(t *testing.T) {
 			want: []int{3},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			issues, err := check("fixture.go", []byte(tt.code))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			issues, err := check("fixture.go", []byte(tc.code))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,8 +89,8 @@ func TestCheck(t *testing.T) {
 			for _, issue := range issues {
 				lines = append(lines, issue.line)
 			}
-			if !slices.Equal(lines, tt.want) {
-				t.Fatalf("lines = %v, want %v", lines, tt.want)
+			if !slices.Equal(lines, tc.want) {
+				t.Fatalf("lines = %v, want %v", lines, tc.want)
 			}
 		})
 	}

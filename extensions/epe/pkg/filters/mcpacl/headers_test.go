@@ -55,11 +55,11 @@ func TestDecodeMcpHeaderValue(t *testing.T) {
 		{"non-lowercase prefix", "=?BASE64?SGVsbG8=?=", "=?BASE64?SGVsbG8=?=", true},
 		{"partial encoding (prefix only)", "prefix" + base64SentinelPrefix + "dGVzdA==" + base64SentinelSuffix, "prefix" + base64SentinelPrefix + "dGVzdA==" + base64SentinelSuffix, true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := decodeMcpHeaderValue(tt.input)
-			if got != tt.want || ok != tt.wantOk {
-				t.Errorf("decodeMcpHeaderValue(%q) = (%q, %v), want (%q, %v)", tt.input, got, ok, tt.want, tt.wantOk)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := decodeMcpHeaderValue(tc.input)
+			if got != tc.want || ok != tc.wantOk {
+				t.Errorf("decodeMcpHeaderValue(%q) = (%q, %v), want (%q, %v)", tc.input, got, ok, tc.want, tc.wantOk)
 			}
 		})
 	}

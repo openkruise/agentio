@@ -41,6 +41,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 func TestAgentgatewayNativeGeneratedConfiguration(t *testing.T) {
@@ -228,7 +229,7 @@ http:
 		}
 	})
 	client := &http.Client{Timeout: time.Second}
-	waitCondition(t, 10*time.Second, func() bool {
+	testutil.WaitFor(t, 10*time.Second, func() bool {
 		resp, err := client.Get("http://" + ready + "/healthz/ready")
 		if err != nil {
 			return false

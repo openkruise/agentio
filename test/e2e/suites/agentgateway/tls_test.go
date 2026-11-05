@@ -221,7 +221,7 @@ spec:
 			Headers: map[string]string{
 				"Host":                    host,
 				"X-Agentio-Workload-Name": "forged",
-				"X-Agentio-Sandbox-Uid":   "forged",
+				"X-Agentio-Sandbox-Id":    "forged",
 			},
 			Check: check.NoErrorAndStatus(want),
 			Retry: harness.FixedRetry(2*time.Minute, time.Second),

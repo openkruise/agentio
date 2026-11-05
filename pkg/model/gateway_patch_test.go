@@ -133,11 +133,11 @@ func TestNewGatewayPatchRejectsInvalidValues(t *testing.T) {
 			wantErr:  false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewGatewayPatch(tt.metadata, 0, tt.targets, []EnvoyPatch{tt.patch})
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("error = %v, want error %v", err, tt.wantErr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewGatewayPatch(tc.metadata, 0, tc.targets, []EnvoyPatch{tc.patch})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want error %v", err, tc.wantErr)
 			}
 		})
 	}

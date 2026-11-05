@@ -97,7 +97,7 @@ data:
 				"Host":                         host,
 				"X-Agentio-Workload-Name":      "forged-workload",
 				"X-Agentio-Workload-Namespace": "forged-namespace",
-				"X-Agentio-Sandbox-Uid":        "forged-sandbox",
+				"X-Agentio-Sandbox-Id":         "forged-sandbox",
 			},
 			Check: check.NoErrorAndStatus(want),
 			Retry: harness.FixedRetry(2*time.Minute, time.Second),

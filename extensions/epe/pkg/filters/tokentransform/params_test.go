@@ -96,9 +96,9 @@ func TestRenderParamsMapResult(t *testing.T) {
 		{"map literal", `{"tenant": pod.labels["tenant"]}`, map[string]any{"tenant": "a"}},
 		{"map inside list", `[request.headers]`, []any{map[string]any{"x-scope": "readonly"}}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prog, err := eval.CompileValue(tt.expr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prog, err := eval.CompileValue(tc.expr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,8 +123,8 @@ func TestRenderParamsMapResult(t *testing.T) {
 			if err != nil {
 				t.Fatalf("renderParams: %v", err)
 			}
-			if !reflect.DeepEqual(got["computed"], tt.want) {
-				t.Fatalf("renderParams = %#v, want %#v", got["computed"], tt.want)
+			if !reflect.DeepEqual(got["computed"], tc.want) {
+				t.Fatalf("renderParams = %#v, want %#v", got["computed"], tc.want)
 			}
 		})
 	}

@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -354,7 +355,7 @@ func TestEndpointsFollowTheirSlice(t *testing.T) {
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{slice}, nil)
 
-	eventually(t, func() bool { return len(r.Endpoints.List()) == 2 }, "endpoints derived from the slice")
+	testutil.Eventually(t, func() bool { return len(r.Endpoints.List()) == 2 }, "endpoints derived from the slice")
 	for _, endpoint := range r.Endpoints.List() {
 		if endpoint.ServiceKey != "demo/backend.demo.svc.cluster.local" {
 			t.Fatalf("service key = %q", endpoint.ServiceKey)
@@ -367,7 +368,7 @@ func TestEndpointsFollowTheirSlice(t *testing.T) {
 	if err := r.client.DiscoveryV1().EndpointSlices("demo").Delete(ctx, "backend-abc", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool { return len(r.Endpoints.List()) == 0 }, "endpoints withdrawn with the slice")
+	testutil.Eventually(t, func() bool { return len(r.Endpoints.List()) == 0 }, "endpoints withdrawn with the slice")
 }
 
 // A slice with no service label produces nothing rather than a bogus hostname.

@@ -26,7 +26,7 @@ import (
 // Test the exported query path with real DNS packets, including zero TTL in
 // different positions so zero cannot be mistaken for an uninitialized minimum.
 func TestTransportAnswerTTL(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		records []string
 		want    time.Duration
@@ -37,9 +37,9 @@ func TestTransportAnswerTTL(t *testing.T) {
 		{"cname minimum", []string{"api.example. 5 IN CNAME target.example.", "target.example. 60 IN A 192.0.2.1"}, 5 * time.Second},
 		{"zero cname", []string{"api.example. 0 IN CNAME target.example.", "target.example. 60 IN A 192.0.2.1"}, 0},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var answers []mdns.RR
-			for _, text := range tt.records {
+			for _, text := range tc.records {
 				record, err := mdns.NewRR(text)
 				if err != nil {
 					t.Fatal(err)
@@ -76,8 +76,8 @@ func TestTransportAnswerTTL(t *testing.T) {
 				[]string{packet.LocalAddr().String()},
 				time.Second,
 			).Lookup(context.Background(), "api.example", IPv4Only)
-			if err != nil || len(result.Addresses) == 0 || result.TTL != tt.want {
-				t.Fatalf("got %+v, %v; want TTL %v", result, err, tt.want)
+			if err != nil || len(result.Addresses) == 0 || result.TTL != tc.want {
+				t.Fatalf("got %+v, %v; want TTL %v", result, err, tc.want)
 			}
 		})
 	}

@@ -57,10 +57,10 @@ func TestHasIdentity(t *testing.T) {
 			want:    false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.subject.HasIdentity(); got != tt.want {
-				t.Errorf("HasIdentity(): want %v, got %v", tt.want, got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.subject.HasIdentity(); got != tc.want {
+				t.Errorf("HasIdentity(): want %v, got %v", tc.want, got)
 			}
 		})
 	}

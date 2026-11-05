@@ -126,7 +126,7 @@ fn request(sandbox: &str, udp: bool) -> extproc::ProcessingRequest {
                         view::string("spiffe://cluster.local/ns/demo/sa/default"),
                     ),
                     (
-                        "filter_state['agentio.sandbox.uid']".into(),
+                        "filter_state['agentio.sandbox.id']".into(),
                         view::string(sandbox),
                     ),
                 ]),
@@ -231,7 +231,7 @@ async fn agentgateway_resolves_identity_without_sni_or_connect_metrics() {
         .unwrap()
         .fields;
     fields.insert(
-        "filter_state['agentio.sandbox.uid']".into(),
+        "filter_state['agentio.sandbox.id']".into(),
         view::string("forged"),
     );
     assert_eq!(
@@ -251,7 +251,7 @@ async fn agentgateway_resolves_identity_without_sni_or_connect_metrics() {
         .get_mut("envoy.filters.http.ext_proc")
         .unwrap()
         .fields;
-    fields.remove("filter_state['agentio.sandbox.uid']");
+    fields.remove("filter_state['agentio.sandbox.id']");
     // A malformed captured certificate must not fall back to the otherwise valid IP/principal.
     fields.insert(
         "filter_state['agentio.peer.certificate']".into(),

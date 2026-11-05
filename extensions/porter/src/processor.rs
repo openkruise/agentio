@@ -105,7 +105,7 @@ fn identity(attributes: Option<&Struct>) -> IdentityEvidence<'_> {
         certificate: attribute(attributes, "filter_state['agentio.peer.certificate']"),
         peer_ip: attribute(attributes, "filter_state['agentio.downstream.ip']"),
         principal: attribute(attributes, "filter_state['agentio.peer.principal']"),
-        sandbox_id: attribute(attributes, "filter_state['agentio.sandbox.uid']"),
+        sandbox_id: attribute(attributes, "filter_state['agentio.sandbox.id']"),
     }
 }
 

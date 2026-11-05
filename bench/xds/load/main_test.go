@@ -97,7 +97,7 @@ func TestRoundUsesFactoryAndIsolatesEpochs(t *testing.T) {
 		}}
 	b.ready.Store(1)
 	handler := b.handler()
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		body   string
 		status int
 	}{
@@ -107,9 +107,9 @@ func TestRoundUsesFactoryAndIsolatesEpochs(t *testing.T) {
 		{`{"id":2,"parameters":{"revision":"second"}}`, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/round", strings.NewReader(test.body)))
-		if w.Code != test.status {
-			t.Fatalf("%s: got %d: %s", test.body, w.Code, w.Body)
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/round", strings.NewReader(tc.body)))
+		if w.Code != tc.status {
+			t.Fatalf("%s: got %d: %s", tc.body, w.Code, w.Body)
 		}
 	}
 	if b.expected != "second" || b.round.ID != 2 || len(b.samples) != 0 {

@@ -66,19 +66,19 @@ func TestRenderURL_ValidHTTP(t *testing.T) {
 			wantURL: "http://hook.example.com/p1/r1",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ca := &audit.Audit{
 				Webhook: &audit.Webhook{
-					URL: template.Must(template.New("url").Parse(tt.tmpl)),
+					URL: template.Must(template.New("url").Parse(tc.tmpl)),
 				},
 			}
-			got, err := RenderURL(ca, tt.ctx)
+			got, err := RenderURL(ca, tc.ctx)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tt.wantURL {
-				t.Errorf("want %q, got %q", tt.wantURL, got)
+			if got != tc.wantURL {
+				t.Errorf("want %q, got %q", tc.wantURL, got)
 			}
 		})
 	}
@@ -93,11 +93,11 @@ func TestRenderURL_InvalidScheme(t *testing.T) {
 		{name: "empty scheme", tmpl: "//example.com/audit"},
 		{name: "mailto scheme", tmpl: "mailto:admin@example.com"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ca := &audit.Audit{
 				Webhook: &audit.Webhook{
-					URL: template.Must(template.New("url").Parse(tt.tmpl)),
+					URL: template.Must(template.New("url").Parse(tc.tmpl)),
 				},
 			}
 			_, err := RenderURL(ca, &audit.Scope{})
@@ -316,14 +316,14 @@ func TestCapBody(t *testing.T) {
 		{name: "body at exact limit accepted untruncated", size: MaxRenderedBodyBytes, wantErr: false},
 		{name: "oversized body rejected", size: MaxRenderedBodyBytes + 1000, wantErr: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			body := make([]byte, tt.size)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := make([]byte, tc.size)
 			for i := range body {
 				body[i] = 'A'
 			}
 			got, err := capBody(body)
-			if tt.wantErr {
+			if tc.wantErr {
 				if !errors.Is(err, errBodyTooLarge) {
 					t.Fatalf("oversized body must be rejected, got err=%v", err)
 				}
@@ -364,9 +364,9 @@ func TestRenderBody_OversizedRejected(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ca := &audit.Audit{Webhook: &audit.Webhook{Body: tt.body}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := &audit.Audit{Webhook: &audit.Webhook{Body: tc.body}}
 			_, _, err := RenderBody(ca, &audit.Scope{})
 			if !errors.Is(err, errBodyTooLarge) {
 				t.Fatalf("want errBodyTooLarge, got %v", err)

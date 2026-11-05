@@ -84,6 +84,7 @@ agentiod:
       drop: [ALL]
     readOnlyRootFilesystem: true
   tokenAudience: agentio-ca
+  kubernetesWorkloadAuthMode: tokenreview
   logging:
     level: info
     format: text
@@ -365,6 +366,8 @@ egressGateway:
         protocol: HBONE
 
 epe:
+  # Retain deleted administrator profiles for stale WDS references; 0s disables.
+  profileDeletionGracePeriod: 60s
   xdsCache:
     idleTTL: 10m
     maxEntries: 10000

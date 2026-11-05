@@ -35,6 +35,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -88,25 +89,11 @@ func settle() {
 	time.Sleep(200 * time.Millisecond)
 }
 
-// eventually polls until condition holds, which is how krt's asynchronous
-// propagation has to be observed.
-func eventually(t testing.TB, condition func() bool, message string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("condition never held: %s", message)
-}
-
 // awaitSteadyState waits until every named resource exists and the graph has gone
 // quiet; must run before registering an event recorder to avoid recording initial Adds.
 func awaitSteadyState(t testing.TB, compiler *Compiler, names ...string) {
 	t.Helper()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		for _, name := range names {
 			if compiler.graph.resources.GetKey(name) == nil {
 				return false
@@ -264,7 +251,7 @@ func testWorkload(namespace, name, address string) model.Workload {
 		Addresses: []string{address},
 		Labels:    map[string]string{"app": name},
 		Ready:     true,
-		Principal: mustTestPrincipal("cluster.local", "ns/"+(namespace)+"/sa/"+("default")),
+		Principal: model.MustServiceAccountPrincipal(namespace, "default"),
 	}
 }
 
@@ -337,7 +324,7 @@ func incrementalAddressEndpoint(hostname, address string, port uint32) model.End
 
 func assertWorkloadEvents(t testing.TB, recorder *recorder, affected, unaffected []model.Workload) {
 	t.Helper()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		for _, workload := range affected {
 			if !recorder.has(model.AddressType + "|" + workload.UID) {
 				return false
@@ -426,7 +413,7 @@ func testWDSWorkload(name, sourceUID, address string) model.Workload {
 		Name:      name,
 		Addresses: []string{address},
 		Ready:     true,
-		Principal: mustTestPrincipal("cluster.local", "ns/"+("demo")+"/sa/"+("default")),
+		Principal: model.MustServiceAccountPrincipal("demo", "default"),
 	}
 }
 

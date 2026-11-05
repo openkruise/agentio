@@ -30,7 +30,7 @@ func TestAuthorizationVisibilityUsesScopedIdentityAndExactReferences(t *testing.
 	visibility := newAuthorizationVisibility(
 		model.ClientScope{
 			Class:       model.ClientDedicatedZTunnel,
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			WorkloadUID: "uid-a",
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 		},
@@ -57,7 +57,7 @@ func TestAuthorizationIncrementalDiffsExactReferenceTransition(t *testing.T) {
 	request := GenerationRequest{
 		Scope: model.ClientScope{
 			Class:       model.ClientDedicatedZTunnel,
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			WorkloadUID: "uid-a",
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 		},

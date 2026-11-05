@@ -40,7 +40,7 @@ defaultProviders: {credentialProvider: inherited}
 		t.Fatal(err)
 	}
 	original := proto.Clone(base)
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		raw     string
 		want    string
@@ -108,18 +108,18 @@ defaultProviders: {credentialProvider: ""}`,
 defaultProviders: {credentialProvider: inherited}`,
 		},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ApplyConfig(tt.raw, base)
-			if (err != nil) != tt.invalid {
-				t.Fatalf("ApplyConfig() error = %v, want invalid=%v", err, tt.invalid)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ApplyConfig(tc.raw, base)
+			if (err != nil) != tc.invalid {
+				t.Fatalf("ApplyConfig() error = %v, want invalid=%v", err, tc.invalid)
 			}
 			if !proto.Equal(base, original) {
 				t.Fatal("overlay mutated the lower layer")
 			}
-			if tt.invalid {
+			if tc.invalid {
 				return
 			}
-			want, err := config.Apply(tt.want, &configv1.EPEConfig{})
+			want, err := config.Apply(tc.want, &configv1.EPEConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -123,20 +123,20 @@ func TestNormalizeCredentialRef(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := NormalizeCredentialRef(tt.ref)
-			if tt.expectError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.expectError) {
-					t.Fatalf("NormalizeCredentialRef error = %v, want substring %q", err, tt.expectError)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeCredentialRef(tc.ref)
+			if tc.expectError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.expectError) {
+					t.Fatalf("NormalizeCredentialRef error = %v, want substring %q", err, tc.expectError)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("NormalizeCredentialRef: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("NormalizeCredentialRef = %#v, want %#v", got, tt.want)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("NormalizeCredentialRef = %#v, want %#v", got, tc.want)
 			}
 			// The deprecated fields must be gone, not merely unread: the
 			// filter's schema has no place to put them.

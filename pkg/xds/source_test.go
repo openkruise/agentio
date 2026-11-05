@@ -197,6 +197,41 @@ func TestPublicationCompletesPendingConfig(t *testing.T) {
 	}
 }
 
+func TestDedicatedSandboxRefreshCompletesPendingSourceDeletion(t *testing.T) {
+	present := true
+	scope := model.ClientScope{Class: model.ClientDedicatedZTunnel, WorkloadUID: "own"}
+	server := newTestServerWithGenerators(t, scope, nil, map[string]ResourceGenerator{
+		model.SandboxType: SandboxGenerator{
+			Source: sourceReaderFunc(func(model.ResourceKey) (model.SourceIdentity, bool) {
+				return model.SourceIdentity{UID: "source"}, present
+			}),
+		},
+	})
+	store := xdsstore.New(selectionSnapshot(t, nil))
+	server.server.resources = store
+	subscription := store.Subscribe(t.Context(), scope)
+	stream := newFakeStream(t.Context(), 1)
+	watches := map[string]*watchState{}
+	if err := server.server.handleRequest(stream, scope, log, watches, subscription,
+		nodeRequest(model.SandboxType, "pending")); err != nil {
+		t.Fatal(err)
+	}
+	if !hasPendingConfigs(watches) {
+		t.Fatal("unpublished Sandbox demand was not retained")
+	}
+	before := len(stream.sent())
+	present = false
+	store.NotifyKeys([]model.ResourceKey{{TypeURL: model.SandboxType, Name: "pending"}})
+	if err := server.server.pushUpdate(stream, scope, log, watches, <-subscription.Updates()); err != nil {
+		t.Fatal(err)
+	}
+	responses := stream.sent()
+	if len(responses) != before+1 || !slices.Equal(responses[before].RemovedResources, []string{"pending"}) ||
+		hasPendingConfigs(watches) {
+		t.Fatalf("indexed refresh did not complete deleted demand: %v", responses)
+	}
+}
+
 func TestPendingConfigCompletesAfterHalfClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var deleted atomic.Bool

@@ -178,11 +178,11 @@ func TestOptionValidation(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := tt.build()
-			if tt.expectError != "" {
-				mustErrorContains(t, err, tt.expectError)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := tc.build()
+			if tc.expectError != "" {
+				mustErrorContains(t, err, tc.expectError)
 				return
 			}
 			if err != nil {
@@ -445,12 +445,12 @@ func TestHandshake(t *testing.T) {
 			expectError: "trust anchors",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			serverCfg, clientCfg := tt.setup(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serverCfg, clientCfg := tc.setup(t)
 			_, err := doHandshake(t, serverCfg, clientCfg)
-			if tt.expectError != "" {
-				mustErrorContains(t, err, tt.expectError)
+			if tc.expectError != "" {
+				mustErrorContains(t, err, tc.expectError)
 				return
 			}
 			if err != nil {

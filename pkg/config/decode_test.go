@@ -38,7 +38,7 @@ defaultProviders: {credentialProvider: base}
 		t.Fatal(err)
 	}
 	original := proto.Clone(base)
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name            string
 		raw             string
 		provider        string
@@ -68,30 +68,30 @@ defaultProviders: {credentialProvider: base}
 		{name: "unknown field", raw: "unknown: true", provider: "base", defaultProvider: "base"},
 		{name: "unknown field in replacement", raw: "defaultProviders: {futureOption: true}", provider: "base"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := config.Apply(tt.raw, base)
-			if (err != nil) != tt.invalid {
-				t.Fatalf("Apply() error = %v, want invalid=%v", err, tt.invalid)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := config.Apply(tc.raw, base)
+			if (err != nil) != tc.invalid {
+				t.Fatalf("Apply() error = %v, want invalid=%v", err, tc.invalid)
 			}
 			if !proto.Equal(base, original) {
 				t.Fatal("overlay mutated the base configuration")
 			}
-			if tt.invalid {
+			if tc.invalid {
 				return
 			}
 			providers := got.GetExtensionProviders()
-			if tt.provider == "" {
+			if tc.provider == "" {
 				if len(providers) != 0 {
 					t.Fatalf("providers = %v, want empty", providers)
 				}
-			} else if len(providers) != 1 || providers[0].Name != tt.provider {
-				t.Fatalf("providers = %v, want only %q", providers, tt.provider)
+			} else if len(providers) != 1 || providers[0].Name != tc.provider {
+				t.Fatalf("providers = %v, want only %q", providers, tc.provider)
 			}
-			if got.GetDefaultProviders().GetCredentialProvider() != tt.defaultProvider {
+			if got.GetDefaultProviders().GetCredentialProvider() != tc.defaultProvider {
 				t.Fatalf(
 					"default provider = %q, want %q",
 					got.GetDefaultProviders().GetCredentialProvider(),
-					tt.defaultProvider,
+					tc.defaultProvider,
 				)
 			}
 		})

@@ -41,7 +41,7 @@ func TestBuildGatewayAccessLogFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		format *configv1.AccessLogFormat
 		text   string
@@ -52,9 +52,9 @@ func TestBuildGatewayAccessLogFormat(t *testing.T) {
 		{name: "text adds newline", format: &configv1.AccessLogFormat{Text: proto.String("%PROTOCOL% %REQ(:SCHEME)%")}, text: "%PROTOCOL% %REQ(:SCHEME)%\n"},
 		{name: "text preserves newline", format: &configv1.AccessLogFormat{Text: proto.String("%PROTOCOL%\n")}, text: "%PROTOCOL%\n"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			gateway := testTelemetryGateway()
-			gateway.Config.AccessLogFormat = tt.format
+			gateway.Config.AccessLogFormat = tc.format
 			for _, disabled := range []bool{false, true} {
 				expression := "connection.requested_server_name != ''"
 				policy := buildValue(t, nil, nil, []model.TelemetryAccessLogging{{
@@ -89,12 +89,12 @@ func TestBuildGatewayAccessLogFormat(t *testing.T) {
 					}
 					format := fileLog.GetLogFormat()
 					switch {
-					case tt.format.GetJson() != nil:
+					case tc.format.GetJson() != nil:
 						if !proto.Equal(format.GetJsonFormat(), customJSON) || !format.GetOmitEmptyValues() {
 							t.Fatalf("%s: JSON replacement = %v", path, format)
 						}
-					case tt.text != "":
-						if format.GetTextFormatSource().GetInlineString() != tt.text || format.GetOmitEmptyValues() {
+					case tc.text != "":
+						if format.GetTextFormatSource().GetInlineString() != tc.text || format.GetOmitEmptyValues() {
 							t.Fatalf("%s: text replacement = %v", path, format)
 						}
 					default:

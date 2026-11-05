@@ -55,7 +55,7 @@ func TestPolicyBindingsSelectorDependencyFanout(t *testing.T) {
 				values := map[string]string{"app": uid}
 				subjects = append(subjects, model.Workload{UID: uid, Namespace: "demo", Labels: values})
 			}
-			workloades := krt.NewMutableCollection(nil, subjects, options...)
+			workloads := krt.NewMutableCollection(nil, subjects, options...)
 			makePolicy := func(selector metav1.LabelSelector) PolicyAttachment {
 				t.Helper()
 				target := AttachmentTarget{Selector: selector, Global: global}
@@ -80,7 +80,7 @@ func TestPolicyBindingsSelectorDependencyFanout(t *testing.T) {
 			initial := makePolicy(selectApp("subject-0"))
 			attachments := krt.NewMutableCollection(nil, []PolicyAttachment{initial, witness}, options...)
 			bindings := NewWorkloadPolicyBindingsCollection(
-				workloades.AsCollection(),
+				workloads.AsCollection(),
 				attachments.AsCollection(),
 				krt.NewOptionsBuilder(stop, "test", nil),
 			)
@@ -129,7 +129,7 @@ func TestPolicyBindingsSelectorDependencyFanout(t *testing.T) {
 			// A primary label update must still detach the policy.
 			updated := subjects[1]
 			updated.Labels = map[string]string{"app": "disabled"}
-			workloades.ConditionalUpdateObject(updated)
+			workloads.ConditionalUpdateObject(updated)
 			check(1, 1, func(int) bool { return false })
 			attachments.ConditionalUpdateObject(makePolicy(selectApp("subject-2")))
 			check(1, 0, func(index int) bool { return index == 2 })
@@ -275,9 +275,9 @@ func TestPolicyBindings(t *testing.T) {
 		attachments[index] = normalized
 	}
 
-	workloades := krt.NewStaticCollection(nil, []model.Workload{demo, other}, options...)
+	workloads := krt.NewStaticCollection(nil, []model.Workload{demo, other}, options...)
 	policies := krt.NewStaticCollection(nil, attachments, options...)
-	bindings := NewWorkloadPolicyBindingsCollection(workloades, policies, builder)
+	bindings := NewWorkloadPolicyBindingsCollection(workloads, policies, builder)
 	if !bindings.WaitUntilSynced(stop) {
 		t.Fatal("workload policy bindings did not sync")
 	}

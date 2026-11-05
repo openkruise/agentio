@@ -64,18 +64,18 @@ func BenchmarkEvalBool(b *testing.B) {
 		{"labels-and-result", `pod.labels["app"] == "sleep" && result == "blocked"`},
 		{"string-functions", `request.path.startsWith("/v1/") && request.host.endsWith(".example.com")`},
 	}
-	for _, tt := range tests {
-		prog, err := CompileBool(tt.expr)
+	for _, tc := range tests {
+		prog, err := CompileBool(tc.expr)
 		if err != nil {
-			b.Fatalf("%s: compile: %v", tt.name, err)
+			b.Fatalf("%s: compile: %v", tc.name, err)
 		}
 		act := layerAuditOnly(b, benchActivation(nil), map[string]any{"result": "blocked"})
 		// Guard the fixture: every arm must actually evaluate to true, or
 		// the numbers would describe an error path instead.
 		if ok, err := EvalBool(prog, act); err != nil || !ok {
-			b.Fatalf("%s: fixture does not evaluate to true: (%v, %v)", tt.name, ok, err)
+			b.Fatalf("%s: fixture does not evaluate to true: (%v, %v)", tc.name, ok, err)
 		}
-		b.Run(tt.name, func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				ok, err := EvalBool(prog, act)
@@ -107,16 +107,16 @@ func BenchmarkEvalValue(b *testing.B) {
 		// EvalValue cannot hand back the activation's own map.
 		{"map-slot", `pod.labels`, nil},
 	}
-	for _, tt := range tests {
-		prog, err := CompileValue(tt.expr)
+	for _, tc := range tests {
+		prog, err := CompileValue(tc.expr)
 		if err != nil {
-			b.Fatalf("%s: compile: %v", tt.name, err)
+			b.Fatalf("%s: compile: %v", tc.name, err)
 		}
-		act := benchActivation(tt.inputs)
+		act := benchActivation(tc.inputs)
 		if v, err := EvalValue(prog, act); err != nil || v == nil {
-			b.Fatalf("%s: fixture yields (%v, %v), want a value", tt.name, v, err)
+			b.Fatalf("%s: fixture yields (%v, %v), want a value", tc.name, v, err)
 		}
-		b.Run(tt.name, func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				v, err := EvalValue(prog, act)

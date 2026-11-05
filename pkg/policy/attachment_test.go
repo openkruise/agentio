@@ -53,21 +53,21 @@ func TestPolicyAttachmentTargets(t *testing.T) {
 			wantDemo: true,
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			attachment, err := NewPolicyAttachment(PolicyAttachment{
 				Kind:   PolicyKindSecurityProfile,
-				Name:   test.name,
-				Target: test.target,
+				Name:   tc.name,
+				Target: tc.target,
 			})
 			if err != nil {
 				t.Fatalf("new policy attachment: %v", err)
 			}
-			if got := attachment.Selects(demo); got != test.wantDemo {
-				t.Fatalf("Selects(demo) = %v, want %v", got, test.wantDemo)
+			if got := attachment.Selects(demo); got != tc.wantDemo {
+				t.Fatalf("Selects(demo) = %v, want %v", got, tc.wantDemo)
 			}
-			if got := attachment.Selects(other); got != test.wantOther {
-				t.Fatalf("Selects(other) = %v, want %v", got, test.wantOther)
+			if got := attachment.Selects(other); got != tc.wantOther {
+				t.Fatalf("Selects(other) = %v, want %v", got, tc.wantOther)
 			}
 		})
 	}
@@ -151,9 +151,9 @@ func TestPolicyAttachmentValidation(t *testing.T) {
 			},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewPolicyAttachment(test.attachment); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewPolicyAttachment(tc.attachment); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
@@ -198,14 +198,14 @@ func TestPolicyAttachmentEqualityTracksOnlyReferenceFields(t *testing.T) {
 			p.selector = nil
 		}},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			changed := *policy
 			copy := *attachment
-			test.mutate(&copy)
+			tc.mutate(&copy)
 			changed.Attachment = &copy
 			if attachment.Equals(*changed.PolicyAttachment()) || policy.Equals(changed) {
-				t.Fatalf("%s change did not change attachment and compiled policy", test.name)
+				t.Fatalf("%s change did not change attachment and compiled policy", tc.name)
 			}
 		})
 	}

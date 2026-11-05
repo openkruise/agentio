@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/pki"
@@ -212,7 +213,7 @@ func TestAgentgatewaySourceChangesRegenerateConfig(t *testing.T) {
 		Ready:      true,
 		Serving:    true,
 	})
-	waitCondition(t, 3*time.Second, func() bool {
+	testutil.WaitFor(t, 3*time.Second, func() bool {
 		for _, patch := range rig.patcher.all() {
 			if patch.gvr.Resource == "configmaps" && strings.Contains(string(patch.data), "10.0.0.9") &&
 				strings.Contains(string(patch.data), "12345") {
@@ -308,7 +309,7 @@ func TestAgentgatewayGeneratedTrustAndHotUpdates(t *testing.T) {
 		Update(t.Context(), root, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, time.Second, func() bool {
+	testutil.WaitFor(t, time.Second, func() bool {
 		return rig.configMaps.Get(root.Name, root.Namespace).Data["ca.pem"] == root.Data["ca.pem"]
 	}, "invalid CA source update")
 	rig.patcher.mu.Lock()
@@ -332,7 +333,7 @@ func TestAgentgatewayGeneratedTrustAndHotUpdates(t *testing.T) {
 		Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(
+	testutil.WaitFor(
 		t,
 		time.Second,
 		func() bool { return rig.configMaps.Get(cm.Name, cm.Namespace).Data["config"] == cm.Data["config"] },

@@ -27,6 +27,7 @@ import (
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -104,7 +105,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	await := func(uid string, sniCount int) model.ResourceSet {
 		t.Helper()
 		var snap model.ResourceSet
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			snap = currentSnapshot(t, f.compiler)
 			w, _ := compatibilityWorkload(t, snap, uid)
 			sni := &extensionsv1.SniTrafficPolicy{}
@@ -125,7 +126,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	shared.Spec = *shared.Spec.DeepCopy()
 	shared.Spec.Egress.Rules[0].Action = agentsv1alpha1.RuleActionReject
 	f.trafficPolicies.UpdateObject(shared)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		r, ok := currentSnapshot(t, f.compiler).Get(authKey)
 		return ok && r.Hash != auth.Hash
 	}, "shared body updates compatibility")
@@ -141,7 +142,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	security = compatibilitySecurity("*bad.example")
 	s.Policies = &model.SandboxPolicies{SecurityRules: security.Rules}
 	f.sandboxes.UpdateObject(s)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return f.compiler.Failures()["SandboxPolicies/"+s.UID] != ""
 	}, "invalid SNI retains the last valid policy")
 	await(a.UID, 1)
@@ -158,7 +159,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	s.Attester = &model.Attester{WorkloadUID: b.UID}
 	f.sandboxes.UpdateObject(s)
 	await(b.UID, 1)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snap := currentSnapshot(t, f.compiler)
 		w, _ := compatibilityWorkload(t, snap, a.UID)
 		_, authExists := snap.Get(authKey)
@@ -167,7 +168,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	}, "move preserves shared policies on the previous Workload")
 	s.Attester = nil
 	f.sandboxes.UpdateObject(s)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		w, _ := compatibilityWorkload(t, currentSnapshot(t, f.compiler), b.UID)
 		return len(w.GetAuthorizationPolicies()) == 1 &&
 			!compatibilityExtension(t, w, "sni-traffic-policy", new(extensionsv1.SniTrafficPolicy))
@@ -176,7 +177,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	f.sandboxes.UpdateObject(s)
 	await(b.UID, 1)
 	f.sandboxes.DeleteObject(s.UID)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snap := currentSnapshot(t, f.compiler)
 		w, _ := compatibilityWorkload(t, snap, b.UID)
 		for _, r := range snap.List(model.WorkloadAuthorizationType) {
@@ -201,7 +202,7 @@ func TestMultipleSandboxesShareWorkloadWithoutProjection(t *testing.T) {
 			Policies:  &model.SandboxPolicies{SecurityRules: compatibilitySecurity(uid + ".example").Rules},
 		})
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, f.compiler)
 		w, _ := compatibilityWorkload(t, snapshot, host.UID)
 		if w == nil || len(snapshot.List(model.SandboxType)) != 2 || len(w.GetAuthorizationPolicies()) != 0 {
@@ -213,7 +214,7 @@ func TestMultipleSandboxesShareWorkloadWithoutProjection(t *testing.T) {
 			len(manifestAt(t, f.compiler, "b").GetExtensions()) == 2
 	}, "multiple Sandboxes do not require Workload projection")
 	f.sandboxes.DeleteObject("b")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		w, _ := compatibilityWorkload(t, currentSnapshot(t, f.compiler), host.UID)
 		refs := new(extensionsv1.PolicyReference)
 		sni := new(extensionsv1.SniTrafficPolicy)
@@ -243,7 +244,7 @@ func TestLegacyTrafficPolicySharedAcrossWorkloads(t *testing.T) {
 	selected.Spec.Selector = metav1.LabelSelector{MatchLabels: map[string]string{"app": "client"}}
 	f.trafficPolicies.UpdateObject(selected)
 	var before model.ResourceSet
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		before = currentSnapshot(t, f.compiler)
 		if len(before.List(model.WorkloadAuthorizationType)) != 3 {
 			return false
@@ -261,7 +262,7 @@ func TestLegacyTrafficPolicySharedAcrossWorkloads(t *testing.T) {
 	selected.Spec = *selected.Spec.DeepCopy()
 	selected.Spec.Egress.Rules[0].Action = agentsv1alpha1.RuleActionReject
 	f.trafficPolicies.UpdateObject(selected)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		r, found := currentSnapshot(t, f.compiler).Get(key)
 		return found && r.Hash != old.Hash
 	}, "body update replaces the one shared Authorization")
@@ -275,7 +276,7 @@ func TestLegacyTrafficPolicySharedAcrossWorkloads(t *testing.T) {
 		}
 	}
 	f.trafficPolicies.DeleteObject(selected.ResourceName())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, f.compiler)
 		if len(snapshot.List(model.WorkloadAuthorizationType)) != 2 {
 			return false
@@ -324,7 +325,7 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 	projectedUID := ""
 	check := func(host string) {
 		t.Helper()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			snapshot := currentSnapshot(t, f.compiler)
 			for _, w := range []model.Workload{target, other, crossNamespace, nonPod} {
 				wire, _ := compatibilityWorkload(t, snapshot, w.UID)
@@ -391,7 +392,7 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 	inline = compatibilitySecurity("*bad.example")
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.Rules}
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return f.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
 	}, "invalid inline SNI was processed")
 	check("updated.example")

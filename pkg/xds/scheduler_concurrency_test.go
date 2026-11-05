@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
@@ -143,7 +144,8 @@ func TestPushSchedulerMergeInterleavings(t *testing.T) {
 					t.Fatal("merge revived a cancelled/closed connection")
 				}
 				// AfterFunc can remove the entry before releasing its slot.
-				eventually(t, func() bool { return len(scheduler.slots) == 0 }, "scheduler capacity was not released")
+				testutil.Eventually(t, func() bool { return len(scheduler.slots) == 0 },
+					"scheduler capacity was not released")
 				return
 			}
 			push := nextSchedulerPush(t, scheduler)

@@ -115,15 +115,15 @@ func TestResolveProvidersRejectsInvalidOverrides(t *testing.T) {
 			want: "cluster",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			if _, err := resolveTelemetryProviders(
-				&test.override,
+				&tc.override,
 				nil,
 				false,
 			); err == nil ||
-				!strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.want)) {
-				t.Fatalf("ResolveProviders error = %v, want containing %q", err, test.want)
+				!strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
+				t.Fatalf("ResolveProviders error = %v, want containing %q", err, tc.want)
 			}
 		})
 	}

@@ -21,7 +21,7 @@ import (
 )
 
 func TestWDSIdentityProjectionChecksNamespace(t *testing.T) {
-	principal := mustTestPrincipal("cluster.local", "ns/demo/sa/app")
+	principal := model.MustPrincipal("cluster.local", "ns/demo/sa/app")
 	for _, tc := range []struct {
 		namespace string
 		wantErr   bool

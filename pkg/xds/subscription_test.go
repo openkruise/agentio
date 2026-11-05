@@ -57,19 +57,19 @@ func TestApplySubscriptionTypeAwareImplicitWildcard(t *testing.T) {
 		{name: "Sandbox", typeURL: model.SandboxType, wildcard: true},
 		{name: "RDS", typeURL: model.RouteType, wildcard: false},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			watch := &watchState{names: sets.New[string](), sent: map[string]string{}}
-			changed := applySubscription(watch, &discoveryv3.DeltaDiscoveryRequest{TypeUrl: test.typeURL})
-			if !changed || !watch.started || watch.wildcard != test.wildcard {
+			changed := applySubscription(watch, &discoveryv3.DeltaDiscoveryRequest{TypeUrl: tc.typeURL})
+			if !changed || !watch.started || watch.wildcard != tc.wildcard {
 				t.Fatalf("subscription = changed:%t started:%t wildcard:%t, want wildcard:%t",
-					changed, watch.started, watch.wildcard, test.wildcard)
+					changed, watch.started, watch.wildcard, tc.wildcard)
 			}
 			changed = applySubscription(watch, &discoveryv3.DeltaDiscoveryRequest{
-				TypeUrl:       test.typeURL,
+				TypeUrl:       tc.typeURL,
 				ResponseNonce: "ack",
 			})
-			if changed || watch.wildcard != test.wildcard {
+			if changed || watch.wildcard != tc.wildcard {
 				t.Fatalf("empty ACK changed subscription: changed:%t wildcard:%t", changed, watch.wildcard)
 			}
 		})

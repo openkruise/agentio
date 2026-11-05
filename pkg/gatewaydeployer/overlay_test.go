@@ -28,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 func overlayFixture() (*gatewayv1.Gateway, *corev1.ConfigMap) {
@@ -186,7 +188,7 @@ func TestGatewayOverlayConfigMapEvents(t *testing.T) {
 		}
 		return ""
 	}
-	waitCondition(t, 5*time.Second, func() bool { return version() == "one" }, "initial patch")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return version() == "one" }, "initial patch")
 	cm = cm.DeepCopy()
 	cm.Data["deployment"] = patch("two")
 	if _, err := rig.kubeClient.CoreV1().
@@ -194,7 +196,7 @@ func TestGatewayOverlayConfigMapEvents(t *testing.T) {
 		Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool { return version() == "two" }, "ConfigMap update to requeue Gateway")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return version() == "two" }, "ConfigMap update to requeue Gateway")
 	// Proxy configuration changes must not change the generated Pod template.
 	before := lastDeployment(rig.patcher).Spec.Template.DeepCopy()
 	cm = cm.DeepCopy()
@@ -204,7 +206,7 @@ func TestGatewayOverlayConfigMapEvents(t *testing.T) {
 		Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return d.clients.ConfigMaps.Get(cm.Name, cm.Namespace).Data["config"] == cm.Data["config"]
 	}, "proxy config change")
 	if err := d.Reconcile(namespacedNameOf(gw)); err != nil {
@@ -220,13 +222,13 @@ func TestGatewayOverlayConfigMapEvents(t *testing.T) {
 		Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool { return version() == "" }, "removing patch restores template")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return version() == "" }, "removing patch restores template")
 	if err := rig.kubeClient.CoreV1().
 		ConfigMaps(cm.Namespace).
 		Delete(context.Background(), cm.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return d.clients.ConfigMaps.Get(cm.Name, cm.Namespace) == nil
 	}, "ConfigMap deletion")
 	before = lastDeployment(rig.patcher).Spec.Template.DeepCopy()
@@ -243,7 +245,7 @@ func TestGatewayOverlayConfigMapEvents(t *testing.T) {
 		Create(context.Background(), cm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(
+	testutil.WaitFor(
 		t,
 		5*time.Second,
 		func() bool { return version() == "restored" },
@@ -394,7 +396,7 @@ func TestGatewayClassOverlayConfigMapEvents(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	go d.Run(stop)
-	waitCondition(t, 5*time.Second, func() bool { return lastDeployment(rig.patcher) != nil }, "initial deployment")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return lastDeployment(rig.patcher) != nil }, "initial deployment")
 	if lastDeployment(rig.patcher).Spec.Replicas != nil {
 		t.Fatal("template should not set replicas")
 	}
@@ -407,7 +409,7 @@ func TestGatewayClassOverlayConfigMapEvents(t *testing.T) {
 		dep := lastDeployment(rig.patcher)
 		return dep.Spec.Replicas != nil && *dep.Spec.Replicas == n
 	}
-	waitCondition(t, 5*time.Second, func() bool { return replicas(2) }, "class defaults creation")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return replicas(2) }, "class defaults creation")
 	cm = cm.DeepCopy()
 	cm.Data["deployment"] = "spec: {replicas: 3}"
 	if _, err := rig.kubeClient.CoreV1().
@@ -415,13 +417,13 @@ func TestGatewayClassOverlayConfigMapEvents(t *testing.T) {
 		Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool { return replicas(3) }, "class defaults update")
+	testutil.WaitFor(t, 5*time.Second, func() bool { return replicas(3) }, "class defaults update")
 	if err := rig.kubeClient.CoreV1().
 		ConfigMaps(cm.Namespace).
 		Delete(context.Background(), cm.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return lastDeployment(rig.patcher).Spec.Replicas == nil
 	}, "class defaults deletion")
 }
@@ -469,7 +471,7 @@ func TestGatewayClassOverlayLabelChanges(t *testing.T) {
 		return false
 	}
 	two, three := int32(2), int32(3)
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return hasReplicas(oldGateway, &two) && hasReplicas(newGateway, nil)
 	}, "initial class defaults")
 	updateClass := func(className string) {
@@ -486,15 +488,15 @@ func TestGatewayClassOverlayLabelChanges(t *testing.T) {
 		}
 	}
 	updateClass("other-egress")
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return hasReplicas(oldGateway, &three) && hasReplicas(newGateway, &two)
 	}, "label reassignment updates both classes and selects the old class fallback")
 	updateClass("")
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return hasReplicas(oldGateway, &three) && hasReplicas(newGateway, nil)
 	}, "label removal restores the new class template")
 	updateClass("agentio-egress")
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return hasReplicas(oldGateway, &two) && hasReplicas(newGateway, nil)
 	}, "label addition restores the oldest class defaults")
 }

@@ -21,6 +21,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -125,7 +126,7 @@ func BenchmarkCompilerWorkloadUpdate(b *testing.B) {
 			workload.NodeName = fmt.Sprintf("updated-node-%d", iteration)
 			workloads.ConditionalUpdateObject(workload)
 			// Wait for the change to reach the joined collection, then assemble.
-			eventually(b, func() bool {
+			testutil.Eventually(b, func() bool {
 				current := compiler.graph.resources.GetKey(model.AddressType + "|" + target)
 				if current == nil || current.Hash == previousHash {
 					return false

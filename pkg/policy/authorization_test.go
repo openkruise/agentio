@@ -540,7 +540,7 @@ func TestTrafficPolicyAsAuthorizationUnmatchedWorkloadPeerFailsClosed(t *testing
 		Namespace: "demo",
 		Selector:  map[string]string{"app": "missing"},
 	}}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		action agentsv1alpha1.RuleAction
 		from   []agentsv1alpha1.TrafficPolicyPeer
@@ -551,14 +551,14 @@ func TestTrafficPolicyAsAuthorizationUnmatchedWorkloadPeerFailsClosed(t *testing
 		{name: "reject source", action: agentsv1alpha1.RuleActionReject, from: []agentsv1alpha1.TrafficPolicyPeer{peer}},
 		{name: "reject destination", action: agentsv1alpha1.RuleActionReject, to: []agentsv1alpha1.TrafficPolicyPeer{peer}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			direction := &agentsv1alpha1.TrafficPolicyDirection{Rules: []agentsv1alpha1.TrafficPolicyRule{{
-				Action: test.action,
-				From:   test.from,
-				To:     test.to,
+				Action: tc.action,
+				From:   tc.from,
+				To:     tc.to,
 			}}}
 			source := model.TrafficPolicy{Name: "missing-peer", Namespace: "demo"}
-			if len(test.from) > 0 {
+			if len(tc.from) > 0 {
 				source.Spec.Ingress = direction
 			} else {
 				source.Spec.Egress = direction

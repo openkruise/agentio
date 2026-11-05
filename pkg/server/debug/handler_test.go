@@ -178,17 +178,17 @@ func TestConfigDebugHandlerAuthenticatesRemoteRootNamespaceServiceAccount(t *tes
 
 func TestConfigDebugHandlerRejectsRemoteMissingOrInvalidCredentials(t *testing.T) {
 	fixture := newConfigDebugFixture(t, nil, true)
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name       string
 		remoteAddr string
 	}{
 		{name: "missing credentials", remoteAddr: "192.0.2.10:41000"},
 		{name: "malformed remote address is not local", remoteAddr: "127.0.0.1"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			handler := NewHandler(fixture.sources, fixture.compiler,
 				&configDebugTestAuthenticator{err: errors.New("credentials rejected")}, "agentio-system")
-			recorder := serveConfigDebugRequest(handler, http.MethodGet, Path, test.remoteAddr)
+			recorder := serveConfigDebugRequest(handler, http.MethodGet, Path, tc.remoteAddr)
 			if recorder.Code != http.StatusUnauthorized {
 				t.Fatalf("response status = %d, want 401: %s", recorder.Code, recorder.Body.String())
 			}
@@ -198,7 +198,7 @@ func TestConfigDebugHandlerRejectsRemoteMissingOrInvalidCredentials(t *testing.T
 
 func TestConfigDebugHandlerRejectsRemoteNonKubernetesOrWrongNamespaceIdentity(t *testing.T) {
 	fixture := newConfigDebugFixture(t, nil, true)
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		peer model.PeerIdentity
 	}{
@@ -224,9 +224,9 @@ func TestConfigDebugHandlerRejectsRemoteNonKubernetesOrWrongNamespaceIdentity(t 
 			peer: model.PeerIdentity{AttestedBy: model.AttestationKubernetes, Kubernetes: model.KubernetesPeer{Namespace: "agentio-system", ServiceAccount: ""}},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			handler := NewHandler(fixture.sources, fixture.compiler,
-				&configDebugTestAuthenticator{peer: test.peer}, "agentio-system")
+				&configDebugTestAuthenticator{peer: tc.peer}, "agentio-system")
 			recorder := serveConfigDebugRequest(handler, http.MethodGet, Path, "192.0.2.10:41000")
 			if recorder.Code != http.StatusForbidden {
 				t.Fatalf("response status = %d, want 403: %s", recorder.Code, recorder.Body.String())

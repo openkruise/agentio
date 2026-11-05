@@ -207,7 +207,7 @@ data:
       messageTimeout: 5s
       request:
         attributes:
-        - filter_state['agentio.sandbox.uid']
+        - filter_state['agentio.sandbox.id']
         - filter_state['agentio.workload.name']
         - filter_state['agentio.workload.namespace']
         - filter_state['downstream_peer'].name

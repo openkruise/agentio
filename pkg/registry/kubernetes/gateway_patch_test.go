@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/compiler"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -65,7 +66,7 @@ func TestGatewayPatchConfigMapTypeSelection(t *testing.T) {
 		ManifestTypeConfigMapLabel: GatewayPatchManifestType,
 		KubeSourceConfigMapLabel:   "true",
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name      string
 		labels    map[string]string
 		data      map[string]string
@@ -97,22 +98,22 @@ func TestGatewayPatchConfigMapTypeSelection(t *testing.T) {
 		{name: "invalid sources without patch", labels: sourceLabels, data: map[string]string{KubeSourceDataKey: "[broken"}, wantError: "data.sources"},
 		{name: "partial legacy update rejected", labels: sourceLabels, data: map[string]string{KubeSourceDataKey: envoyFilterClusterPatch + "---\n[broken"}, wantError: "data.sources"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			cm := patchConfigMap("")
-			cm.Labels = tt.labels
-			cm.Data = tt.data
+			cm.Labels = tc.labels
+			cm.Data = tc.data
 			patches, err := decodeGatewayPatches(cm)
-			if tt.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantError) || len(patches) != 0 {
-					t.Fatalf("patches = %#v, error = %v; want no patches and %s error", patches, err, tt.wantError)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || len(patches) != 0 {
+					t.Fatalf("patches = %#v, error = %v; want no patches and %s error", patches, err, tc.wantError)
 				}
 				return
 			}
-			if err != nil || len(patches) != tt.wantCount {
-				t.Fatalf("patches = %#v, error = %v; want %d patches", patches, err, tt.wantCount)
+			if err != nil || len(patches) != tc.wantCount {
+				t.Fatalf("patches = %#v, error = %v; want %d patches", patches, err, tc.wantCount)
 			}
-			if len(patches) > 0 && patches[0].Name != tt.wantName {
-				t.Fatalf("name = %q; want %q", patches[0].Name, tt.wantName)
+			if len(patches) > 0 && patches[0].Name != tc.wantName {
+				t.Fatalf("name = %q; want %q", patches[0].Name, tc.wantName)
 			}
 			if len(patches) > 0 {
 				if !slices.Equal(patches[0].TargetGateways, []string{"demo/egress"}) {
@@ -197,7 +198,7 @@ func TestGatewayPatchFormatSwitchesRetainLastGood(t *testing.T) {
 			)
 		}
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return seen["10"]
@@ -279,7 +280,7 @@ func patchUpdateBarrier(
 		marker.Name = "test-progress"
 		marker.ResourceVersion = strconv.Itoa(revision)
 		configMaps.ConditionalUpdateObject(marker)
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			list := patchesFromSource(patches, "agentio-system/test-progress")
 			return len(list) == 1 && list[0].ResourceVersion == marker.ResourceVersion
 		}, "patch update queue processed earlier events")
@@ -336,7 +337,7 @@ func TestPatchSelectionPreservesTelemetry(t *testing.T) {
 	changed.Data[KubeSourceDataKey] = envoyFilterClusterPatch + "---\n" + targetlessMetricsTelemetry("demo", "second")
 	configMaps.ConditionalUpdateObject(changed)
 	waitForUpdates()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		list := telemetries.List()
 		return len(list) == 1 && list[0].Name == "second" && list[0].ResourceVersion == "2"
 	}, "Telemetry updates independently of invalid patches")
@@ -348,7 +349,7 @@ func TestPatchSelectionPreservesTelemetry(t *testing.T) {
 	changed.Data[KubePatchDataKey] = validPatchConfig
 	delete(changed.Labels, KubeSourceConfigMapLabel)
 	configMaps.ConditionalUpdateObject(changed)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		list := patchesFromSource(patches, "agentio-system/patches")
 		return len(telemetries.List()) == 0 && len(list) == 1 && list[0].ResourceVersion == "3"
 	}, "patch label alone does not select legacy Telemetry")
@@ -391,7 +392,7 @@ func TestPatchConfigAndEnvoyFilterProduceEquivalentGatewayResources(t *testing.T
 }
 
 func TestConfigMapPatchOrderingAcrossSources(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name           string
 		firstPriority  int
 		secondPriority int
@@ -402,8 +403,8 @@ func TestConfigMapPatchOrderingAcrossSources(t *testing.T) {
 		{name: "equal priority uses name", wantTimeout: 5 * time.Second},
 		{name: "sources in another ConfigMap still participate", includeSource: true, wantTimeout: 9 * time.Second},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			first := patchConfigMap(validPatchConfig + "priority: " + strconv.Itoa(tt.firstPriority) + "\n")
+		t.Run(tc.name, func(t *testing.T) {
+			first := patchConfigMap(validPatchConfig + "priority: " + strconv.Itoa(tc.firstPriority) + "\n")
 			first.Name = "a-patches"
 			first.CreationTimestamp = metav1.NewTime(time.Unix(200, 0))
 			second := patchConfigMap(
@@ -412,14 +413,14 @@ func TestConfigMapPatchOrderingAcrossSources(t *testing.T) {
 					"3s",
 					"5s",
 				) + "priority: " + strconv.Itoa(
-					tt.secondPriority,
+					tc.secondPriority,
 				) + "\n",
 			)
 			second.Name = "b-patches"
 			second.CreationTimestamp = metav1.NewTime(time.Unix(100, 0))
 			// Reverse input order to ensure application order comes from metadata.
 			inputs := []*corev1.ConfigMap{second, first}
-			if tt.includeSource {
+			if tc.includeSource {
 				source := patchConfigMap("")
 				source.Name = "c-sources"
 				source.Labels = map[string]string{KubeSourceConfigMapLabel: "true"}
@@ -455,8 +456,8 @@ func TestConfigMapPatchOrderingAcrossSources(t *testing.T) {
 				if err := resource.Value.UnmarshalTo(cluster); err != nil {
 					t.Fatal(err)
 				}
-				if got := cluster.GetConnectTimeout().AsDuration(); got != tt.wantTimeout {
-					t.Fatalf("connect timeout = %s, want %s", got, tt.wantTimeout)
+				if got := cluster.GetConnectTimeout().AsDuration(); got != tc.wantTimeout {
+					t.Fatalf("connect timeout = %s, want %s", got, tc.wantTimeout)
 				}
 				return
 			}
@@ -508,7 +509,7 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.Run(ctx.Done())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return registry.HasSynced() && c.HasSynced() && len(patchGatewayHashes(t, c, "demo/egress")) > 0
 	}, "baseline Gateway compilation")
 	baseline := patchGatewayHashes(t, c, "demo/egress")
@@ -520,7 +521,7 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return patchGatewayTimeout(t, c, "demo/egress") == 3*time.Second },
 		"ConfigMap watch -> compiler -> xDS",
@@ -537,7 +538,11 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 	if _, err := client.Kube().CoreV1().ConfigMaps(cm.Namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool { return c.Failures()["Gateway/demo/egress"] != "" }, "invalid final resources recorded")
+	testutil.Eventually(
+		t,
+		func() bool { return c.Failures()["Gateway/demo/egress"] != "" },
+		"invalid final resources recorded",
+	)
 	if !maps.Equal(patchGatewayHashes(t, c, "demo/egress"), lastGood) {
 		t.Fatal("invalid resources replaced last-known-good graph")
 	}
@@ -556,7 +561,7 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 	if _, err := client.Kube().CoreV1().ConfigMaps(cm.Namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return c.Failures()["Gateway/demo/egress"] == "" && patchGatewayTimeout(t, c, "demo/egress") == 4*time.Second
 	}, "valid update recovers graph")
 
@@ -572,7 +577,7 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 		Update(ctx, base, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return patchGatewayTimeout(t, c, "late/egress") == 4*time.Second },
 		"previously missing target picks up patches",
@@ -581,7 +586,7 @@ func TestConfigMapPatchesReachCompilerAndRetainLastGoodResources(t *testing.T) {
 	if err := client.Kube().CoreV1().ConfigMaps(cm.Namespace).Delete(ctx, cm.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return maps.Equal(patchGatewayHashes(t, c, "demo/egress"), baseline) },
 		"delete restores generated baseline",

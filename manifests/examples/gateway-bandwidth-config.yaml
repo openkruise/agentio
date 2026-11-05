@@ -14,8 +14,8 @@ egressGateways:
     bandwidthLimit:
       rateLimits:
         - actions:
-            # agentio.sandbox.uid is validated by Porter before this filter runs.
-            - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
+            # agentio.sandbox.id is validated by Porter before this filter runs.
+            - filterState: {key: agentio.sandbox.id, descriptorKey: sandbox}
       descriptors:
         - entries:
             - key: sandbox

@@ -140,6 +140,20 @@ pub fn project_rules(values: &[SniRule]) -> impl Iterator<Item = Value> + '_ {
                     list(sni_match.sni.iter().cloned().map(string).collect()),
                 );
             }
+            if !sni_match.ports.is_empty() {
+                matched.insert(
+                    "ports".into(),
+                    list(
+                        sni_match
+                            .ports
+                            .iter()
+                            .map(|port| Value {
+                                kind: Some(Kind::NumberValue(f64::from(*port))),
+                            })
+                            .collect(),
+                    ),
+                );
+            }
             fields.insert("match".into(), object(matched));
         }
         object(fields)
@@ -224,6 +238,67 @@ fn traffic_references(values: &[Any]) -> Result<Option<Vec<String>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::kruise::networking::extensions::v1::SniMatch;
+
+    #[test]
+    fn sni_projection_preserves_action_order_and_ports() {
+        let policy = SniTrafficPolicy {
+            rules: vec![
+                SniRule {
+                    r#match: Some(SniMatch {
+                        sni: vec!["skip.example.com".into()],
+                        ports: vec![443, 8443],
+                    }),
+                    action: SniAction::Passthrough as i32,
+                },
+                SniRule {
+                    r#match: Some(SniMatch {
+                        sni: vec!["*".into()],
+                        ports: vec![],
+                    }),
+                    action: SniAction::Deny as i32,
+                },
+            ],
+        };
+        let decoded = rules(&[Any {
+            type_url: "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy".into(),
+            value: policy.encode_to_vec(),
+        }])
+        .unwrap();
+        let projected: Vec<_> = project_rules(&decoded).collect();
+        assert_eq!(
+            projected,
+            vec![
+                object([
+                    ("action".into(), string("SNI_ACTION_PASSTHROUGH")),
+                    (
+                        "match".into(),
+                        object([
+                            ("sni".into(), list(vec![string("skip.example.com")])),
+                            (
+                                "ports".into(),
+                                list(vec![
+                                    Value {
+                                        kind: Some(Kind::NumberValue(443.0))
+                                    },
+                                    Value {
+                                        kind: Some(Kind::NumberValue(8443.0))
+                                    },
+                                ])
+                            ),
+                        ])
+                    ),
+                ]),
+                object([
+                    ("action".into(), string("SNI_ACTION_DENY")),
+                    (
+                        "match".into(),
+                        object([("sni".into(), list(vec![string("*")]))])
+                    ),
+                ]),
+            ]
+        );
+    }
 
     fn binding(names: &[&str]) -> Any {
         Any {

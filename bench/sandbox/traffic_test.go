@@ -62,7 +62,7 @@ func TestContinuousTrafficChangesRateWithoutRepreparingClients(t *testing.T) {
 // A TCP/TLS success is insufficient: the test adapter must check both CONNECT
 // authorization and the exact HTTP response carried inside the tunnel.
 func TestRequestChecksTunnelAndBackend(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		connect   int
 		inner     int
@@ -78,15 +78,15 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 		{"traffic_wrong_error", 200, 403, `{"code":"other","message":"Outbound destination is denied by policy."}`, true, true},
 		{"traffic_malformed_error", 200, 403, `not json`, true, true},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if req.Method != "CONNECT" || req.Host != "backend:8080" ||
-					req.Header.Get("X-Agentio-Sandbox-Uid") != "kruise:sandbox-000042" {
+					req.Header.Get("X-Agentio-Sandbox-Id") != "kruise:sandbox-000042" {
 					t.Errorf("incorrect tunnel request: %s %s %v", req.Method, req.Host, req.Header)
 				}
-				w.WriteHeader(test.connect)
+				w.WriteHeader(tc.connect)
 				w.(http.Flusher).Flush()
-				if test.connect != 200 {
+				if tc.connect != 200 {
 					return
 				}
 				reader := bufio.NewReader(req.Body)
@@ -103,9 +103,9 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				if _, err := fmt.Fprintf(
 					w,
 					"HTTP/1.1 %d response\r\nContent-Length: %d\r\n\r\n%s",
-					test.inner,
-					len(test.body),
-					test.body,
+					tc.inner,
+					len(tc.body),
+					tc.body,
 				); err != nil {
 					t.Errorf("write inner response: %v", err)
 				}
@@ -129,21 +129,21 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if test.traffic {
+			if tc.traffic {
 				r.PolicyKind = "traffic"
 				r.ExpectedStatus = http.StatusForbidden
 			}
 			defer cancel()
 			err := r.request(ctx, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}}, 42)
-			if (err != nil) != test.wantError {
-				t.Fatalf("request error=%v, want error=%t", err, test.wantError)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("request error=%v, want error=%t", err, tc.wantError)
 			}
 			transport := r.gatewayTransport(&tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
 			defer transport.CloseIdleConnections()
 			for range 2 {
 				err := r.requestOn(ctx, transport.RoundTrip, 42)
-				if (err != nil) != test.wantError {
-					t.Fatalf("reused request error=%v, want error=%t", err, test.wantError)
+				if (err != nil) != tc.wantError {
+					t.Fatalf("reused request error=%v, want error=%t", err, tc.wantError)
 				}
 			}
 			if got := connections.Load(); got != 2 {

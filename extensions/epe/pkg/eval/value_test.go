@@ -34,23 +34,23 @@ func TestValueEval(t *testing.T) {
 		{name: "template renders", value: Value{Tmpl: tmpl}, data: struct{ Token string }{"tok"}, want: "Bearer tok"},
 		{name: "empty value yields empty string", value: Value{}, want: ""},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.value.Eval(tt.data)
-			if tt.expectError != "" {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.value.Eval(tc.data)
+			if tc.expectError != "" {
 				if err == nil {
-					t.Fatalf("Eval: want error containing %q, got nil", tt.expectError)
+					t.Fatalf("Eval: want error containing %q, got nil", tc.expectError)
 				}
-				if !strings.Contains(err.Error(), tt.expectError) {
-					t.Errorf("Eval error: want substring %q, got %q", tt.expectError, err.Error())
+				if !strings.Contains(err.Error(), tc.expectError) {
+					t.Errorf("Eval error: want substring %q, got %q", tc.expectError, err.Error())
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("Eval: unexpected error: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("Eval: want %q, got %q", tt.want, got)
+			if got != tc.want {
+				t.Errorf("Eval: want %q, got %q", tc.want, got)
 			}
 		})
 	}

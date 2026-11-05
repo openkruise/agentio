@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	agentlog "github.com/openkruise/agentio/pkg/log"
 	"github.com/openkruise/agentio/pkg/metrics"
@@ -51,7 +52,7 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", value, nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: name,
-				Principal:   serviceAccountPrincipal("default", "default"),
+				Principal:   model.MustServiceAccountPrincipal("default", "default"),
 			}})
 		if err != nil {
 			t.Fatal(err)
@@ -63,18 +64,6 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 		t.Fatal(err)
 	}
 	return set
-}
-
-func eventually(t testing.TB, condition func() bool, message string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("condition never held: %s", message)
 }
 
 // stubSource returns whatever snapshot it is currently holding and counts calls,
@@ -266,7 +255,7 @@ func TestControllerLogsPublishedSnapshotAtInfo(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- controller.Run(ctx) }()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return strings.Contains(output.String(), `msg="xDS snapshot published"`)
 	}, "snapshot publication logged")
 	cancel()
@@ -369,10 +358,10 @@ func TestControllerOwnsCompiledResourceRegistration(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- controller.Run(ctx) }()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return source.Resources().(*fakeResourceEvents).HandlerCount() == 1
 	}, "compiled resource handler registered")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		full, _ := sink.calls()
 		return full == 1
 	}, "initial snapshot published")
@@ -380,7 +369,7 @@ func TestControllerOwnsCompiledResourceRegistration(t *testing.T) {
 
 	resource := newSnapshot(t, "one").List(model.AddressType)[0]
 	source.Resources().(*fakeResourceEvents).Emit(resource)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, delta := sink.calls()
 		return delta == 1
 	}, "compiled resource event applied")
@@ -412,7 +401,7 @@ func TestControllerUsesResourcePublisherForDeltaAndFullPushes(t *testing.T) {
 	}
 	go func() { _ = controller.Run(ctx) }()
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		full, _ := sink.calls()
 		return full == 1
 	}, "initial snapshot published")
@@ -420,7 +409,7 @@ func TestControllerUsesResourcePublisherForDeltaAndFullPushes(t *testing.T) {
 
 	resource := newSnapshot(t, "b").List(model.AddressType)[0]
 	controller.Enqueue([]model.ResourceChange{{Key: resource.Key, New: &resource}})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, delta := sink.calls()
 		return delta == 1
 	}, "changed resource applied")
@@ -430,7 +419,7 @@ func TestControllerUsesResourcePublisherForDeltaAndFullPushes(t *testing.T) {
 
 	sink.reset()
 	controller.Trigger()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		full, _ := sink.calls()
 		return full == 1
 	}, "explicit trigger published full snapshot")
@@ -455,7 +444,7 @@ func TestControllerCoalescesTriggersIntoOneCompile(t *testing.T) {
 	for range 20 {
 		controller.Trigger()
 	}
-	eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "snapshot published")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "snapshot published")
 
 	// Run issues one trigger of its own at startup, so at most two compiles should
 	// have happened: the startup one and the burst.
@@ -477,12 +466,12 @@ func TestControllerAppliesKRTIncrementalBatchWithoutFullCompile(t *testing.T) {
 	resources := krt.NewMutableCollection[model.Resource](nil, nil, krt.WithStop(ctx.Done()))
 	source.events = resources.AsCollection()
 	go func() { _ = controller.Run(ctx) }()
-	eventually(t, func() bool { return source.calls() > 0 }, "initial full compile")
+	testutil.Eventually(t, func() bool { return source.calls() > 0 }, "initial full compile")
 	before := source.calls()
 
 	resource := newSnapshot(t, "a").List(model.AddressType)[0]
 	resources.UpdateObject(resource)
-	eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "changed resource applied")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "changed resource applied")
 	if got := source.calls(); got != before {
 		t.Fatalf("steady-state change event caused full compile: calls=%d, want %d", got, before)
 	}
@@ -504,7 +493,7 @@ func TestControllerRunUnregistersResourceEvents(t *testing.T) {
 	first := firstSnapshot.List(model.AddressType)[0]
 	source.set(firstSnapshot, nil)
 	resources.UpdateObject(first)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		controller.mu.Lock()
 		defer controller.mu.Unlock()
 		return len(controller.changes) == 1
@@ -565,7 +554,7 @@ func TestControllerFlushesAtMaximumDelay(t *testing.T) {
 		}
 	}()
 
-	eventually(t, func() bool { return store.Snapshot().Len() == 1 },
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 1 },
 		"snapshot published despite continuous triggers")
 	close(stop)
 	select {
@@ -604,7 +593,8 @@ func TestFailedCompilePreservesLastKnownGood(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- controller.Run(ctx) }()
 
-	eventually(t, func() bool { return store.Snapshot().Version() == good.Version() }, "good snapshot published")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Version() == good.Version() },
+		"good snapshot published")
 	subscriptionCtx, cancelSubscription := context.WithCancel(context.Background())
 	t.Cleanup(cancelSubscription)
 	subscription := store.Subscribe(subscriptionCtx, model.ClientScope{})
@@ -613,7 +603,7 @@ func TestFailedCompilePreservesLastKnownGood(t *testing.T) {
 	source.set(model.ResourceSet{}, fmt.Errorf("compilation exploded"))
 	before := source.calls()
 	controller.Trigger()
-	eventually(t, func() bool { return source.calls() > before }, "failing compile attempted")
+	testutil.Eventually(t, func() bool { return source.calls() > before }, "failing compile attempted")
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -721,12 +711,12 @@ func TestControllerPublishesWithoutDebounce(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "initial snapshot without timers")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "initial snapshot without timers")
 	resource := newSnapshot(t, "added").List(model.AddressType)[0]
 	controller.Enqueue([]model.ResourceChange{{Key: resource.Key, New: &resource}})
-	eventually(t, func() bool { return store.Snapshot().Len() == 2 }, "incremental publication without timers")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 2 }, "incremental publication without timers")
 	controller.Enqueue([]model.ResourceChange{{Key: resource.Key, Old: &resource}})
-	eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "resource removal without timers")
+	testutil.Eventually(t, func() bool { return store.Snapshot().Len() == 1 }, "resource removal without timers")
 	if source.calls() != 1 {
 		t.Fatal("incremental updates triggered a full snapshot")
 	}

@@ -89,17 +89,17 @@ func benchmarkResourceMembershipBatch(b *testing.B, shared bool, namespaceSize, 
 					if err != nil {
 						b.Fatal(err)
 					}
-					for _, scenario := range []struct {
+					for _, tc := range []struct {
 						name    string
 						set     ResourceSet
 						changes []ResourceChange
 						want    int
 					}{{"delete", initial, deletes, size - count}, {"add", absent, adds, size}, {"payload", initial, updates, size}} {
-						b.Run(scenario.name, func(b *testing.B) {
+						b.Run(tc.name, func(b *testing.B) {
 							b.ReportAllocs()
 							for b.Loop() {
-								next, changed, err := scenario.set.Apply(scenario.changes)
-								if err != nil || !changed || next.Len() != scenario.want {
+								next, changed, err := tc.set.Apply(tc.changes)
+								if err != nil || !changed || next.Len() != tc.want {
 									b.Fatalf("changed=%t len=%d err=%v", changed, next.Len(), err)
 								}
 							}

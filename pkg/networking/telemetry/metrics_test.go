@@ -26,7 +26,7 @@ import (
 )
 
 func TestMetricsFilterSelection(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name      string
 		config    metricConfig
 		selection string
@@ -44,20 +44,20 @@ func TestMetricsFilterSelection(t *testing.T) {
 		{name: "required response flags", config: metricConfig{Overrides: []metricsOverride{{Name: "REQUEST_DURATION", Tags: []tagOverride{{Name: "response_flags", Remove: true}}}}}, invalid: true},
 		{name: "required response code", config: metricConfig{Overrides: []metricsOverride{{Name: "REQUEST_COUNT", Tags: []tagOverride{{Name: "response_code", Remove: true}}}}}, invalid: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			// reportingInterval is TCP-specific; it does not schedule HTTP observations.
 			interval := time.Microsecond
 			filter, err := buildMetricsFilter(
-				metricsConfig{ServerMetrics: tt.config, ReportingInterval: &interval},
+				metricsConfig{ServerMetrics: tc.config, ReportingInterval: &interval},
 				false,
 			)
-			if (err != nil) != tt.invalid {
+			if (err != nil) != tc.invalid {
 				t.Fatalf("error = %v", err)
 			}
-			if tt.invalid {
+			if tc.invalid {
 				return
 			}
-			if (filter == nil) != tt.disabled {
+			if (filter == nil) != tc.disabled {
 				t.Fatalf("filter = %v", filter)
 			}
 			if filter == nil {
@@ -80,7 +80,7 @@ func TestMetricsFilterSelection(t *testing.T) {
 				config.DynamicModuleConfig.MetricsNamespace != "agentio_gateway" ||
 				modulePath != "/usr/local/lib/libagentio_gateway_metrics.so" ||
 				config.FilterName != "agentio_gateway_metrics" ||
-				selection.Value != tt.selection {
+				selection.Value != tc.selection {
 				t.Fatal(config)
 			}
 		})

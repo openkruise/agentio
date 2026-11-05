@@ -210,9 +210,9 @@ spec:
 `,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := f.ValidateYAML(fmt.Sprintf(base, tt.spec)); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := f.ValidateYAML(fmt.Sprintf(base, tc.spec)); err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
 		})

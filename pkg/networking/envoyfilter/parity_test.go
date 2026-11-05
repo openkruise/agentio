@@ -87,19 +87,19 @@ func TestAgentioReplaceAndInsertParity(t *testing.T) {
 			applied:      false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, applied := replaceFirst(slices.Clone(tt.input), replacement)
-			if !slices.Equal(got, tt.replace) || applied != tt.applied {
-				t.Fatalf("replaceFirst() = %v, %v, want %v, %v", got, applied, tt.replace, tt.applied)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, applied := replaceFirst(slices.Clone(tc.input), replacement)
+			if !slices.Equal(got, tc.replace) || applied != tc.applied {
+				t.Fatalf("replaceFirst() = %v, %v, want %v, %v", got, applied, tc.replace, tc.applied)
 			}
-			got, applied = insertBefore(slices.Clone(tt.input), replacement)
-			if !slices.Equal(got, tt.insertBefore) || applied != tt.applied {
-				t.Fatalf("insertBefore() = %v, %v, want %v, %v", got, applied, tt.insertBefore, tt.applied)
+			got, applied = insertBefore(slices.Clone(tc.input), replacement)
+			if !slices.Equal(got, tc.insertBefore) || applied != tc.applied {
+				t.Fatalf("insertBefore() = %v, %v, want %v, %v", got, applied, tc.insertBefore, tc.applied)
 			}
-			got, applied = insertAfter(slices.Clone(tt.input), replacement)
-			if !slices.Equal(got, tt.insertAfter) || applied != tt.applied {
-				t.Fatalf("insertAfter() = %v, %v, want %v, %v", got, applied, tt.insertAfter, tt.applied)
+			got, applied = insertAfter(slices.Clone(tc.input), replacement)
+			if !slices.Equal(got, tc.insertAfter) || applied != tc.applied {
+				t.Fatalf("insertAfter() = %v, %v, want %v, %v", got, applied, tc.insertAfter, tc.applied)
 			}
 		})
 	}
@@ -121,11 +121,11 @@ func TestAgentioClusterMatchParity(t *testing.T) {
 		{name: "full match", cluster: "outbound|80|v1|foo.bar", match: &model.ClusterMatch{PortNumber: 80, Service: "foo.bar", Subset: "v1"}, want: true},
 		{name: "legacy separator full match", cluster: "outbound_.80_.v1_.foo.bar", match: &model.ClusterMatch{PortNumber: 80, Service: "foo.bar", Subset: "v1"}, want: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			patch := Patch{Target: model.ClusterPatch{Match: tt.match}}
-			if got := clusterMatches(&clusterv3.Cluster{Name: tt.cluster}, patch); got != tt.want {
-				t.Fatalf("clusterMatches() = %v, want %v", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			patch := Patch{Target: model.ClusterPatch{Match: tc.match}}
+			if got := clusterMatches(&clusterv3.Cluster{Name: tc.cluster}, patch); got != tc.want {
+				t.Fatalf("clusterMatches() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -177,15 +177,15 @@ func TestAgentioListenerMatchParity(t *testing.T) {
 		{name: "one application protocol missing", match: &model.ListenerMatch{FilterChain: &model.FilterChainMatch{ApplicationProtocols: "h2,http/3"}}},
 		{name: "destination port mismatch", match: &model.ListenerMatch{FilterChain: &model.FilterChainMatch{DestinationPort: 8443}}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			patch := Patch{Target: model.NetworkFilterPatch{Match: tt.match}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			patch := Patch{Target: model.NetworkFilterPatch{Match: tc.match}}
 			got := listenerMatches(listener, patch)
-			if got && tt.match != nil && tt.match.FilterChain != nil {
+			if got && tc.match != nil && tc.match.FilterChain != nil {
 				got = filterChainMatches(listener, chain, patch)
 			}
-			if got != tt.want {
-				t.Fatalf("listener/filterChain match = %v, want %v", got, tt.want)
+			if got != tc.want {
+				t.Fatalf("listener/filterChain match = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -236,14 +236,14 @@ func TestAgentioListenerFilterOperationParity(t *testing.T) {
 			wantMerge: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			match := &model.ListenerMatch{Name: "main", ListenerFilter: tt.matched}
-			policy := parityPolicy(t, tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			match := &model.ListenerMatch{Name: "main", ListenerFilter: tc.matched}
+			policy := parityPolicy(t, tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.ListenerFilterPatch{
 					Match: match,
-					Value: tt.value,
+					Value: tc.value,
 				},
 			})
 			input := []*listenerv3.Listener{{
@@ -257,10 +257,10 @@ func TestAgentioListenerFilterOperationParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if names := listenerFilterNames(got[0].ListenerFilters); !slices.Equal(names, tt.want) {
-				t.Fatalf("listener filters = %v, want %v", names, tt.want)
+			if names := listenerFilterNames(got[0].ListenerFilters); !slices.Equal(names, tc.want) {
+				t.Fatalf("listener filters = %v, want %v", names, tc.want)
 			}
-			if tt.wantMerge {
+			if tc.wantMerge {
 				configuration := &structpb.Struct{}
 				if err := got[0].ListenerFilters[0].GetTypedConfig().UnmarshalTo(configuration); err != nil {
 					t.Fatal(err)
@@ -306,13 +306,13 @@ func TestAgentioListenerOperationParity(t *testing.T) {
 			wantNames: []string{"other"},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			policy := parityPolicy(t, "listener-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := parityPolicy(t, "listener-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.ListenerPatch{
-					Match: tt.match,
-					Value: tt.value,
+					Match: tc.match,
+					Value: tc.value,
 				},
 			})
 			input := []*listenerv3.Listener{{Name: "main"}, {Name: "other"}}
@@ -320,10 +320,10 @@ func TestAgentioListenerOperationParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if names := listenerNames(got); !slices.Equal(names, tt.wantNames) {
-				t.Fatalf("listeners = %v, want %v", names, tt.wantNames)
+			if names := listenerNames(got); !slices.Equal(names, tc.wantNames) {
+				t.Fatalf("listeners = %v, want %v", names, tc.wantNames)
 			}
-			if tt.wantMerge && got[0].GetTrafficDirection() != corev3.TrafficDirection_INBOUND {
+			if tc.wantMerge && got[0].GetTrafficDirection() != corev3.TrafficDirection_INBOUND {
 				t.Fatalf("merged traffic direction = %v", got[0].GetTrafficDirection())
 			}
 			if input[0].GetTrafficDirection() != corev3.TrafficDirection_UNSPECIFIED {
@@ -358,13 +358,13 @@ func TestAgentioFilterChainOperationParity(t *testing.T) {
 		},
 		{name: "remove", operation: model.PatchRemove, matched: "a", wantNames: []string{"b"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			policy := parityPolicy(t, "filter-chain-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := parityPolicy(t, "filter-chain-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.FilterChainPatch{
-					Match: &model.ListenerMatch{Name: "main", FilterChain: &model.FilterChainMatch{Name: tt.matched}},
-					Value: tt.value,
+					Match: &model.ListenerMatch{Name: "main", FilterChain: &model.FilterChainMatch{Name: tc.matched}},
+					Value: tc.value,
 				},
 			})
 			input := []*listenerv3.Listener{{
@@ -378,10 +378,10 @@ func TestAgentioFilterChainOperationParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if names := filterChainNames(got[0].FilterChains); !slices.Equal(names, tt.wantNames) {
-				t.Fatalf("filter chains = %v, want %v", names, tt.wantNames)
+			if names := filterChainNames(got[0].FilterChains); !slices.Equal(names, tc.wantNames) {
+				t.Fatalf("filter chains = %v, want %v", names, tc.wantNames)
 			}
-			if tt.wantMerge && got[0].FilterChains[0].GetFilterChainMatch().GetTransportProtocol() != "tls" {
+			if tc.wantMerge && got[0].FilterChains[0].GetFilterChainMatch().GetTransportProtocol() != "tls" {
 				t.Fatalf("merged filter chain = %+v", got[0].FilterChains[0])
 			}
 			if input[0].FilterChains[0].GetFilterChainMatch().GetTransportProtocol() != "" {
@@ -419,17 +419,17 @@ func TestAgentioNetworkFilterOperationParity(t *testing.T) {
 			wantMerge: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			match := &model.ListenerMatch{Name: "main", FilterChain: &model.FilterChainMatch{Name: "chain"}}
-			if tt.matched != "" {
-				match.FilterChain.Filter = &model.FilterMatch{Name: tt.matched}
+			if tc.matched != "" {
+				match.FilterChain.Filter = &model.FilterMatch{Name: tc.matched}
 			}
-			policy := parityPolicy(t, "network-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+			policy := parityPolicy(t, "network-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.NetworkFilterPatch{
 					Match: match,
-					Value: tt.value,
+					Value: tc.value,
 				},
 			})
 			input := []*listenerv3.Listener{{
@@ -447,10 +447,10 @@ func TestAgentioNetworkFilterOperationParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			filters := got[0].FilterChains[0].Filters
-			if names := networkFilterNames(filters); !slices.Equal(names, tt.want) {
-				t.Fatalf("network filters = %v, want %v", names, tt.want)
+			if names := networkFilterNames(filters); !slices.Equal(names, tc.want) {
+				t.Fatalf("network filters = %v, want %v", names, tc.want)
 			}
-			if tt.wantMerge {
+			if tc.wantMerge {
 				configuration := &structpb.Struct{}
 				if err := filters[0].GetTypedConfig().UnmarshalTo(configuration); err != nil {
 					t.Fatal(err)
@@ -494,8 +494,8 @@ func TestAgentioHTTPFilterOperationParity(t *testing.T) {
 			wantMerge: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			match := &model.ListenerMatch{
 				Name: "main",
 				FilterChain: &model.FilterChainMatch{
@@ -503,14 +503,14 @@ func TestAgentioHTTPFilterOperationParity(t *testing.T) {
 					Filter: &model.FilterMatch{Name: httpConnectionManagerFilter},
 				},
 			}
-			if tt.matched != "" {
-				match.FilterChain.Filter.SubFilter = &model.SubFilterMatch{Name: tt.matched}
+			if tc.matched != "" {
+				match.FilterChain.Filter.SubFilter = &model.SubFilterMatch{Name: tc.matched}
 			}
-			policy := parityPolicy(t, "http-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+			policy := parityPolicy(t, "http-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.HTTPFilterPatch{
 					Match: match,
-					Value: tt.value,
+					Value: tc.value,
 				},
 			})
 			input := listenerWithHTTPFilters(t, []*hcmv3.HttpFilter{
@@ -522,10 +522,10 @@ func TestAgentioHTTPFilterOperationParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			manager := unmarshalHCM(t, got[0].FilterChains[0].Filters[0])
-			if names := httpFilterNamesForParity(manager.HttpFilters); !slices.Equal(names, tt.want) {
-				t.Fatalf("HTTP filters = %v, want %v", names, tt.want)
+			if names := httpFilterNamesForParity(manager.HttpFilters); !slices.Equal(names, tc.want) {
+				t.Fatalf("HTTP filters = %v, want %v", names, tc.want)
 			}
-			if tt.wantMerge {
+			if tc.wantMerge {
 				configuration := &structpb.Struct{}
 				if err := manager.HttpFilters[0].GetTypedConfig().UnmarshalTo(configuration); err != nil {
 					t.Fatal(err)
@@ -575,11 +575,16 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 				},
 			},
 		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				patch := Patch{Target: model.RouteConfigurationPatch{Match: tt.match}}
-				if got := routeConfigurationMatches(&routev3.RouteConfiguration{Name: tt.configuration}, patch); got != tt.want {
-					t.Fatalf("routeConfigurationMatches() = %v, want %v", got, tt.want)
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				patch := Patch{
+					Target: model.RouteConfigurationPatch{
+						Match: tc.match,
+					},
+				}
+				rc := &routev3.RouteConfiguration{Name: tc.configuration}
+				if got := routeConfigurationMatches(rc, patch); got != tc.want {
+					t.Fatalf("routeConfigurationMatches() = %v, want %v", got, tc.want)
 				}
 			})
 		}
@@ -599,11 +604,17 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 			{name: "name and domain match", host: &routev3.VirtualHost{Name: "scoobydoo", Domains: []string{"*.scooby", "*.com"}}, match: &model.VirtualHostMatch{Name: "scoobydoo", DomainName: "*.scooby"}, want: true},
 			{name: "domain mismatch", host: &routev3.VirtualHost{Name: "scoobydoo", Domains: []string{"*.scooby", "*.com"}}, match: &model.VirtualHostMatch{DomainName: "*.invalid"}},
 		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				patch := Patch{Target: model.VirtualHostPatch{Match: &model.RouteConfigurationMatch{VirtualHost: tt.match}}}
-				if got := virtualHostMatches(tt.host, patch); got != tt.want {
-					t.Fatalf("virtualHostMatches() = %v, want %v", got, tt.want)
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				patch := Patch{
+					Target: model.VirtualHostPatch{
+						Match: &model.RouteConfigurationMatch{
+							VirtualHost: tc.match,
+						},
+					},
+				}
+				if got := virtualHostMatches(tc.host, patch); got != tc.want {
+					t.Fatalf("virtualHostMatches() = %v, want %v", got, tc.want)
 				}
 			})
 		}
@@ -623,11 +634,19 @@ func TestAgentioRouteMatchParity(t *testing.T) {
 			{name: "direct response action", route: &routev3.Route{Action: &routev3.Route_DirectResponse{DirectResponse: &routev3.DirectResponseAction{}}}, match: model.RouteMatch{Action: model.RouteActionDirectResponse}, wanted: true},
 			{name: "action mismatch", route: &routev3.Route{Action: &routev3.Route_Redirect{Redirect: &routev3.RedirectAction{}}}, match: model.RouteMatch{Action: model.RouteActionRoute}},
 		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				patch := Patch{Target: model.HTTPRoutePatch{Match: &model.RouteConfigurationMatch{VirtualHost: &model.VirtualHostMatch{Route: &tt.match}}}}
-				if got := httpRouteMatches(tt.route, patch); got != tt.wanted {
-					t.Fatalf("httpRouteMatches() = %v, want %v", got, tt.wanted)
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				patch := Patch{
+					Target: model.HTTPRoutePatch{
+						Match: &model.RouteConfigurationMatch{
+							VirtualHost: &model.VirtualHostMatch{
+								Route: &tc.match,
+							},
+						},
+					},
+				}
+				if got := httpRouteMatches(tc.route, patch); got != tc.wanted {
+					t.Fatalf("httpRouteMatches() = %v, want %v", got, tc.wanted)
 				}
 			})
 		}
@@ -649,17 +668,17 @@ func TestAgentioHTTPRouteOperationParity(t *testing.T) {
 		{name: "merge", operation: model.PatchMerge, matched: "a", value: &routev3.Route{Name: "merged"}, want: []string{"merged", "b"}},
 		{name: "remove", operation: model.PatchRemove, matched: "a", want: []string{"b"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			match := &model.RouteConfigurationMatch{Name: "routes", VirtualHost: &model.VirtualHostMatch{Name: "host"}}
-			if tt.matched != "" {
-				match.VirtualHost.Route = &model.RouteMatch{Name: tt.matched}
+			if tc.matched != "" {
+				match.VirtualHost.Route = &model.RouteMatch{Name: tc.matched}
 			}
-			policy := parityPolicy(t, "route-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+			policy := parityPolicy(t, "route-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.HTTPRoutePatch{
 					Match: match,
-					Value: tt.value,
+					Value: tc.value,
 				},
 			})
 			input := []*routev3.RouteConfiguration{{
@@ -673,8 +692,8 @@ func TestAgentioHTTPRouteOperationParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if names := routeNames(got[0].VirtualHosts[0].Routes); !slices.Equal(names, tt.want) {
-				t.Fatalf("HTTP routes = %v, want %v", names, tt.want)
+			if names := routeNames(got[0].VirtualHosts[0].Routes); !slices.Equal(names, tc.want) {
+				t.Fatalf("HTTP routes = %v, want %v", names, tc.want)
 			}
 			if names := routeNames(input[0].VirtualHosts[0].Routes); !slices.Equal(names, []string{"a", "b"}) {
 				t.Fatalf("input HTTP routes were mutated: %v", names)
@@ -696,17 +715,17 @@ func TestAgentioVirtualHostOperationParity(t *testing.T) {
 		{name: "replace", operation: model.PatchReplace, matched: "b", value: &routev3.VirtualHost{Name: "x"}, want: []string{"a", "x"}},
 		{name: "remove", operation: model.PatchRemove, matched: "a", want: []string{"b"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			match := &model.RouteConfigurationMatch{Name: "routes"}
-			if tt.matched != "" {
-				match.VirtualHost = &model.VirtualHostMatch{Name: tt.matched}
+			if tc.matched != "" {
+				match.VirtualHost = &model.VirtualHostMatch{Name: tc.matched}
 			}
-			policy := parityPolicy(t, "vhost-"+tt.name, model.EnvoyPatch{
-				Operation: tt.operation,
+			policy := parityPolicy(t, "vhost-"+tc.name, model.EnvoyPatch{
+				Operation: tc.operation,
 				Target: model.VirtualHostPatch{
 					Match: match,
-					Value: tt.value,
+					Value: tc.value,
 				},
 			})
 			input := []*routev3.RouteConfiguration{{Name: "routes", VirtualHosts: []*routev3.VirtualHost{{Name: "a"}, {Name: "b"}}}}
@@ -714,8 +733,8 @@ func TestAgentioVirtualHostOperationParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if names := virtualHostNames(got[0].VirtualHosts); !slices.Equal(names, tt.want) {
-				t.Fatalf("virtual hosts = %v, want %v", names, tt.want)
+			if names := virtualHostNames(got[0].VirtualHosts); !slices.Equal(names, tc.want) {
+				t.Fatalf("virtual hosts = %v, want %v", names, tc.want)
 			}
 		})
 	}

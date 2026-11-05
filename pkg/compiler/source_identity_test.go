@@ -19,6 +19,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -40,14 +41,14 @@ func TestSandboxInlineCompilation(t *testing.T) {
 	sandbox.Policies = &model.SandboxPolicies{}
 	f.sandboxes.UpdateObject(sandbox)
 	key := sandbox.SourceKey()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, f.compiler).Get(key)
 		return found && resource.Facts.SourceIdentity == sandbox.SourceIdentity
 	}, "valid inline input publishes complete Sandbox")
 	initial, _ := currentSnapshot(t, f.compiler).Get(key)
 	sandbox.Policies = &model.SandboxPolicies{InputError: "invalid update"}
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return f.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
 	}, "invalid update recorded")
 	current, found := currentSnapshot(t, f.compiler).Get(key)
@@ -56,7 +57,7 @@ func TestSandboxInlineCompilation(t *testing.T) {
 	}
 	sandbox.Policies = &model.SandboxPolicies{}
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, f.compiler).Get(key)
 		return found && resource.Hash == initial.Hash && len(f.compiler.Failures()) == 0
 	}, "same-content recovery clears failure without changing published output")
@@ -73,7 +74,8 @@ func TestSandboxInvalidUpdateWithdrawsObsoleteResult(t *testing.T) {
 			}
 			f.sandboxes.UpdateObject(sandbox)
 			waitSynced(t, f.compiler)
-			eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) != nil }, "initial Sandbox")
+			testutil.Eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) != nil },
+				"initial Sandbox")
 			sandbox.Policies = &model.SandboxPolicies{InputError: "invalid"}
 			switch change {
 			case "unbind":
@@ -82,14 +84,14 @@ func TestSandboxInvalidUpdateWithdrawsObsoleteResult(t *testing.T) {
 				sandbox.SourceIdentity.UID = "replacement"
 			}
 			f.sandboxes.UpdateObject(sandbox)
-			eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) == nil },
+			testutil.Eventually(t, func() bool { return manifestAt(t, f.compiler, sandbox.UID) == nil },
 				"incompatible update withdraws old complete result")
 			if change == "unbind" {
 				sandbox.Attester = &model.Attester{WorkloadUID: "new-host"}
 			}
 			sandbox.Policies = nil
 			f.sandboxes.UpdateObject(sandbox)
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				resource, found := currentSnapshot(t, f.compiler).Get(sandbox.SourceKey())
 				return found && resource.Facts.SourceIdentity == sandbox.SourceIdentity &&
 					resource.Facts.Sandbox.AttesterWorkloadUID == sandbox.Attester.WorkloadUID
@@ -108,14 +110,14 @@ func TestRecreatedPolicyDoesNotRetainPreviousObject(t *testing.T) {
 	f.trafficPolicies.ConditionalUpdateObject(policy)
 	waitSynced(t, f.compiler)
 	key := model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: "namespaces/demo/trafficPolicies/reused"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, f.compiler).Get(key)
 		return found
 	}, "valid policy published")
 	policy.UID = "replacement"
 	policy.Spec.Priority = -1
 	f.trafficPolicies.ConditionalUpdateObject(policy)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool {
 			_, found := currentSnapshot(t, f.compiler).Get(key)
@@ -125,7 +127,7 @@ func TestRecreatedPolicyDoesNotRetainPreviousObject(t *testing.T) {
 	)
 	policy.Spec.Priority = 0
 	f.trafficPolicies.UpdateObject(policy)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, f.compiler).Get(key)
 		return found
 	}, "replacement with identical compiled content is published")
@@ -143,7 +145,7 @@ func TestRecreatedSecurityProfileWithdrawsPreviousBinding(t *testing.T) {
 	f.securityProfiles.UpdateObject(profile)
 	key := model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID}
 	waitSynced(t, f.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
 		return len(refs.GetResourceNames()) == 1 && refs.ResourceNames[0] == profile.ResourceName()
 	}, "initial SecurityProfile binding")
@@ -151,13 +153,13 @@ func TestRecreatedSecurityProfileWithdrawsPreviousBinding(t *testing.T) {
 	priority := int32(-1)
 	profile.Spec.Priority = &priority
 	f.securityProfiles.UpdateObject(profile)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
 		return refs != nil && len(refs.ResourceNames) == 0
 	}, "invalid replacement withdraws previous profile binding")
 	profile.Spec.Priority = nil
 	f.securityProfiles.UpdateObject(profile)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
 		return len(refs.GetResourceNames()) == 1 && refs.ResourceNames[0] == profile.ResourceName()
 	}, "recovered replacement restores profile binding")
@@ -174,14 +176,14 @@ func TestSandboxInlineRemoval(t *testing.T) {
 	}
 	f.sandboxes.UpdateObject(sandbox)
 	waitSynced(t, f.compiler)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()) == 2 },
 		"initial inline policy",
 	)
 	sandbox.Policies = nil
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, f.compiler).Get(sandbox.SourceKey())
 		return found && resource.Facts.SourceIdentity == sandbox.SourceIdentity &&
 			len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()) == 1
@@ -201,14 +203,14 @@ func TestFailedPolicyRetainsLastGoodOutput(t *testing.T) {
 	f.trafficPolicies.UpdateObject(policy)
 	waitSynced(t, f.compiler)
 	key := model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: "namespaces/demo/trafficPolicies/example"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, f.compiler).Get(key)
 		return found
 	}, "initial policy published")
 	initial, _ := currentSnapshot(t, f.compiler).Get(key)
 	policy.Spec.Priority = -1
 	f.trafficPolicies.UpdateObject(policy)
-	eventually(t, func() bool { return len(f.compiler.Failures()) > 0 }, "invalid update recorded")
+	testutil.Eventually(t, func() bool { return len(f.compiler.Failures()) > 0 }, "invalid update recorded")
 	if got := f.trafficPolicies.GetKey(policy.ResourceName()); got == nil || !got.Equals(policy) {
 		t.Fatalf("input did not advance independently of compilation: %v", got)
 	}
@@ -221,7 +223,7 @@ func TestFailedPolicyRetainsLastGoodOutput(t *testing.T) {
 	}
 	policy.Spec.Priority = 0
 	f.trafficPolicies.UpdateObject(policy)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current, found := currentSnapshot(t, f.compiler).Get(key)
 		return found && current.Hash == initial.Hash && len(f.compiler.Failures()) == 0
 	}, "same-content recovery clears failure without changing published output")
@@ -237,7 +239,7 @@ func TestSandboxTrafficFailureRetainsCompleteResult(t *testing.T) {
 	}
 	f.sandboxes.UpdateObject(sandbox)
 	waitSynced(t, f.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, f.compiler).Get(sandbox.SourceKey())
 		return found
 	}, "initial Sandbox published")
@@ -252,7 +254,7 @@ func TestSandboxTrafficFailureRetainsCompleteResult(t *testing.T) {
 		},
 	}
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return f.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != "" },
 		"traffic failure recorded",
@@ -263,7 +265,7 @@ func TestSandboxTrafficFailureRetainsCompleteResult(t *testing.T) {
 	}
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: compatibilitySecurity("updated.example").Rules}
 	f.sandboxes.UpdateObject(sandbox)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, f.compiler).Get(sandbox.SourceKey())
 		return found && resource.Hash != before.Hash && resource.Facts.SourceIdentity == sandbox.SourceIdentity &&
 			manifestAt(t, f.compiler, sandbox.UID).GetTrafficPolicy() == nil

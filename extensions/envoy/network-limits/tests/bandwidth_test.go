@@ -27,6 +27,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 type transfer struct {
@@ -127,7 +129,7 @@ func TestEnvoyBandwidthBucketRelease(t *testing.T) {
 	second.close()
 	for _, sandbox := range []string{"b", "c", "d"} {
 		var admitted *stream
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			s := b.open(t, "test", sandbox, "plain:80", 0)
 			if s.response.StatusCode == 200 {
 				admitted = s
@@ -138,7 +140,7 @@ func TestEnvoyBandwidthBucketRelease(t *testing.T) {
 			}
 			s.close()
 			return false
-		})
+		}, "sandbox admission succeeds")
 		admitted.close()
 	}
 }

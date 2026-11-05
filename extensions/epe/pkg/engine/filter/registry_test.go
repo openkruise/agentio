@@ -71,9 +71,9 @@ func TestDefinitionRejectsInvalidContracts(t *testing.T) {
 			}(),
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Build(Define(tt.desc, testProject)); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Build(Define(tc.desc, testProject)); err == nil {
 				t.Fatal("Build accepted an invalid descriptor")
 			}
 		})

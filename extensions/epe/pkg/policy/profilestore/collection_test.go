@@ -82,7 +82,7 @@ func TestProfileCollection_ConfigMapInputDependency(t *testing.T) {
 	})
 	stop := t.Context().Done()
 
-	store := NewStore()
+	store := NewStore(0)
 	profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 	reg := store.RegisterCollection(profiles)
 	c.Run(stop)
@@ -175,7 +175,7 @@ func TestProfileCollection_EndToEnd(t *testing.T) {
 	stop := t.Context().Done()
 	c.Run(stop)
 
-	store := NewStore()
+	store := NewStore(0)
 	profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 	reg := store.RegisterCollection(profiles)
 	if !reg.WaitUntilSynced(stop) {
@@ -301,7 +301,7 @@ func TestProfileCollection_SyncsWithoutSandboxCRD(t *testing.T) {
 	// Deliberately no Sandbox CRD.
 	stop := t.Context().Done()
 
-	store := NewStore()
+	store := NewStore(0)
 	profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 	reg := store.RegisterCollection(profiles)
 	c.Run(stop)
@@ -337,7 +337,7 @@ func TestProfileCollectionSandboxMode(t *testing.T) {
 				return true, &metav1.List{}, nil
 			})
 			stop := t.Context().Done()
-			store := NewStore()
+			store := NewStore(0)
 			profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 			reg := store.RegisterCollection(profiles)
 			t.Cleanup(profiles.Registry.RegisterDeletes(store.NotifyKeys))
@@ -385,7 +385,7 @@ func TestProfileCollection_MissingConfigMapOnFirstCreate(t *testing.T) {
 	c := newProfileTestClient(profile)
 	stop := t.Context().Done()
 
-	store := NewStore()
+	store := NewStore(0)
 	profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 	reg := store.RegisterCollection(profiles)
 	c.Run(stop)
@@ -465,7 +465,7 @@ func TestProfileCollection_ProjectionErrorRejectsVersion(t *testing.T) {
 	agentsCS := c.AgentsAPI()
 	stop := t.Context().Done()
 
-	store := NewStore()
+	store := NewStore(0)
 	profiles := NewCollection(c, regs, krt.GlobalDebugHandler, stop)
 	reg := store.RegisterCollection(profiles)
 	c.Run(stop)

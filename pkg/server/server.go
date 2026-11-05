@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	securityapi "istio.io/api/security/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/compiler"
@@ -120,15 +121,48 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	})
 	kubeCoreClient := kubeClient.Kube()
 	krtBuilder := krt.NewOptionsBuilder(ctx.Done(), "", nil)
-	tokenReviewer, err := attestation.NewTokenReviewer(
-		kubeCoreClient,
-		[]string{features.TokenAudience},
-	)
+	registry, err := kubernetesregistry.New(kubeClient, kubernetesregistry.Options{
+		EnableKruise:          features.SandboxMode,
+		ClusterID:             options.ClusterID,
+		TrustDomain:           options.TrustDomain,
+		RootNamespace:         options.RootNamespace,
+		ZTunnelServiceAccount: ztunnelAccount,
+		ScopedSecrets:         features.ScopedSecrets,
+		AgentioConfigMaps: &kubernetesregistry.AgentioConfigMapOptions{
+			BaseName:    features.AgentioConfigMapName,
+			PrimaryName: features.PrimaryAgentioConfigMapName,
+		},
+		ClusterDomain: options.ClusterDomain,
+		DebounceAfter: features.KRTDebounceAfter,
+		DebounceMax:   features.KRTDebounceMax,
+	}, ctx.Done())
+	if err != nil {
+		return err
+	}
+	var kubernetesAuthenticator attestation.Authenticator
+	authenticationSynced := func() bool { return true }
+	if features.KubernetesWorkloadAuthMode == "local" {
+		accounts := krt.NewInformer[*corev1.ServiceAccount](
+			kubeClient,
+			krt.WithStop(ctx.Done()),
+			krt.WithName("authentication-serviceaccounts"),
+		)
+		kubernetesAuthenticator, err = attestation.NewLocalJWTAuthenticator(
+			ctx,
+			kubeCoreClient.CoreV1().RESTClient(),
+			registry.Pods,
+			accounts,
+			features.TokenAudience,
+		)
+		authenticationSynced = accounts.HasSynced
+	} else {
+		kubernetesAuthenticator, err = attestation.NewTokenReviewer(kubeCoreClient, []string{features.TokenAudience})
+	}
 	if err != nil {
 		return err
 	}
 	authenticatorChain := mergeAuthenticators(
-		attestation.AuthenticatorChain{tokenReviewer}, composition.authenticators)
+		attestation.AuthenticatorChain{kubernetesAuthenticator}, composition.authenticators)
 	// The registered attestation set is the scope-function key set; the
 	// functions themselves are composed later, once the registry exists.
 	registeredAttestations := []model.Attestation{model.AttestationKubernetes}
@@ -164,24 +198,6 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		ConfigMapName: features.TrustBundleConfigMapName,
 		LeaseName:     features.TrustBundleLeaseName,
 	})
-	if err != nil {
-		return err
-	}
-	registry, err := kubernetesregistry.New(kubeClient, kubernetesregistry.Options{
-		EnableKruise:          features.SandboxMode,
-		ClusterID:             options.ClusterID,
-		TrustDomain:           options.TrustDomain,
-		RootNamespace:         options.RootNamespace,
-		ZTunnelServiceAccount: ztunnelAccount,
-		ScopedSecrets:         features.ScopedSecrets,
-		AgentioConfigMaps: &kubernetesregistry.AgentioConfigMapOptions{
-			BaseName:    features.AgentioConfigMapName,
-			PrimaryName: features.PrimaryAgentioConfigMapName,
-		},
-		ClusterDomain: options.ClusterDomain,
-		DebounceAfter: features.KRTDebounceAfter,
-		DebounceMax:   features.KRTDebounceMax,
-	}, ctx.Done())
 	if err != nil {
 		return err
 	}
@@ -463,7 +479,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	nextSyncLog := time.Now().Add(10 * time.Second)
-	for !registry.HasSynced() || !resourceCompiler.HasSynced() {
+	for !registry.HasSynced() || !resourceCompiler.HasSynced() || !authenticationSynced() {
 		select {
 		case <-ctx.Done():
 			return nil
@@ -472,8 +488,17 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		case <-ticker.C:
 		}
 		if time.Now().After(nextSyncLog) {
-			log.Info("waiting for initial configuration sync", "elapsed", time.Since(started),
-				"registry_synced", registry.HasSynced(), "compiler_synced", resourceCompiler.HasSynced())
+			log.Info(
+				"waiting for initial configuration sync",
+				"elapsed",
+				time.Since(started),
+				"registry_synced",
+				registry.HasSynced(),
+				"compiler_synced",
+				resourceCompiler.HasSynced(),
+				"authentication_synced",
+				authenticationSynced(),
+			)
 			nextSyncLog = time.Now().Add(10 * time.Second)
 		}
 	}

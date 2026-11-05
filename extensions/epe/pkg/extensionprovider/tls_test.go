@@ -32,7 +32,7 @@ func TestClientCertificateSecretKeys(t *testing.T) {
 			ClientCertificateSecretRef: &configv1.TargetReference{Name: "client"},
 		},
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		data   map[string][]byte
 		serial int64
@@ -76,15 +76,15 @@ func TestClientCertificateSecretKeys(t *testing.T) {
 		{name: "partial legacy pair", data: map[string][]byte{"client.crt": legacyCert}},
 		{name: "missing pair"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			raw := resolveTLSMaterial(cfg, "system", func(key string) *corev1.Secret {
 				if key != "system/client" {
 					t.Fatalf("unexpected Secret: %s", key)
 				}
-				return &corev1.Secret{Data: tt.data}
+				return &corev1.Secret{Data: tc.data}
 			}, nil, nil)
 			transport, err := clientTLS("https://credentials.example", cfg, raw)
-			if tt.serial == 0 {
+			if tc.serial == 0 {
 				if err == nil {
 					t.Fatal("invalid certificate material was accepted")
 				}
@@ -97,8 +97,8 @@ func TestClientCertificateSecretKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cert.Leaf.SerialNumber.Int64() != tt.serial {
-				t.Fatalf("certificate serial = %v, want %d", cert.Leaf.SerialNumber, tt.serial)
+			if cert.Leaf.SerialNumber.Int64() != tc.serial {
+				t.Fatalf("certificate serial = %v, want %d", cert.Leaf.SerialNumber, tc.serial)
 			}
 		})
 	}

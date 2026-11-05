@@ -79,6 +79,19 @@ func TestNewInlineProfileNoAnnotation(t *testing.T) {
 	}
 }
 
+func TestNewSandboxProfileTLSRules(t *testing.T) {
+	for _, action := range []string{"Deny", "Passthrough"} {
+		raw := `[{"name":"tls","match":[{"domains":["*"],"ports":[8443]}],"actions":{"tls":{"action":"` + action + `"}}}]`
+		profile, err := NewSandboxProfile(sandboxWithRules("tls", "demo", raw))
+		if err != nil || profile == nil {
+			t.Fatalf("TLS annotation %s: profile = %+v, error = %v", action, profile, err)
+		}
+		if len(profile.Rules) != 0 {
+			t.Fatalf("TLS annotation entered HTTP processing: %+v", profile.Rules)
+		}
+	}
+}
+
 // The annotation is a server artifact: anything the reader does not
 // understand must fail closed instead of degrading into dropped rules.
 func TestNewInlineProfileRejections(t *testing.T) {
@@ -100,14 +113,14 @@ func TestNewInlineProfileRejections(t *testing.T) {
 			"regex",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", tt.raw))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", tc.raw))
 			if err == nil {
 				t.Fatal("expected an error")
 			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
 			}
 		})
 	}

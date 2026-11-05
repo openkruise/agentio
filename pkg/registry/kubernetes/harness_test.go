@@ -17,8 +17,6 @@ package kubernetes
 import (
 	"sort"
 	"sync"
-	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,18 +27,6 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 	podsource "github.com/openkruise/agentio/pkg/registry/kubernetes/pod"
 )
-
-func eventually(t testing.TB, condition func() bool, message string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("condition never held: %s", message)
-}
 
 func egressPod(namespace, name, gatewayName, address string) *corev1.Pod {
 	return &corev1.Pod{

@@ -45,13 +45,13 @@ func BenchmarkDeltaPushScan(b *testing.B) {
 				WorkloadUID: name,
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 				NodeName:    "node-a",
-				Principal:   serviceAccountPrincipal("default", "default"),
+				Principal:   model.MustServiceAccountPrincipal("default", "default"),
 			}},
 		})
 	}
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	testServer := newTestServer(b, scope, resources, nil)
@@ -184,7 +184,7 @@ func BenchmarkDeltaPushIncrementalAllClients(b *testing.B) {
 						WorkloadUID: name,
 						Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 						NodeName:    "node-a",
-						Principal:   serviceAccountPrincipal("default", "default"),
+						Principal:   model.MustServiceAccountPrincipal("default", "default"),
 					}},
 				})
 			}
@@ -213,7 +213,7 @@ func BenchmarkDeltaPushIncrementalAllClients(b *testing.B) {
 		}
 		scope := model.ClientScope{
 			Class:     model.ClientSharedZTunnel,
-			Principal: serviceAccountPrincipal("demo", "ztunnel"),
+			Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 			NodeName:  "node-a",
 		}
 		testServer := newTestServer(b, scope, variants[0], nil)
@@ -265,7 +265,7 @@ func BenchmarkDeltaPushPublicationFanout(b *testing.B) {
 					Class:       model.ClientDedicatedZTunnel,
 					WorkloadUID: fmt.Sprintf("workload-%06d", index),
 					Source:      model.SourceRef{Registry: "kubernetes/test", Key: fmt.Sprintf("workload-%06d", index)},
-					Principal:   serviceAccountPrincipal("demo", "default"),
+					Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 				}
 			}
 			benchmarkIncrementalClientFanout(b, resources, variants, scopes)
@@ -580,7 +580,7 @@ func fanoutBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource
 			WorkloadUID: name,
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 			NodeName:    fmt.Sprintf("node-%03d", index%100),
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		}}
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: name},
@@ -626,7 +626,7 @@ func relationshipFanoutScenario(t testing.TB) ([]model.Resource, [2]xdsstore.Upd
 				WorkloadUID: name,
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 				NodeName:    node,
-				Principal:   serviceAccountPrincipal("demo", "default"),
+				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 				GatewayReferences: []string{
 					"gateway/" + node,
 				},
@@ -646,7 +646,7 @@ func relationshipFanoutScenario(t testing.TB) ([]model.Resource, [2]xdsstore.Upd
 				Workload: &model.WorkloadResourceFacts{
 					WorkloadUID: name,
 					Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
-					Principal:   serviceAccountPrincipal("agentio-system", "gateway"),
+					Principal:   model.MustServiceAccountPrincipal("agentio-system", "gateway"),
 				},
 				GatewayOwner: "gateway/" + node,
 			},
@@ -697,7 +697,7 @@ func authorizationFanoutScenario(t testing.TB) ([]model.Resource, [2]xdsstore.Up
 			WorkloadUID:       name,
 			Source:            model.SourceRef{Registry: "kubernetes/test", Key: name},
 			NodeName:          node,
-			Principal:         serviceAccountPrincipal("demo", "default"),
+			Principal:         model.MustServiceAccountPrincipal("demo", "default"),
 			AuthorizationRefs: policies,
 		}}
 		resource, err := model.NewResource(
@@ -799,7 +799,7 @@ func distributedDedicatedClients(clientCount int) []model.ClientScope {
 	for client := range scopes {
 		scopes[client] = model.ClientScope{
 			Class:       model.ClientDedicatedZTunnel,
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			WorkloadUID: fmt.Sprintf("workload-%06d", client),
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: fmt.Sprintf("workload-%06d", client)},
 		}
@@ -825,7 +825,7 @@ func mixedClientScopes(clientCount int) []model.ClientScope {
 		}
 		scopes[client] = model.ClientScope{
 			Class:       model.ClientDedicatedZTunnel,
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			WorkloadUID: fmt.Sprintf("workload-%06d", index),
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: fmt.Sprintf("workload-%06d", index)},
 		}

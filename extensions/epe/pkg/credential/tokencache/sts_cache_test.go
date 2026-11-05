@@ -103,19 +103,19 @@ func TestSTSCache_ExpirationMargin(t *testing.T) {
 			wantCached: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			c := NewSTSCache(100)
-			c.expirationMargin = tt.margin
+			c.expirationMargin = tc.margin
 
 			entry := stsEntry("ak1", "sk1", "token1")
-			c.SetWithExpiration(Key{ProviderName: "p", ResourceID: "r1"}, entry, time.Now().Add(tt.expiresIn), 0)
+			c.SetWithExpiration(Key{ProviderName: "p", ResourceID: "r1"}, entry, time.Now().Add(tc.expiresIn), 0)
 
 			got, ok := c.Get(Key{ProviderName: "p", ResourceID: "r1"})
-			if ok != tt.wantCached {
-				t.Fatalf("cached = %v, want %v", ok, tt.wantCached)
+			if ok != tc.wantCached {
+				t.Fatalf("cached = %v, want %v", ok, tc.wantCached)
 			}
-			if tt.wantCached {
+			if tc.wantCached {
 				if got.AccessKeyID != "ak1" {
 					t.Errorf("expected ak1, got %s", got.AccessKeyID)
 				}
@@ -247,15 +247,15 @@ func TestSTSCache_ConcurrentAccess(t *testing.T) {
 // TestSTSCache_DefaultExpirationMargin verifies NewSTSCache falls back to the
 // default expiration margin regardless of a non-positive max size.
 func TestSTSCache_DefaultExpirationMargin(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		maxSize int
 	}{
 		{name: "zero max size", maxSize: 0},
 		{name: "negative max size", maxSize: -5},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c := NewSTSCache(tt.maxSize)
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewSTSCache(tc.maxSize)
 			if c.expirationMargin != defaultExpirationMargin {
 				t.Errorf("expected default expiration margin %v, got %v", defaultExpirationMargin, c.expirationMargin)
 			}

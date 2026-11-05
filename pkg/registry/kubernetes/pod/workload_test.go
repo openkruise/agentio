@@ -24,7 +24,7 @@ import (
 
 func TestPodWorkloadEligibility(t *testing.T) {
 	deleting := metav1.NewTime(time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC))
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		pod  *corev1.Pod
 		want bool
@@ -75,9 +75,9 @@ func TestPodWorkloadEligibility(t *testing.T) {
 			want: true,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := IsEligible(test.pod); got != test.want {
-				t.Fatalf("IsEligible() = %v, want %v", got, test.want)
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsEligible(tc.pod); got != tc.want {
+				t.Fatalf("IsEligible() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -110,7 +110,7 @@ func TestPodProducesWorkloadWithoutSandbox(t *testing.T) {
 }
 
 func TestPodWorkloadCanonicalIdentity(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name         string
 		labels       map[string]string
 		wantName     string
@@ -142,15 +142,15 @@ func TestPodWorkloadCanonicalIdentity(t *testing.T) {
 			wantRevision: "latest",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			pod := workloadTestPod(corev1.PodRunning, "10.0.0.1")
 			pod.Name = "client"
-			pod.Labels = test.labels
+			pod.Labels = tc.labels
 
 			workload := BaseWorkloadFromPod("cluster", pod)
-			if workload.CanonicalName != test.wantName || workload.CanonicalRevision != test.wantRevision {
+			if workload.CanonicalName != tc.wantName || workload.CanonicalRevision != tc.wantRevision {
 				t.Fatalf("canonical identity = %q/%q, want %q/%q",
-					workload.CanonicalName, workload.CanonicalRevision, test.wantName, test.wantRevision)
+					workload.CanonicalName, workload.CanonicalRevision, tc.wantName, tc.wantRevision)
 			}
 		})
 	}
@@ -176,7 +176,7 @@ func TestHasInjectedZTunnelUsesRuntimeMode(t *testing.T) {
 	sharedKruise := kruisePod.DeepCopy()
 	sharedKruise.Spec.InitContainers[0].Env = nil
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		pod  *corev1.Pod
 		want bool
@@ -189,9 +189,9 @@ func TestHasInjectedZTunnelUsesRuntimeMode(t *testing.T) {
 		{name: "Kruise name without ztunnel args", pod: nonZTunnel},
 		{name: "Kruise name without dedicated runtime", pod: sharedKruise},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := HasInjectedZTunnel(test.pod); got != test.want {
-				t.Fatalf("HasInjectedZTunnel() = %v, want %v", got, test.want)
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasInjectedZTunnel(tc.pod); got != tc.want {
+				t.Fatalf("HasInjectedZTunnel() = %v, want %v", got, tc.want)
 			}
 		})
 	}

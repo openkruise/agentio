@@ -57,7 +57,7 @@ type FakeStore struct {
 // mismatch rather than evaluating a profile projected against a different
 // chain.
 func MakeFakeStore(regs ...filter.Registration) *FakeStore {
-	return &FakeStore{store: NewStore(), regs: regs}
+	return &FakeStore{store: NewStore(0), regs: regs}
 }
 
 // ProfileSet adds or updates a namespace-scoped profile synchronously.

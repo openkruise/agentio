@@ -53,10 +53,6 @@ func peerIdentity(namespace, serviceAccount string) model.PeerIdentity {
 	}
 }
 
-func serviceAccountPrincipal(namespace, serviceAccount string) model.Principal {
-	return mustTestPrincipal("cluster.local", "ns/"+(namespace)+"/sa/"+(serviceAccount))
-}
-
 func requestWithCSR(t *testing.T, identities ...string) *securityapi.IstioCertificateRequest {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -127,7 +123,7 @@ func responseIdentity(t *testing.T, response *securityapi.IstioCertificateRespon
 
 func TestCertificateIdentityUsesExplicitTargetWhenAuthorized(t *testing.T) {
 	caller := peerIdentity("demo", "app")
-	target := mustTestPrincipal("cluster.local", "workload/app")
+	target := model.MustPrincipal("cluster.local", "workload/app")
 	request := requestWithCSR(t, target.String())
 	setRequestMetadata(t, request, target.String())
 	response, err := certificateAuthority(
@@ -145,7 +141,7 @@ func TestCertificateIdentityUsesExplicitTargetWhenAuthorized(t *testing.T) {
 
 func TestCertificateIdentityUsesAuthorizedImpersonation(t *testing.T) {
 	caller := sharedZTunnelCaller()
-	target := mustTestPrincipal("cluster.local", "workload/target")
+	target := model.MustPrincipal("cluster.local", "workload/target")
 	authorizer := &fakeDelegatedIdentityAuthorizer{}
 	request := requestWithCSR(t)
 	setRequestMetadata(t, request, target.String())
@@ -164,15 +160,15 @@ func TestCertificateIdentityUsesAuthorizedImpersonation(t *testing.T) {
 }
 
 func TestCertificateIdentityRejectsDeniedDelegation(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		err  error
 	}{
 		{name: "untrusted caller", err: errors.New("caller is not a trusted node")},
 		{name: "cross-node identity", err: errors.New("target workload is on another node")},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			authorizer := &fakeDelegatedIdentityAuthorizer{err: test.err}
+		t.Run(tc.name, func(t *testing.T) {
+			authorizer := &fakeDelegatedIdentityAuthorizer{err: tc.err}
 			request := requestWithCSR(t)
 			setRequestMetadata(t, request, "spiffe://cluster.local/workload/target")
 
@@ -184,7 +180,7 @@ func TestCertificateIdentityRejectsDeniedDelegation(t *testing.T) {
 			if status.Code(err) != codes.Unauthenticated {
 				t.Fatalf("CreateCertificate() code = %s, want %s: %v", status.Code(err), codes.Unauthenticated, err)
 			}
-			if strings.Contains(err.Error(), test.err.Error()) || strings.Contains(err.Error(), "spiffe://") {
+			if strings.Contains(err.Error(), tc.err.Error()) || strings.Contains(err.Error(), "spiffe://") {
 				t.Fatalf("CreateCertificate() error leaked authorization detail: %v", err)
 			}
 			if authorizer.calls != 1 {
@@ -223,7 +219,11 @@ func TestCallerPrincipalRequiresKubernetesEvidence(t *testing.T) {
 
 func TestCertificateIdentityRejectsMalformedRequest(t *testing.T) {
 	caller := peerIdentity("demo", "app")
-	callerIdentity := serviceAccountPrincipal(caller.Kubernetes.Namespace, caller.Kubernetes.ServiceAccount).String()
+	callerPrincipal := model.MustServiceAccountPrincipal(
+		caller.Kubernetes.Namespace,
+		caller.Kubernetes.ServiceAccount,
+	)
+	callerIdentity := callerPrincipal.String()
 	tests := []struct {
 		name   string
 		build  func(*testing.T) *securityapi.IstioCertificateRequest
@@ -276,12 +276,12 @@ func TestCertificateIdentityRejectsMalformedRequest(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := certificateAuthority(t, caller, &fakeDelegatedIdentityAuthorizer{}).
-				CreateCertificate(context.Background(), test.build(t))
-			if status.Code(err) != test.status {
-				t.Fatalf("CreateCertificate() code = %s, want %s: %v", status.Code(err), test.status, err)
+				CreateCertificate(context.Background(), tc.build(t))
+			if status.Code(err) != tc.status {
+				t.Fatalf("CreateCertificate() code = %s, want %s: %v", status.Code(err), tc.status, err)
 			}
 		})
 	}
@@ -289,7 +289,7 @@ func TestCertificateIdentityRejectsMalformedRequest(t *testing.T) {
 
 func TestCertificateRequestRequiresOneStrictPEMBlock(t *testing.T) {
 	caller := peerIdentity("demo", "app")
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name     string
 		csr      func(string) string
 		wantCode codes.Code
@@ -304,17 +304,17 @@ func TestCertificateRequestRequiresOneStrictPEMBlock(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			request := requestWithCSR(t)
 			setRequestMetadata(t, request, "spiffe://cluster.local/workload/app")
-			request.Csr = test.csr(request.Csr)
+			request.Csr = tc.csr(request.Csr)
 			_, err := certificateAuthority(
 				t,
 				caller,
 				&fakeDelegatedIdentityAuthorizer{},
 			).CreateCertificate(context.Background(), request)
-			if got := status.Code(err); got != test.wantCode {
-				t.Fatalf("CreateCertificate() code = %s, want %s: %v", got, test.wantCode, err)
+			if got := status.Code(err); got != tc.wantCode {
+				t.Fatalf("CreateCertificate() code = %s, want %s: %v", got, tc.wantCode, err)
 			}
 		})
 	}
@@ -322,7 +322,7 @@ func TestCertificateRequestRequiresOneStrictPEMBlock(t *testing.T) {
 
 func TestExplicitCertificateSANRequiresAuthorization(t *testing.T) {
 	caller := peerIdentity("demo", "shared")
-	target := mustTestPrincipal("cluster.local", "workload/shared")
+	target := model.MustPrincipal("cluster.local", "workload/shared")
 	for _, allow := range []bool{false, true} {
 		authorizer := &fakeDelegatedIdentityAuthorizer{}
 		if !allow {

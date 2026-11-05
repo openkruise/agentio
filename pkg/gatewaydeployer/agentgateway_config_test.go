@@ -187,7 +187,7 @@ func TestAgentgatewayGeneratedConfigRejectsUnsupportedSettings(t *testing.T) {
 		"extProc: {service: processor.example, messageTimeout: 5s}",
 		"extProc: {service: processor.example, request: {headerMode: 42}}",
 		"extProc: {service: processor.example, request: {attributes: [\"filter_state['unknown']\"]}}",
-		"extProc: {service: processor.example, request: {attributes: [\"filter_state['agentio.sandbox.uid']\"]}}",
+		"extProc: {service: processor.example, request: {attributes: [\"filter_state['agentio.sandbox.id']\"]}}",
 		"serviceEntries: [{hosts: [api.example], endpoints: [{address: invalid}]}]",
 	} {
 		t.Run(settings, func(t *testing.T) {

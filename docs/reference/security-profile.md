@@ -1,6 +1,6 @@
 # SecurityProfile reference
 
-`SecurityProfile` is a namespaced L7 egress policy for selected Pods. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Both are consumed by Egress Policy Enforcer (EPE); they are distinct from `TrafficPolicy` and `GlobalTrafficPolicy`, which control destination routing rather than request-level actions.
+`SecurityProfile` is a namespaced TLS connection and HTTP egress policy for selected Pods. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Agentio projects TLS connection selection into SNI policy; Egress Policy Enforcer (EPE) processes HTTP rules. `TrafficPolicy` and `GlobalTrafficPolicy` control destination routing.
 
 The complete field schemas for both kinds are in the [SecurityProfile API reference](security-profile-api.md). This page explains the implemented evaluation behavior instead of duplicating the field reference.
 
@@ -41,6 +41,35 @@ Every rule has a unique `name`, at least one `match` clause, and `actions`. The 
 Invalid regexes reject the whole profile version rather than silently making a rule non-matching. The request values and absence rules are detailed in [Request context](#request-context).
 
 ## Action order and actions
+
+### TLS connection actions
+
+`rules[].actions.tls.action` accepts `Deny` or `Passthrough`, with no default. `Deny` rejects the connection without decrypting TLS; it does not guarantee an HTTP response or a particular TLS alert. `Passthrough` forwards encrypted traffic without HTTP rule processing. TLS actions cannot be combined with HTTP actions or rule-level audit; `bypass: false` is equivalent to omission. Profile-level audit applies only to HTTP rules.
+
+```yaml
+rules:
+  - name: allow-pinned-client
+    match:
+      - domains: [pinned.example.com]
+        ports: [443]
+    actions:
+      tls:
+        action: Passthrough
+  - name: deny-other-tls
+    match:
+      - domains: ["*"]
+    actions:
+      tls:
+        action: Deny
+```
+
+Explicit TLS rules allow only `domains` and `ports` in each match clause. Domains match the TLS inspector's visible SNI, never the CONNECT authority. Missing SNI does not match, including `*`. Ports match the original destination port restored from CONNECT: values are ORed, an empty list allows any port, and a missing destination port never matches a restricted list. Each clause keeps its own domain/port pair.
+
+The first matching connection rule decides, in profile order and then source rule order. HTTP rules also participate in connection selection: each clause with no `schemes` or with `https` selects TLS termination using its domains and ports. Paths, methods, headers, and query parameters are deferred to HTTP processing. Put passthrough exceptions before broader HTTP rules; an earlier HTTP rule may already select TLS termination. TLS rules themselves are excluded from EPE's HTTP processing and audit.
+
+No matching connection rule preserves the existing passthrough default. Gateway exclusions still take precedence, and cleartext follows the existing HTTP path. The same projection applies to per-Sandbox security rules. Install the updated SecurityProfile CRDs and use matching Agentio control-plane, Porter, and gateway builds before using port-restricted rules.
+
+### HTTP actions
 
 EPE registers actions in this fixed order within each matched rule:
 

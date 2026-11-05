@@ -50,14 +50,14 @@ func TestAuditScopeActivationShadowsResult(t *testing.T) {
 		{name: "profile survives layering", expr: `has(profile.name)`},
 		{name: "rule survives layering", expr: `has(rule.name)`},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalBoolOnAuditScope(t, s, tt.expr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalBoolOnAuditScope(t, s, tc.expr)
 			if err != nil {
-				t.Fatalf("%s: unexpected error: %v", tt.expr, err)
+				t.Fatalf("%s: unexpected error: %v", tc.expr, err)
 			}
 			if !got {
-				t.Errorf("%s = false, want true", tt.expr)
+				t.Errorf("%s = false, want true", tc.expr)
 			}
 		})
 	}
@@ -138,14 +138,14 @@ func TestScopeActivation_AllFieldsPopulated(t *testing.T) {
 		{name: "profile", expr: `profile.name == "p1" && profile.namespace == "ns"`},
 		{name: "rule", expr: `rule.name == "r1"`},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalBoolOnAuditScope(t, s, tt.expr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalBoolOnAuditScope(t, s, tc.expr)
 			if err != nil {
-				t.Fatalf("%s: unexpected error: %v", tt.expr, err)
+				t.Fatalf("%s: unexpected error: %v", tc.expr, err)
 			}
 			if !got {
-				t.Errorf("%s = false, want true", tt.expr)
+				t.Errorf("%s = false, want true", tc.expr)
 			}
 		})
 	}
@@ -251,14 +251,14 @@ func TestAuditScopeResolvesResult(t *testing.T) {
 		{name: "result resolves", expr: `result == "blocked"`},
 		{name: "base variables still resolve", expr: `request.host == "h" && pod.namespace == "ns"`},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalBoolOnAuditScope(t, s, tt.expr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalBoolOnAuditScope(t, s, tc.expr)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if !got {
-				t.Errorf("%s = false, want true", tt.expr)
+				t.Errorf("%s = false, want true", tc.expr)
 			}
 		})
 	}

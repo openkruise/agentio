@@ -111,10 +111,10 @@ func TestAgentioMetricsMergeVectors(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := mergeMetrics(test.policies, test.defaults); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("mergeMetrics() = %#v, want %#v", got, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mergeMetrics(tc.policies, tc.defaults); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("mergeMetrics() = %#v, want %#v", got, tc.want)
 			}
 		})
 	}
@@ -190,10 +190,10 @@ func TestAgentioAccessLoggingMergeVectors(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := mergeLogs(test.policies, test.defaults); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("mergeLogs() = %#v, want %#v", got, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mergeLogs(tc.policies, tc.defaults); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("mergeLogs() = %#v, want %#v", got, tc.want)
 			}
 		})
 	}
@@ -313,10 +313,10 @@ func TestAgentioTracingMergeVectors(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := mergeTracing(test.policies, test.defaults); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("mergeTracing() = %#v, want %#v", got, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mergeTracing(tc.policies, tc.defaults); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("mergeTracing() = %#v, want %#v", got, tc.want)
 			}
 		})
 	}

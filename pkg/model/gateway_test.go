@@ -80,7 +80,7 @@ func TestGatewayValidateForUseRejectsDuplicateRouteOverrideHosts(t *testing.T) {
 }
 
 func TestGatewayValidateForUseAllowsExtProcDisable(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		provider *configv1.ExtProcProvider
 		wantErr  bool
@@ -91,10 +91,10 @@ func TestGatewayValidateForUseAllowsExtProcDisable(t *testing.T) {
 		{name: "override", provider: &configv1.ExtProcProvider{Service: "epe.demo.svc"}},
 		{name: "whitespace is invalid", provider: &configv1.ExtProcProvider{Service: " \t"}, wantErr: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			gateway := Gateway{Namespace: "demo", Name: "egress", Config: &configv1.EgressGateway{ExtProc: tt.provider}}
-			if err := gateway.ValidateForUse(); (err != nil) != tt.wantErr {
-				t.Fatalf("ValidateForUse() = %v, want error = %v", err, tt.wantErr)
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := Gateway{Namespace: "demo", Name: "egress", Config: &configv1.EgressGateway{ExtProc: tc.provider}}
+			if err := gateway.ValidateForUse(); (err != nil) != tc.wantErr {
+				t.Fatalf("ValidateForUse() = %v, want error = %v", err, tc.wantErr)
 			}
 		})
 	}
@@ -238,13 +238,13 @@ func TestGatewayValidateForUseRejectsInvalidStaticServiceEntries(t *testing.T) {
 			},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			gateway := Gateway{
 				Namespace: "demo",
 				Name:      "egress",
 				Source:    GatewaySourceGatewayAPI,
-				Config:    &configv1.EgressGateway{ServiceEntries: test.entries},
+				Config:    &configv1.EgressGateway{ServiceEntries: tc.entries},
 			}
 			if err := gateway.ValidateForUse(); err == nil {
 				t.Fatal("ValidateForUse() accepted invalid static service entries")
@@ -267,12 +267,12 @@ func TestGatewayKeyFromService(t *testing.T) {
 		{service: ".agentio-system"},
 		{service: "egress..svc.cluster.local"},
 	}
-	for _, test := range tests {
-		t.Run(test.service, func(t *testing.T) {
-			got, valid := GatewayKeyFromService(test.service)
-			if got != test.want || valid != test.valid {
+	for _, tc := range tests {
+		t.Run(tc.service, func(t *testing.T) {
+			got, valid := GatewayKeyFromService(tc.service)
+			if got != tc.want || valid != tc.valid {
 				t.Fatalf("GatewayKeyFromService(%q) = %q, %v; want %q, %v",
-					test.service, got, valid, test.want, test.valid)
+					tc.service, got, valid, tc.want, tc.valid)
 			}
 		})
 	}

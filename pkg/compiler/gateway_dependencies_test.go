@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
@@ -56,7 +57,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 		newFailureRecorder(),
 		options.WithName,
 	)
-	eventually(t, resources.HasSynced, "gateway resources synced")
+	testutil.Eventually(t, resources.HasSynced, "gateway resources synced")
 	settle()
 	count := func() uint64 { return resources.Metadata()["recomputeTotal"].(uint64) }
 	host := func(gateway, cluster string) string {
@@ -77,7 +78,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 	before := count()
 	config.Provider = &configv1.ExtProcProvider{Service: "global-new.demo.svc"}
 	publish()
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return host("inherit", networking.ExtProcCluster) == "global-new.demo.svc" },
 		"inherited primary updated",
@@ -97,7 +98,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 			config.Additional = []*configv1.ExtProcProvider{{Name: "audit", Service: service}}
 		}
 		publish()
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			return host("inherit", "agentio.additional-ext-proc.audit") == service &&
 				host("override", "agentio.additional-ext-proc.audit") == service
 		}, "additional processor add/update/removal reached both enabled gateways")
@@ -114,7 +115,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 	inherited.Config = proto.Clone(inherited.Config).(*configv1.EgressGateway)
 	inherited.Config.ExtProc = nil
 	gateways.ConditionalUpdateObject(inherited)
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return host("override", networking.ExtProcCluster) == "global-new.demo.svc" },
 		"override now inherits",
@@ -123,7 +124,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 	before = count()
 	config.Provider = &configv1.ExtProcProvider{Service: "global-last.demo.svc"}
 	publish()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return host("inherit", networking.ExtProcCluster) == "global-last.demo.svc" &&
 			host("override", networking.ExtProcCluster) == "global-last.demo.svc"
 	}, "primary dependency restored")

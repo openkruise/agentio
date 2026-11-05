@@ -516,7 +516,7 @@ data:
 			"--resolve", resolve, "--proxy", proxyURL, "https://"+target+"/")
 	}
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		scheme    string
 		proxyPort int
@@ -524,16 +524,16 @@ data:
 		{name: "HTTP proxy", scheme: "http", proxyPort: connectProxyHTTPNodePort},
 		{name: "HTTPS proxy", scheme: "https", proxyPort: connectProxyHTTPSNodePort},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
-				stdout, stderr, err := curlThroughProxy(connectProxyHost, test.scheme, test.proxyPort)
+				stdout, stderr, err := curlThroughProxy(connectProxyHost, tc.scheme, tc.proxyPort)
 				if err != nil {
-					return fmt.Errorf("curl through %s failed: %v; stdout=%q stderr=%q", test.name, err, stdout, stderr)
+					return fmt.Errorf("curl through %s failed: %w; stdout=%q stderr=%q", tc.name, err, stdout, stderr)
 				}
 				if codes := strings.TrimSpace(stdout); codes != "200:200" {
 					return fmt.Errorf(
 						"curl through %s returned target:CONNECT codes %s, want 200:200; stderr=%q",
-						test.name,
+						tc.name,
 						codes,
 						stderr,
 					)

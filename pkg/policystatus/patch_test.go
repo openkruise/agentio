@@ -55,31 +55,35 @@ func TestStatusPatchOwnershipAndTransitions(t *testing.T) {
 	accepted.LastTransitionTime = oldTime
 	resolved := condition("ResolvedRefs", metav1.ConditionTrue, "ResolvedRefs", "found", s.Metadata.Generation)
 	resolved.LastTransitionTime = oldTime
-	foreign := condition("Programmed", metav1.ConditionTrue, "Loaded", "owned by another controller", 2)
+	programmed := condition("Programmed", metav1.ConditionTrue, "Programmed", "compiled", s.Metadata.Generation)
+	programmed.LastTransitionTime = oldTime
+	foreign := condition("Ready", metav1.ConditionTrue, "Loaded", "owned by another controller", 2)
 	foreign.LastTransitionTime = oldTime
 	status, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&statusBody{
 		ObservedGeneration: &s.Metadata.Generation,
-		Conditions:         []metav1.Condition{accepted, resolved, foreign},
+		Conditions:         []metav1.Condition{accepted, resolved, programmed, foreign},
 	})
 	assert.NoError(t, err)
 	live := livePolicy(s)
 	live.Object["status"] = status
 	desired := result{
 		Source:     s,
-		Conditions: []metav1.Condition{accepted, resolved},
+		Conditions: []metav1.Condition{accepted, resolved, programmed},
 	}
 	data, err := buildPatch(live, desired)
 	assert.NoError(t, err)
 	assert.Equal(t, len(data), 0)
 	desired.Conditions[0].Message = "new details"
 	desired.Conditions[1].Status = metav1.ConditionFalse
+	desired.Conditions[2].Status = metav1.ConditionFalse
 	data, err = buildPatch(live, desired)
 	assert.NoError(t, err)
 	var patch statusPatch
 	assert.NoError(t, json.Unmarshal(data, &patch))
-	assert.Equal(t, len(patch.Status.Conditions), 2)
+	assert.Equal(t, len(patch.Status.Conditions), 3)
 	assert.Equal(t, patch.Status.Conditions[0].LastTransitionTime, oldTime)
 	assert.Equal(t, patch.Status.Conditions[1].LastTransitionTime.After(oldTime.Time), true)
+	assert.Equal(t, patch.Status.Conditions[2].LastTransitionTime.After(oldTime.Time), true)
 	assert.Equal(t, patch.Metadata.ResourceVersion, "42")
 	assert.Equal(t, patch.Metadata.UID, s.Metadata.UID)
 	assert.Equal(t, *patch.Status.ObservedGeneration, s.Metadata.Generation)

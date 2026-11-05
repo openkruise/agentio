@@ -23,6 +23,7 @@ import (
 	"istio.io/istio/pkg/util/sets"
 
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -46,7 +47,7 @@ func TestNotificationsPreserveTypeSubscriptions(t *testing.T) {
 
 	// Single-type notifications after a union must not inherit subscribers
 	// from the other type, regardless of which index was borrowed first.
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		types []string
 		want  []string
@@ -58,11 +59,11 @@ func TestNotificationsPreserveTypeSubscriptions(t *testing.T) {
 		{"empty alias", []string{model.AddressType, model.WorkloadType}, []string{"address", "both"}},
 		{"all", nil, []string{"address", "cluster", "both", "secret"}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			store.mu.Lock()
-			store.notifyLocked(Update{full: true, fullTypes: sets.New(test.types...)})
+			store.notifyLocked(Update{full: true, fullTypes: sets.New(tc.types...)})
 			store.mu.Unlock()
-			want := sets.New(test.want...)
+			want := sets.New(tc.want...)
 			for name, sub := range subscriptions {
 				select {
 				case <-sub.Updates():
@@ -203,7 +204,7 @@ func updateTestResource(t testing.TB, typeURL, keyName, xdsName, payload string,
 	if typeURL == model.AddressType {
 		facts.Workload = &model.WorkloadResourceFacts{
 			WorkloadUID: keyName,
-			Principal:   serviceAccountPrincipal("default", "default"),
+			Principal:   model.MustServiceAccountPrincipal("default", "default"),
 		}
 	}
 	resource, err := model.NewResource(
@@ -386,7 +387,7 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", value, nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: name,
-				Principal:   serviceAccountPrincipal("default", "default"),
+				Principal:   model.MustServiceAccountPrincipal("default", "default"),
 			}})
 		if err != nil {
 			t.Fatal(err)
@@ -398,22 +399,6 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 		t.Fatal(err)
 	}
 	return set
-}
-
-func eventually(t testing.TB, condition func() bool, message string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("condition never held: %s", message)
-}
-
-func serviceAccountPrincipal(namespace, serviceAccount string) model.Principal {
-	return mustTestPrincipal("cluster.local", "ns/"+(namespace)+"/sa/"+(serviceAccount))
 }
 
 // Cancellation releases both the subscriber and any type-index entries.
@@ -433,7 +418,7 @@ func TestSubscriberIsReleasedOnContextCancel(t *testing.T) {
 				subscription.Watch(model.AddressType)
 			}
 			cancel()
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				store.mu.RLock()
 				defer store.mu.RUnlock()
 				return len(store.subscribers) == 0 && len(store.subscribersByType) == 0

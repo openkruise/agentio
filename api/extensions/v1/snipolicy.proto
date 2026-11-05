@@ -46,6 +46,10 @@ message SniMatch {
   // Values are ORed. Supported forms are exact names, a leading wildcard,
   // and "*" for any non-empty SNI.
   repeated string sni = 1;
+
+  // Original destination ports are ORed and ANDed with SNI. Empty means any
+  // port; a missing destination port never matches a non-empty list.
+  repeated uint32 ports = 2;
 }
 
 enum SniAction {
