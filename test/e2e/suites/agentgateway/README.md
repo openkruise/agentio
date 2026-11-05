@@ -10,11 +10,13 @@ Certificate renewal and failure recovery are covered separately by `TestAgentgat
 
 `TestAgentgatewayGeneratedEgress` supplies `data.config` egress settings to the production deployer and waits for its generated ConfigMap and ready Deployment. Generated mode mounts the directory for native file watching and uses a stable mode marker rather than a per-configuration rollout hash. It sends traffic to an unreachable intercepted IP with a synthetic Host; success requires static endpoint selection and request/response processing by the configured Service/EndpointSlice ext-proc fixture through real ztunnel/HBONE traffic.
 
-`TestAgentgatewayPorterEPEIdentity` checks Porter identity resolution and workload-selected EPE policy with forged application identity headers. `TestAgentgatewayPorterTLSIdentity` checks Porter-triggered MITM, identity after decryption, EPE-selected static endpoints, private upstream CA trust, and rejection of mismatched SNI and Host. It uses a cluster-local HTTPS origin and a temporary test CA.
+`TestAgentgatewayStaticTLSInterception` checks static SNI-selected interception, static upstream endpoints, private upstream CA trust, and standard request/response external processing after decryption.
+
+The suite uses the official agentgateway image without patches. It does not cover Porter identity enrichment, dynamic SNI decisions or Agentio-specific EPE target binding, which are not implemented for this data plane.
 
 ## Run
 
-Use an isolated Kubernetes cluster with Gateway API v1.4.1 standard CRDs already installed. As with the other suites, provide immutable images for Agentiod, EPE, Porter, ext-proc, ztunnel, proxy-init, and CNI using the component flags or an `-agentio.config` file. Set `gateway-image` to the [Agentio agentgateway v1.7.0 adapter image](../../../../extensions/agentgateway/README.md) digest. From `test/e2e`:
+Use an isolated Kubernetes cluster with Gateway API v1.4.1 standard CRDs already installed. As with the other suites, provide immutable images for Agentiod, EPE, ext-proc, ztunnel, proxy-init, and CNI using the component flags or an `-agentio.config` file. Set `gateway-image` to an official agentgateway v1.7.0 digest. From `test/e2e`:
 
 ```bash
 AGENTIO_E2E=1 go test ./suites/agentgateway -v -timeout=25m \

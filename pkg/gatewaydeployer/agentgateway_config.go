@@ -36,15 +36,6 @@ const agentgatewayOriginalTarget = `(string(destination.address).contains(":") ?
 
 const agentgatewaySourceAddress = `(string(source.address).contains(":") ? "[" + string(source.address) + "]" : string(source.address)) + ":" + string(source.port)`
 
-var agentgatewayIdentityAttributes = map[string]string{
-	model.AttributeWorkloadUID:                 "source.connectMetadata.agentio.workload.uid",
-	model.AttributeWorkloadName:                "source.connectMetadata.agentio.workload.name",
-	model.AttributeWorkloadNamespace:           "source.connectMetadata.agentio.workload.namespace",
-	model.AttributeSandboxUID:                  `source.connectHeaders["x-agentio-sandbox-uid"]`,
-	"filter_state['sandbox.token']":            `source.connectHeaders["x-agentio-sandbox-token"]`,
-	"filter_state['agentio.sandbox.metadata']": `source.connectHeaders["x-agentio-sandbox-metadata"]`,
-}
-
 // Keep the intercepted port even when Host contains a different explicit port.
 const agentgatewayHostTarget = `(request.host.startsWith("[") ? request.host.split("]")[0] + "]" : request.host.split(":")[0]) + ":" + string(destination.port)`
 
@@ -124,18 +115,6 @@ func agentgatewayEgressConfig(
 		"binds": binds,
 		"frontendPolicies": map[string]any{
 			"connect": map[string]any{"mode": "deny"},
-			"hboneExtProc": map[string]any{
-				"host":          "127.0.0.1:9002",
-				"timeout":       "5s",
-				"tlsExclusions": append([]string{}, gateway.GetTlsTermination().GetExcludeHosts()...),
-				"tlsInclusions": append([]string{}, gateway.GetTlsTermination().GetIncludeHosts()...),
-				"requestAttributes": map[string]string{
-					model.AttributePeerIP:          "string(source.rawAddress)",
-					model.AttributePeerPrincipal:   `has(source.spiffeId) ? source.spiffeId : ""`,
-					model.AttributePeerCertificate: `has(source.certificate) ? source.certificate : ""`,
-					model.AttributeSandboxUID:      `"x-agentio-sandbox-uid" in source.connectHeaders ? source.connectHeaders["x-agentio-sandbox-uid"] : ""`,
-				},
-			},
 		},
 	}
 	services, workloads := agentgatewayProcessorServices(providers, inputs)
@@ -221,22 +200,6 @@ func agentgatewayHTTPListener(
 	if err != nil {
 		return nil, err
 	}
-	if primary != nil {
-		// EPE chooses a static endpoint once, then authorizes that exact destination.
-		candidates := "[]"
-		for _, entry := range gateway.GetServiceEntries() {
-			var matches, targets []string
-			for _, host := range entry.GetHosts() {
-				matches = append(matches, "destination.hostname == "+strconv.Quote(host))
-			}
-			for _, endpoint := range entry.GetEndpoints() {
-				targets = append(targets, strconv.Quote(endpoint.GetAddress()+":")+" + string(destination.port)")
-			}
-			candidates = "(" + strings.Join(matches, " || ") + ") ? [" +
-				strings.Join(targets, ", ") + "] : (" + candidates + ")"
-		}
-		primary["requestAttributes"].(map[string]string)["agentio.route.candidates"] = candidates
-	}
 	routes, err := agentgatewayHTTPRoutes(gateway, primary)
 	if err != nil {
 		return nil, err
@@ -302,10 +265,6 @@ func agentgatewayTLSListeners(
 			continue
 		}
 		listeners = append(listeners, agentgatewayHTTPSListener(http, host, inputs))
-	}
-	if inputs.MITM && !termination["*"] {
-		// Porter can request termination for a host absent from static includes.
-		listeners = append(listeners, agentgatewayHTTPSListener(http, "*", inputs))
 	}
 	return listeners, nil
 }
@@ -604,7 +563,6 @@ func agentgatewayExtProc(provider *configv1.ExtProcProvider) (map[string]any, er
 		"destination.address": "string(destination.address)",
 		"destination.port":    "destination.port",
 	}
-	maps.Copy(attributes, agentgatewayIdentityAttributes)
 	for _, attribute := range provider.GetRequest().GetAttributes() {
 		expression, err := agentgatewayExtProcAttribute(attribute, false)
 		if err != nil {
@@ -656,9 +614,6 @@ func agentgatewayExtProc(provider *configv1.ExtProcProvider) (map[string]any, er
 }
 
 func agentgatewayExtProcAttribute(attribute string, response bool) (string, error) {
-	if expression, found := agentgatewayIdentityAttributes[attribute]; found {
-		return expression, nil
-	}
 	switch attribute {
 	case "source.address":
 		return agentgatewaySourceAddress, nil

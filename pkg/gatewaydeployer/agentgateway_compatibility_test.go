@@ -19,11 +19,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/openkruise/agentio/pkg/model"
 )
 
-func TestAgentgatewayPorterIdentityConfiguration(t *testing.T) {
+func TestAgentgatewayGeneratedUsesOfficialInterfaces(t *testing.T) {
 	gateway, _ := agentgatewayFixture()
 	content, err := agentgatewayEgressConfig(agentgatewaySettings(t, `
 serviceEntries:
@@ -38,10 +36,10 @@ extProc: {serviceRef: {name: epe, namespace: system}}
 	if err := json.Unmarshal([]byte(content), &config); err != nil {
 		t.Fatal(err)
 	}
-	porter := config["frontendPolicies"].(map[string]any)["hboneExtProc"].(map[string]any)
-	if porter["host"] != "127.0.0.1:9002" || porter["timeout"] != "5s" ||
-		porter["requestAttributes"].(map[string]any)[model.AttributePeerCertificate] != `has(source.certificate) ? source.certificate : ""` {
-		t.Fatalf("Porter must receive the authenticated outer TLS context: %v", porter)
+	for _, custom := range []string{"hboneExtProc", "source.connectMetadata", "agentio.route.candidates"} {
+		if strings.Contains(content, custom) {
+			t.Fatalf("generated configuration requires an agentgateway patch: %s", custom)
+		}
 	}
 	listeners := config["binds"].([]any)[1].(map[string]any)["listeners"].([]any)
 	route := listeners[0].(map[string]any)["routes"].([]any)[0].(map[string]any)
@@ -50,24 +48,15 @@ extProc: {serviceRef: {name: epe, namespace: system}}
 		t.Fatalf("ServiceRef must use native name/port fields: %v", processor)
 	}
 	attributes := processor["requestAttributes"].(map[string]any)
-	if attributes[model.AttributeWorkloadUID] != "source.connectMetadata.agentio.workload.uid" ||
-		attributes["source.address"] != agentgatewaySourceAddress {
-		t.Fatalf("identity did not come from immutable CONNECT metadata: %v", attributes)
-	}
-	candidates := attributes["agentio.route.candidates"].(string)
-	if !strings.Contains(candidates, "192.0.2.1") || !strings.Contains(candidates, "192.0.2.2") {
-		t.Fatal("EPE did not receive the static endpoint candidates")
-	}
-	if !strings.Contains(candidates, `destination.hostname == "api.example"`) {
-		t.Fatal("static candidates must match the normalized hostname, including case and port handling")
+	if attributes["source.address"] != agentgatewaySourceAddress {
+		t.Fatal("native processor did not receive its source address")
 	}
 	for _, value := range listeners {
 		listener := value.(map[string]any)
-		if listener["protocol"] == "HTTPS" && listener["hostname"] == "*" {
-			return
+		if listener["protocol"] == "HTTPS" {
+			t.Fatal("mounting a CA must not enable unsupported Porter-driven termination")
 		}
 	}
-	t.Fatal("Porter cannot select TLS termination without a wildcard HTTPS listener")
 }
 
 func TestGatewayStatusAddressesAreAnArrayBeforeAssignment(t *testing.T) {

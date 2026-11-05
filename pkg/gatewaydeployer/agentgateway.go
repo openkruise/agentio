@@ -116,11 +116,6 @@ func (d *DeploymentController) agentgatewayInput(input *TemplateInput) error {
 				"generated agentgateway egress configuration requires egressGateway.agentgateway.ca.enabled",
 			)
 		}
-		if nestedString(d.renderer.state.Load().values, "global", "agentgateway", "agentioImage") == "" {
-			return fmt.Errorf(
-				"generated agentgateway requires egressGateway.agentgateway.agentioImage built with the Agentio HBONE patch",
-			)
-		}
 		input.AgentgatewayConfig = content
 		input.AgentgatewayTrustBundle = trustBundle
 		input.AgentgatewayConfigName = input.DeploymentName + "-native"
@@ -158,7 +153,7 @@ func (d *DeploymentController) agentgatewayInput(input *TemplateInput) error {
 	input.AgentgatewayConfigHash = fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 	if input.AgentgatewayConfig != "" {
 		// Generated runtime settings are file-watched; only changing mode needs a rollout.
-		input.AgentgatewayConfigHash = "generated-v1.7.0-agentio"
+		input.AgentgatewayConfigHash = "generated-v1.7.0"
 	}
 	return nil
 }

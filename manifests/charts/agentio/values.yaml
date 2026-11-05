@@ -293,9 +293,6 @@ egressGateway:
   # Native file configuration comes from the Gateway's parametersRef ConfigMap.
   agentgateway:
     image: cr.agentgateway.dev/agentgateway:v1.7.0
-    # Required for generated Agentio config; build docker/Dockerfile.agentgateway.
-    # The official image remains available for operator-owned config.yaml.
-    agentioImage: ""
     # Enable the native CA client using Agentiod's address, trust bundle,
     # token audience and the Gateway Pod's ServiceAccount identity.
     # Native config must use tunnelProtocol: hboneGateway for HBONE termination.

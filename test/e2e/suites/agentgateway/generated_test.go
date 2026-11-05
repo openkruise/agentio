@@ -83,7 +83,7 @@ data:
     - policy: GATEWAY
       gateway: {service: generated-egress.{{ .Namespace }}.svc.cluster.local}
 `)
-	if err := native.WaitReadyHash(ctx, env, config.Namespace, name, "generated-v1.7.0-agentio"); err != nil {
+	if err := native.WaitReadyHash(ctx, env, config.Namespace, name, "generated-v1.7.0"); err != nil {
 		t.Fatal(err)
 	}
 	traffic.Client.CallOrFail(t, echo.CallOptions{

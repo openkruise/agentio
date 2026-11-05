@@ -2,7 +2,7 @@
 
 Agentio's gateway deployer supports the `agentio-agentgateway` GatewayClass. It provisions a ServiceAccount, Deployment, and Service, and runs agentgateway with either operator-supplied native YAML or native configuration generated from Agentio egress settings. HorizontalPodAutoscaler (HPA) and PodDisruptionBudget (PDB) are opt-in resources.
 
-The generated configuration supports HTTP Host routing, static service entries, HTTP route timeouts and retries, Porter identity resolution and EPE external processing. Workload certificate bootstrap uses Agentiod CA. The Agentio-patched image adds per-tunnel Workload/Sandbox context, SecurityProfile processing through EPE, dynamic SNI decisions and authorized-target enforcement. HTTPRoute and Envoy extensions are not integrated with this path. Existing `agentio-egress` Gateways continue to use Envoy.
+The generated configuration uses the official agentgateway v1.7.0 image. It supports HTTP Host routing, static service entries, HTTP route timeouts and retries, static TLS interception and standard HTTP external processing. Workload certificate bootstrap uses Agentiod CA. Porter identity enrichment, workload/Sandbox-driven SNI decisions, and the full EPE authorization contract are not integrated. Existing `agentio-egress` Gateways continue to use Envoy.
 
 ## Enable the deployer
 
@@ -74,7 +74,7 @@ If Helm should also create the Gateway, set `egressGateway.gatewayAPI.create: tr
 
 ## Generate configuration from Agentio egress settings
 
-Use `data.config` instead of `data["config.yaml"]` in the referenced ConfigMap to generate a native egress configuration. Enable `egressGateway.agentgateway.ca.enabled: true`, set `egressGateway.agentgateway.agentioImage` to an image built with [the v1.7.0 Agentio adapter](../../extensions/agentgateway/README.md), and expose one HBONE listener. Do not supply both formats. The official image does not implement the adapter's HBONE processing interface.
+Use `data.config` instead of `data["config.yaml"]` in the referenced ConfigMap to generate a native egress configuration. Enable `egressGateway.agentgateway.ca.enabled: true` and expose one HBONE listener. Both configuration formats use `egressGateway.agentgateway.image`; no custom proxy image or source patch is required. Do not supply both formats.
 
 ```yaml
 apiVersion: v1
@@ -84,6 +84,7 @@ metadata:
   namespace: agentio-system
 data:
   config: |
+    extProc: {}
     serviceEntries:
     - hosts: [api.example.com]
       endpoints: [{address: 203.0.113.10}]
@@ -114,9 +115,7 @@ spec:
     protocol: HBONE
 ```
 
-The controller creates a separate Gateway-owned `<deployment-name>-native` ConfigMap and deploys Porter as a native sidecar. It does not modify or adopt the input ConfigMap. The generated directory is mounted without `subPath`: agentgateway watches and reloads routes, listeners, processor endpoints, certificates and trust files. Configuration changes keep the Pod template's `generated-v1.7.0-agentio` mode marker stable and do not trigger a rollout. Switching between native and generated modes does trigger a rollout. Deleting the Gateway garbage-collects its generated ConfigMap.
-
-Register the Gateway under the global `egressGateways` configuration before waiting for readiness. Porter uses this enrollment to authenticate to Agentiod; Gateway Pod labels alone do not grant gateway privileges.
+The controller creates a separate Gateway-owned `<deployment-name>-native` ConfigMap. It does not modify or adopt the input ConfigMap. The generated directory is mounted without `subPath`: agentgateway watches and reloads routes, listeners, processor endpoints, certificates and trust files. Configuration changes keep the Pod template's `generated-v1.7.0` mode marker stable and do not trigger a rollout. Switching between native and generated modes does trigger a rollout. Deleting the Gateway garbage-collects its generated ConfigMap.
 
 Generated internal binds accept destination ports 80 and 443. Add non-HBONE listener ports to declare additional internal destination ports. These binds do not open public sockets; application traffic still enters through HBONE. Gateway listeners also determine Service ports, so additional internal-only ports advertised by the Service do not accept direct connections.
 
@@ -127,7 +126,7 @@ Supported settings are deliberately limited to fields with a native implementati
 | Agentio setting | Native behavior |
 | --- | --- |
 | `serviceEntries` | Exact host matching and equally weighted static IPv4 endpoints for HTTP, including decrypted HTTPS. TLS verification uses the service hostname when dialing a static IP. |
-| `tlsTermination` | Native `dynamicCa` certificates for exact, `*.suffix` and `*` SNI patterns. Exclusions precede Porter's ordered SNI rules; includes apply after those rules. Requires the signing Secret described below. |
+| `tlsTermination` | Native `dynamicCa` certificates selected by static exact, `*.suffix` and `*` SNI patterns. An exclusion wins over an identical inclusion. Requires the signing Secret described below. Workload/Sandbox policy does not select termination. |
 | `upstreamTrustBundle` | ConfigMap/Secret sources in the Agentio system namespace are validated, merged and deduplicated with Agentiod's public CA package, then mounted as the HTTPS origination root file. Invalid sources retain the existing generated configuration. |
 | `http.acceptHttp10` | Defaults to accepting HTTP/1.0. Explicit `false` rejects HTTP/1.0 through native authorization with HTTP 403. |
 | `http.routing.fallback` | Default timeout/retry settings. An override for `*` replaces them. |
@@ -136,19 +135,18 @@ Supported settings are deliberately limited to fields with a native implementati
 | Route `retries` | In v1.7.0, both Agentio and native `attempts` count retries after the original request, so the value is passed through. Maximum 255 retries. `perTryTimeout` maps to `backendRequestTimeout`. `backoff` uses the native delay. Supported `retryOn` values are HTTP status numbers, `5xx`, `gateway-error`, `connect-failure`, `refused-stream`, `unavailable`, and `cancelled`. Connection failures follow agentgateway's native retry classification; previous-host/locality selection is not translated. |
 | `extProc` | Per-gateway override or inherited global `sandboxExtProc`, plaintext endpoint, failure mode, header modes and body mode override. `serviceRef` uses the shared Service/EndpointSlice cache and authoritative endpoint ports; only ready, serving, non-terminating TCP endpoints participate. Missing Services/endpoints produce an empty native Service and never fall back to DNS. |
 | `additionalExtProcs` | One additional processor is supported through native gateway and route phases: requests run primary then additional, responses run in reverse order. Explicit per-gateway `extProc: {}` disables both. Longer chains are rejected. |
-| ext-proc attributes | Workload UID/name/namespace come from Porter's validated result. Sandbox UID, token and metadata come from the outer CONNECT after Porter validates its binding. These and the source address and destination address/port are supplied automatically. Request attributes can also select `source.port`, `request.method`, `request.host`, `request.path`, `request.scheme`, `request.protocol`, `request.headers`; response attributes can select `response.code` and `response.headers`. |
-| EPE authorization | `agentio.route.upstream.address` fixes the actual numeric connection target, including after buffered body authorization. Other processors cannot overwrite it. Static endpoints are supplied as `agentio.route.candidates` so EPE selects and authorizes the same endpoint. |
+| ext-proc attributes | Source address and destination address/port are supplied automatically. Request attributes can also select `source.port`, `request.method`, `request.host`, `request.path`, `request.scheme`, `request.protocol`, `request.headers`; response attributes can select `response.code` and `response.headers`. Agentio Workload/Sandbox identity and filter-state attributes are rejected. Attribute values follow native proxy semantics. |
 | Explicit transport defaults | TLS 1.2–1.3 without a cipher override, `http.streamIdleTimeout: 0s`, and `tcp.idleTimeout: 0s` are accepted. Native defaults do not reproduce Envoy's nonzero idle timeout defaults. |
 
 Unsupported populated fields are rejected with `Accepted=False` and `Programmed=False` before changing generated configuration or the Deployment. Remaining gaps require native capabilities with matching semantics: CONNECT rate/concurrency/bandwidth limits and identity buckets; nonzero bidirectional HTTP/TCP idle timeouts and TCP maximum lifetime; TLS origination version/cipher restrictions; Envoy log-format operators; ext-proc per-message timeouts, legacy label attributes, HTTP/2 connection limits, and longer processor chains. The native CA's legacy mTLS transport can fall back to plaintext when identity acquisition fails, so it cannot safely implement Agentio's fail-closed `extProc.tls: MUTUAL` contract. SPIFFE Workload API configurations can be supplied in native mode, but are a different identity source.
 
-To use managed EPE with generated configuration, override the provider in `data.config`, for example `extProc: {serviceRef: {name: agentio-epe, namespace: agentio-system}}`. This uses plaintext inside the cluster and the automatically supplied identity attributes. The chart's inherited Envoy provider includes per-message timeout and legacy attributes that cannot be translated; configure the provider explicitly instead of copying that block.
+Configure a standard HTTP processor explicitly in `data.config`, for example `extProc: {serviceRef: {name: processor, namespace: agentio-system}}`. The chart's inherited Envoy EPE provider includes identity attributes and per-message timeouts that cannot be translated. HTTP ext-proc can call an EPE endpoint, but this integration does not supply Porter's trusted Workload/Sandbox metadata or interpret EPE's `agentio.route` metadata to bind the actual dial target. Full EPE policy and destination-authorization parity is therefore not claimed.
 
 Application-level HTTP CONNECT is explicitly denied with HTTP 405 before HTTP processing. Native `connect.mode: route` terminates CONNECT and establishes a byte tunnel; it does not forward the original CONNECT request to the intercepted upstream HTTP proxy as `agentio-egress` does. This restriction does not affect the outer HBONE CONNECT transport.
 
 With two processors, the primary runs before native route selection. A primary processor that rewrites Host can therefore affect host overrides and static endpoint selection.
 
-To enable MITM, provision a CA Secret in the Gateway's namespace with `ca.crt` and `ca.key`, and add the existing Gateway annotation `gateway.agentio.kruise.io/agentgateway-certs: <secret-name>`. Termination can be selected by Porter's workload/Sandbox policy or static `tlsTermination.includeHosts`. Clients must trust that CA. Decrypted requests with different SNI and Host are rejected with HTTP 403 before EPE. Agentgateway holds this signing key and issues SNI leaf certificates locally; the controller does not copy Agentiod's MITM signing Secret or private keys. Projected Secret changes are watched by the native resource manager. Use a dedicated CA appropriate for the gateway's trust boundary.
+To enable MITM, provision a CA Secret in the Gateway's namespace with `ca.crt` and `ca.key`, add the existing Gateway annotation `gateway.agentio.kruise.io/agentgateway-certs: <secret-name>`, and set static `tlsTermination.includeHosts`. Clients must trust that CA. Native interception does not reproduce Agentio's Porter-driven decisions or the Envoy SNI/Host equality guard. Agentgateway holds this signing key and issues SNI leaf certificates locally; the controller does not copy Agentiod's MITM signing Secret or private keys. Projected Secret changes are watched by the native resource manager. Use a dedicated CA appropriate for the gateway's trust boundary.
 
 Agentgateway v1.7.0 filters loopback, unspecified and link-local addresses after resolution for dynamic backends. Generated configuration retains that default, including static service entries represented by dynamic targets. Private service networks remain reachable. EPE and TrafficPolicy authorization remain separate from this native address restriction. Use native `config.yaml` for other native features; retain `agentio-egress` for the unsupported enforcement settings listed above.
 

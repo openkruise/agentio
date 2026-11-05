@@ -50,8 +50,7 @@ func generatedAgentgatewayRenderer(t *testing.T) *renderer {
 		"global": map[string]any{
 			"caAddress": "https://agentiod.agentio-system.svc:15012",
 			"agentgateway": map[string]any{
-				"ca":           map[string]any{"enabled": true},
-				"agentioImage": "example.com/agentio-agentgateway:tested",
+				"ca": map[string]any{"enabled": true},
 			},
 		},
 	})
@@ -188,6 +187,8 @@ func TestAgentgatewayGeneratedConfigRejectsUnsupportedSettings(t *testing.T) {
 		"extProc: {service: processor.example, messageTimeout: 5s}",
 		"extProc: {service: processor.example, request: {headerMode: 42}}",
 		"extProc: {service: processor.example, request: {attributes: [\"filter_state['unknown']\"]}}",
+		"extProc: {service: processor.example, request: {attributes: [\"filter_state['agentio.workload.uid']\"]}}",
+		"extProc: {service: processor.example, request: {attributes: [\"filter_state['agentio.sandbox.uid']\"]}}",
 		"serviceEntries: [{hosts: [api.example], endpoints: [{address: invalid}]}]",
 	} {
 		t.Run(settings, func(t *testing.T) {
