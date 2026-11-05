@@ -102,6 +102,8 @@ spec:
               value: {{ include "agentiod.fullname" . | quote }}
             - name: AGENTIO_TOKEN_AUDIENCE
               value: {{ .Values.agentiod.tokenAudience | quote }}
+            - name: AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE
+              value: {{ .Values.agentiod.kubernetesWorkloadAuthMode | quote }}
             - name: AGENTIO_TRUSTED_NODE_ACCOUNTS
               value: {{ .Values.agentiod.trustedNodeServiceAccount | quote }}
             - name: AGENTIO_CONFIGMAP_NAME

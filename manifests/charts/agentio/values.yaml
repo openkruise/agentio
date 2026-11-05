@@ -84,6 +84,7 @@ agentiod:
       drop: [ALL]
     readOnlyRootFilesystem: true
   tokenAudience: agentio-ca
+  kubernetesWorkloadAuthMode: tokenreview
   logging:
     level: info
     format: text

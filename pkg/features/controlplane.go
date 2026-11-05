@@ -60,6 +60,11 @@ var (
 		"agentio-ca",
 		"Audience a client token must carry to be accepted.",
 	).Get()
+	KubernetesWorkloadAuthMode = env.Register(
+		"AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE",
+		"tokenreview",
+		"Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings.",
+	).Get()
 	ServiceName = env.Register(
 		"AGENTIO_SERVICE_NAME",
 		"agentiod",
@@ -102,6 +107,9 @@ var (
 func validateControlPlane() error {
 	if _, set := os.LookupEnv("AGENTIO_SANDBOX_RUNTIMES"); set {
 		return fmt.Errorf("AGENTIO_SANDBOX_RUNTIMES is no longer supported; remove it and use AGENTIO_SANDBOX_MODE")
+	}
+	if KubernetesWorkloadAuthMode != "tokenreview" && KubernetesWorkloadAuthMode != "local" {
+		return fmt.Errorf("unsupported Kubernetes workload authentication mode %q", KubernetesWorkloadAuthMode)
 	}
 	if strings.TrimSpace(TokenAudience) == "" {
 		return fmt.Errorf("token audience is required")
