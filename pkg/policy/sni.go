@@ -25,27 +25,29 @@ import (
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 )
 
-// CompileSNIRules projects HTTPS-capable security matches into SNI termination rules.
+// CompileSNIRules projects TLS and HTTPS-capable HTTP rules in source order.
 // Sandbox-owned rules and shared SecurityProfiles use the same projection.
 func CompileSNIRules(rules []agentsv1alpha1.SecurityRule) (*extensionsv1.SniTrafficPolicy, error) {
-	hosts, err := sniHosts(rules)
-	if err != nil || len(hosts) == 0 {
-		return nil, err
-	}
-	return &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
-		Match:  &extensionsv1.SniMatch{Sni: hosts},
-		Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION,
-	}}}, nil
-}
-
-func sniHosts(rules []agentsv1alpha1.SecurityRule) ([]string, error) {
-	seen := sets.New[string]()
-	result := make([]string, 0)
+	var result *extensionsv1.SniTrafficPolicy
 	for ruleIndex, rule := range rules {
+		if err := ValidateTLSRule(rule); err != nil {
+			return nil, fmt.Errorf("rules[%d]: %w", ruleIndex, err)
+		}
+		action := extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION
+		if rule.Actions.TLS != nil {
+			switch rule.Actions.TLS.Action {
+			case agentsv1alpha1.TLSActionDeny:
+				action = extensionsv1.SniAction_SNI_ACTION_DENY
+			case agentsv1alpha1.TLSActionPassthrough:
+				action = extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH
+			}
+		}
 		for matchIndex, match := range rule.Match {
-			if !mayMatchHTTPS(match.Schemes) {
+			if rule.Actions.TLS == nil && !mayMatchHTTPS(match.Schemes) {
 				continue
 			}
+			seen := sets.New[string]()
+			matched := &extensionsv1.SniMatch{}
 			for domainIndex, domain := range match.Domains {
 				normalized, err := normalizeSNI(domain)
 				if err != nil {
@@ -56,11 +58,58 @@ func sniHosts(rules []agentsv1alpha1.SecurityRule) ([]string, error) {
 					continue
 				}
 				seen.Insert(normalized)
-				result = append(result, normalized)
+				matched.Sni = append(matched.Sni, normalized)
 			}
+			for _, port := range match.Ports {
+				if port < 1 || port > 65535 {
+					return nil, fmt.Errorf("rules[%d].match[%d]: invalid destination port %d", ruleIndex, matchIndex, port)
+				}
+				matched.Ports = append(matched.Ports, uint32(port))
+			}
+			if len(matched.Sni) == 0 {
+				continue
+			}
+			if result == nil {
+				result = &extensionsv1.SniTrafficPolicy{}
+			}
+			result.Rules = append(result.Rules, &extensionsv1.SniRule{Match: matched, Action: action})
 		}
 	}
 	return result, nil
+}
+
+// ValidateTLSRule enforces the connection-only contract for CRDs and inline rules.
+func ValidateTLSRule(rule agentsv1alpha1.SecurityRule) error {
+	actions := rule.Actions
+	if actions.TLS == nil {
+		return nil
+	}
+	if actions.TLS.Action != agentsv1alpha1.TLSActionDeny && actions.TLS.Action != agentsv1alpha1.TLSActionPassthrough {
+		return fmt.Errorf("invalid TLS action %q", actions.TLS.Action)
+	}
+	if actions.Bypass || actions.Block != nil || actions.MCPToolPolicy != nil ||
+		actions.HeaderManipulation != nil || actions.HTTPCallout != nil ||
+		actions.TokenTransformation != nil || len(actions.Audit) > 0 {
+		return fmt.Errorf("TLS action cannot be combined with HTTP actions or rule audit")
+	}
+	if len(rule.Match) == 0 {
+		return fmt.Errorf("TLS rule requires a match")
+	}
+	for i, match := range rule.Match {
+		if len(match.Domains) == 0 {
+			return fmt.Errorf("match[%d]: TLS rule requires domains", i)
+		}
+		if len(match.Paths) > 0 || len(match.Methods) > 0 || len(match.Schemes) > 0 ||
+			len(match.Headers) > 0 || len(match.QueryParams) > 0 {
+			return fmt.Errorf("match[%d]: TLS rule only supports domains and ports", i)
+		}
+		for _, port := range match.Ports {
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("match[%d]: invalid destination port %d", i, port)
+			}
+		}
+	}
+	return nil
 }
 
 func mayMatchHTTPS(schemes []string) bool {

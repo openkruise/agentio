@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -27,6 +28,78 @@ import (
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
+	fixture := newIncrementalFixture(t)
+	workload := testWorkload("demo", "client", "10.1.0.1")
+	fixture.workloads.ConditionalUpdateObject(workload)
+	profile := model.SecurityProfile{Name: "tls", Namespace: "demo"}
+	sandbox := model.Sandbox{UID: "inline-tls", Namespace: "demo"}
+	await := func(want *extensionsv1.SniTrafficPolicy) {
+		t.Helper()
+		eventually(t, func() bool {
+			resource, found := currentSnapshot(t, fixture.compiler).Get(model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID})
+			if !found {
+				return false
+			}
+			address := new(workloadv1.Address)
+			if err := resource.Value.UnmarshalTo(address); err != nil {
+				t.Fatal(err)
+			}
+			got := new(extensionsv1.SniTrafficPolicy)
+			compatibilityExtension(t, address.GetWorkload(), "sni-traffic-policy", got)
+			if !proto.Equal(got, want) {
+				return false
+			}
+			manifest := manifestAt(t, fixture.compiler, sandbox.UID)
+			if manifest == nil {
+				return false
+			}
+			for _, extension := range manifest.Extensions {
+				if extension.MessageIs(got) {
+					if err := extension.UnmarshalTo(got); err != nil {
+						t.Fatal(err)
+					}
+					return proto.Equal(got, want)
+				}
+			}
+			return false
+		}, "TLS action and original ports reach both xDS extensions")
+	}
+	for _, tc := range []struct {
+		action agentsv1alpha1.TLSActionType
+		want   extensionsv1.SniAction
+	}{
+		{agentsv1alpha1.TLSActionPassthrough, extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH},
+		{agentsv1alpha1.TLSActionDeny, extensionsv1.SniAction_SNI_ACTION_DENY},
+	} {
+		profile.Spec.Rules = []agentsv1alpha1.SecurityRule{{
+			Name:    "tls",
+			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"API.Example.COM."}, Ports: []int32{8443}}},
+			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: tc.action}},
+		}}
+		sandbox.Policies = &model.SandboxPolicies{SecurityRules: profile.Spec.Rules}
+		fixture.securityProfiles.ConditionalUpdateObject(profile)
+		fixture.sandboxes.ConditionalUpdateObject(sandbox)
+		await(&extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"api.example.com"}, Ports: []uint32{8443}},
+			Action: tc.want,
+		}}})
+	}
+	profile.Spec = *profile.Spec.DeepCopy()
+	profile.Spec.Rules[0].Actions.TLS.Action = "invalid"
+	sandbox.Policies = &model.SandboxPolicies{SecurityRules: profile.Spec.Rules}
+	fixture.securityProfiles.ConditionalUpdateObject(profile)
+	fixture.sandboxes.ConditionalUpdateObject(sandbox)
+	eventually(t, func() bool {
+		failures := fixture.compiler.Failures()
+		return failures["SecurityProfile/"+profile.ResourceName()] != "" && failures["SandboxPolicies/"+sandbox.UID] != ""
+	}, "invalid TLS updates are diagnosed")
+	await(&extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
+		Match:  &extensionsv1.SniMatch{Sni: []string{"api.example.com"}, Ports: []uint32{8443}},
+		Action: extensionsv1.SniAction_SNI_ACTION_DENY,
+	}}})
+}
 
 func securityReferencesAt(
 	t *testing.T,

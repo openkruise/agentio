@@ -15,14 +15,96 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestCompileSNIRulesPreservesTLSOrderAndMatchPorts(t *testing.T) {
+	rules := []agentsv1alpha1.SecurityRule{
+		{
+			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"SKIP.Example.COM."}, Ports: []int32{443, 8443}}},
+			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionPassthrough}},
+		},
+		{
+			Match: []agentsv1alpha1.RuleMatch{
+				{Domains: []string{"*.example.com"}, Ports: []int32{443}, Schemes: []string{"https"}, Methods: []string{"GET"}},
+				{Domains: []string{"skip.example.com"}, Ports: []int32{9443}},
+				{Domains: []string{"http.example.com"}, Schemes: []string{"http"}},
+			},
+		},
+		{
+			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"*"}}},
+			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny}},
+		},
+	}
+	got, err := CompileSNIRules(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{
+		{Match: &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{443, 8443}}, Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH},
+		{Match: &extensionsv1.SniMatch{Sni: []string{"*.example.com"}, Ports: []uint32{443}}, Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION},
+		{Match: &extensionsv1.SniMatch{Sni: []string{"skip.example.com"}, Ports: []uint32{9443}}, Action: extensionsv1.SniAction_SNI_ACTION_TLS_TERMINATION},
+		{Match: &extensionsv1.SniMatch{Sni: []string{"*"}}, Action: extensionsv1.SniAction_SNI_ACTION_DENY},
+	}}
+	if !proto.Equal(got, want) {
+		t.Fatalf("SNI policy = %v, want %v", got, want)
+	}
+}
+
+func TestCompileSNIRulesRejectsInvalidTLSRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*agentsv1alpha1.SecurityRule)
+		want   string
+	}{
+		{"missing action", func(r *agentsv1alpha1.SecurityRule) { r.Actions.TLS.Action = "" }, "invalid TLS action"},
+		{"unknown action", func(r *agentsv1alpha1.SecurityRule) { r.Actions.TLS.Action = "Terminate" }, "invalid TLS action"},
+		{"block", func(r *agentsv1alpha1.SecurityRule) { r.Actions.Block = &agentsv1alpha1.BlockAction{} }, "HTTP actions"},
+		{"bypass", func(r *agentsv1alpha1.SecurityRule) { r.Actions.Bypass = true }, "HTTP actions"},
+		{"mcp", func(r *agentsv1alpha1.SecurityRule) { r.Actions.MCPToolPolicy = &agentsv1alpha1.MCPToolPolicySpec{} }, "HTTP actions"},
+		{"headers action", func(r *agentsv1alpha1.SecurityRule) {
+			r.Actions.HeaderManipulation = &agentsv1alpha1.HeaderManipulationAction{}
+		}, "HTTP actions"},
+		{"callout", func(r *agentsv1alpha1.SecurityRule) { r.Actions.HTTPCallout = &agentsv1alpha1.HTTPCalloutAction{} }, "HTTP actions"},
+		{"token", func(r *agentsv1alpha1.SecurityRule) {
+			r.Actions.TokenTransformation = &agentsv1alpha1.TokenTransformationAction{}
+		}, "HTTP actions"},
+		{"audit", func(r *agentsv1alpha1.SecurityRule) { r.Actions.Audit = []agentsv1alpha1.AuditAction{{}} }, "rule audit"},
+		{"paths", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Paths = []agentsv1alpha1.PathMatch{{Value: "/"}} }, "only supports domains and ports"},
+		{"methods", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Methods = []string{"GET"} }, "only supports domains and ports"},
+		{"schemes", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Schemes = []string{"https"} }, "only supports domains and ports"},
+		{"headers", func(r *agentsv1alpha1.SecurityRule) {
+			r.Match[0].Headers = []agentsv1alpha1.HeaderMatch{{Name: "x-test"}}
+		}, "only supports domains and ports"},
+		{"query", func(r *agentsv1alpha1.SecurityRule) {
+			r.Match[0].QueryParams = []agentsv1alpha1.QueryParamMatch{{Name: "test"}}
+		}, "only supports domains and ports"},
+		{"no match", func(r *agentsv1alpha1.SecurityRule) { r.Match = nil }, "requires a match"},
+		{"no domains", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Domains = nil }, "requires domains"},
+		{"invalid domain", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Domains = []string{"*bad.example"} }, "wildcard"},
+		{"zero port", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Ports = []int32{0} }, "invalid destination port"},
+		{"large port", func(r *agentsv1alpha1.SecurityRule) { r.Match[0].Ports = []int32{65536} }, "invalid destination port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := agentsv1alpha1.SecurityRule{
+				Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"example.com"}}},
+				Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: agentsv1alpha1.TLSActionDeny}},
+			}
+			tc.change(&rule)
+			if _, err := CompileSNIRules([]agentsv1alpha1.SecurityRule{rule}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("compile error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
 
 func TestCompileSecurityProfileNormalizesHTTPSDomains(t *testing.T) {
 	priority := int32(10)

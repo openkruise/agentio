@@ -52,7 +52,9 @@ fn decide(envoy: &impl EnvoyListenerFilter) -> Action {
         Ok(name) => name,
         Err(_) => return Action::Deny,
     };
-    policy.evaluate(name)
+    // original_dst restores the CONNECT destination before this filter runs.
+    let port = envoy.get_local_address().map(|(_, port)| port);
+    policy.evaluate(name, port)
 }
 
 impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for Filter {
@@ -119,6 +121,9 @@ mod tests {
             .expect_get_requested_server_name()
             .returning(move || sni.map(EnvoyBuffer::new));
         envoy
+            .expect_get_local_address()
+            .returning(|| Some(("192.0.2.1".into(), 8443)));
+        envoy
     }
 
     #[test]
@@ -135,6 +140,16 @@ mod tests {
                 Action::Passthrough,
             ),
             (Some(POLICY), None, Action::Passthrough),
+            (
+                Some(br#"{"rules":[{"match":{"sni":["*"],"ports":[8443]},"action":"SNI_ACTION_DENY"}]}"#.as_slice()),
+                Some(b"api.example.com".as_slice()),
+                Action::Deny,
+            ),
+            (
+                Some(br#"{"rules":[{"match":{"sni":["*"],"ports":[443]},"action":"SNI_ACTION_DENY"}]}"#.as_slice()),
+                Some(b"api.example.com".as_slice()),
+                Action::Passthrough,
+            ),
             (
                 Some(POLICY),
                 Some(b"\xff.example.com".as_slice()),

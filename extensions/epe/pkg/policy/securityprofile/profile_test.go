@@ -36,6 +36,25 @@ func reqInfo(host, path, method string, port int32, headers map[string]string, q
 	}
 }
 
+func TestCompileRulesExcludesTLSFromHTTP(t *testing.T) {
+	for _, action := range []v1alpha1.TLSActionType{v1alpha1.TLSActionDeny, v1alpha1.TLSActionPassthrough} {
+		t.Run(string(action), func(t *testing.T) {
+			rules := []v1alpha1.SecurityRule{
+				{Name: "tls", Match: []v1alpha1.RuleMatch{{Domains: []string{"*"}}}, Actions: v1alpha1.SecurityRuleActions{TLS: &v1alpha1.TLSAction{Action: action}}},
+				matchAllRule("http"),
+			}
+			compiled, err := compileRules(rules)
+			if err != nil || len(compiled) != 1 || compiled[0].Name != "http" {
+				t.Fatalf("HTTP rules = %+v, error = %v", compiled, err)
+			}
+			rules[0].Actions.Bypass = true
+			if _, err := compileRules(rules); err == nil {
+				t.Fatal("mixed TLS/HTTP action accepted")
+			}
+		})
+	}
+}
+
 // TestCompileRuleMatch_AndMatches drives every branch of Match.Matches
 // through a table so the matcher's intent is documented alongside its
 // behaviour.

@@ -79,6 +79,19 @@ func TestNewInlineProfileNoAnnotation(t *testing.T) {
 	}
 }
 
+func TestNewSandboxProfileTLSRules(t *testing.T) {
+	for _, action := range []string{"Deny", "Passthrough"} {
+		raw := `[{"name":"tls","match":[{"domains":["*"],"ports":[8443]}],"actions":{"tls":{"action":"` + action + `"}}}]`
+		profile, err := NewSandboxProfile(sandboxWithRules("tls", "demo", raw))
+		if err != nil || profile == nil {
+			t.Fatalf("TLS annotation %s: profile = %+v, error = %v", action, profile, err)
+		}
+		if len(profile.Rules) != 0 {
+			t.Fatalf("TLS annotation entered HTTP processing: %+v", profile.Rules)
+		}
+	}
+}
+
 // The annotation is a server artifact: anything the reader does not
 // understand must fail closed instead of degrading into dropped rules.
 func TestNewInlineProfileRejections(t *testing.T) {
