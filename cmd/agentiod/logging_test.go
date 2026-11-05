@@ -85,7 +85,7 @@ func TestNewLoggerAppliesTextFormat(t *testing.T) {
 }
 
 func TestNewLoggerRejectsInvalidConfiguration(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		level  string
 		format string
@@ -93,9 +93,9 @@ func TestNewLoggerRejectsInvalidConfiguration(t *testing.T) {
 		{name: "level", level: "verbose", format: "text"},
 		{name: "format", level: "info", format: "console"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := agentiolog.NewLogger(&bytes.Buffer{}, test.level, test.format); err == nil {
-				t.Fatalf("agentiolog.NewLogger(%q, %q) accepted invalid configuration", test.level, test.format)
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := agentiolog.NewLogger(&bytes.Buffer{}, tc.level, tc.format); err == nil {
+				t.Fatalf("agentiolog.NewLogger(%q, %q) accepted invalid configuration", tc.level, tc.format)
 			}
 		})
 	}

@@ -126,18 +126,18 @@ func TestBuildExtProcTLS(t *testing.T) {
 			expectSecure:     true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			source := tt.source
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			source := tc.source
 			if source == "" {
 				source = "file"
 			}
 			result, err := buildExtProcTLS(
 				extProcTLSOptions{
 					Source:   source,
-					CertPath: tt.certPath,
-					KeyPath:  tt.keyPath,
-					CAPath:   tt.caPath,
+					CertPath: tc.certPath,
+					KeyPath:  tc.keyPath,
+					CAPath:   tc.caPath,
 					Workload: certsource.WorkloadOptions{
 						Address:   "agentiod.agentio-system.svc:15012",
 						TokenPath: filepath.Join(t.TempDir(), "token"),
@@ -147,22 +147,22 @@ func TestBuildExtProcTLS(t *testing.T) {
 				},
 				t.Context().Done(),
 			)
-			if tt.expectError != "" {
+			if tc.expectError != "" {
 				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+					t.Fatalf("expected error containing %q, got nil", tc.expectError)
 				}
-				if !strings.Contains(err.Error(), tt.expectError) {
-					t.Errorf("error %q does not contain %q", err.Error(), tt.expectError)
+				if !strings.Contains(err.Error(), tc.expectError) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.expectError)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("buildExtProcTLS: %v", err)
 			}
-			if result.Secure != tt.expectSecure {
-				t.Errorf("Secure = %v, want %v", result.Secure, tt.expectSecure)
+			if result.Secure != tc.expectSecure {
+				t.Errorf("Secure = %v, want %v", result.Secure, tc.expectSecure)
 			}
-			if !tt.expectSecure {
+			if !tc.expectSecure {
 				if result.Provider != nil {
 					t.Errorf("plaintext result must have a nil Provider, got %v", result.Provider)
 				}
@@ -171,8 +171,8 @@ func TestBuildExtProcTLS(t *testing.T) {
 			if result.Provider == nil {
 				t.Fatal("secure result must have a non-nil Provider")
 			}
-			if result.RequireClientCert != tt.expectClientCert {
-				t.Errorf("RequireClientCert = %v, want %v", result.RequireClientCert, tt.expectClientCert)
+			if result.RequireClientCert != tc.expectClientCert {
+				t.Errorf("RequireClientCert = %v, want %v", result.RequireClientCert, tc.expectClientCert)
 			}
 			if (result.Workload != nil) != (source == "ca") {
 				t.Errorf("certificate renewal runnable present = %v for source %q", result.Workload != nil, source)

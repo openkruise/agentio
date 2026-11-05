@@ -130,18 +130,18 @@ func TestWaitForPolicyStateObservesAppearanceAndRemoval(t *testing.T) {
 			dumps:   []string{nativePolicyDump(t, true, true), nativePolicyDump(t, false, true)},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			err := waitForPolicyState(ctx, "tp-target", test.present, func(context.Context) (string, error) {
+			err := waitForPolicyState(ctx, "tp-target", tc.present, func(context.Context) (string, error) {
 				index := calls
-				if index >= len(test.dumps) {
-					index = len(test.dumps) - 1
+				if index >= len(tc.dumps) {
+					index = len(tc.dumps) - 1
 				}
 				calls++
-				return test.dumps[index], nil
+				return tc.dumps[index], nil
 			})
 			if err != nil {
 				t.Fatal(err)

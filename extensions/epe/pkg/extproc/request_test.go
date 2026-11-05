@@ -234,10 +234,10 @@ func TestExtractRequestID(t *testing.T) {
 			want:    "",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := extractRequestID(tt.headers); got != tt.want {
-				t.Errorf("extractRequestID() = %q, want %q", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractRequestID(tc.headers); got != tc.want {
+				t.Errorf("extractRequestID() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -423,9 +423,9 @@ func TestHandleRequestHeaders_TerminalResultsArmFinalization(t *testing.T) {
 		{name: "blocked", action: filter.Stop(filter.Reply{Status: 403})},
 		{name: "bypassed", action: filter.Bypass()},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			regs := []filter.Registration{fixedRegHeaders("terminal", tt.action)}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			regs := []filter.Registration{fixedRegHeaders("terminal", tc.action)}
 			s := NewServer(ServerDeps{
 				Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 					return engine.Resolution{Units: []engine.Unit{{
@@ -567,12 +567,12 @@ func TestHandleResponseHeaders_MissingInputKeepsObligationAndAuditsError(t *test
 		{name: "nil message"},
 		{name: "missing header map", headers: &extProcPb.HttpHeaders{}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			probe := &responseHeadersProbe{}
 			s, state, cap := responseHeadersState(probe)
 
-			_, err := s.HandleResponseHeaders(context.Background(), tt.headers, state)
+			_, err := s.HandleResponseHeaders(context.Background(), tc.headers, state)
 			if err == nil {
 				t.Fatal("missing response headers were accepted")
 			}

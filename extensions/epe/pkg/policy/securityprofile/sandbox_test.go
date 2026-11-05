@@ -100,14 +100,14 @@ func TestNewInlineProfileRejections(t *testing.T) {
 			"regex",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", tt.raw))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", tc.raw))
 			if err == nil {
 				t.Fatal("expected an error")
 			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
 			}
 		})
 	}

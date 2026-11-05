@@ -124,16 +124,16 @@ func TestResolveConfigValidation(t *testing.T) {
 		{name: "reuse unnamed kind", args: []string{"-e2e.cluster.reuse=true"}, want: "cluster name"},
 		{name: "negative dumps", args: []string{"-e2e.diagnostics.max-full-dumps=-1"}, want: "max full dumps"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			fs := flag.NewFlagSet("e2e", flag.ContinueOnError)
 			in := RegisterFlags(fs)
-			if err := fs.Parse(tt.args); err != nil {
+			if err := fs.Parse(tc.args); err != nil {
 				t.Fatal(err)
 			}
 			_, err := ResolveConfig(in, DefaultConfig())
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
 			}
 		})
 	}

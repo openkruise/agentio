@@ -543,15 +543,15 @@ func TestMatchingIndex(t *testing.T) {
 			wantIndex: -1,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			cr := Rule{}
-			for _, d := range tt.domains {
+			for _, d := range tc.domains {
 				cr.Matches = append(cr.Matches, Match{Domains: d})
 			}
-			got := cr.MatchingIndex(&httpreq.HTTPRequest{Host: tt.host})
-			if got != tt.wantIndex {
-				t.Errorf("MatchingIndex = %d, want %d", got, tt.wantIndex)
+			got := cr.MatchingIndex(&httpreq.HTTPRequest{Host: tc.host})
+			if got != tc.wantIndex {
+				t.Errorf("MatchingIndex = %d, want %d", got, tc.wantIndex)
 			}
 		})
 	}
@@ -616,13 +616,13 @@ func TestSortProfiles(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// Run against both input orderings to prove the comparator is a
 			// total order rather than order-preserving on ties.
 			for _, reversed := range []bool{false, true} {
-				in := make([]*Profile, len(tt.input))
-				copy(in, tt.input)
+				in := make([]*Profile, len(tc.input))
+				copy(in, tc.input)
 				if reversed {
 					for i, j := 0, len(in)-1; i < j; i, j = i+1, j-1 {
 						in[i], in[j] = in[j], in[i]
@@ -633,9 +633,9 @@ func TestSortProfiles(t *testing.T) {
 				for i, p := range in {
 					got[i] = sortKey(p)
 				}
-				for i := range tt.want {
-					if got[i] != tt.want[i] {
-						t.Errorf("reversed=%v: order = %v, want %v", reversed, got, tt.want)
+				for i := range tc.want {
+					if got[i] != tc.want[i] {
+						t.Errorf("reversed=%v: order = %v, want %v", reversed, got, tc.want)
 						break
 					}
 				}

@@ -38,14 +38,14 @@ func TestSandboxTokenJSONRoundTrip(t *testing.T) {
 			want: SandboxToken{},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			var got SandboxToken
-			if err := json.Unmarshal([]byte(tt.in), &got); err != nil {
-				t.Fatalf("json.Unmarshal(%q): %v", tt.in, err)
+			if err := json.Unmarshal([]byte(tc.in), &got); err != nil {
+				t.Fatalf("json.Unmarshal(%q): %v", tc.in, err)
 			}
-			if got != tt.want {
-				t.Errorf("SandboxToken: want %+v, got %+v", tt.want, got)
+			if got != tc.want {
+				t.Errorf("SandboxToken: want %+v, got %+v", tc.want, got)
 			}
 		})
 	}
@@ -87,9 +87,9 @@ func TestParseSandboxToken(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			token := NewSandboxToken(tt.raw)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := NewSandboxToken(tc.raw)
 			got := token.Parse(context.Background())
 			if token != nil && token.raw != "" {
 				t.Fatal("raw token retained after parse")
@@ -97,8 +97,8 @@ func TestParseSandboxToken(t *testing.T) {
 			if again := token.Parse(context.Background()); again != got {
 				t.Fatal("second access did not reuse parse result")
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Parse() = %+v, want %+v", got, tt.want)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Parse() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

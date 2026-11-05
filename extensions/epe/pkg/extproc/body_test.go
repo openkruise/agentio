@@ -140,11 +140,11 @@ func TestHandleRequestBody_ArmsOnlyTerminalFinalization(t *testing.T) {
 			wantFinalize: false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fp := &bodyProbe{bodyAct: tt.action}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := &bodyProbe{bodyAct: tc.action}
 			s, state := pendingBodyState(t, []filter.Registration{fixedReg("fake-body", fp)}, nil)
-			state.awaitResponseHeaders = tt.awaitResponse
+			state.awaitResponseHeaders = tc.awaitResponse
 
 			if _, err := s.HandleRequestBody(context.Background(), &extProcPb.HttpBody{
 				Body:        []byte("data"),
@@ -152,10 +152,10 @@ func TestHandleRequestBody_ArmsOnlyTerminalFinalization(t *testing.T) {
 			}, state); err != nil {
 				t.Fatalf("HandleRequestBody: %v", err)
 			}
-			if got := state.lifecycle == lifecycleFinalizePending; got != tt.wantFinalize {
-				t.Fatalf("finalize pending = %v (lifecycle %v), want %v", got, state.lifecycle, tt.wantFinalize)
+			if got := state.lifecycle == lifecycleFinalizePending; got != tc.wantFinalize {
+				t.Fatalf("finalize pending = %v (lifecycle %v), want %v", got, state.lifecycle, tc.wantFinalize)
 			}
-			if tt.action.Kind() == filter.KindStop && state.awaitResponseHeaders {
+			if tc.action.Kind() == filter.KindStop && state.awaitResponseHeaders {
 				t.Fatal("blocked body result left an impossible response obligation")
 			}
 		})

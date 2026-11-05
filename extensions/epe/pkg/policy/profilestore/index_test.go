@@ -86,11 +86,11 @@ func TestEligibleRequirements(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			profile := mustCompileIndexedProfile(t, "eligible", "default", tt.selector)
-			if got := eligibleRequirements(profile.Selector); !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("eligibleRequirements() = %#v, want %#v", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := mustCompileIndexedProfile(t, "eligible", "default", tc.selector)
+			if got := eligibleRequirements(profile.Selector); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("eligibleRequirements() = %#v, want %#v", got, tc.want)
 			}
 		})
 	}
@@ -203,12 +203,12 @@ func TestBuildProfileIndexBreaksAnchorTiesDeterministically(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			profile := mustCompileIndexedProfile(t, "tie", "default", tt.selector)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := mustCompileIndexedProfile(t, "tie", "default", tc.selector)
 			index := buildProfileIndex([]*securityprofile.Profile{profile})
-			if _, found := index.buckets[tt.wantBucket]; !found {
-				t.Fatalf("buckets = %v, want anchor bucket %#v", bucketProfileNames(index.buckets), tt.wantBucket)
+			if _, found := index.buckets[tc.wantBucket]; !found {
+				t.Fatalf("buckets = %v, want anchor bucket %#v", bucketProfileNames(index.buckets), tc.wantBucket)
 			}
 			if len(index.buckets) != 1 {
 				t.Fatalf("bucket count = %d, want 1", len(index.buckets))

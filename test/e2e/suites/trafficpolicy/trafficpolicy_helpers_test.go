@@ -26,6 +26,7 @@ import (
 	"github.com/openkruise/agentio/test/e2e"
 	"github.com/openkruise/agentio/test/e2e/components/echo"
 	"github.com/openkruise/agentio/test/e2e/retry"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type configDumpFunc func(context.Context) (string, error)
@@ -128,4 +129,41 @@ func requireFirewallRules(t *testing.T) {
 	if !resolvedAgentioConfig.EnableFirewallRules {
 		t.Skip("UDP and ICMP traffic policy tests require Agentio firewall rules")
 	}
+}
+
+func trafficPolicy(name, namespace string, selector map[string]string, action, cidr string) *unstructured.Unstructured {
+	matchLabels := make(map[string]any, len(selector))
+	for key, value := range selector {
+		matchLabels[key] = value
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "agents.kruise.io/v1alpha1",
+		"kind":       "TrafficPolicy",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+		},
+		"spec": map[string]any{
+			"priority": int64(100),
+			"selector": map[string]any{
+				"matchLabels": matchLabels,
+			},
+			"egress": map[string]any{
+				"rules": []any{
+					map[string]any{
+						"action": action,
+						"to": []any{
+							map[string]any{"cidr": cidr},
+						},
+					},
+					map[string]any{
+						"action": "allow",
+						"to": []any{
+							map[string]any{"cidr": "0.0.0.0/0"},
+						},
+					},
+				},
+			},
+		},
+	}}
 }

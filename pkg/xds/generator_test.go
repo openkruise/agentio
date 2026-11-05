@@ -36,7 +36,7 @@ func TestDiffSubscribedResendsWithoutDuplicates(t *testing.T) {
 		"quiet":   "same",
 		"deleted": "old",
 	}}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name          string
 		requested     []string
 		wantResources []string
@@ -45,8 +45,8 @@ func TestDiffSubscribedResendsWithoutDuplicates(t *testing.T) {
 		{"ordinary diff", nil, []string{"changed", "new"}, []string{"deleted"}},
 		{"explicit replay", []string{"new", "cached", "cached", "changed", "deleted", "deleted", "missing", "missing", "*"}, []string{"changed", "new", "cached"}, []string{"deleted", "missing"}},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got := diffSubscribed(sub, selected, tt.requested)
+		t.Run(tc.name, func(t *testing.T) {
+			got := diffSubscribed(sub, selected, tc.requested)
 			names := make([]string, len(got.Resources))
 			for i, r := range got.Resources {
 				names[i] = r.XDSName
@@ -54,13 +54,13 @@ func TestDiffSubscribedResendsWithoutDuplicates(t *testing.T) {
 					t.Fatalf("stale resource: %+v", r)
 				}
 			}
-			if !slices.Equal(names, tt.wantResources) || !slices.Equal(got.Removed, tt.wantRemoved) {
+			if !slices.Equal(names, tc.wantResources) || !slices.Equal(got.Removed, tc.wantRemoved) {
 				t.Fatalf(
 					"resources=%v removed=%v; want resources=%v removed=%v",
 					names,
 					got.Removed,
-					tt.wantResources,
-					tt.wantRemoved,
+					tc.wantResources,
+					tc.wantRemoved,
 				)
 			}
 		})

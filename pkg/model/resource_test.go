@@ -174,9 +174,9 @@ func TestNewResourceRejectsInvalidFacts(t *testing.T) {
 			facts: ResourceFacts{Authorization: &AuthorizationResourceFacts{Scope: AuthorizationScopeNamespace}},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewResource(tt.key, "", tt.value, nil, tt.facts); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewResource(tc.key, "", tc.value, nil, tc.facts); err == nil {
 				t.Fatal("NewResource accepted invalid facts")
 			}
 		})
@@ -194,8 +194,8 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 		{name: "empty path segment", principal: Principal{uri: "spiffe://cluster.local//id"}, wantErr: true},
 		{name: "query in URI", principal: Principal{uri: "spiffe://cluster.local/workload/id?"}, wantErr: true},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewResource(
 				ResourceKey{TypeURL: AddressType, Name: "workload-a"},
 				"",
@@ -203,11 +203,11 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 				nil,
 				ResourceFacts{Workload: &WorkloadResourceFacts{
 					WorkloadUID: "sandbox-a",
-					Principal:   test.principal,
+					Principal:   tc.principal,
 				}},
 			)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("NewResource() error = %v, wantErr %t", err, test.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("NewResource() error = %v, wantErr %t", err, tc.wantErr)
 			}
 		})
 	}

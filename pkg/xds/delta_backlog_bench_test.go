@@ -146,7 +146,7 @@ func BenchmarkDeltaPushBacklogWithdrawals(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	for _, scenario := range []struct {
+	for _, tc := range []struct {
 		name     string
 		snapshot model.ResourceSet
 	}{
@@ -159,9 +159,9 @@ func BenchmarkDeltaPushBacklogWithdrawals(b *testing.B) {
 			snapshot: replaced,
 		},
 	} {
-		b.Run(scenario.name, func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			server := newTestServer(b, ztunnelScope(), resources, nil)
-			server.resources.snapshot = scenario.snapshot
+			server.resources.snapshot = tc.snapshot
 			scopes, watches := distributedSharedClients(clients)
 			stream := &countingDeltaStream{ctx: b.Context()}
 			updates := make([]xdsstore.Update, clients)

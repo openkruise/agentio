@@ -31,16 +31,16 @@ func TestSNIEchoFixtureManifest(t *testing.T) {
 		{name: "selected", namespace: "sni-policy", policyValue: "selected"},
 		{name: "global", namespace: "sni-policy-global", policyValue: "global"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			config := sniEchoConfig(test.name, test.namespace, test.policyValue)
-			if config.Name != test.name || config.Namespace != test.namespace {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			config := sniEchoConfig(tc.name, tc.namespace, tc.policyValue)
+			if config.Name != tc.name || config.Namespace != tc.namespace {
 				t.Fatalf("SNI echo identity = %s/%s", config.Namespace, config.Name)
 			}
 			if config.Image != echo.DefaultImage || !strings.Contains(config.Image, "@sha256:") {
 				t.Fatalf("SNI echo image = %q, want immutable default", config.Image)
 			}
-			wantLabels := map[string]string{"app": test.name, sniPolicyLabel: test.policyValue}
+			wantLabels := map[string]string{"app": tc.name, sniPolicyLabel: tc.policyValue}
 			if !reflect.DeepEqual(config.Labels, wantLabels) {
 				t.Fatalf("SNI echo labels = %#v, want %#v", config.Labels, wantLabels)
 			}

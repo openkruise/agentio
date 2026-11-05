@@ -233,12 +233,12 @@ func TestConfigEffectiveRejectsInvalidConfiguration(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg := valid
-			tt.mutate(&cfg)
-			if _, err := cfg.Effective(); err == nil || !strings.Contains(strings.ToLower(err.Error()), tt.wantErr) {
-				t.Fatalf("Effective error = %v, want one containing %q", err, tt.wantErr)
+			tc.mutate(&cfg)
+			if _, err := cfg.Effective(); err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+				t.Fatalf("Effective error = %v, want one containing %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -355,17 +355,17 @@ func TestConfigEffectiveRejectsInvalidHeaderConfigInBothDirections(t *testing.T)
 
 	for _, direction := range directions {
 		t.Run(direction.name, func(t *testing.T) {
-			for _, tt := range tests {
-				t.Run(tt.name, func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
 					cfg := Config{
 						Provider: "scanner",
 						Request:  &PhaseConfig{},
 						Response: &PhaseConfig{},
 					}
-					tt.mutate(direction.field(&cfg))
+					tc.mutate(direction.field(&cfg))
 					_, err := cfg.Effective()
-					if err == nil || !strings.Contains(strings.ToLower(err.Error()), tt.wantErr) {
-						t.Fatalf("Effective error = %v, want one containing %q", err, tt.wantErr)
+					if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+						t.Fatalf("Effective error = %v, want one containing %q", err, tc.wantErr)
 					}
 					// The message must name the direction, or an operator with
 					// both fields set cannot tell which one is wrong.

@@ -31,7 +31,7 @@ import (
 )
 
 func TestConfigDebugPatchSupportsEverySealedTarget(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		target model.PatchTarget
 		want   string
@@ -47,13 +47,13 @@ func TestConfigDebugPatchSupportsEverySealedTarget(t *testing.T) {
 		{name: "HTTP route", target: model.HTTPRoutePatch{Value: &routev3.Route{}}, want: "httpRoute"},
 		{name: "extension configuration", target: model.ExtensionConfigurationPatch{Value: &corev3.TypedExtensionConfig{}}, want: "extensionConfiguration"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := configDebugPatch(model.EnvoyPatch{Operation: model.PatchAdd, Target: test.target})
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := configDebugPatch(model.EnvoyPatch{Operation: model.PatchAdd, Target: tc.target})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Target != test.want || got.Operation != "ADD" || string(got.Value) != "{}" {
-				t.Fatalf("adapted patch = %#v, want target=%q operation=ADD value={}", got, test.want)
+			if got.Target != tc.want || got.Operation != "ADD" || string(got.Value) != "{}" {
+				t.Fatalf("adapted patch = %#v, want target=%q operation=ADD value={}", got, tc.want)
 			}
 		})
 	}

@@ -164,7 +164,7 @@ func TestEmptyPrimaryAgentioConfigMapNameDisablesOverlay(t *testing.T) {
 }
 
 func TestAgentioConfigIgnoredLabelsNullPreservesDefaultsAndEmptyClears(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		yaml string
 		want []string
@@ -172,20 +172,20 @@ func TestAgentioConfigIgnoredLabelsNullPreservesDefaultsAndEmptyClears(t *testin
 		{name: "null preserves defaults", yaml: "sandboxIgnoredLabels: null", want: defaultAgentioConfiguration().GetSandboxIgnoredLabels()},
 		{name: "empty clears defaults", yaml: "sandboxIgnoredLabels: []"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := applyAgentioConfig(test.yaml, defaultAgentioConfiguration())
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := applyAgentioConfig(tc.yaml, defaultAgentioConfiguration())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if labels := got.GetSandboxIgnoredLabels(); !reflect.DeepEqual(labels, test.want) {
-				t.Fatalf("sandbox ignored labels = %v, want %v", labels, test.want)
+			if labels := got.GetSandboxIgnoredLabels(); !reflect.DeepEqual(labels, tc.want) {
+				t.Fatalf("sandbox ignored labels = %v, want %v", labels, tc.want)
 			}
 		})
 	}
 }
 
 func TestAgentioConfigPrimaryReplacesFullSubmessage(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name        string
 		primary     string
 		wantService string
@@ -215,7 +215,7 @@ func TestAgentioConfigPrimaryReplacesFullSubmessage(t *testing.T) {
 			wantPort:    9002,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			base := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
@@ -226,7 +226,7 @@ func TestAgentioConfigPrimaryReplacesFullSubmessage(t *testing.T) {
 			primary := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config-primary"},
 				Data: map[string]string{
-					"config": test.primary,
+					"config": tc.primary,
 				},
 			}
 			r := newTestRegistry(t, ctx, []runtime.Object{base, primary}, nil)
@@ -239,9 +239,9 @@ func TestAgentioConfigPrimaryReplacesFullSubmessage(t *testing.T) {
 			if extProc == nil {
 				t.Fatal("sandbox ext-proc is nil")
 			}
-			if extProc.GetService() != test.wantService || extProc.GetPort() != test.wantPort {
+			if extProc.GetService() != tc.wantService || extProc.GetPort() != tc.wantPort {
 				t.Fatalf("sandbox ext-proc = service %q port %d, want service %q port %d",
-					extProc.GetService(), extProc.GetPort(), test.wantService, test.wantPort)
+					extProc.GetService(), extProc.GetPort(), tc.wantService, tc.wantPort)
 			}
 		})
 	}
@@ -293,10 +293,10 @@ func TestApplyAgentioConfigRejectsInvalidStaticServiceEntries(t *testing.T) {
 			entries: "- hosts: [API.example.com.]\n  endpoints:\n  - address: 10.10.20.30\n- hosts: [api.example.com]\n  endpoints:\n  - address: 10.10.20.31",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			content := "egressGateways:\n- name: egress\n  namespace: agentio-system\n  serviceEntries:\n  " +
-				strings.ReplaceAll(test.entries, "\n", "\n  ") + "\n"
+				strings.ReplaceAll(tc.entries, "\n", "\n  ") + "\n"
 			if _, err := applyAgentioConfig(content, nil); err == nil {
 				t.Fatal("applyAgentioConfig() accepted an invalid static service entry")
 			}
@@ -444,7 +444,7 @@ func newTestRegistryWithOptions(
 }
 
 func TestGatewayConfigurationAccessLogFormat(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name, format string
 		invalid      bool
 	}{
@@ -457,22 +457,22 @@ func TestGatewayConfigurationAccessLogFormat(t *testing.T) {
 		{"wrong JSON type", "{json: []}", true},
 		{"unknown field", "{labels: {scheme: '%REQ(:SCHEME)%'}}", true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
 				"AgentioConfig": func() (*configv1.EgressGateway, error) {
-					got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  accessLogFormat: "+tt.format, nil)
+					got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: agentio-system\n  accessLogFormat: "+tc.format, nil)
 					if err != nil {
 						return nil, err
 					}
 					return got.GetEgressGateways()[0], nil
 				},
 				"Gateway API parameters": func() (*configv1.EgressGateway, error) {
-					return decodeEgressGateway("accessLogFormat: " + tt.format)
+					return decodeEgressGateway("accessLogFormat: " + tc.format)
 				},
 			} {
 				t.Run(name, func(t *testing.T) {
 					got, err := decode()
-					invalid := tt.invalid && !(name == "AgentioConfig" && tt.name == "unknown field")
+					invalid := tc.invalid && !(name == "AgentioConfig" && tc.name == "unknown field")
 					if (err != nil) != invalid {
 						t.Fatalf("config error = %v, want invalid=%v", err, invalid)
 					}
@@ -486,7 +486,7 @@ func TestGatewayConfigurationAccessLogFormat(t *testing.T) {
 }
 
 func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name, settings string
 		invalid        bool
 	}{
@@ -507,8 +507,8 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 		{"empty cipher", "{cipherSuites: ['']}", true},
 		{"duplicate", "{cipherSuites: [AES128-GCM-SHA256, AES128-GCM-SHA256]}", true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			config := "egressGateways:\n- name: egress-gw\n  namespace: agentio-system\n  tls:\n    origination: " + tt.settings
+		t.Run(tc.name, func(t *testing.T) {
+			config := "egressGateways:\n- name: egress-gw\n  namespace: agentio-system\n  tls:\n    origination: " + tc.settings
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
 				"AgentioConfig": func() (*configv1.EgressGateway, error) {
 					got, err := applyAgentioConfig(config, defaultAgentioConfiguration())
@@ -518,15 +518,15 @@ func TestGatewayConfigurationUpstreamTLS(t *testing.T) {
 					return got.GetEgressGateways()[0], nil
 				},
 				"Gateway API parameters": func() (*configv1.EgressGateway, error) {
-					return decodeEgressGateway("tls:\n  origination: " + tt.settings)
+					return decodeEgressGateway("tls:\n  origination: " + tc.settings)
 				},
 			} {
 				t.Run(name, func(t *testing.T) {
 					got, err := decode()
-					if (err != nil) != tt.invalid {
-						t.Fatalf("config error = %v, want invalid=%v", err, tt.invalid)
+					if (err != nil) != tc.invalid {
+						t.Fatalf("config error = %v, want invalid=%v", err, tc.invalid)
 					}
-					if !tt.invalid && got.GetTls().GetOrigination() == nil {
+					if !tc.invalid && got.GetTls().GetOrigination() == nil {
 						t.Fatal("missing upstream TLS settings")
 					}
 				})

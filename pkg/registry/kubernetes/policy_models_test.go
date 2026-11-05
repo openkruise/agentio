@@ -32,7 +32,7 @@ func TestPolicyModelsUseSelector(t *testing.T) {
 		Namespace:   "demo",
 		Annotations: map[string]string{agentsv1alpha1.AnnotationSandboxID: "kruise:annotation"},
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name     string
 		selector metav1.LabelSelector
 	}{
@@ -55,15 +55,15 @@ func TestPolicyModelsUseSelector(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			for _, global := range []bool{false, true} {
 				traffic := trafficPolicyModel(
 					metadata,
-					&agentsv1alpha1.TrafficPolicySpec{Selector: test.selector},
+					&agentsv1alpha1.TrafficPolicySpec{Selector: tc.selector},
 					global,
 				)
 				profile := securityProfileModel(metadata, &agentsv1alpha1.SecurityProfileSpec{
-					Selector: test.selector,
+					Selector: tc.selector,
 					Rules: []agentsv1alpha1.SecurityRule{
 						{
 							Match: []agentsv1alpha1.RuleMatch{
@@ -78,8 +78,8 @@ func TestPolicyModelsUseSelector(t *testing.T) {
 				if traffic.GetUID() != "policy-source" || profile.GetUID() != "policy-source" {
 					t.Fatal("policy model lost the source object UID")
 				}
-				if !reflect.DeepEqual(traffic.Spec.Selector, test.selector) ||
-					!reflect.DeepEqual(profile.Spec.Selector, test.selector) {
+				if !reflect.DeepEqual(traffic.Spec.Selector, tc.selector) ||
+					!reflect.DeepEqual(profile.Spec.Selector, tc.selector) {
 					t.Fatal("policy model changed the selector")
 				}
 				compiled, err := policy.CompileSecurityProfile(*profile)

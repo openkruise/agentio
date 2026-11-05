@@ -117,7 +117,7 @@ patches:
 
 func TestPatchConfigRejectsMalformedInput(t *testing.T) {
 	replace := func(old, new string) string { return strings.Replace(validPatchConfig, old, new, 1) }
-	for _, tt := range []struct{ name, input, want string }{
+	for _, tc := range []struct{ name, input, want string }{
 		{"null", "null", "expected one YAML object"},
 		{"array", "[]", "expected one YAML object"},
 		{"extra document", validPatchConfig + "---\n{}\n", "one YAML document"},
@@ -151,10 +151,10 @@ func TestPatchConfigRejectsMalformedInput(t *testing.T) {
 		{"unknown Any", replace("connect_timeout: 3s", "typed_extension_protocol_options: {test: {'@type': type.googleapis.com/unknown.Config}}"), "unable to resolve"},
 		{"cluster add match", replace("operation: MERGE", "operation: ADD"), "must omit match"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := decodeGatewayPatches(patchConfigMap(tt.input))
-			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "data.patches") {
-				t.Fatalf("error = %v, want data.patches and %q", err, tt.want)
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeGatewayPatches(patchConfigMap(tc.input))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "data.patches") {
+				t.Fatalf("error = %v, want data.patches and %q", err, tc.want)
 			}
 		})
 	}
@@ -220,7 +220,7 @@ func matrixMatch(target, operation string) json.RawMessage {
 }
 
 func TestPatchRejectsUnusedMatchesAndMissingAnchors(t *testing.T) {
-	for _, tt := range []struct{ target, operation, match, want string }{
+	for _, tc := range []struct{ target, operation, match, want string }{
 		{"listener", "MERGE", `{"filterChain":{}}`, "filterChain"},
 		{"listener", "MERGE", `{"listenerFilter":"test"}`, "listenerFilter"},
 		{"listener", "MERGE", `{"portNumber":65536}`, "portNumber"},
@@ -250,14 +250,14 @@ func TestPatchRejectsUnusedMatchesAndMissingAnchors(t *testing.T) {
 		{"httpRoute", "MERGE", `{"virtualHost":{"route":{"action":"BOGUS"}}}`, "unknown action"},
 		{"extensionConfiguration", "ADD", `{}`, "omit match"},
 	} {
-		t.Run(fmt.Sprintf("%s/%s/%s", tt.target, tt.operation, tt.match), func(t *testing.T) {
-			input := patchEntry{Target: tt.target, Operation: tt.operation, Match: json.RawMessage(tt.match)}
-			if tt.operation != "REMOVE" {
+		t.Run(fmt.Sprintf("%s/%s/%s", tc.target, tc.operation, tc.match), func(t *testing.T) {
+			input := patchEntry{Target: tc.target, Operation: tc.operation, Match: json.RawMessage(tc.match)}
+			if tc.operation != "REMOVE" {
 				input.Value = json.RawMessage(`{}`)
 			}
 			_, err := decodePatch(input)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want %q", err, tt.want)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
 	}

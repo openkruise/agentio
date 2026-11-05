@@ -464,7 +464,7 @@ func TestPushLogUsesHumanReadableSizeAndDemotesEmptyPushes(t *testing.T) {
 }
 
 func TestByteSizeFormatsUnits(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		bytes int
 		want  string
 	}{
@@ -476,8 +476,8 @@ func TestByteSizeFormatsUnits(t *testing.T) {
 		{2_100_000, "2.1MB"},
 		{3_200_000_000, "3.2GB"},
 	} {
-		if got := byteSize(test.bytes); got != test.want {
-			t.Fatalf("byteSize(%d) = %q, want %q", test.bytes, got, test.want)
+		if got := byteSize(tc.bytes); got != tc.want {
+			t.Fatalf("byteSize(%d) = %q, want %q", tc.bytes, got, tc.want)
 		}
 	}
 }
@@ -579,7 +579,7 @@ func TestStreamWaitsForScopeBeforeSendingConfiguration(t *testing.T) {
 }
 
 func TestStreamScopeWaitStatus(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name       string
 		resolveErr error
 		want       codes.Code
@@ -587,15 +587,15 @@ func TestStreamScopeWaitStatus(t *testing.T) {
 		{name: "pending times out", resolveErr: model.ErrScopeNotReady, want: codes.DeadlineExceeded},
 		{name: "invalid ownership", resolveErr: errors.New("Pod UID does not match"), want: codes.PermissionDenied},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ts := newTestServer(t, ztunnelScope(), nil, nil)
-			ts.server.scopeFuncs = fakeResolver{err: tt.resolveErr}.scopeFuncs()
+			ts.server.scopeFuncs = fakeResolver{err: tc.resolveErr}.scopeFuncs()
 			ctx, cancel := context.WithTimeout(t.Context(), 75*time.Millisecond)
 			defer cancel()
 			stream := newFakeStream(ctx, 1)
 			stream.send(nodeRequest(model.AddressType))
-			if err := ts.server.serveDelta(stream); status.Code(err) != tt.want {
-				t.Fatalf("err=%v, want %v", err, tt.want)
+			if err := ts.server.serveDelta(stream); status.Code(err) != tc.want {
+				t.Fatalf("err=%v, want %v", err, tc.want)
 			}
 			if len(stream.sent()) != 0 {
 				t.Fatal("sent configuration without an authorized scope")

@@ -85,9 +85,9 @@ func TestActionEqual(t *testing.T) {
 		{"different mutation status", Continue(Mutation{StatusCode: &statusAccepted}), Continue(Mutation{StatusCode: &statusCreated}), false},
 		{"missing mutation status", Continue(Mutation{StatusCode: &statusAccepted}), Continue(Mutation{}), false},
 	}
-	for _, tt := range tests {
-		if got := tt.a.Equal(tt.b); got != tt.want {
-			t.Errorf("%s: Equal = %v, want %v", tt.name, got, tt.want)
+	for _, tc := range tests {
+		if got := tc.a.Equal(tc.b); got != tc.want {
+			t.Errorf("%s: Equal = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

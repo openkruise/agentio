@@ -204,12 +204,12 @@ func TestBuildRejectsUnknownSignalProvider(t *testing.T) {
 			}}, nil),
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Build(Inputs{
 				Gateway:       testTelemetryGateway(),
 				RootNamespace: "agentio-system",
-				Telemetry:     []model.Telemetry{test.policy},
+				Telemetry:     []model.Telemetry{tc.policy},
 			}); err == nil {
 				t.Fatal("expected signal provider failure")
 			}

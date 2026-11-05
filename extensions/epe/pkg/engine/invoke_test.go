@@ -45,13 +45,13 @@ func TestInvoke_CountsByOutcome(t *testing.T) {
 		{"need-body", func(context.Context) (filter.Action, error) { return filter.NeedBody(), nil }, "record"},
 		{"error", func(context.Context) (filter.Action, error) { return filter.Continue(), errors.New("boom") }, "error"},
 	}
-	for _, tt := range tests {
-		if _, err := e.invoke(context.Background(), nil, newFilterMetrics("p", phaseRequestHeaders), tt.call); err != nil && tt.wantOutcome != "error" {
-			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+	for _, tc := range tests {
+		if _, err := e.invoke(context.Background(), nil, newFilterMetrics("p", phaseRequestHeaders), tc.call); err != nil && tc.wantOutcome != "error" {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
 		}
-		got := testutil.ToFloat64(pluginCallsTotal.WithLabelValues("p", phaseRequestHeaders, tt.wantOutcome))
+		got := testutil.ToFloat64(pluginCallsTotal.WithLabelValues("p", phaseRequestHeaders, tc.wantOutcome))
 		if got != 1 {
-			t.Errorf("%s: calls{outcome=%q} = %v, want 1", tt.name, tt.wantOutcome, got)
+			t.Errorf("%s: calls{outcome=%q} = %v, want 1", tc.name, tc.wantOutcome, got)
 		}
 	}
 }

@@ -82,24 +82,24 @@ func TestResolveConfigRequiresImmutableImages(t *testing.T) {
 		{name: "short ext proc digest", component: "ext-proc", image: "repo/ext-proc@sha256:abc"},
 		{name: "tagged forward proxy", component: "forward-proxy", image: "repo/envoy:v1"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			fs := flag.NewFlagSet("agentio", flag.ContinueOnError)
 			inputs := RegisterFlags(fs)
 			args := validImageArgs(valid)
-			if tt.component == "cni" {
+			if tc.component == "cni" {
 				args = append(args, "-agentio.profile=ambient")
 			}
 			for index, argument := range args {
-				if strings.HasPrefix(argument, "-agentio."+tt.component+"-image=") {
-					args[index] = "-agentio." + tt.component + "-image=" + tt.image
+				if strings.HasPrefix(argument, "-agentio."+tc.component+"-image=") {
+					args[index] = "-agentio." + tc.component + "-image=" + tc.image
 				}
 			}
 			if err := fs.Parse(args); err != nil {
 				t.Fatal(err)
 			}
 			_, err := ResolveConfig(inputs)
-			if err == nil || !strings.Contains(err.Error(), tt.component) ||
+			if err == nil || !strings.Contains(err.Error(), tc.component) ||
 				!strings.Contains(err.Error(), "repository@sha256") {
 				t.Fatalf("ResolveConfig() error = %v", err)
 			}
@@ -205,8 +205,8 @@ func TestResolveConfigAdditionalImagePrecedenceFromFileEnvironmentAndCLI(t *test
 			value:       func(config Config) string { return config.ForwardProxyImage },
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			resolve := func(args ...string) Config {
 				t.Helper()
 				fs := flag.NewFlagSet("agentio", flag.ContinueOnError)
@@ -220,14 +220,14 @@ func TestResolveConfigAdditionalImagePrecedenceFromFileEnvironmentAndCLI(t *test
 				}
 				return config
 			}
-			if got := tt.value(resolve()); got != fileImage {
+			if got := tc.value(resolve()); got != fileImage {
 				t.Fatalf("file image = %q, want %q", got, fileImage)
 			}
-			t.Setenv(tt.environment, envImage)
-			if got := tt.value(resolve()); got != envImage {
+			t.Setenv(tc.environment, envImage)
+			if got := tc.value(resolve()); got != envImage {
 				t.Fatalf("environment image = %q, want %q", got, envImage)
 			}
-			if got := tt.value(resolve("-agentio." + tt.flagName + "-image=" + cliImage)); got != cliImage {
+			if got := tc.value(resolve("-agentio." + tc.flagName + "-image=" + cliImage)); got != cliImage {
 				t.Fatalf("CLI image = %q, want %q", got, cliImage)
 			}
 		})
