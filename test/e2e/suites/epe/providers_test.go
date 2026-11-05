@@ -105,8 +105,19 @@ func TestEPECredentialProviderConfigUpdates(t *testing.T) {
 		"ProviderImage":  resolvedAgentioConfig.ExtProcImage,
 		"EnvironmentURL": endpoint + "environment",
 	}, providerFixturesYAML).ApplyOrFail(t, kube.CreateOnly)
+	sandbox, err := scope.ApplyInNamespace(ctx, callerNamespace, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "agents.kruise.io/v1alpha1",
+		"kind":       "Sandbox",
+		"metadata":   map[string]any{"name": caller},
+		"spec":       map[string]any{},
+	}}, kube.CreateOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e2econfig.New(scope).Eval(callerNamespace, map[string]any{
 		"Caller":     caller,
+		"SandboxUID": string(sandbox.UID),
+		"SandboxID":  "kruise:" + callerNamespace + "--" + caller,
 		"EchoImage":  echo.DefaultImage,
 		"ProxyImage": resolvedAgentioConfig.ZtunnelImage,
 	}, providerCallerYAML).ApplyOrFail(t, kube.CreateOnly)
@@ -119,6 +130,27 @@ func TestEPECredentialProviderConfigUpdates(t *testing.T) {
 		if _, err := environment.Kube.WaitReadyPods(ctx, fixture.namespace, fixture.selector, 1); err != nil {
 			t.Fatal(err)
 		}
+	}
+	callerPod, err := environment.Cluster.Kube.CoreV1().Pods(callerNamespace).Get(ctx, caller, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxes := environment.Cluster.Dynamic.Resource(sandbox.GVR).Namespace(callerNamespace)
+	sandboxObject, err := sandboxes.Get(ctx, caller, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedField(
+		sandboxObject.Object,
+		string(callerPod.UID),
+		"status",
+		"podInfo",
+		"podUID",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sandboxes.UpdateStatus(ctx, sandboxObject, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
 	}
 	pods, err := environment.Kube.ReadyPods(ctx, namespace, "app="+name)
 	if err != nil || len(pods) != 1 {
@@ -366,12 +398,19 @@ metadata:
   name: epe-provider-token
 stringData:
   sandbox.token: '{"requestId":"epe-e2e","accessToken":"epe-e2e-access","sandboxClientId":"epe-e2e-client"}'
+  sandbox.json: '{"sandboxId":{{ .SandboxID | printf "%q" }}}'
 ---
 apiVersion: v1
 kind: Pod
 metadata:
   name: {{ .Caller }}
   labels: {app: {{ .Caller }}}
+  ownerReferences:
+  - apiVersion: agents.kruise.io/v1alpha1
+    kind: Sandbox
+    name: {{ .Caller }}
+    uid: {{ .SandboxUID | printf "%q" }}
+    controller: true
 spec:
   containers:
   - name: app
@@ -387,7 +426,15 @@ spec:
     - {name: SANDBOX_TOKEN_ENABLED, value: "true"}
     volumeMounts:
     - {name: provider-token, mountPath: /var/opt/sandbox/agent-token, readOnly: true}
+    # Restore a registered Sandbox, as after a proxy restart; xDS still checks its host binding.
+    - {name: provider-registration, mountPath: /var/lib/ztunnel/sandbox/sandbox.json, subPath: sandbox.json, readOnly: true}
   volumes:
   - name: provider-token
-    secret: {secretName: epe-provider-token}
+    secret:
+      secretName: epe-provider-token
+      items: [{key: sandbox.token, path: sandbox.token}]
+  - name: provider-registration
+    secret:
+      secretName: epe-provider-token
+      items: [{key: sandbox.json, path: sandbox.json}]
 `

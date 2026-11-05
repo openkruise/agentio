@@ -148,7 +148,7 @@ func (s *fakeStore) put(typ store.Type, name string, value any) {
 func (s *fakeStore) bind(names ...string) {
 	key := store.Key{Type: store.Workload, Name: "uid"}
 	w := proto.Clone(s.resources[key].Value.(*workload.Workload)).(*workload.Workload)
-	ref, err := anypb.New(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: names})
+	ref, err := anypb.New(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, Resources: policyResources(names...)})
 	if err != nil {
 		panic(err)
 	}
@@ -805,5 +805,36 @@ func TestAuthorizerRejectsMissingIdentityBeforeLookup(t *testing.T) {
 				t.Fatalf("audit=%+v", audit)
 			}
 		})
+	}
+}
+
+func policyResources(names ...string) []*ext.PolicyResourceReference {
+	resources := make([]*ext.PolicyResourceReference, 0, len(names))
+	for _, name := range names {
+		resources = append(resources, &ext.PolicyResourceReference{Name: name})
+	}
+	return resources
+}
+
+func TestTrafficReferencesResolveNamesWithUIDAndExtensions(t *testing.T) {
+	payload, err := anypb.New(&ext.PolicyReference{
+		TypeUrl: model.TrafficPolicyType,
+		Resources: []*ext.PolicyResourceReference{
+			{
+				Name:       "second",
+				Uid:        "source-2",
+				Extensions: []*anypb.Any{{TypeUrl: "test.example/Metadata", Value: []byte("metadata")}},
+			},
+			{Name: "first", Uid: "source-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := references(&workload.Workload{
+		Extensions: []*workload.Extension{{Name: "traffic-policy-reference", Config: payload}},
+	})
+	if err != nil || !slices.Equal(names, []string{"second", "first"}) {
+		t.Fatalf("structured references = %v, %v", names, err)
 	}
 }

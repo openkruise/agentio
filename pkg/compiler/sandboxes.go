@@ -107,7 +107,10 @@ func compileSandbox(
 				}
 				result.Payload.Extensions = append(result.Payload.Extensions, extension)
 			}
-			references.ResourceNames = []string{model.SandboxSecurityProfileName(sandbox.UID)}
+			references.Resources = []*extensionsv1.PolicyResourceReference{{
+				Name: model.SandboxSecurityProfileName(sandbox.UID),
+				Uid:  sandbox.SourceIdentity.UID,
+			}}
 		}
 	}
 	extension, err := marshalDeterministicAny(references)

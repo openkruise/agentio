@@ -57,6 +57,7 @@ type AttachmentTarget struct {
 type PolicyAttachment struct {
 	Kind            PolicyKind
 	Name            string
+	UID             string
 	Target          AttachmentTarget
 	Priority        int32
 	CreationTime    time.Time
@@ -78,6 +79,7 @@ func (p PolicyAttachment) ResourceName() string {
 func (p PolicyAttachment) Equals(other PolicyAttachment) bool {
 	return p.Kind == other.Kind &&
 		p.Name == other.Name &&
+		p.UID == other.UID &&
 		p.Target.Global == other.Target.Global &&
 		equalStrings(p.Target.Namespaces, other.Target.Namespaces) &&
 		apiequality.Semantic.DeepEqual(p.Target.Selector, other.Target.Selector) &&

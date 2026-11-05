@@ -88,7 +88,10 @@ func testSource() *fakeSource {
 			{
 				Name: "traffic-policy-reference",
 				Config: packed(
-					&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: []string{"allow"}},
+					&ext.PolicyReference{
+						TypeUrl:   model.TrafficPolicyType,
+						Resources: []*ext.PolicyResourceReference{{Name: "allow"}},
+					},
 				),
 			},
 		},

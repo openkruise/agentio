@@ -16,7 +16,18 @@ syntax = "proto3";
 
 package kruise.networking.extensions.v1;
 
+import "google/protobuf/any.proto";
+
 option go_package = "github.com/openkruise/agentio/api/extensions/v1;extensionsv1";
+
+// PolicyResourceReference identifies one policy and its reference-specific metadata.
+message PolicyResourceReference {
+  string name = 1;
+  // UID is the source object's identity. Consumers currently resolve by name.
+  string uid = 2;
+  // Typed, policy-specific metadata; policy bodies are distributed separately.
+  repeated google.protobuf.Any extensions = 3;
+}
 
 // PolicyReference carries ordered bindings for one policy type on a Workload
 // or Sandbox. The enclosing resource supplies the target identity.
@@ -29,7 +40,7 @@ message PolicyReference {
   // Ordered according to the source policy API. The data plane evaluates the
   // referenced resources in this order and does not apply its own tie-breaks.
   // An empty list means no policies apply; an unresolved reference does not.
-  repeated string resource_names = 2;
+  repeated PolicyResourceReference resources = 2;
 }
 
 message SniTrafficPolicy {

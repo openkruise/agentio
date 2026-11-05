@@ -94,16 +94,24 @@ func benchFixture(count int) (*benchSource, *store.Aggregate, *resourceResolver,
 		},
 	}
 	source.snapshot.Changed = source.changed
-	ref := pack(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: []string{"policy"}})
+	ref := pack(
+		&ext.PolicyReference{
+			TypeUrl:   model.TrafficPolicyType,
+			Resources: []*ext.PolicyResourceReference{{Name: "policy"}},
+		},
+	)
 	profile := pack(&ext.PolicyReference{TypeUrl: model.SecurityProfileType})
 	for i := range count {
 		name := fmt.Sprintf("pod-%d", i)
 		source.snapshot.Resources[model.WorkloadType][name] = &xdsclient.Resource{Value: &workload.Workload{
-			Uid:        name,
-			Name:       name,
-			Namespace:  "ns",
-			Addresses:  [][]byte{{192, 0, 2, 1}},
-			Extensions: []*workload.Extension{{Name: "traffic-policy-reference", Config: ref}, {Name: "security-profile-reference", Config: profile}},
+			Uid:       name,
+			Name:      name,
+			Namespace: "ns",
+			Addresses: [][]byte{{192, 0, 2, 1}},
+			Extensions: []*workload.Extension{
+				{Name: "traffic-policy-reference", Config: ref},
+				{Name: "security-profile-reference", Config: profile},
+			},
 		},
 		}
 	}

@@ -85,7 +85,10 @@ func workloadBinding(w *workload.Workload) (subject.Workload, error) {
 	if binding == nil || binding.TypeUrl != model.SecurityProfileType {
 		return identity, fmt.Errorf("SecurityProfile binding missing or invalid for %s", identity.String())
 	}
-	identity.SecurityProfileReferences = append([]string{}, binding.ResourceNames...)
+	identity.SecurityProfileReferences = make([]string, 0, len(binding.Resources))
+	for _, reference := range binding.Resources {
+		identity.SecurityProfileReferences = append(identity.SecurityProfileReferences, reference.GetName())
+	}
 	if metadata != nil {
 		identity.Labels = metadata.Labels
 	}

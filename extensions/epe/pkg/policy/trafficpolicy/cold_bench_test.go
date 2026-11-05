@@ -37,7 +37,9 @@ func BenchmarkColdDependencySequence(b *testing.B) {
 			for i := range n {
 				names[i] = fmt.Sprintf("p%d", i)
 			}
-			ref, err := anypb.New(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: names})
+			ref, err := anypb.New(
+				&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, Resources: policyResources(names...)},
+			)
 			if err != nil {
 				b.Fatal(err)
 			}

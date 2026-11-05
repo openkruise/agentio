@@ -36,17 +36,17 @@ import (
 // wdsProjection contains the resolved inputs for one WDS Workload projection.
 // Callers resolve every KRT dependency into this flat value before encoding.
 type wdsProjection struct {
-	ClusterID             string
-	Workload              model.Workload
-	Endpoints             []model.Endpoint
-	Services              []model.Service
-	SNIPolicy             *extensionsv1.SniTrafficPolicy
-	EgressPolicies        *extensionsv1.EgressPolicies
-	AuthorizationNames    []string
-	TrafficPolicyNames    []string
-	SecurityProfileNames  []string
-	MetadataConfiguration *workloadMetadataConfiguration
-	EgressGatewayKeys     []string
+	ClusterID                 string
+	Workload                  model.Workload
+	Endpoints                 []model.Endpoint
+	Services                  []model.Service
+	SNIPolicy                 *extensionsv1.SniTrafficPolicy
+	EgressPolicies            *extensionsv1.EgressPolicies
+	AuthorizationNames        []string
+	TrafficPolicyReferences   []*extensionsv1.PolicyResourceReference
+	SecurityProfileReferences []*extensionsv1.PolicyResourceReference
+	MetadataConfiguration     *workloadMetadataConfiguration
+	EgressGatewayKeys         []string
 }
 
 // buildWDSAddress compiles one Workload into the canonical Address form
@@ -116,8 +116,8 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	// Always publish the native binding, even when empty. Native clients must
 	// distinguish no applicable policies from a referenced body not yet received.
 	trafficPolicyRefs, err := marshalDeterministicAny(&extensionsv1.PolicyReference{
-		TypeUrl:       model.TrafficPolicyType,
-		ResourceNames: append([]string(nil), input.TrafficPolicyNames...),
+		TypeUrl:   model.TrafficPolicyType,
+		Resources: input.TrafficPolicyReferences,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal traffic policy references for workload %s: %w", input.Workload.UID, err)
@@ -129,8 +129,8 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 
 	// EPE resolves administrator profiles from this ordered binding, including an explicit empty list.
 	config, err := marshalDeterministicAny(&extensionsv1.PolicyReference{
-		TypeUrl:       model.SecurityProfileType,
-		ResourceNames: append([]string(nil), input.SecurityProfileNames...),
+		TypeUrl:   model.SecurityProfileType,
+		Resources: input.SecurityProfileReferences,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal security profile references for workload %s: %w", input.Workload.UID, err)
@@ -165,8 +165,12 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal workload %s: %w", input.Workload.UID, err)
 	}
+	trafficPolicyNames := make([]string, 0, len(input.TrafficPolicyReferences))
+	for _, reference := range input.TrafficPolicyReferences {
+		trafficPolicyNames = append(trafficPolicyNames, reference.Name)
+	}
 	facts := model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
-		TrafficPolicyRefs: append([]string(nil), input.TrafficPolicyNames...),
+		TrafficPolicyRefs: trafficPolicyNames,
 		AuthorizationRefs: append([]string(nil), input.AuthorizationNames...),
 		Namespace:         input.Workload.Namespace,
 		WorkloadUID:       input.Workload.UID,

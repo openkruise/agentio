@@ -31,6 +31,45 @@ import (
 	"github.com/openkruise/agentio/pkg/policy"
 )
 
+func TestPolicyReferenceUIDChangesReachWorkload(t *testing.T) {
+	f := newIncrementalFixture(t)
+	w := testWorkload("demo", "client", "10.1.0.1")
+	f.workloads.UpdateObject(w)
+	traffic := model.TrafficPolicy{Name: "traffic", Namespace: "demo", UID: "old"}
+	profile := model.SecurityProfile{Name: "profile", Namespace: "demo", UID: "old"}
+	f.trafficPolicies.UpdateObject(traffic)
+	f.securityProfiles.UpdateObject(profile)
+	waitSynced(t, f.compiler)
+	awaitUID := func(uid string) {
+		t.Helper()
+		testutil.Eventually(t, func() bool {
+			if f.compiler.graph.resources.GetKey(addressResourceName(w.Namespace, w.Name)) == nil {
+				return false
+			}
+			matched := 0
+			for _, extension := range compiledWorkload(t, f.compiler, w).Extensions {
+				if !extension.Config.MessageIs(&extensionsv1.PolicyReference{}) {
+					continue
+				}
+				references := &extensionsv1.PolicyReference{}
+				if err := extension.Config.UnmarshalTo(references); err != nil {
+					t.Fatal(err)
+				}
+				if len(references.Resources) != 1 || references.Resources[0].Uid != uid {
+					return false
+				}
+				matched++
+			}
+			return matched == 2
+		}, "policy source UID reaches WDS")
+	}
+	awaitUID("old")
+	traffic.UID, profile.UID = "new", "new"
+	f.trafficPolicies.UpdateObject(traffic)
+	f.securityProfiles.UpdateObject(profile)
+	awaitUID("new")
+}
+
 // An endpoint edit must reach the workload that owns the endpoint address, and
 // only that workload.
 func TestEndpointEditReachesOnlyItsWorkload(t *testing.T) {
@@ -687,7 +726,8 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 	}
 	payload := func(name, host string) policy.CompiledSecurityProfile {
 		return policy.CompiledSecurityProfile{
-			Name: name,
+			Name:       name,
+			Attachment: &policy.PolicyAttachment{Name: name},
 			SNIPolicy: &extensionsv1.SniTrafficPolicy{
 				Rules: []*extensionsv1.SniRule{{Match: &extensionsv1.SniMatch{Sni: []string{host}}}},
 			},
