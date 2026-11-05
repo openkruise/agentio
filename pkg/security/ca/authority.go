@@ -16,8 +16,13 @@ package ca
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/url"
@@ -299,7 +304,11 @@ func (a *Authority) CreateCertificate(
 func issueServerCertificate(ca pki.SigningCA, rootPEM []byte, names []string,
 	lifetime time.Duration, now time.Time,
 ) (tls.Certificate, error) {
-	issued, err := ca.GenerateRSA(context.Background(), pki.LeafOptions{
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate server key: %w", err)
+	}
+	issued, err := ca.Sign(context.Background(), &key.PublicKey, pki.LeafOptions{
 		CommonName:  names[0],
 		DNSNames:    names,
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
@@ -310,7 +319,14 @@ func issueServerCertificate(ca pki.SigningCA, rootPEM []byte, names []string,
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("sign server certificate: %w", err)
 	}
-	certificate, err := tls.X509KeyPair(pki.AppendCertificateChain(issued.CertificatePEM, rootPEM), issued.PrivateKeyPEM)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal server key: %w", err)
+	}
+	certificate, err := tls.X509KeyPair(
+		pki.AppendCertificateChain(issued.CertificatePEM, rootPEM),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+	)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("load server certificate: %w", err)
 	}

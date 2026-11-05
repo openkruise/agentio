@@ -110,7 +110,7 @@ func newBenchmarkStore(profiles []*securityprofile.Profile) *store {
 	for _, profile := range profiles {
 		installed.put(keyFor(profile.Meta), profile)
 	}
-	store := NewStore()
+	store := NewStore(0)
 	store.snapshot.Store(buildSnapshot(installed))
 	return store
 }

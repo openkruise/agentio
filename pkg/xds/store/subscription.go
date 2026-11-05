@@ -23,9 +23,9 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// Subscription receives changes for resource types watched by a stream.
+// Subscription receives changes for watched types and explicit Sandbox names.
 type Subscription interface {
-	Watch(string)
+	Watch(string, ...string)
 	Updates() <-chan Update
 }
 
@@ -35,6 +35,7 @@ type subscriber struct {
 	mailboxID       uint64
 	types           sets.Set[string]
 	sandboxWorkload string
+	sandboxNames    sets.Set[string]
 }
 
 // subscription allows an xDS stream to add watched types as requests arrive.
@@ -47,9 +48,29 @@ type subscription struct {
 
 func (s *subscription) Updates() <-chan Update { return s.updates }
 
-func (s *subscription) Watch(typeURL string) {
+func (s *subscription) Watch(typeURL string, names ...string) {
 	s.store.mu.Lock()
 	if sub := s.store.subscribers[s.id]; sub != nil {
+		if typeURL == model.SandboxType && sub.sandboxWorkload != "" &&
+			(len(names) != 0 || len(sub.sandboxNames) != 0) {
+			next := sets.New(names...)
+			for name := range sub.sandboxNames.Difference(next) {
+				byName := s.store.sandboxSubscribersByName[name]
+				delete(byName, s.id)
+				if len(byName) == 0 {
+					delete(s.store.sandboxSubscribersByName, name)
+				}
+			}
+			for name := range next.Difference(sub.sandboxNames) {
+				byName := s.store.sandboxSubscribersByName[name]
+				if byName == nil {
+					byName = make(map[uint64]*subscriber)
+					s.store.sandboxSubscribersByName[name] = byName
+				}
+				byName[s.id] = sub
+			}
+			sub.sandboxNames = next
+		}
 		if !sub.types.Contains(typeURL) {
 			sub.types.Insert(typeURL)
 			byID := s.store.subscribersByType[typeURL]
@@ -92,6 +113,13 @@ func (s *Store) Subscribe(ctx context.Context, scope model.ClientScope) Subscrip
 				delete(byWorkload, id)
 				if len(byWorkload) == 0 {
 					delete(s.sandboxSubscribersByWorkload, subscriber.sandboxWorkload)
+				}
+			}
+			for name := range subscriber.sandboxNames {
+				byName := s.sandboxSubscribersByName[name]
+				delete(byName, id)
+				if len(byName) == 0 {
+					delete(s.sandboxSubscribersByName, name)
 				}
 			}
 			for typeURL := range subscriber.types {
@@ -149,9 +177,10 @@ func (s *Store) sandboxSubscribersLocked(candidates []Candidate) map[uint64]*sub
 	result := make(map[uint64]*subscriber)
 	maps.Copy(result, s.sandboxSubscribersByWorkload[""])
 	for _, candidate := range candidates {
+		maps.Copy(result, s.sandboxSubscribersByName[candidate.Key.Name])
 		if len(candidate.Identities) == 0 {
-			// Unpublished source invalidations have no ownership evidence.
-			return s.subscribersByType[model.SandboxType]
+			// An unpublished resource can only be pending on explicit named demand.
+			continue
 		}
 		for _, identity := range candidate.Identities {
 			if identity.Facts.Sandbox == nil {

@@ -43,7 +43,7 @@ func invalidNamespaced(name, namespace string) *securityprofile.Profile {
 }
 
 func TestApplyBatch_CountsRejectedNamespacedVersion(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	before := testutil.ToFloat64(profileCompileFailuresTotal.WithLabelValues(scopeNamespaced))
 
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
@@ -59,7 +59,7 @@ func TestApplyBatch_CountsRejectedNamespacedVersion(t *testing.T) {
 // which is what selects the global label. Use the real type rather than a
 // namespaced profile with a blank namespace.
 func TestApplyBatch_CountsRejectedGlobalVersion(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	before := testutil.ToFloat64(profileCompileFailuresTotal.WithLabelValues(scopeGlobal))
 
 	g := newTestGlobalProfile("g", map[string]string{"app": "x"})
@@ -73,7 +73,7 @@ func TestApplyBatch_CountsRejectedGlobalVersion(t *testing.T) {
 }
 
 func TestApplyBatch_ValidItemCountsNothing(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	before := testutil.ToFloat64(profileCompileFailuresTotal.WithLabelValues(scopeNamespaced))
 
 	good := newTestProfile("p", "default", map[string]string{"app": "x"})
@@ -149,7 +149,7 @@ func installGood(t testing.TB, s *store, name, namespace string) *securityprofil
 }
 
 func TestApplyBatch_InvalidUpdateMarksProfileStale(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	good := installGood(t, s, "stale-me", "default")
 
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
@@ -162,7 +162,7 @@ func TestApplyBatch_InvalidUpdateMarksProfileStale(t *testing.T) {
 }
 
 func TestApplyBatch_ValidVersionClearsStale(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	good := installGood(t, s, "recover-me", "default")
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{Old: good, New: invalidNamespaced("recover-me", "default"), Event: controllers.EventUpdate},
@@ -179,7 +179,7 @@ func TestApplyBatch_ValidVersionClearsStale(t *testing.T) {
 }
 
 func TestApplyBatch_DeleteClearsStale(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	good := installGood(t, s, "delete-me", "default")
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{Old: good, New: invalidNamespaced("delete-me", "default"), Event: controllers.EventUpdate},
@@ -198,7 +198,7 @@ func TestApplyBatch_DeleteClearsStale(t *testing.T) {
 }
 
 func TestApplyBatch_RejectedWithNoPriorVersionIsNotStale(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{New: invalidNamespaced("never-installed", "default"), Event: controllers.EventAdd},
@@ -215,7 +215,7 @@ func TestApplyBatch_RejectedWithNoPriorVersionIsNotStale(t *testing.T) {
 // which is what separates "still protected by an older version" from "not
 // protected at all" without either gauge naming an object.
 func TestApplyBatch_RejectedWithNoPriorVersionIsUnenforced(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{New: invalidNamespaced("never-installed", "default"), Event: controllers.EventAdd},
@@ -230,7 +230,7 @@ func TestApplyBatch_RejectedWithNoPriorVersionIsUnenforced(t *testing.T) {
 // previous version keeps enforcing. Conflating the two would page someone at
 // 3am for a profile that is still protecting its pods.
 func TestApplyBatch_StaleProfileIsNotUnenforced(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	good := installGood(t, s, "still-serving", "default")
 
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
@@ -243,7 +243,7 @@ func TestApplyBatch_StaleProfileIsNotUnenforced(t *testing.T) {
 }
 
 func TestApplyBatch_ValidVersionClearsUnenforced(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{New: invalidNamespaced("recovers", "default"), Event: controllers.EventAdd},
 	})
@@ -259,7 +259,7 @@ func TestApplyBatch_ValidVersionClearsUnenforced(t *testing.T) {
 }
 
 func TestApplyBatch_DeleteClearsUnenforced(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	bad := invalidNamespaced("delete-unenforced", "default")
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
 		{New: bad, Event: controllers.EventAdd},
@@ -292,7 +292,7 @@ func invalidInline(name, namespace, version string) *securityprofile.Profile {
 // mistake from an operator's profile being unenforced.
 func TestApplyBatch_InlineRulesMetrics(t *testing.T) {
 	const ns, name = "sandboxes", "sbx-metrics"
-	s := NewStore()
+	s := NewStore(0)
 
 	// A bad first version installs nothing: unenforced, not stale.
 	before := testutil.ToFloat64(profileCompileFailuresTotal.WithLabelValues(scopeSandbox))
@@ -368,7 +368,7 @@ func gaugeSeriesCount(t testing.TB, metricName string) int {
 // surface stays one series per scope.
 func TestDegradedGaugesAreBoundedByScope(t *testing.T) {
 	const n = 200
-	s := NewStore()
+	s := NewStore(0)
 
 	events := make([]krt.Event[securityprofile.Profile], 0, 2*n)
 	for i := 0; i < n; i++ {
@@ -421,7 +421,7 @@ func TestDegradedGaugesAreBoundedByScope(t *testing.T) {
 // An installed profile whose declared inputs did not resolve keeps enforcing,
 // so it is neither stale nor unenforced — it needs its own signal.
 func TestApplyBatch_InputsUnavailableCounted(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	obj := newTestProfile("degraded-inputs", "default", map[string]string{"app": "x"})
 	compiled, err := securityprofile.NewProfile(obj, &obj.Spec)
 	if err != nil {

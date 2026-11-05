@@ -102,6 +102,11 @@ var (
 		"The port used for gRPC liveness and readiness probes")
 	metricsPort = flag.Int(
 		"metrics-port", 9090, "The metrics port")
+	profileDeletionGracePeriod = flag.Duration(
+		"profile-deletion-grace-period",
+		60*time.Second,
+		"Retain deleted administrator profile bodies for stale WDS references; 0 disables. Does not delay Sandbox or identity deletion.",
+	)
 	pluginBudget = flag.Duration(
 		"plugin-budget",
 		4500*time.Millisecond,
@@ -202,6 +207,9 @@ func run() error {
 				"HTTP_CALLOUT_",
 			},
 		})
+	}
+	if *profileDeletionGracePeriod < 0 {
+		return fmt.Errorf("--profile-deletion-grace-period must not be negative")
 	}
 	if *epeConfigName == "" {
 		return fmt.Errorf("--epe-config must not be empty")
@@ -330,7 +338,7 @@ func run() error {
 	// annotation, looked up by Sandbox identity and evaluated after the
 	// selector-matched profiles). Registration replays current collection
 	// state and then applies every event batch.
-	store := profilestore.NewStore()
+	store := profilestore.NewStore(*profileDeletionGracePeriod)
 	profiles := profilestore.NewCollection(client, registrations, nil, ctx.Done())
 	profileReg := store.RegisterCollection(profiles)
 	unregisterSandboxDeletes := profiles.Registry.RegisterDeletes(store.NotifyKeys)

@@ -30,7 +30,7 @@ import (
 
 func TestPendingProfilesFilterNotificationsAndCancelIndependently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s := NewStore()
+		s := NewStore(0)
 		var aCalls, bCalls atomic.Int64
 		var bRemoved atomic.Bool
 		s.sandbox = func(_ context.Context, subj subject.Subject) (sandboxSource, bool, error) {
@@ -99,7 +99,7 @@ func TestPendingProfilesFilterNotificationsAndCancelIndependently(t *testing.T) 
 
 func TestPendingProfilePublicationBeforeRegistration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s := NewStore()
+		s := NewStore(0)
 		profile := inlineProfile("a", "ns", "1")
 		profile.Meta.SourceIdentity.UID = "uid"
 		published := false
@@ -125,7 +125,7 @@ func TestPendingProfilePublicationBeforeRegistration(t *testing.T) {
 
 func TestPendingProfileSourceRemovalBeforeRegistration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s := NewStore()
+		s := NewStore(0)
 		calls := 0
 		s.sandbox = func(_ context.Context, subj subject.Subject) (sandboxSource, bool, error) {
 			calls++
@@ -151,7 +151,7 @@ func TestPendingProfileSourceRemovalBeforeRegistration(t *testing.T) {
 
 func TestPendingProfileRechecksAndReleasesCanceledWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s := NewStore()
+		s := NewStore(0)
 		calls := 0
 		s.sandbox = func(_ context.Context, subj subject.Subject) (sandboxSource, bool, error) {
 			calls++
@@ -181,7 +181,7 @@ func TestPendingProfileRechecksAndReleasesCanceledWait(t *testing.T) {
 }
 
 func TestPendingProfileConcurrentChangeRespectsCancellation(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	s.sandbox = func(_ context.Context, subj subject.Subject) (sandboxSource, bool, error) {

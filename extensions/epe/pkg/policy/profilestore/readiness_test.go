@@ -215,7 +215,7 @@ func TestSandboxFirstRequestWaitsForSource(t *testing.T) {
 				}
 				return identity, found, err
 			}
-			s := NewStore()
+			s := NewStore(0)
 			reg := s.RegisterCollection(profiles)
 			unregister := profiles.Registry.RegisterDeletes(s.NotifyKeys)
 			defer unregister()
@@ -457,7 +457,7 @@ func TestSandboxLookupBeforeWatch(t *testing.T) {
 	// This client's Sandbox CRD watcher is absent, so only GET can see the object.
 	c := newProfileTestClient()
 	profiles := NewCollection(c, nil, nil, t.Context().Done())
-	s := NewStore()
+	s := NewStore(0)
 	reg := s.RegisterCollection(profiles)
 	c.Run(t.Context().Done())
 	if !reg.WaitUntilSynced(t.Context().Done()) {

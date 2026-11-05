@@ -52,7 +52,7 @@ func inlineProfile(name, ns, version string) *securityprofile.Profile {
 // selector matches: a different workload name in the same namespace must see
 // nothing, and an empty workload name must skip the inline lookup entirely.
 func TestStoreInlineProfiles(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	p := inlineProfile("sbx-1", "sandboxes", "1")
 	s.applyBatch([]krt.Event[securityprofile.Profile]{
@@ -114,7 +114,7 @@ func TestStoreInlineProfiles(t *testing.T) {
 // (via source routing) must keep the two apart, with the inline profile
 // evaluating after the selector match.
 func TestStoreInlineAndCRDProfilesShareIdentity(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	crdObj := newTestProfile("shared", "sandboxes", map[string]string{"app": "x"})
 	crd, err := securityprofile.NewProfile(crdObj, &crdObj.Spec)
@@ -168,7 +168,7 @@ func TestStoreInlineAndCRDProfilesShareIdentity(t *testing.T) {
 // (~9ms and 12MB at 10k profiles) and Sandbox churn is the high-frequency
 // event source, so this must not regress into a full rebuild.
 func TestStoreInlineBatchReusesLabelIndex(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	crdObj := newTestProfile("guard", "sandboxes", map[string]string{"app": "x"})
 	crd, err := securityprofile.NewProfile(crdObj, &crdObj.Spec)

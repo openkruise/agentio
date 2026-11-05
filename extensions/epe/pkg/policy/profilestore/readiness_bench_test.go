@@ -29,7 +29,7 @@ import (
 func BenchmarkReadinessReady(b *testing.B) {
 	for _, parallel := range []bool{false, true} {
 		b.Run(fmt.Sprintf("parallel=%t", parallel), func(b *testing.B) {
-			s := NewStore()
+			s := NewStore(0)
 			profile := inlineProfile("ready", "ns", "1")
 			profile.Meta.SourceIdentity.UID = "uid"
 			s.applyBatch([]krt.Event[securityprofile.Profile]{{New: profile, Event: controllers.EventAdd}})
@@ -87,7 +87,7 @@ func BenchmarkReadinessPending(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				s := NewStore()
+				s := NewStore(0)
 				var started, finished sync.WaitGroup
 				started.Add(tc.waiters)
 				finished.Add(tc.waiters)
