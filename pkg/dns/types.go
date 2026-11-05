@@ -54,6 +54,14 @@ type Lookup interface {
 	Lookup(context.Context, string, Family) (LookupResult, error)
 }
 
+// LookupFunc adapts a function to the Lookup interface.
+type LookupFunc func(context.Context, string, Family) (LookupResult, error)
+
+// Lookup implements the Lookup interface.
+func (f LookupFunc) Lookup(ctx context.Context, host string, family Family) (LookupResult, error) {
+	return f(ctx, host, family)
+}
+
 // Source identifies whether addresses came from DNS or custom records.
 type Source uint8
 
