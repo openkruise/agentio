@@ -35,7 +35,7 @@ func referenceProblem(c *metav1.Condition, status metav1.ConditionStatus, reason
 
 func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condition {
 	resolved := condition("ResolvedRefs", metav1.ConditionTrue, "ResolvedRefs",
-		"All configuration references were found in the control-plane cache", s.Metadata.Generation)
+		"All references checked by agentiod are resolved", s.Metadata.Generation)
 	for _, input := range s.Profile.Inputs {
 		if input.ConfigMap == nil {
 			continue
@@ -56,10 +56,6 @@ func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condit
 		}
 	}
 	for _, rule := range s.Profile.Rules {
-		if rule.Actions.HTTPCallout != nil {
-			referenceProblem(&resolved, metav1.ConditionUnknown, "RuntimeResolutionRequired",
-				fmt.Sprintf("rule %q: HTTP callout provider is resolved by EPE", rule.Name))
-		}
 		tt := rule.Actions.TokenTransformation
 		if tt == nil || tt.Disabled {
 			continue
@@ -70,8 +66,6 @@ func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condit
 			continue
 		}
 		if ref.CredentialProvider != nil {
-			referenceProblem(&resolved, metav1.ConditionUnknown, "RuntimeResolutionRequired",
-				fmt.Sprintf("rule %q: credential provider is resolved by EPE", rule.Name))
 			continue
 		}
 		c.secretRef(ctx, s, rule.Name, *ref.Secret, &resolved)
@@ -84,8 +78,7 @@ func (c *Controller) secretRef(ctx krt.HandlerContext, s source, rule string,
 ) {
 	namespace := cmp.Or(ref.Namespace, s.Metadata.Namespace)
 	if namespace == "" {
-		referenceProblem(resolved, metav1.ConditionUnknown, "RuntimeResolutionRequired",
-			fmt.Sprintf("rule %q: Secret namespace depends on the requesting Pod", rule))
+		// EPE resolves this namespace from the requesting Pod.
 		return
 	}
 	if c.scopedSecrets && namespace != c.namespace {

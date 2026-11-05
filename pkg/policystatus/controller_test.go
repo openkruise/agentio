@@ -141,7 +141,7 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	r.ConfigMaps, r.Secrets = maps.AsCollection(), secrets.AsCollection()
 	s := profileSource(
 		t,
-		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
+		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}},"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
 		"demo",
 	)
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(s)}, krt.WithStop(t.Context().Done()))
@@ -186,7 +186,7 @@ func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
 	}
 }
 
-func TestUnobservableProfileReferences(t *testing.T) {
+func TestProfileReferenceCheckScope(t *testing.T) {
 	c, _ := testController(t, true)
 	for _, tc := range []struct {
 		name      string
@@ -197,9 +197,9 @@ func TestUnobservableProfileReferences(t *testing.T) {
 		reason    string
 	}{
 		{"scoped secret", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"kind":"Secret","name":"cred"},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "OutsideWatchScope"},
-		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
-		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
-		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "RuntimeResolutionRequired"},
+		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
+		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
+		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
 		{"disabled transform", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"disabled":true}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
 		{"invalid global configmap", "", `{"inputs":[{"name":"config","configMap":{"name":"config"}}]}`, metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked"},
 	} {
