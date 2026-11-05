@@ -21,10 +21,12 @@ sandbox ──> egress gateway ──external processing──> EPE ──HTTPS/
 1. ztunnel sends the caller's identity in the tunnel CONNECT header `x-agentio-sandbox-metadata`:
 
    ```text
-   agent-identity.access-token=...,agent-identity.sandbox-client-id=...
+   agent-identity.access-token="...", agent-identity.sandbox-client-id="..."
    ```
 
-   Values are percent-encoded; `+` remains literal. Set Helm `sandbox.enabled=true` to enable the sidecar Sandbox Manager. Enable `SANDBOX_TOKEN_ENABLED=true` on the ztunnel container and mount the token producer's directory at `/var/opt/sandbox/agent-token` (or set `SANDBOX_TOKEN_PATH`). Token files still contain JSON with `accessToken` and `sandboxClientId`. The Sandbox switch does not enable token reading or supply credentials automatically.
+   This is an [RFC 9651](https://www.rfc-editor.org/rfc/rfc9651.html) Structured Fields Dictionary whose two identity values must be nonempty String Items. Strings contain printable ASCII; the standard parser handles escaped quotes and backslashes, and `%`, `+`, `/`, `=`, and commas remain literal. No percent-decoding is performed. Unknown members and parameters are ignored; duplicate Dictionary keys use the last value. Metadata larger than 8 KiB, malformed dictionaries, or invalid identity fields supply no credentials. The previous unquoted KV encoding and JSON objects are not accepted in this header. Deploy the matching ztunnel and EPE versions together.
+
+   Set Helm `sandbox.enabled=true` to enable the sidecar Sandbox Manager. Enable `SANDBOX_TOKEN_ENABLED=true` on the ztunnel container and mount the token producer's directory at `/var/opt/sandbox/agent-token` (or set `SANDBOX_TOKEN_PATH`). Token files still contain JSON with `accessToken` and `sandboxClientId`. The Sandbox switch does not enable token reading or supply credentials automatically.
 
    For older gateways and ztunnels, EPE accepts the existing base64/raw JSON `sandbox.token` attribute only when the metadata attribute is absent. Present but malformed metadata does not fall back to a legacy identity.
 
