@@ -142,6 +142,22 @@ func evalBoolOnScope(t *testing.T, scope *inputs.Scope, expr string) (bool, erro
 	return eval.EvalBool(prog, scope.Activation())
 }
 
+func TestDNSCandidatesInScope(t *testing.T) {
+	scope := inputs.NewScope(inputs.RequestFrom(httpreq.HTTPRequest{DNSCandidates: []string{"api.example.com"}}), inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil)
+	got, err := evalBoolOnScope(t, scope, `"api.example.com" in request.dnsCandidates`)
+	if err != nil || !got {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+	tmpl, err := eval.CompileTemplate("dns", `{{ index .Request.DNSCandidates 0 }}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, scope); err != nil || out.String() != "api.example.com" {
+		t.Fatalf("output=%q err=%v", out.String(), err)
+	}
+}
+
 // evalBoolOnAuditScope mirrors evalBoolOnScope for the audit projection. The
 // helper of the same name in package audit is unexported and in a different
 // package, so the names do not collide.

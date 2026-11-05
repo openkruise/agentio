@@ -163,6 +163,7 @@ Policy expressions see the same request tuple, caller identity, and profile inpu
 | `scheme` | string | `:scheme`; empty when absent. |
 | `headers` | map<string, string> | Request headers keyed in lowercase. In CEL, indexing an absent key raises a `no such key` evaluation error; duplicate values are collapsed to the last value supplied by Envoy. |
 | `queryParams` | map<string, string> | First parsed value of each query parameter. Empty when there is no query. |
+| `dnsCandidates` | list<string> | Observed names for the original HBONE destination IP; empty without valid gateway evidence. See [DNS candidates](dns-candidates.md). |
 
 Path matching excludes the query string. Query matching uses the first percent-decoded value for a key.
 
@@ -172,7 +173,7 @@ Audit conditions and provider parameter values compile in separate CEL environme
 
 | Variable | CEL type | Values |
 | --- | --- | --- |
-| `request` | `map<string, dyn>` | `host`, `port` (int), `path`, `method`, `scheme`, `headers`, `queryParams`. |
+| `request` | `map<string, dyn>` | `host`, `port` (int), `path`, `method`, `scheme`, `headers`, `queryParams`, `dnsCandidates` (list of strings). |
 | `pod` | `map<string, dyn>` | `name`, `namespace`, `ip`, `labels`. |
 | `profile` | `map<string, string>` | `name`, `namespace` (empty for a global profile). |
 | `rule` | `map<string, string>` | `name`. |
@@ -209,7 +210,7 @@ String helpers take the input last for pipelines, for example `{{ .Token | trimP
 | --- | --- |
 | Token transformation `apiKey.value.template` | `.Token`, `.Header.Name`, `.Header.Value`, `.Request`, `.Pod`, `.Profile`, `.Rule`, and lazy `.Inputs`. `.Pod` has `Name`, `Namespace`, `IP`, `Labels`, and `Label key`. |
 | Legacy token transformation `apiKey.valueTemplate` | The same context as `apiKey.value.template`; EPE normalizes the legacy single-header form to the same internal rule. |
-| Credential-provider parameter `template` | `.Request`, `.Pod`, `.Profile`, `.Rule`, `.Inputs`. `.Request` has `Host`, `Port`, `Path`, `Scheme`, `Method`, `Query`, `Header name`, and `QueryParam name`. |
+| Credential-provider parameter `template` | `.Request`, `.Pod`, `.Profile`, `.Rule`, `.Inputs`. `.Request` has `Host`, `Port`, `Path`, `Scheme`, `Method`, `Query`, `DNSCandidates`, `Header name`, and `QueryParam name`. |
 | Audit webhook URL, headers, and body | The shared roots above plus `.Result`, `.Response.Status`, and `.MatchedCriteria`/`.Matched`. Matched fields are populated only when the corresponding rule match constrained them. |
 
 Use lower-risk data in audit and provider templates. Rendered values can be transmitted to external providers/webhooks, and the `json` helper serializes its argument rather than redacting it.

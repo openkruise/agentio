@@ -358,16 +358,20 @@ type TrafficPolicy_Match struct {
 	// The direction's peer condition and ports are ANDed; peers are ORed.
 	// Ingress uses source_ips only; egress uses destination_ips only.
 	// The opposite direction's address field is ignored.
-	// Empty applicable address list = unconstrained.
+	// Empty applicable address list = unconstrained, except egress with FQDNs.
 	// Resolve peers in the control plane. If the applicable peer list resolves
-	// to no addresses, omit the Rule while retaining the configured direction.
+	// to no addresses and has no egress FQDNs, omit the Rule while retaining
+	// the configured direction. FQDN-only rules require compatible data planes.
 	// Validate Address byte/prefix lengths and normalize host bits.
 	SourceIps      []*TrafficPolicy_Address `protobuf:"bytes,1,rep,name=source_ips,json=sourceIps,proto3" json:"source_ips,omitempty"`
 	DestinationIps []*TrafficPolicy_Address `protobuf:"bytes,2,rep,name=destination_ips,json=destinationIps,proto3" json:"destination_ips,omitempty"`
 	// Empty = any protocol/port. Entries are ORed.
-	Ports         []*TrafficPolicy_PortMatch `protobuf:"bytes,3,rep,name=ports,proto3" json:"ports,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Ports []*TrafficPolicy_PortMatch `protobuf:"bytes,3,rep,name=ports,proto3" json:"ports,omitempty"`
+	// Exact DNS names for outbound TCP, ORed with destination_ips.
+	// Preserve these names even when control-plane DNS has no addresses.
+	DestinationFqdns []string `protobuf:"bytes,4,rep,name=destination_fqdns,json=destinationFqdns,proto3" json:"destination_fqdns,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TrafficPolicy_Match) Reset() {
@@ -417,6 +421,13 @@ func (x *TrafficPolicy_Match) GetDestinationIps() []*TrafficPolicy_Address {
 func (x *TrafficPolicy_Match) GetPorts() []*TrafficPolicy_PortMatch {
 	if x != nil {
 		return x.Ports
+	}
+	return nil
+}
+
+func (x *TrafficPolicy_Match) GetDestinationFqdns() []string {
+	if x != nil {
+		return x.DestinationFqdns
 	}
 	return nil
 }
@@ -492,7 +503,7 @@ var File_api_security_v1_trafficpolicy_proto protoreflect.FileDescriptor
 
 const file_api_security_v1_trafficpolicy_proto_rawDesc = "" +
 	"\n" +
-	"#api/security/v1/trafficpolicy.proto\x12\x10agentio.security\"\xff\x06\n" +
+	"#api/security/v1/trafficpolicy.proto\x12\x10agentio.security\"\xac\a\n" +
 	"\rTrafficPolicy\x12A\n" +
 	"\aingress\x18\x01 \x01(\v2'.agentio.security.TrafficPolicy.RuleSetR\aingress\x12?\n" +
 	"\x06egress\x18\x02 \x01(\v2'.agentio.security.TrafficPolicy.RuleSetR\x06egress\x1a;\n" +
@@ -503,12 +514,13 @@ const file_api_security_v1_trafficpolicy_proto_rawDesc = "" +
 	"\x05rules\x18\x01 \x03(\v2$.agentio.security.TrafficPolicy.RuleR\x05rules\x1a\x83\x01\n" +
 	"\x04Rule\x12>\n" +
 	"\x06action\x18\x01 \x01(\x0e2&.agentio.security.TrafficPolicy.ActionR\x06action\x12;\n" +
-	"\x05match\x18\x02 \x01(\v2%.agentio.security.TrafficPolicy.MatchR\x05match\x1a\xe2\x01\n" +
+	"\x05match\x18\x02 \x01(\v2%.agentio.security.TrafficPolicy.MatchR\x05match\x1a\x8f\x02\n" +
 	"\x05Match\x12F\n" +
 	"\n" +
 	"source_ips\x18\x01 \x03(\v2'.agentio.security.TrafficPolicy.AddressR\tsourceIps\x12P\n" +
 	"\x0fdestination_ips\x18\x02 \x03(\v2'.agentio.security.TrafficPolicy.AddressR\x0edestinationIps\x12?\n" +
-	"\x05ports\x18\x03 \x03(\v2).agentio.security.TrafficPolicy.PortMatchR\x05ports\x1a\xa0\x01\n" +
+	"\x05ports\x18\x03 \x03(\v2).agentio.security.TrafficPolicy.PortMatchR\x05ports\x12+\n" +
+	"\x11destination_fqdns\x18\x04 \x03(\tR\x10destinationFqdns\x1a\xa0\x01\n" +
 	"\tPortMatch\x12D\n" +
 	"\bprotocol\x18\x01 \x01(\x0e2(.agentio.security.TrafficPolicy.ProtocolR\bprotocol\x12\x17\n" +
 	"\x04port\x18\x02 \x01(\rH\x00R\x04port\x88\x01\x01\x12\x1e\n" +

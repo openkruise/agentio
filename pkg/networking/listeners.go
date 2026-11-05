@@ -632,6 +632,10 @@ func (b *resourceBuilder) extProcFilter(
 		!slices.Contains(attributes, model.AttributeRouteUpstream) {
 		attributes = append(attributes, model.AttributeRouteUpstream)
 	}
+	if !b.legacyGateway && name == "envoy.filters.http.ext_proc" &&
+		!slices.Contains(attributes, model.AttributeDestinationDNSCandidates) {
+		attributes = append(attributes, model.AttributeDestinationDNSCandidates)
+	}
 	return httpFilter(name, b.pack(&extprocv3.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
@@ -673,6 +677,7 @@ func (b *resourceBuilder) connectExtProcFilter() *hcmv3.HttpFilter {
 			model.AttributePeerIP,
 			model.AttributePeerPrincipal,
 			model.AttributePeerCertificate,
+			model.AttributeDestinationDNSCandidates,
 		},
 		MetadataOptions: &extprocv3.MetadataOptions{
 			ReceivingNamespaces: &extprocv3.MetadataOptions_MetadataNamespaces{
@@ -930,6 +935,10 @@ func buildConnectAuthorityFilter(factory, peerPrincipal, localPrincipal string, 
 			factory, setstatecommonv3.FilterStateValue_ONCE)
 		metadata.SkipIfEmpty = true
 		values = append(values, metadata)
+		candidates := value(model.FilterStateDestinationDNSCandidates, "%REQ(X-AGENTIO-DESTINATION-DNS-CANDIDATES)%",
+			factory, setstatecommonv3.FilterStateValue_ONCE)
+		candidates.SkipIfEmpty = true
+		values = append(values, candidates)
 		// Read the TLS-verified peer certificate, never a CONNECT header.
 		// Only Porter needs the certificate; do not propagate it to inner streams.
 		values = append(values, value(model.FilterStatePeerCertificate, "%DOWNSTREAM_PEER_CERT%",
@@ -979,6 +988,7 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 		// TLS termination adds one internal hop; stop sharing again at main_forward.
 		for _, key := range []string{
 			model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
+			model.FilterStateDestinationDNSCandidates,
 			model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
 			model.FilterStateWorkloadUID,
 		} {

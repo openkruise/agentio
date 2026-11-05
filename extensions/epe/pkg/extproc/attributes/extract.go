@@ -55,10 +55,11 @@ const (
 	// request_attributes for this to be populated.
 	AttrSourceAddress = "source.address"
 	// FilterStateSandboxLabels is the legacy label attribute used during rolling upgrades.
-	FilterStateSandboxLabels   = "filter_state['sandbox.labels']"
-	FilterStateSandboxToken    = "filter_state['sandbox.token']"
-	FilterStateSandboxMetadata = "filter_state['agentio.sandbox.metadata']"
-	FilterStateRouteUpstream   = "filter_state['agentio.route.upstream']"
+	FilterStateSandboxLabels            = "filter_state['sandbox.labels']"
+	FilterStateSandboxToken             = "filter_state['sandbox.token']"
+	FilterStateSandboxMetadata          = "filter_state['agentio.sandbox.metadata']"
+	FilterStateRouteUpstream            = "filter_state['agentio.route.upstream']"
+	FilterStateDestinationDNSCandidates = "filter_state['agentio.destination.dns_candidates']"
 
 	AttrDestinationPort    = "destination.port"
 	AttrDestinationAddress = "destination.address"
@@ -127,6 +128,11 @@ func Extract(
 	}
 
 	req := parseHTTPRequest(ctx, extractHeaderMap(headers))
+	if candidates, err := parseDNSCandidates(extractFilterStateString(attrs, FilterStateDestinationDNSCandidates)); err != nil {
+		loggerD.Info("invalid destination DNS candidates", "error", err)
+	} else {
+		req.DNSCandidates = candidates
+	}
 
 	// For ordinary requests, prefer the real TCP destination port observed by
 	// Envoy. A CONNECT authority is different: it is the RFC-defined tunnel

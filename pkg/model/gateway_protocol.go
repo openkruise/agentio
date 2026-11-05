@@ -22,17 +22,18 @@ const (
 
 // Filter-state keys shared by gateway configuration and CONNECT processing.
 const (
-	FilterStateOuterSNI          = "agentio.tls.outer_sni"
-	FilterStateDenialReason      = "agentio.egress.denial_reason"
-	FilterStateWorkloadUID       = "agentio.workload.uid"
-	FilterStateWorkloadName      = "agentio.workload.name"
-	FilterStateWorkloadNamespace = "agentio.workload.namespace"
-	FilterStateSandboxID         = "agentio.sandbox.id"
-	FilterStateConnectAuthority  = "agentio.connect.authority"
-	FilterStatePeerCertificate   = "agentio.peer.certificate"
-	FilterStatePeerIP            = "agentio.downstream.ip"
-	FilterStatePeerPrincipal     = "agentio.peer.principal"
-	FilterStateLocalPrincipal    = "agentio.local.principal"
+	FilterStateOuterSNI                 = "agentio.tls.outer_sni"
+	FilterStateDenialReason             = "agentio.egress.denial_reason"
+	FilterStateWorkloadUID              = "agentio.workload.uid"
+	FilterStateWorkloadName             = "agentio.workload.name"
+	FilterStateWorkloadNamespace        = "agentio.workload.namespace"
+	FilterStateSandboxID                = "agentio.sandbox.id"
+	FilterStateConnectAuthority         = "agentio.connect.authority"
+	FilterStateDestinationDNSCandidates = "agentio.destination.dns_candidates"
+	FilterStatePeerCertificate          = "agentio.peer.certificate"
+	FilterStatePeerIP                   = "agentio.downstream.ip"
+	FilterStatePeerPrincipal            = "agentio.peer.principal"
+	FilterStateLocalPrincipal           = "agentio.local.principal"
 	// FilterStateSNIPolicy must match POLICY_KEY in extensions/envoy/sni-policy.
 	FilterStateSNIPolicy = "agentio.sni.policy"
 	// FilterStateRouteUpstream holds the gateway-selected IP:port for this request.
@@ -41,14 +42,15 @@ const (
 
 // ExtProc attributes requested by Envoy and consumed by Porter and EPE.
 const (
-	ExtProcAttributesKey       = "envoy.filters.http.ext_proc"
-	AttributeWorkloadUID       = "filter_state['" + FilterStateWorkloadUID + "']"
-	AttributeWorkloadName      = "filter_state['" + FilterStateWorkloadName + "']"
-	AttributeWorkloadNamespace = "filter_state['" + FilterStateWorkloadNamespace + "']"
-	AttributeRouteUpstream     = "filter_state['" + FilterStateRouteUpstream + "']"
-	AttributeSandboxID         = "filter_state['" + FilterStateSandboxID + "']"
-	AttributePeerCertificate   = "filter_state['" + FilterStatePeerCertificate + "']"
-	AttributePeerIP            = "filter_state['" + FilterStatePeerIP + "']"
-	AttributePeerPrincipal     = "filter_state['" + FilterStatePeerPrincipal + "']"
-	GatewayMetadataNamespace   = "agentio"
+	ExtProcAttributesKey              = "envoy.filters.http.ext_proc"
+	AttributeWorkloadUID              = "filter_state['" + FilterStateWorkloadUID + "']"
+	AttributeWorkloadName             = "filter_state['" + FilterStateWorkloadName + "']"
+	AttributeWorkloadNamespace        = "filter_state['" + FilterStateWorkloadNamespace + "']"
+	AttributeRouteUpstream            = "filter_state['" + FilterStateRouteUpstream + "']"
+	AttributeSandboxID                = "filter_state['" + FilterStateSandboxID + "']"
+	AttributeDestinationDNSCandidates = "filter_state['" + FilterStateDestinationDNSCandidates + "']"
+	AttributePeerCertificate          = "filter_state['" + FilterStatePeerCertificate + "']"
+	AttributePeerIP                   = "filter_state['" + FilterStatePeerIP + "']"
+	AttributePeerPrincipal            = "filter_state['" + FilterStatePeerPrincipal + "']"
+	GatewayMetadataNamespace          = "agentio"
 )

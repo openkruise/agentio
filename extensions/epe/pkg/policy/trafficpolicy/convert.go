@@ -18,6 +18,7 @@ package trafficpolicy
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 
 	sec "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
@@ -58,8 +59,11 @@ func Compile(policies []NamedPolicy) (egressauthz.Config, error) {
 			if len(r.Match.Ports) > 0 && len(ports) == 0 {
 				continue
 			}
+			for _, name := range r.Match.DestinationFqdns {
+				rule.FQDNs = append(rule.FQDNs, strings.ToLower(strings.TrimSuffix(name, ".")))
+			}
 			rule.CIDRs = destinations
-			if len(destinations) == 0 {
+			if len(destinations) == 0 && len(rule.FQDNs) == 0 {
 				rule.CIDRs = append([]netip.Prefix(nil), allIPs...)
 			}
 			rule.Ports = ports

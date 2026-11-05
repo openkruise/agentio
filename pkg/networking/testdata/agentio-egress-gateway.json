@@ -911,6 +911,18 @@
                             "skipIfEmpty": true
                           },
                           {
+                            "objectKey": "agentio.destination.dns_candidates",
+                            "factoryKey": "envoy.hashable_string",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%REQ(X-AGENTIO-DESTINATION-DNS-CANDIDATES)%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "sharedWithUpstream": "ONCE",
+                            "skipIfEmpty": true
+                          },
+                          {
                             "objectKey": "agentio.peer.certificate",
                             "factoryKey": "envoy.string",
                             "formatString": {
@@ -952,7 +964,8 @@
                           "filter_state['agentio.sandbox.id']",
                           "filter_state['agentio.downstream.ip']",
                           "filter_state['agentio.peer.principal']",
-                          "filter_state['agentio.peer.certificate']"
+                          "filter_state['agentio.peer.certificate']",
+                          "filter_state['agentio.destination.dns_candidates']"
                         ],
                         "messageTimeout": "5s",
                         "metadataOptions": {
@@ -1268,7 +1281,8 @@
                           "source.address",
                           "destination.address",
                           "destination.port",
-                          "filter_state['agentio.route.upstream']"
+                          "filter_state['agentio.route.upstream']",
+                          "filter_state['agentio.destination.dns_candidates']"
                         ],
                         "responseAttributes": [
                           "response.code"
@@ -1540,6 +1554,18 @@
                       "formatString": {
                         "textFormatSource": {
                           "inlineString": "%FILTER_STATE(agentio.sandbox.metadata:PLAIN)%"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "sharedWithUpstream": "ONCE",
+                      "skipIfEmpty": true
+                    },
+                    {
+                      "objectKey": "agentio.destination.dns_candidates",
+                      "factoryKey": "envoy.hashable_string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "%FILTER_STATE(agentio.destination.dns_candidates:PLAIN)%"
                         },
                         "omitEmptyValues": true
                       },
@@ -1883,12 +1909,12 @@
                               "condition": {
                                 "id": "15",
                                 "callExpr": {
-                                  "function": "_\u0026\u0026_",
+                                  "function": "_&&_",
                                   "args": [
                                     {
                                       "id": "8",
                                       "callExpr": {
-                                        "function": "_\u0026\u0026_",
+                                        "function": "_&&_",
                                         "args": [
                                           {
                                             "id": "3",
@@ -1942,7 +1968,7 @@
                                     {
                                       "id": "29",
                                       "callExpr": {
-                                        "function": "_\u0026\u0026_",
+                                        "function": "_&&_",
                                         "args": [
                                           {
                                             "id": "13",
@@ -2113,7 +2139,8 @@
                           "source.address",
                           "destination.address",
                           "destination.port",
-                          "filter_state['agentio.route.upstream']"
+                          "filter_state['agentio.route.upstream']",
+                          "filter_state['agentio.destination.dns_candidates']"
                         ],
                         "responseAttributes": [
                           "response.code"

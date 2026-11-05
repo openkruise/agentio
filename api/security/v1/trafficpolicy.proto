@@ -70,14 +70,18 @@ message TrafficPolicy {
     // The direction's peer condition and ports are ANDed; peers are ORed.
     // Ingress uses source_ips only; egress uses destination_ips only.
     // The opposite direction's address field is ignored.
-    // Empty applicable address list = unconstrained.
+    // Empty applicable address list = unconstrained, except egress with FQDNs.
     // Resolve peers in the control plane. If the applicable peer list resolves
-    // to no addresses, omit the Rule while retaining the configured direction.
+    // to no addresses and has no egress FQDNs, omit the Rule while retaining
+    // the configured direction. FQDN-only rules require compatible data planes.
     // Validate Address byte/prefix lengths and normalize host bits.
     repeated Address source_ips = 1;
     repeated Address destination_ips = 2;
     // Empty = any protocol/port. Entries are ORed.
     repeated PortMatch ports = 3;
+    // Exact DNS names for outbound TCP, ORed with destination_ips.
+    // Preserve these names even when control-plane DNS has no addresses.
+    repeated string destination_fqdns = 4;
   }
 
   message PortMatch {

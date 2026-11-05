@@ -65,6 +65,10 @@ func TrafficPolicyAsAuthorizations(
 			AuthExtensions: []*securityv1.Extension{extension},
 		}
 		for _, rule := range direction.rules.Rules {
+			// Legacy consumers cannot enforce FQDN-only destinations.
+			if len(rule.Match.DestinationFqdns) > 0 && len(rule.Match.DestinationIps) == 0 {
+				continue
+			}
 			authorization.Groups = append(authorization.Groups, asAuthorizationGroup(rule))
 		}
 		result = append(result, CompiledAuthorization{
@@ -75,8 +79,7 @@ func TrafficPolicyAsAuthorizations(
 	return result, nil
 }
 
-// Preserve the legacy negative-match encoding of reject rules. Unresolved
-// rules have already been omitted by the TrafficPolicy compiler.
+// Preserve the legacy negative-match encoding of reject rules.
 func asAuthorizationGroup(rule *securityv1.TrafficPolicy_Rule) *securityv1.Group {
 	negative := rule.Action == securityv1.TrafficPolicy_DENY
 	group := &securityv1.Group{}

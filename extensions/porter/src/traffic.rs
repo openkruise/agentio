@@ -41,6 +41,7 @@ pub struct Policy {
 struct Rule {
     allow: bool,
     destinations: Vec<Network>,
+    fqdns: Vec<String>,
     ports: Vec<Port>,
 }
 
@@ -116,6 +117,13 @@ impl Policy {
     pub fn compile(value: TrafficPolicy) -> Result<Self> {
         // Validate the complete wire resource, even though CONNECT evaluates egress only.
         if let Some(ingress) = value.ingress {
+            ensure!(
+                ingress.rules.iter().all(|rule| rule
+                    .r#match
+                    .as_ref()
+                    .is_none_or(|m| m.destination_fqdns.is_empty())),
+                "destination FQDNs are egress-only"
+            );
             compile_rules(ingress)?;
         }
         Ok(Self {
@@ -136,7 +144,28 @@ fn compile_rules(value: proto::RuleSet) -> Result<Vec<Rule>> {
             for source in matched.source_ips {
                 Network::compile(source)?;
             }
+            let fqdns = matched
+                .destination_fqdns
+                .into_iter()
+                .map(|name| {
+                    let name = name.strip_suffix('.').unwrap_or(&name).to_ascii_lowercase();
+                    ensure!(
+                        !name.is_empty()
+                            && name.len() <= 253
+                            && name.split('.').all(|label| !label.is_empty()
+                                && label.len() <= 63
+                                && !label.starts_with('-')
+                                && !label.ends_with('-')
+                                && label.bytes().all(|b| b.is_ascii_lowercase()
+                                    || b.is_ascii_digit()
+                                    || b == b'-')),
+                        "invalid destination FQDN"
+                    );
+                    Ok(name)
+                })
+                .collect::<Result<Vec<_>>>()?;
             Ok(Rule {
+                fqdns,
                 allow: action == proto::Action::Allow,
                 destinations: matched
                     .destination_ips
@@ -155,7 +184,11 @@ fn compile_rules(value: proto::RuleSet) -> Result<Vec<Rule>> {
 
 /// One ordered stage: first match wins; configured but unmatched means deny.
 /// Callers must resolve every reference before invoking this function.
-pub fn evaluate<'a>(policies: impl IntoIterator<Item = &'a Policy>, target: Target) -> Evaluation {
+pub fn evaluate<'a>(
+    policies: impl IntoIterator<Item = &'a Policy>,
+    target: Target,
+    dns_candidates: &[String],
+) -> Evaluation {
     let mut configured = false;
     for (policy_index, policy) in policies.into_iter().enumerate() {
         let Some(rules) = &policy.egress else {
@@ -163,7 +196,13 @@ pub fn evaluate<'a>(policies: impl IntoIterator<Item = &'a Policy>, target: Targ
         };
         configured = true;
         for (rule_index, rule) in rules.iter().enumerate() {
-            if (rule.destinations.is_empty()
+            if ((rule.destinations.is_empty() && rule.fqdns.is_empty())
+                || (target.protocol == proto::Protocol::Tcp
+                    && dns_candidates.iter().any(|name| {
+                        rule.fqdns.iter().any(|fqdn| {
+                            fqdn.eq_ignore_ascii_case(name.strip_suffix('.').unwrap_or(name))
+                        })
+                    }))
                 || rule
                     .destinations
                     .iter()
@@ -202,7 +241,7 @@ mod tests {
     use super::*;
 
     fn allows<'a>(policies: impl IntoIterator<Item = &'a Policy>, target: Target) -> bool {
-        evaluate(policies, target).allowed
+        evaluate(policies, target, &[]).allowed
     }
 
     fn rule(
@@ -229,6 +268,55 @@ mod tests {
     }
 
     #[test]
+    fn fqdn_and_ip_are_alternatives_without_a_wildcard() {
+        let target = Target::parse("192.0.2.1:443", false).unwrap();
+        let mut matched = proto::Match {
+            destination_fqdns: vec!["API.EXAMPLE.COM.".into()],
+            ..Default::default()
+        };
+        let build = |matched| {
+            policy(vec![proto::Rule {
+                action: proto::Action::Allow as i32,
+                r#match: Some(matched),
+            }])
+        };
+        let dns = build(matched.clone());
+        assert!(!evaluate([&dns], target, &[]).allowed);
+        assert!(evaluate([&dns], target, &["api.example.com".into()]).allowed);
+        assert!(
+            !evaluate(
+                [&dns],
+                Target::parse("192.0.2.1:443", true).unwrap(),
+                &["api.example.com".into()]
+            )
+            .allowed
+        );
+        matched.destination_ips.push(proto::Address {
+            address: vec![192, 0, 2, 1],
+            length: 32,
+        });
+        let both = build(matched);
+        assert!(evaluate([&both], target, &[]).allowed);
+        let denied = policy(vec![rule(proto::Action::Deny, vec![], vec![])]);
+        assert!(!evaluate([&denied, &dns], target, &["api.example.com".into()]).allowed);
+        assert!(
+            Policy::compile(TrafficPolicy {
+                egress: Some(proto::RuleSet {
+                    rules: vec![proto::Rule {
+                        action: 0,
+                        r#match: Some(proto::Match {
+                            destination_fqdns: vec!["*.example.com".into()],
+                            ..Default::default()
+                        })
+                    }]
+                }),
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn evaluation_identifies_the_deciding_rule_and_default_reason() {
         let target = Target::parse("192.0.2.1:443", false).unwrap();
         let absent = Policy::compile(TrafficPolicy::default()).unwrap();
@@ -245,7 +333,7 @@ mod tests {
             rule(proto::Action::Allow, vec![], vec![]),
         ]);
         assert_eq!(
-            evaluate([&absent, &empty, &matched], target),
+            evaluate([&absent, &empty, &matched], target, &[]),
             Evaluation {
                 allowed: true,
                 matched_rule: Some((2, 1)),
@@ -253,7 +341,7 @@ mod tests {
             }
         );
         assert_eq!(
-            evaluate([&empty], target),
+            evaluate([&empty], target, &[]),
             Evaluation {
                 allowed: false,
                 matched_rule: None,
@@ -261,7 +349,7 @@ mod tests {
             }
         );
         assert_eq!(
-            evaluate([&absent], target),
+            evaluate([&absent], target, &[]),
             Evaluation {
                 allowed: true,
                 matched_rule: None,
