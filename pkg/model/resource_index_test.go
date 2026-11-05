@@ -255,7 +255,7 @@ func TestWorkloadQuerySingletonPreservesAllPredicates(t *testing.T) {
 
 func TestOpaquePrincipalNamespaceComesFromSourceMetadata(t *testing.T) {
 	resource := testWorkloadResource(t, "opaque", "value", "uid", "node", nil, nil)
-	resource.Facts.Workload.Principal = mustTestPrincipal("cluster.local", "workload/app")
+	resource.Facts.Workload.Principal = MustPrincipal("cluster.local", "workload/app")
 	resource.Facts.Workload.Namespace = "source-namespace"
 	snapshot, err := NewResourceSet([]Resource{resource})
 	if err != nil {

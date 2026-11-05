@@ -196,18 +196,18 @@ func TestFinishStream_OutcomeIsDerivedFromSentResponses(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			state := newStreamState()
 			state.lifecycle = lifecycleActive
-			state.effect = tt.effect
-			state.stream.Info.Matched = tt.matched
+			state.effect = tc.effect
+			state.stream.Info.Matched = tc.matched
 
 			s := &Server{}
-			s.finishStream(context.Background(), state, tt.err)
+			s.finishStream(context.Background(), state, tc.err)
 
-			if got := state.stream.Info.Outcome.String(); got != tt.want {
-				t.Errorf("Outcome = %q, want %q", got, tt.want)
+			if got := state.stream.Info.Outcome.String(); got != tc.want {
+				t.Errorf("Outcome = %q, want %q", got, tc.want)
 			}
 		})
 	}

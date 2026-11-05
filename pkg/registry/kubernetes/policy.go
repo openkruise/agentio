@@ -52,8 +52,20 @@ func defaultAgentioConfiguration() *configv1.AgentioConfig {
 }
 
 func validateAgentioConfig(value *configv1.AgentioConfig) error {
+	for i, id := range value.GetTrustedEpeIdentities() {
+		uri, err := model.ParseSPIFFEID(id)
+		if err != nil {
+			return fmt.Errorf("trustedEPEIdentities[%d]: %w", i, err)
+		}
+		if _, err := model.ParsePrincipal(id, uri.Host); err != nil {
+			return fmt.Errorf("trustedEPEIdentities[%d]: %w", i, err)
+		}
+	}
 	if err := model.ValidateAdditionalExtProcs(value.GetAdditionalExtProcs()); err != nil {
 		return err
+	}
+	if err := model.ValidateExtProcServiceRef(value.GetSandboxExtProc()); err != nil {
+		return fmt.Errorf("sandboxExtProc: %w", err)
 	}
 	if err := model.ValidateExtProcTLS(value.GetSandboxExtProc().GetTls()); err != nil {
 		return err
@@ -62,10 +74,16 @@ func validateAgentioConfig(value *configv1.AgentioConfig) error {
 		return err
 	}
 	for i, gateway := range value.GetEgressGateways() {
+		if err := model.ValidateExtProcServiceRef(gateway.GetExtProc()); err != nil {
+			return fmt.Errorf("egressGateways[%d].extProc: %w", i, err)
+		}
 		if err := model.ValidateExtProcTLS(gateway.GetExtProc().GetTls()); err != nil {
 			return fmt.Errorf("egressGateways[%d].%w", i, err)
 		}
 		if err := model.ValidateUpstreamTLS(gateway.GetTls().GetOrigination()); err != nil {
+			return fmt.Errorf("egressGateways[%d].%w", i, err)
+		}
+		if err := model.ValidateUpstreamTrustBundle(gateway.GetUpstreamTrustBundle()); err != nil {
 			return fmt.Errorf("egressGateways[%d].%w", i, err)
 		}
 		if err := model.ValidateAccessLogFormat(gateway.GetAccessLogFormat()); err != nil {

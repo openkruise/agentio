@@ -30,6 +30,7 @@ import (
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -54,7 +55,7 @@ func TestTrafficPolicyCompilesBothResourcesWithOneResolution(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	nativeKey := model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: "namespaces/demo/trafficPolicies/api"}
 	legacyKey := model.ResourceKey{TypeURL: model.WorkloadAuthorizationType, Name: "demo/api-egress"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, fixture.compiler)
 		_, native := snapshot.Get(nativeKey)
 		legacy, found := snapshot.Get(legacyKey)
@@ -72,7 +73,7 @@ func TestTrafficPolicyCompilesBothResourcesWithOneResolution(t *testing.T) {
 	oldNative, _ := before.Get(nativeKey)
 	oldLegacy, _ := before.Get(legacyKey)
 	fixture.setResolved("api.example.com", netip.MustParseAddr("203.0.113.7"))
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current := currentSnapshot(t, fixture.compiler)
 		native, nativeFound := current.Get(nativeKey)
 		legacy, legacyFound := current.Get(legacyKey)
@@ -108,7 +109,7 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 		Namespace: "demo",
 		Spec:      agentsv1alpha1.TrafficPolicySpec{Selector: metav1.LabelSelector{MatchLabels: workload.Labels}},
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		egress   bool
 		ingress  bool
 		empty    bool
@@ -125,7 +126,7 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 		{deleted: true},
 	} {
 		source.Spec.Egress, source.Spec.Ingress = nil, nil
-		if test.egress {
+		if tc.egress {
 			source.Spec.Egress = &agentsv1alpha1.TrafficPolicyDirection{
 				Rules: []agentsv1alpha1.TrafficPolicyRule{
 					{
@@ -135,7 +136,7 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 				},
 			}
 		}
-		if test.ingress {
+		if tc.ingress {
 			source.Spec.Ingress = &agentsv1alpha1.TrafficPolicyDirection{
 				Rules: []agentsv1alpha1.TrafficPolicyRule{
 					{
@@ -149,18 +150,18 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 			if direction == nil {
 				continue
 			}
-			if test.empty {
+			if tc.empty {
 				direction.Rules = nil
-			} else if test.peerless {
+			} else if tc.peerless {
 				direction.Rules[0].From, direction.Rules[0].To = nil, nil
 			}
 		}
-		if !test.deleted {
+		if !tc.deleted {
 			fixture.trafficPolicies.UpdateObject(source)
 		} else {
 			fixture.trafficPolicies.DeleteObject(source.ResourceName())
 		}
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			snapshot := currentSnapshot(t, fixture.compiler)
 			var names []string
 			for _, resource := range snapshot.List(model.WorkloadAuthorizationType) {
@@ -179,15 +180,15 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 				model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: "namespaces/demo/trafficPolicies/api"},
 			)
 			var want []string
-			if !test.deleted && !test.empty && !test.peerless {
-				if test.egress {
+			if !tc.deleted && !tc.empty && !tc.peerless {
+				if tc.egress {
 					want = append(want, "demo/api-egress")
 				}
-				if test.ingress {
+				if tc.ingress {
 					want = append(want, "demo/api-ingress")
 				}
 			}
-			if nativeFound != !test.deleted || !slices.Equal(names, want) ||
+			if nativeFound != !tc.deleted || !slices.Equal(names, want) ||
 				!slices.Equal(wire.GetWorkload().AuthorizationPolicies, want) {
 				return false
 			}
@@ -248,7 +249,7 @@ func TestEgressPolicyIncrementalAttachmentAndLastKnownGood(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		valid("rules", "203.0.113.2/32", "egress-a.agentio-system.svc.cluster.local"),
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(
 			t,
 			fixture.compiler,
@@ -269,7 +270,7 @@ func TestEgressPolicyIncrementalAttachmentAndLastKnownGood(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		valid("gateway", "203.0.113.2/32", "egress-b.agentio-system.svc.cluster.local"),
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(
 			t,
 			fixture.compiler,
@@ -285,7 +286,7 @@ func TestEgressPolicyIncrementalAttachmentAndLastKnownGood(t *testing.T) {
 	}
 
 	fixture.agentioConfig.ConditionalUpdateObject(valid("invalid", "203.0.113.3/32", "egress..svc.cluster.local"))
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["AgentioConfig/configuration"]
 		return found
 	}, "malformed gateway records configuration failure")
@@ -338,7 +339,7 @@ func TestPolicyEditInvalidatesOnlyItsNamespace(t *testing.T) {
 		},
 	})
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return recorder.has(model.TrafficPolicyType + "|namespaces/alpha/trafficPolicies/allow")
 	}, "alpha authorization recompiled")
 	settle()
@@ -377,7 +378,7 @@ func TestGlobalPolicyInvalidatesEveryNamespace(t *testing.T) {
 
 	for _, namespace := range []string{"alpha", "beta"} {
 		expected := addressResourceName(namespace, "client")
-		eventually(t, func() bool { return recorder.has(expected) },
+		testutil.Eventually(t, func() bool { return recorder.has(expected) },
 			"global policy invalidated Workload in "+namespace)
 	}
 }
@@ -403,7 +404,7 @@ func TestMalformedPolicyIsOmittedWhileRestPublishes(t *testing.T) {
 	})
 	waitSynced(t, fixture.compiler)
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, fixture.compiler).Get(model.ResourceKey{
 			TypeURL: model.AddressType,
 			Name:    "cluster//Pod/alpha/client",
@@ -416,7 +417,7 @@ func TestMalformedPolicyIsOmittedWhileRestPublishes(t *testing.T) {
 	); compiled != nil {
 		t.Fatal("a policy with an invalid priority produced a native TrafficPolicy")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		failures := fixture.compiler.Failures()
 		return failures["TrafficPolicy/namespaced/alpha/broken"] != ""
 	}, "policy compilation reports the invalid source")
@@ -437,7 +438,7 @@ func TestMalformedPolicyIsOmittedWhileRestPublishes(t *testing.T) {
 			}}},
 		},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		manifest := manifestAt(t, fixture.compiler, "cluster//Pod/alpha/client")
 		return manifest != nil &&
 			len(fixture.compiler.PolicyNames("cluster//Pod/alpha/client", model.PolicyKindTrafficPolicy)) == 1 &&
@@ -467,13 +468,13 @@ func TestDeletingMalformedTrafficPolicyClearsFailure(t *testing.T) {
 		},
 	})
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["TrafficPolicy/namespaced/alpha/broken"]
 		return found
 	}, "malformed policy failure")
 
 	fixture.trafficPolicies.DeleteObject("namespaced/alpha/broken")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["TrafficPolicy/namespaced/alpha/broken"]
 		return !found
 	}, "deleted malformed policy clears failure")
@@ -499,13 +500,13 @@ func TestDeletingMalformedSecurityProfileClearsFailure(t *testing.T) {
 		},
 	})
 	waitSynced(t, fixture.compiler)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["SecurityProfile/namespaced/alpha/broken"]
 		return found
 	}, "malformed profile failure")
 
 	fixture.securityProfiles.DeleteObject("namespaced/alpha/broken")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["SecurityProfile/namespaced/alpha/broken"]
 		return !found
 	}, "deleted malformed profile clears failure")
@@ -545,7 +546,7 @@ func TestMalformedTrafficPolicyUpdatePreservesLastKnownGood(t *testing.T) {
 		TypeURL: model.TrafficPolicyType,
 		Name:    "namespaces/alpha/trafficPolicies/allow",
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, fixture.compiler).Get(key)
 		return found
 	}, "initial native TrafficPolicy resource")
@@ -554,7 +555,7 @@ func TestMalformedTrafficPolicyUpdatePreservesLastKnownGood(t *testing.T) {
 	invalid := valid
 	invalid.Spec.Priority = -1
 	fixture.trafficPolicies.ConditionalUpdateObject(invalid)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["TrafficPolicy/namespaced/alpha/allow"]
 		return found
 	}, "invalid update failure")
@@ -596,7 +597,7 @@ func TestMalformedSecurityProfileUpdatePreservesLastKnownGood(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 
 	key := valid.ResourceName()
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return fixture.compiler.graph.policies.securityProfiles.GetKey(key) != nil
 	}, "initial SNI policy")
 	baseline := fixture.compiler.graph.policies.securityProfiles.GetKey(key)
@@ -606,7 +607,7 @@ func TestMalformedSecurityProfileUpdatePreservesLastKnownGood(t *testing.T) {
 	invalid.Spec.Rules[0].Match = append([]agentsv1alpha1.RuleMatch(nil), valid.Spec.Rules[0].Match...)
 	invalid.Spec.Rules[0].Match[0].Domains = []string{"*foo.example.com"}
 	fixture.securityProfiles.ConditionalUpdateObject(invalid)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["SecurityProfile/namespaced/demo/terminate"]
 		return found
 	}, "invalid update failure")
@@ -822,17 +823,17 @@ func TestAuthorizationResourceCarriesScopeFacts(t *testing.T) {
 			want: model.AuthorizationResourceFacts{Scope: model.AuthorizationScopeWorkload},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			resource, err := authorizationResource(policypkg.CompiledAuthorization{
-				Name:   test.authorization.GetNamespace() + "/" + test.authorization.GetName(),
-				Policy: test.authorization,
+				Name:   tc.authorization.GetNamespace() + "/" + tc.authorization.GetName(),
+				Policy: tc.authorization,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resource.Facts.Authorization == nil || *resource.Facts.Authorization != test.want {
-				t.Fatalf("Authorization facts = %+v, want %+v", resource.Facts.Authorization, test.want)
+			if resource.Facts.Authorization == nil || *resource.Facts.Authorization != tc.want {
+				t.Fatalf("Authorization facts = %+v, want %+v", resource.Facts.Authorization, tc.want)
 			}
 		})
 	}
@@ -1043,10 +1044,10 @@ func TestCompilerPublishesWorkloadEgressPolicies(t *testing.T) {
 			uid: "cluster//Pod/other/client",
 		},
 	}
-	for _, test := range tests {
-		resource, found := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: test.uid})
+	for _, tc := range tests {
+		resource, found := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: tc.uid})
 		if !found {
-			t.Fatalf("Address %s is missing", test.uid)
+			t.Fatalf("Address %s is missing", tc.uid)
 		}
 		address := &workloadv1.Address{}
 		if err := resource.Value.UnmarshalTo(address); err != nil {
@@ -1054,27 +1055,27 @@ func TestCompilerPublishesWorkloadEgressPolicies(t *testing.T) {
 		}
 		effective := new(extensionsv1.EgressPolicies)
 		hasEgress := compatibilityExtension(t, address.GetWorkload(), "egress-policies", effective)
-		if test.wantPolicies == 0 {
+		if tc.wantPolicies == 0 {
 			if hasEgress {
-				t.Fatalf("%s received unrelated egress policies: %+v", test.uid, effective)
+				t.Fatalf("%s received unrelated egress policies: %+v", tc.uid, effective)
 			}
 			continue
 		}
-		if got := len(effective.GetEgressPolicies()); got != test.wantPolicies {
-			t.Fatalf("%s policy count = %d, want %d", test.uid, got, test.wantPolicies)
+		if got := len(effective.GetEgressPolicies()); got != tc.wantPolicies {
+			t.Fatalf("%s policy count = %d, want %d", tc.uid, got, tc.wantPolicies)
 		}
 		if resource.Facts.Workload == nil ||
-			!slices.Contains(resource.Facts.Workload.GatewayReferences, test.wantGateway) {
-			t.Fatalf("%s facts = %+v, missing Gateway reference %s", test.uid, resource.Facts, test.wantGateway)
+			!slices.Contains(resource.Facts.Workload.GatewayReferences, tc.wantGateway) {
+			t.Fatalf("%s facts = %+v, missing Gateway reference %s", tc.uid, resource.Facts, tc.wantGateway)
 		}
 		count := 0
 		for _, current := range resource.Facts.Workload.GatewayReferences {
-			if current == test.wantGateway {
+			if current == tc.wantGateway {
 				count++
 			}
 		}
 		if count != 1 {
-			t.Fatalf("%s Gateway reference count = %d, want 1", test.uid, count)
+			t.Fatalf("%s Gateway reference count = %d, want 1", tc.uid, count)
 		}
 	}
 }
@@ -1099,7 +1100,7 @@ func TestTrafficRulesOnlyUpdateDoesNotInvalidateWorkloads(t *testing.T) {
 	fixture.trafficPolicies.ConditionalUpdateObject(policyInput)
 	waitSynced(t, fixture.compiler)
 	sandboxKey := model.ResourceKey{TypeURL: model.SandboxType, Name: "cluster//Pod/demo/client"}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := currentSnapshot(t, fixture.compiler).Get(sandboxKey)
 		return found
 	}, "initial Sandbox resource")
@@ -1113,7 +1114,7 @@ func TestTrafficRulesOnlyUpdateDoesNotInvalidateWorkloads(t *testing.T) {
 	updated.Spec.Egress = policyInput.Spec.Egress.DeepCopy()
 	updated.Spec.Egress.Rules[0].To[0].CIDR = "10.0.0.0/8"
 	fixture.trafficPolicies.ConditionalUpdateObject(updated)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current, found := currentSnapshot(t, fixture.compiler).Get(policyKey)
 		return found && current.Hash != oldPolicy.Hash
 	}, "native policy rules update")

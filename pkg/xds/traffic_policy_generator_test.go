@@ -27,7 +27,7 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-func sharedTrafficResource(t *testing.T, name string, action securityv1.TrafficPolicy_Action) model.Resource {
+func sharedTrafficResource(t testing.TB, name string, action securityv1.TrafficPolicy_Action) model.Resource {
 	t.Helper()
 	body, err := anypb.New(
 		&securityv1.TrafficPolicy{
@@ -52,7 +52,7 @@ func sharedTrafficResource(t *testing.T, name string, action securityv1.TrafficP
 	return r
 }
 
-func workloadWithTrafficRefs(t *testing.T, workload model.Resource, names ...string) model.Resource {
+func workloadWithTrafficRefs(t testing.TB, workload model.Resource, names ...string) model.Resource {
 	t.Helper()
 	address := new(workloadv1.Address)
 	if err := workload.Value.UnmarshalTo(address); err != nil {

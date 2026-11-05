@@ -22,7 +22,7 @@ import (
 )
 
 func TestPodSandboxEligibility(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		update func(*corev1.Pod)
 		want   bool
@@ -61,16 +61,16 @@ func TestPodSandboxEligibility(t *testing.T) {
 				p.UID = ""
 			}},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			p := workloadTestPod(corev1.PodRunning, "10.0.0.1")
 			p.Namespace, p.Name, p.UID = "demo", "app", "pod-uid"
 			p.Labels, p.Annotations = map[string]string{"app": "client"}, map[string]string{}
-			if tt.update != nil {
-				tt.update(p)
+			if tc.update != nil {
+				tc.update(p)
 			}
 			s := sandboxFromPod("cluster", p)
-			if (s != nil) != tt.want {
-				t.Fatalf("Sandbox = %+v, want present = %t", s, tt.want)
+			if (s != nil) != tc.want {
+				t.Fatalf("Sandbox = %+v, want present = %t", s, tc.want)
 			}
 			if s == nil {
 				return

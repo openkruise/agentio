@@ -299,12 +299,10 @@ func TestDecodeRejectsInvalidRegistry(t *testing.T) {
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {clientCertificateFiles: {}}}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {clientCertificateFiles: {certificateFile: /cert}}}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: https://example, tls: {insecureSkipVerify: true, peerSpiffeIDs: [spiffe://domain/server]}}}]",
-		"unknown: true",
 		"extensionProviders: [{name: a}, {name: a}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://example}, credentialProvider: {url: http://example}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://user:pass@example}}]",
 		"extensionProviders: [{name: a, httpCallout: {url: http://example, timeout: -1s}}]",
-		"extensionProviders: [{name: a, credentialProvider: {url: http://example, cache: {}}}]",
 		"extensionProviders: [{name: a, credentialProvider: {url: http://example, tls: {}}}]",
 		"extensionProviders: [{name: a, credentialProvider: {url: https://example, tls: {caSecretRef: {}}}}]",
 	} {
@@ -317,7 +315,7 @@ func TestDecodeRejectsInvalidRegistry(t *testing.T) {
 }
 
 func TestRegistryGlobalCacheSettings(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		kind     tokentransform.CredentialKind
 		ttl      time.Duration
@@ -331,11 +329,11 @@ func TestRegistryGlobalCacheSettings(t *testing.T) {
 			`{"stsToken":{"accessKeyId":"ak","accessKeySecret":"sk","securityToken":"token","expiration":%q}}`,
 			time.Now().Add(time.Hour).Format(time.RFC3339)), 3},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			testsupport.SetForTest(t, &cacheTTL, tt.ttl)
+		t.Run(tc.name, func(t *testing.T) {
+			testsupport.SetForTest(t, &cacheTTL, tc.ttl)
 			testsupport.SetForTest(t, &cacheMaxSize, 1)
 			testsupport.SetForTest(t, &stsCacheMaxSize, 1)
-			remote := credentialtest.NewRawProvider(t, tt.response)
+			remote := credentialtest.NewRawProvider(t, tc.response)
 			r := &Registry{}
 			t.Cleanup(r.Close)
 			apply(
@@ -353,7 +351,7 @@ func TestRegistryGlobalCacheSettings(t *testing.T) {
 				for _, resource := range []string{"one", "one", "two", "one"} {
 					_, err := r.Fetch(t.Context(), tokentransform.Ref{
 						Provider:        provider,
-						Kind:            tt.kind,
+						Kind:            tc.kind,
 						Name:            "remote",
 						SandboxClientID: resource,
 						AccessToken:     "access",
@@ -362,8 +360,8 @@ func TestRegistryGlobalCacheSettings(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if got := remote.Calls.Load() - before; got != tt.calls {
-					t.Fatalf("provider %s made %d remote calls, want %d", provider, got, tt.calls)
+				if got := remote.Calls.Load() - before; got != tc.calls {
+					t.Fatalf("provider %s made %d remote calls, want %d", provider, got, tc.calls)
 				}
 			}
 		})
@@ -766,7 +764,7 @@ func TestRegistryOptionalMaterialDoesNotDisableVerification(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		optional bool
 		insecure bool
@@ -776,7 +774,7 @@ func TestRegistryOptionalMaterialDoesNotDisableVerification(t *testing.T) {
 		{name: "optional material still verifies the server", optional: true},
 		{name: "required material stays required", insecure: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg := defaultConfig(server.URL)
 			cfg.ExtensionProviders[0].GetCredentialProvider().Tls = &configv1.ClientTLS{
 				CaSource: &configv1.ClientTLS_CaSecretRef{
@@ -785,8 +783,8 @@ func TestRegistryOptionalMaterialDoesNotDisableVerification(t *testing.T) {
 				ClientCertificateSource: &configv1.ClientTLS_ClientCertificateSecretRef{
 					ClientCertificateSecretRef: &configv1.TargetReference{Name: "missing"},
 				},
-				Optional:           tt.optional,
-				InsecureSkipVerify: tt.insecure,
+				Optional:           tc.optional,
+				InsecureSkipVerify: tc.insecure,
 			}
 			registry := &Registry{}
 			defer registry.Close()
@@ -794,7 +792,7 @@ func TestRegistryOptionalMaterialDoesNotDisableVerification(t *testing.T) {
 				t.Fatal(err)
 			}
 			credential, err := registry.Fetch(t.Context(), liveCredentialRef(""))
-			if tt.success {
+			if tc.success {
 				if err != nil || credential.Token != "tls-token" {
 					t.Fatalf("fetch: %v, %v", credential, err)
 				}

@@ -2,6 +2,8 @@
 
 Agentio extends the [Istio configuration model](https://istio.io/latest/docs/reference/config/) with controller configuration for egress routing, external policy processing, egress gateways, TLS termination, and connection controls. This page describes the Agentio-specific configuration stored in Kubernetes ConfigMaps.
 
+A **Sandbox** is an OpenKruise Sandbox workload, the unit of identity and policy subject in Agentio.
+
 ## Configuration sources and precedence
 
 Agentio builds the effective configuration in the mesh root namespace, which is `agentio-system` in the standard chart installation. Each ConfigMap stores YAML in `data.config`.
@@ -14,6 +16,8 @@ The sources are applied in this order:
 | 2 | `agentio-config-primary` | Optionally overrides the base configuration. |
 
 Both ConfigMaps are watched. A valid update is applied and distributed without restarting `agentiod`. If a layer cannot be parsed or validated, Agentio logs a warning and retains the last successfully applied effective configuration.
+
+Unknown fields are ignored with a warning listing their full paths, so an older controller can read configuration that contains fields from a newer version. Known fields still undergo type and semantic validation; invalid enum names, duplicate YAML keys, and conflicting oneof members reject the update. Before any valid configuration has been loaded, rejection uses the startup defaults; retained configuration does not survive a process restart.
 
 ## Merge behavior
 
@@ -110,8 +114,25 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `sandboxExtProc` | `ExtProcProvider` | Unset | Global external-processing provider used by egress gateways unless a gateway supplies an override. |
 | `additionalExtProcs` | `ExtProcProvider[]` | Empty | Ordered processors appended after the effective sandbox provider. Disabled when that provider is absent or explicitly disabled. |
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
-| `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from sandbox workload metadata to reduce xDS size. |
+| `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from Sandbox workload metadata to reduce configuration size. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
+| `trustedEPEIdentities` | `string[]` | Empty; Helm adds the managed EPE identity | Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy discovery. Empty disables EPE access. |
+
+## Trusted EPE identities
+
+Register every EPE discovery client in the effective configuration. EPE always requires workload discovery access to resolve Workload SecurityProfile references, including when TrafficPolicy authorization is disabled:
+
+```yaml
+trustedEPEIdentities:
+  - spiffe://cluster.local/ns/agentio-system/sa/agentio-epe
+  - spiffe://cluster.local/ns/custom-system/sa/custom-ext-proc
+```
+
+The trust domain must match the client's verified workload principal. `agentiod` validates a Pod-bound ServiceAccount token through TokenReview and checks its active Pod binding before matching the workload principal exactly against this list. The client must also present the EPE node type. Node metadata cannot declare a trusted identity, and wildcards are not supported. Authorized EPE clients can discover Workloads and TrafficPolicies, not gateway configuration or secrets.
+
+Helm adds the managed EPE's identity using `global.trustDomain`, the release namespace, and `epe.serviceAccount.name`. For external EPE deployments, configure `agentiod.config.values.trustedEPEIdentities` explicitly. A supplied list replaces the generated list, so include every EPE identity that should retain access. Set `trustedEPEIdentities: []` to disable access.
+
+Updates apply to newly established discovery streams without restarting `agentiod`. Removing an identity does not immediately terminate an existing stream; it is checked again when the client reconnects.
 
 ## Egress policies
 
@@ -171,8 +192,9 @@ An `ExtProcProvider` can be set globally at `sandboxExtProc`, in `additionalExtP
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | String | Empty | Required, unique DNS label for each additional processor; ignored for the primary provider. Identifies filters, clusters, and statistics independently of list position. |
-| `service` | String | Empty | Hostname or address of the gRPC external-processing service. Required for additional processors. |
-| `port` | Integer | `0` | Service port. |
+| `service` | String | Empty | DNS hostname or address of the gRPC processor. Used when `serviceRef` is absent. Additional processors require `service` or `serviceRef`. |
+| `serviceRef` | Service reference | Unset | Kubernetes Service identified by required `namespace` and `name`. Takes precedence over `service` and selects endpoint discovery. |
+| `port` | Integer | `9002` | Service port. With `serviceRef`, mapped to the Service's actual endpoint port. |
 | `request.headerMode` | Enum | `SEND` | `DEFAULT`, `SEND`, or `SKIP` for request headers and trailers. `DEFAULT` uses Agentio's request default. |
 | `request.attributes` | `string[]` | Empty | Envoy attributes included with request processing messages. |
 | `response.headerMode` | Enum | `SKIP` | `DEFAULT`, `SEND`, or `SKIP` for response headers and trailers. `DEFAULT` uses Agentio's response default. |
@@ -182,9 +204,24 @@ An `ExtProcProvider` can be set globally at `sandboxExtProc`, in `additionalExtP
 | `clusterSettings.http.maxConcurrentStreams` | Integer | `1024` (Envoy default) | Maximum concurrent HTTP/2 streams per upstream connection. Agentio leaves the field unset when configured as `0`. |
 | `clusterSettings.http.maxRequestsPerConnection` | Integer | `0` | Maximum requests before closing an upstream connection. `0` means unlimited. |
 
-If an egress gateway has no `extProc` field, it inherits `sandboxExtProc`. A gateway-level provider replaces the global provider. A gateway-level `extProc: {}` has an empty `service` and disables external processing for that gateway.
+If an egress gateway has no `extProc` field, it inherits `sandboxExtProc`. A gateway-level provider replaces the global provider. A gateway-level `extProc: {}` has neither `service` nor `serviceRef` and disables external processing for that gateway.
+
+Use `serviceRef` for a Kubernetes Service whose Pod endpoints should be pushed to gateways:
+
+```yaml
+sandboxExtProc:
+  service: agentio-epe.agentio-system.svc.cluster.local
+  serviceRef:
+    namespace: agentio-system
+    name: agentio-epe
+  port: 9002
+```
+
+The reference always identifies a Service, including a headless Service. `service` and `serviceRef` may coexist during migration: controllers that support `serviceRef` use endpoint discovery, while older controllers ignore the unknown reference and use `service`. TLS and HTTP/2 settings apply to both discovery methods.
 
 The chart generates `sandboxExtProc` automatically when `epe.mode` is `managed` or `external`. Its generated `messageTimeout` is `5s`, rather than the raw API default of `200ms`; set `epe.messageTimeout` or use `agentiod.config.values.sandboxExtProc` to override it.
+
+Managed mode generates both `service` and `serviceRef`, using the actual EPE Service name and release namespace. External mode defaults to DNS; set `agentiod.config.values.sandboxExtProc.serviceRef` to reference an external processor's Kubernetes Service. To force DNS in managed mode, explicitly set `agentiod.config.values.sandboxExtProc.serviceRef: null`; changing `service` alone does not override a generated reference.
 
 See [EPE configuration](epe-configuration.md) for the deployed EPE service, listeners, Helm values, and process settings.
 
@@ -206,33 +243,15 @@ additionalExtProcs:
     headerMode: SEND
 ```
 
-Requests run through the effective primary provider, then `policy`, then
-`transform`. Responses run in reverse order, including the primary provider if
-it subscribes to responses. The list applies to inspected HTTP, including HTTP
-after gateway TLS termination. It does not apply to CONNECT setup, raw TCP, or
-TLS passthrough. A gateway-level primary override still uses the global list;
-`extProc: {}` disables the entire chain for that gateway. With no effective
-primary provider, additional processors are inactive.
+Requests run through the effective primary provider, then each additional processor in order. Responses run in reverse order. The list applies to inspected HTTP, including HTTP after gateway TLS termination; it does not apply to CONNECT setup, raw TCP, or TLS passthrough. A gateway-level primary override still uses the global list; `extProc: {}` disables the entire chain for that gateway. With no effective primary provider, additional processors are inactive.
 
-Each entry reuses the provider's timeout, failure mode, TLS, connection pool,
-and processing attributes. Names must be unique lowercase DNS labels (up to
-63 characters). Services must be nonempty, ports are 1–65535 (`0` selects
-9002), and an explicit message timeout must be positive. Invalid updates retain
-the last-known-good configuration. Changing the order, endpoints, or options
-updates xDS without restarting gateway Pods. Supplying `additionalExtProcs: []`
-removes the list; an omitted or null list preserves the lower configuration layer.
+Each entry reuses the provider's timeout, failure mode, TLS, connection pool, and processing attributes. Names must be unique lowercase DNS labels (up to 63 characters). Services must be nonempty, ports are 1–65535 (`0` selects 9002), and an explicit message timeout must be positive. Changing the order, endpoints, or options updates the gateway configuration without restarting gateway Pods. Supplying `additionalExtProcs: []` removes the list; an omitted or null list preserves the lower configuration layer.
 
-Initially only request headers are sent by default. `allow_mode_override` is
-enabled: a processor can return a `mode_override` in its header response to
-request a buffered request or response body. This decision is per HTTP stream;
-body delivery to one processor does not subscribe the others. Each processor
-receives its own body messages, not another processor's parsed objects.
-
-Additional processors see mutations already committed by EPE, including any injected credentials, and may modify that request further. Their decisions do not re-enter EPE policy evaluation or its rule audit. Only grant this capability to trusted services. Additional processors cannot publish EPE's `agentio.route` metadata; they have independent clusters, filter names, and statistics named `agentio.additional-ext-proc.<name>`.
+Additional processors see mutations already committed by EPE, including any injected credentials, and may modify that request further. Their decisions do not re-enter EPE policy evaluation. Only grant this capability to trusted services.
 
 ## Egress gateway settings
 
-Each entry in `egressGateways` matches a running gateway by verified workload identity: `name` must equal its ServiceAccount name and `namespace` must match exactly. The same rule applies to gateways registered through Gateway API. The `gateway.networking.k8s.io/gateway-name` Pod label does not grant gateway identity or on-demand certificate permission. A custom ServiceAccount must still have the same name as the Gateway; otherwise the Pod cannot obtain that gateway's xDS configuration or on-demand certificates. Pod-bound token and active-Pod checks still apply.
+Each entry in `egressGateways` matches a running gateway by verified workload identity: `name` must equal its ServiceAccount name and `namespace` must match exactly. The same rule applies to gateways registered through Gateway API. Pod-bound token and active-Pod checks still apply.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -242,12 +261,13 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. In static SNI matching, an identical pattern in both lists belongs to `excludeHosts` (case-insensitive); repeated patterns are registered once. Different overlapping patterns retain Envoy's most-specific-match precedence. |
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
+| `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
 | `connectRateLimit` | `LocalRateLimitSettings` | Unset | Local token-bucket limit for new HTTP/2 CONNECT streams. |
 | `connectConcurrencyLimit` | `ConnectConcurrencyLimitSettings` | Unset | Shared limits on active TCP CONNECT streams, grouped by trusted filter state. |
-| `bandwidthLimit` | `BandwidthLimitSettings` | Unset | Per-filter-state TCP byte shaping on CONNECT, shared across connections/workers in one community gateway process. |
+| `bandwidthLimit` | `BandwidthLimitSettings` | Unset | Per-filter-state TCP byte shaping on CONNECT, shared across connections and workers in one gateway process. |
 | `serviceEntries` | `EgressServiceEntry[]` | Empty | Static upstream endpoints that override DNS resolution for exact destination hosts at this gateway. |
 | `accessLogFormat` | `AccessLogFormat` | Built-in JSON | Format of the built-in `envoy` access-log provider on stdout for this gateway. See below. |
 
@@ -272,11 +292,8 @@ This setting also applies to Gateway API `parametersRef` configuration. It does
 not change the outer HTTP/2 CONNECT tunnel or TLS passthrough traffic. Preserve
 other gateway entries and settings when updating the `egressGateways` list.
 
-### Gateway protocol names
-
-Native `agentio-egress` gateways capture TLS termination SNI in `agentio.tls.outer_sni`, log policy denials from `agentio.egress.denial_reason`, and store CONNECT authority in `agentio.connect.authority`. Native CONNECT filter instances use the `agentio.` prefix. Workload, peer, route, and SNI-policy fields retain their existing `agentio.*` names. Sandbox context retains `sandbox.id` and `sandbox.token`; the gateway writes resolved workload labels to both `agentio.workload.labels` and `sandbox.labels` and exports both to EPE. Configured ext_proc attribute names are passed through unchanged. Additional ext_proc filters, clusters, and statistics retain `agentio.additional-ext-proc.<name>`.
-
-Legacy waypoint gateways retain their existing keys, filter names, and default log expressions, including `io.kruise.outer_sni`, `io.kruise.egress_denial_reason`, and `io.istio.connect_authority`. Custom CEL expressions, log formats, and filter-name patches must use the names for the target gateway. Envoy built-in keys, HTTP headers, Kubernetes API domains, and protobuf type URLs retain their protocol names.
+The protocol names used in access-log expressions and CEL filters are listed in
+[Gateway protocol names](../design/gateway-protocol-names.md).
 
 ### Access-log format
 
@@ -327,9 +344,9 @@ accessLogFormat:
 
 Agentio appends a trailing newline if it is missing. Unavailable values in text output use Envoy's `-` placeholder. Do not set `text` and `json` together; blank text and an empty `json` object are rejected. Omitting `accessLogFormat` or setting it to `{}` restores the built-in JSON format.
 
-ConfigMap updates take effect through xDS without restarting agentiod or the gateway. Formatting is scoped to the configured gateway. Telemetry still controls whether the logs are enabled and which requests are logged, including the existing CONNECT and listener failure filters. Explicit provider overrides keep their own formats, and EnvoyFilter patches run after format generation. Gateway API `parametersRef` ConfigMaps accept the same `accessLogFormat` field.
+ConfigMap updates take effect without restarting `agentiod` or the gateway. Formatting is scoped to the configured gateway. Telemetry still controls whether the logs are enabled and which requests are logged, including the existing CONNECT and listener failure filters. Gateway API `parametersRef` ConfigMaps accept the same `accessLogFormat` field.
 
-Agentio validates the configuration structure; Envoy validates substitution operators and CEL expressions when it receives xDS. An unsupported operator or malformed expression can cause Envoy to reject the listener update.
+Agentio validates the configuration structure; Envoy validates substitution operators and CEL expressions when it receives the configuration. An unsupported operator or malformed expression can cause Envoy to reject the listener update.
 
 ### TLS termination for HTTPS inspection
 
@@ -339,7 +356,7 @@ Configure all three parts of the trust boundary:
 
 1. Add each inspected hostname to the `tlsTermination.includeHosts` of the `egressGateways` entry whose `name` and `namespace` match the gateway ServiceAccount.
 2. Configure the MITM signing CA. For production, select `SECRET` mode and provide a Secret containing `ca.crt` and `ca.key`; the default `SELF_SIGN` mode maintains a control-plane-managed CA in a Secret.
-3. Configure calling workloads to trust the MITM CA. In sidecar mode, set `agentiod.injector.clientTrust.enabled: true` to combine and distribute public CAs with the MITM trust bundle and inject Python/Node.js/curl trust environment variables into newly created business containers. This master switch defaults to disabled and is independent of Gateway TLS termination and SNI traffic policy configuration. See [client CA trust](../tasks/configure-client-ca-trust.md) for container selection, overrides, custom sources and the rollout required for existing Pods. Other clients and ambient workloads need their own trust configuration. Do not disable certificate verification as a production workaround.
+3. Configure calling workloads to trust the MITM CA. Sidecar mode is the recommended deployment mode; ambient mode is Alpha. In sidecar mode, set `agentiod.injector.clientTrust.enabled: true` to combine and distribute public CAs with the MITM trust bundle and inject Python/Node.js/curl trust environment variables into newly created business containers. This master switch defaults to disabled. See [client CA trust](../tasks/configure-client-ca-trust.md) for container selection, overrides, custom sources and the rollout required for existing Pods. Other clients and ambient workloads need their own trust configuration. Do not disable certificate verification as a production workaround.
 
 For example, after creating `agentio-mitm-ca` in `agentio-system` from an operator-managed CA, these values enable inspection of two hosts:
 
@@ -362,11 +379,64 @@ agentiod:
 
 The Secret coordinates and gateway namespace must be consistent. See [MITM certificate environment variables](agentiod-environment-variables.md#on-demand-tls-certificates) for the complete signing settings.
 
+### Upstream CA trust
+
+Use `upstreamTrustBundle.additionalSources` to trust private CAs while retaining the built-in public CA package. Each entry must select exactly one `configMapRef` or `secretRef`, with an explicit `name` and `key`. Both kinds are resolved in the **mesh root namespace**, even when the gateway is declared in another namespace. References do not accept a `namespace` field.
+
+For example, create these sources in `agentio-system` when that is the root namespace:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: company-ca
+  namespace: agentio-system
+data:
+  ca.crt: |
+    <COMPANY_CA_CERTIFICATES_PEM>
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: partner-ca
+  namespace: agentio-system
+type: Opaque
+stringData:
+  ca.crt: |
+    <PARTNER_CA_CERTIFICATES_PEM>
+```
+
+Reference them from the gateway configuration:
+
+```yaml
+egressGateways:
+  - name: egress-gateway
+    namespace: sandbox-traffic-system
+    upstreamTrustBundle:
+      additionalSources:
+        - configMapRef:
+            name: company-ca
+            key: ca.crt
+        - secretRef:
+            name: partner-ca
+            key: ca.crt
+```
+
+Each selected key must contain one or more PEM CA certificates; private keys, non-CA service certificates, empty sources, and malformed PEM are rejected. ConfigMaps use `data`; Secrets use `data` (or `stringData` when creating them). The controller merges and deduplicates these certificates with the built-in public CA package and sends the complete bundle to both destination and HTTPS proxy TLS origination clusters. Hostname verification remains enabled. This does not change the workload `clientTrustBundle` or the MITM signing CA.
+
+Source updates apply without restarting `agentiod` or the gateway. If a source is missing, its selected key is absent, or its contents are invalid, compilation reports the gateway, source, key, and reason and retains the previous valid gateway output. An initially invalid configuration produces no gateway resources. Check compiler failures before relying on a trust change having taken effect.
+
+Remove entries, or set `additionalSources: []`, to remove their contribution. A CA remains trusted if it is still present in another source or the public package. Existing TLS connections can remain active until they close.
+
+`agentiod` always loads the public CA package at startup. Standard images provide it at `/usr/local/share/agentio/trust-package/cert-manager-package-debian.json`; set `AGENTIO_CLIENT_TRUST_PACKAGE_PATH` only to override this path. An empty path or an unreadable or invalid package prevents startup.
+
+Gateway API `parametersRef` ConfigMaps accept the same `upstreamTrustBundle` block in `data.config`, without the `egressGateways` wrapper. Trust sources still resolve in the mesh root namespace, independently of the parameters ConfigMap namespace.
+
 ### Upstream TLS defaults
 
 When the sandbox egress gateway originates TLS to a destination or an HTTPS proxy, it explicitly allows TLS 1.2 through TLS 1.3. Its TLS 1.2 cipher list contains the six ECDHE AES-GCM and ChaCha20-Poly1305 suites, followed by `AES128-GCM-SHA256` and `AES256-GCM-SHA384` for older public servers without ECDHE support. Connections negotiating these two RSA suites do not provide forward secrecy. TLS 1.3 cipher suites are managed separately by Envoy.
 
-Upstream CA and hostname verification remain enabled. Destination and HTTPS proxy TLS origination use Envoy 1.40.2's default session cache, scoped by the effective SNI to prevent cross-host session reuse. Keep `envoy.reloadable_features.scope_upstream_tls_session_cache_by_sni` enabled. Session resumption remains disabled for EPE mTLS and downstream TLS termination. These settings do not change connections forwarded without termination.
+Upstream CA and hostname verification remain enabled. Session resumption is disabled for EPE mTLS and downstream TLS termination. These settings do not change connections forwarded without termination.
 
 Override the upstream defaults per gateway with `tls.origination`:
 
@@ -398,11 +468,11 @@ This example removes RSA key-exchange suites. For a raw ConfigMap `data.config`,
 | `maxProtocolVersion` | `TLSV1_3` | Same values; cannot be below the effective minimum. |
 | `cipherSuites` | Eight suites described above | A non-empty list replaces the default list in order; omitted or empty lists restore defaults. Only affects TLS 1.2. |
 
-`DEFAULT` or an omitted version uses that field's default. Set only `maxProtocolVersion: TLSV1_2` for TLS 1.2 only, or only `minProtocolVersion: TLSV1_3` for TLS 1.3 only. Cipher names must be explicit Envoy/OpenSSL names recognized by the controller; unknown names, expressions such as `ALL`, and duplicates are rejected. Invalid settings reject the configuration layer and follow the fallback behavior described above.
+`DEFAULT` or an omitted version uses that field's default. Set only `maxProtocolVersion: TLSV1_2` for TLS 1.2 only, or only `minProtocolVersion: TLSV1_3` for TLS 1.3 only. Cipher names must be explicit Envoy/OpenSSL names recognized by the controller; unknown names, expressions such as `ALL`, and duplicates are rejected. Invalid settings reject the configuration layer.
 
 The override applies to both destination and HTTPS proxy TLS origination on the matching gateway. CA verification, hostname verification, and session cache behavior cannot be disabled through this API. Domain-specific TLS overrides are not currently supported; `tlsTermination.excludeHosts` selects TLS passthrough.
 
-Gateway API `parametersRef` ConfigMaps accept the same `tls.origination` block in `data.config`, alongside `tlsTermination`, without an `egressGateways` wrapper or embedded gateway name and namespace. Invalid parameter updates retain the last successfully applied parameters.
+Gateway API `parametersRef` ConfigMaps accept the same `tls.origination` block in `data.config`, alongside `tlsTermination`, without an `egressGateways` wrapper or embedded gateway name and namespace.
 
 ### HTTP routing and TCP timeouts
 
@@ -428,7 +498,7 @@ Use the same `rateLimits[].actions[]` and `descriptors[].entries[]` grouping for
 connectRateLimit:
   rateLimits:
     - actions:
-        - filterState: {key: sandbox.id, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -438,7 +508,7 @@ connectRateLimit:
       tokenBucket: {maxTokens: 100, tokensPerFill: 20, fillInterval: 1s}
 ```
 
-Only the configuration grouping is shared: CONNECT rate limiting still uses Envoy's native local rate limit filter, including its matching and bucket lifecycle. Filter-state actions compile to native CEL descriptor expressions; evaluation errors retain the native skip behavior rather than the dynamic modules' missing-identity 403. Supply identity in a preceding trusted filter. Legacy `entries[].cel` configurations remain accepted when `rateLimits` is omitted; combining the two forms is rejected. To migrate a string lookup such as `cel: 'filter_state["sandbox.id"]'`, move its source into a `filterState` action and leave just `key`/`value` in the descriptor entry.
+Only the configuration grouping is shared: CONNECT rate limiting still uses Envoy's native local rate limit filter, including its matching and bucket lifecycle. Supply identity in a preceding trusted filter. Legacy `entries[].cel` configurations remain accepted when `rateLimits` is omitted; combining the two forms is rejected.
 
 Burst is already supported through `maxTokens`: for example, `maxTokens: 100`, `tokensPerFill: 10`, `fillInterval: 1s` permits an initial burst of 100 attempts and replenishes 10 tokens per second. No separate burst field is needed. Keep `perDownstreamConnection: false` for a shared gateway budget.
 
@@ -458,13 +528,13 @@ Burst is already supported through `maxTokens`: for example, `maxTokens: 100`, `
 
 ### CONNECT concurrency limits
 
-`egressGateways[].connectConcurrencyLimit` limits **active TCP CONNECT streams**, including upstream connection establishment. It is independent of `connectRateLimit` (new-stream rate) and `bandwidthLimit` (payload byte rate). It works without either setting; all three can be enabled together. The order after trusted identity processing is rate limit, concurrency admission, bandwidth shaping, router. An attempt rejected by concurrency may already have consumed a connection-rate token.
+`egressGateways[].connectConcurrencyLimit` limits **active TCP CONNECT streams**, including upstream connection establishment. It is independent of `connectRateLimit` (new-stream rate) and `bandwidthLimit` (payload byte rate). All three can be enabled together.
 
 ```yaml
 connectConcurrencyLimit:
   rateLimits:
     - actions:
-        - filterState: {key: sandbox.id, descriptorKey: sandbox}
+        - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - actions:
         - genericKey: {descriptorKey: scope, descriptorValue: gateway}
   descriptors:
@@ -474,32 +544,29 @@ connectConcurrencyLimit:
       maxConcurrentStreams: 4096
 ```
 
-These numbers are examples, not capacity recommendations. Use a globally unique sandbox identity, or combine tenant and sandbox actions/entries. See the [three-limit example](../../manifests/examples/gateway-concurrency-config.yaml) for placement in AgentioConfig. Gateway API `parametersRef` accepts the same block.
+These numbers are examples, not capacity recommendations. Use a globally unique sandbox identity, or combine tenant and sandbox actions/entries.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `rateLimits[].actions[]` | Required | Same ordered `filterState` / `genericKey` sources as bandwidth limits. |
-| `descriptors[].entries[]` | Required | Same exact-match precedence and distinct wildcard semantics as bandwidth limits. |
-| `descriptors[].maxConcurrentStreams` | Required | Positive uint32 active-stream limit for each matched key. |
-| `maxDynamicBuckets` | `10000` | Positive maximum count of live wildcard-derived counters across this configuration. Exact descriptors do not consume this capacity. |
+| `rateLimits[].actions[]` | Required | Ordered `filterState` / `genericKey` sources, as for bandwidth limits. |
+| `descriptors[].entries[]` | Required | Ordered entries matching an action group. An empty `value` creates a distinct bucket for each runtime value. |
+| `descriptors[].maxConcurrentStreams` | Required | Positive active-stream limit for each matched key. |
+| `maxDynamicBuckets` | `10000` | Maximum live wildcard-derived counters; exact descriptors do not consume this capacity. |
 
-All matching groups must have room; their counters are acquired together, with repeated matches counted once. Quota exhaustion is rejected rather than queued. New admissions pause briefly while a grouping update recounts existing streams. A full stream quota returns 429 (`concurrency_limit_exceeded`); exhausted distinct-key capacity returns 503 (`concurrency_capacity`). Missing/empty/unserializable required identity returns 403 (`concurrency_missing_key`). Complete unmatched descriptors are unlimited: include a wildcard when every sandbox must be covered.
+Behavior:
 
-Slots are held from admission before the router until stream destruction. Request half-close does not release a slot while a response is still active. Normal completion, resets, downstream disconnects and upstream failures release acquired slots. A counter is removed when its last stream closes. Each managed stream retains a worker scheduler handle if its policy is later disabled; it does not allocate a pacing timer or perform per-body accounting. A stream created while this limit is absent has no concurrency filter instance or scheduler handle.
+- All matching groups must have room; their counters are acquired together.
+- Quota exhaustion is rejected rather than queued. A full stream quota returns 429; exhausted distinct-key capacity returns 503; missing required identity returns 403.
+- Slots are held from admission until stream destruction.
+- **Lowering a limit does not evict existing streams; it blocks new admission until the count is below the new limit.**
+- Removing the setting disables admission control on existing instances and stops creating instances for new streams.
+- Limits are per gateway process, not pooled across replicas.
 
-Enabling either network limit publishes only the community Envoy resource variant for that gateway. Upgrade all legacy proxyv2 instances before enabling these limits; their old listener resources are withdrawn rather than forwarding traffic without enforcement. CONNECT streams created without a concurrency filter remain uncounted after enablement. If a strict total cap must include those tunnels, drain or reconnect them; otherwise the cap applies to managed streams and coverage increases as older tunnels close.
-
-The controller installs `envoy_agentio_connect_concurrency` from the same `libenvoy_agentio_network_limits.so` as the bandwidth filter, with an independent `agentio/<namespace>/<name>/connect_concurrency` scope. Counters are shared across workers, HTTP/2 connections and draining listeners **within one Envoy process**. There is no runtime module download. Legacy proxyv2, CONNECT-UDP and bypass traffic are unsupported by this integration.
-
-Changing limits preserves active counts. Lowering a limit does not evict existing streams; it blocks new admission until the count is below the new limit. Lowering dynamic capacity retains live counters and allows existing keys within their stream limits; new keys wait for space by retrying admission. Actions and descriptor entries/order can change through ECDS. The module schedules every tracked stream, including idle streams, to resolve the new keys and rebuild counts before admitting new streams. Already accepted managed streams are counted even if the new count exceeds the quota or distinct-key capacity; they are not evicted solely for that reason. Removing the setting disables admission control on existing instances and stops creating instances for new streams. Re-enabling can recount the remaining managed streams, but cannot include streams created while the filter was off.
-
-HCM retains fixed ECDS entries for both filters, disabled by default. The TCP CONNECT route enables each filter independently through RDS when its setting is present. With a setting absent, new streams have no corresponding Rust filter instance, stream registration or body callbacks; the ECDS provider and module configuration still exist. This requires the matching Envoy 1.40.2 gateway image with the updated modules, even when settings are absent; upgrade those images before the controller. Changing these settings does not replace the listener or drain HTTP/2 connections. New CONNECT streams on an existing HTTP/2 connection use the updated route.
-
-The controller sends ECDS before RDS, without an ACK barrier between them. Accepted module configuration publishes shared policy on the main dispatcher; rejected candidates do not publish. Worker callbacks then migrate managed streams. During convergence, route enablement and module policy can differ. An xDS ACK is not a guarantee that every worker has finished migration, and RDS/ECDS or the two independent filters do not form an atomic transaction. Concurrent-stream bounds do not guarantee CPU isolation, fair bandwidth scheduling or pooled quotas across replicas. Gateway totals in the example cover this gateway scope, not other independently configured gateways in the same process.
+Upgrade all gateway instances before enabling these limits; streams created while the limit was absent are not counted retroactively.
 
 ### CONNECT bandwidth limits
 
-`egressGateways[].bandwidthLimit` limits the TCP payload carried by CONNECT. HTTP, TLS records and other TCP payloads count toward the same budget. Outer HBONE/HTTP2 framing, outer TLS and IP overhead do not count. `connectRateLimit` continues to count **new CONNECT streams** and reject excess attempts; `bandwidthLimit` counts **bytes** and delays transmission with backpressure. Both settings can be enabled together.
+`egressGateways[].bandwidthLimit` limits the TCP payload carried by CONNECT. HTTP, TLS records, and other TCP payloads count toward the same budget; outer tunneling and TLS overhead do not. `connectRateLimit` continues to count **new CONNECT streams**; `bandwidthLimit` counts **bytes** and delays transmission with backpressure. Both settings can be enabled together.
 
 ```yaml
 egressGateways:
@@ -509,7 +576,7 @@ egressGateways:
       rateLimits:
         - actions:
             - filterState:
-                key: sandbox.id
+                key: agentio.sandbox.uid
                 descriptorKey: sandbox
       descriptors:
         - entries:
@@ -521,45 +588,32 @@ egressGateways:
             downloadBurstBytes: 5242880
 ```
 
-Merge this fragment into the existing `data.config` or Helm `agentiod.config.values`; preserve other gateway entries and settings because `egressGateways` replaces the list. Gateway API `parametersRef` ConfigMaps accept the same `bandwidthLimit` block without the outer `egressGateways` list. A [combined example](../../manifests/examples/gateway-bandwidth-config.yaml) enables both connection-rate and bandwidth limits.
+Merge this fragment into the existing `data.config` or Helm `agentiod.config.values`; `egressGateways` uses list replacement, so preserve other entries and settings.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `rateLimits[].actions[]` | Required | Ordered sources forming one composite descriptor. Multiple groups can enforce multiple budgets together. |
-| `actions[].filterState.key` | Required for this source | Trusted filter state serialized as a nonempty UTF-8 string; read at CONNECT headers and again when grouping changes. |
+| `actions[].filterState.key` | Required for this source | Trusted filter state serialized as a nonempty UTF-8 string. |
 | `actions[].filterState.descriptorKey` | Required for this source | Output descriptor key, unique within its group. |
-| `actions[].genericKey` | Unset | Alternative fixed source with nonempty `descriptorKey` and `descriptorValue`. Each action must specify exactly one source. |
+| `actions[].genericKey` | Unset | Alternative fixed source with nonempty `descriptorKey` and `descriptorValue`. Each action specifies exactly one source. |
 | `descriptors[].entries[]` | Required | Ordered `key`/`value` entries matching a complete action group. Empty or omitted `value` creates a distinct bucket for each actual value combination. |
 | `descriptors[].bandwidthLimit.uploadBytesPerSecond` | Unlimited | Positive bytes/second from downstream to upstream. |
 | `descriptors[].bandwidthLimit.downloadBytesPerSecond` | Unlimited | Positive bytes/second from upstream to downstream. At least one direction is required. |
 | `descriptors[].bandwidthLimit.uploadBurstBytes` | One-batch pacing | Positive upload burst capacity in bytes; requires `uploadBytesPerSecond`. |
 | `descriptors[].bandwidthLimit.downloadBurstBytes` | One-batch pacing | Positive download burst capacity in bytes; requires `downloadBytesPerSecond`. |
-| `maxDynamicBuckets` | `10000` | Maximum wildcard-derived buckets per gateway process. Must be positive. |
-| `bufferLimitBytes` | `65536` | Positive soft streaming watermark per stream, not a hard memory or burst cap. |
+| `maxDynamicBuckets` | `10000` | Maximum wildcard-derived buckets per gateway process. |
+| `bufferLimitBytes` | `65536` | Soft streaming watermark per stream. |
 
-Burst credit starts full and replenishes at the corresponding byte rate, capped at the configured capacity. All connections and workers matching the descriptor share it; reconnecting does not reset it. Omitting burst preserves existing batch pacing; explicitly setting zero is invalid. Capacity changes preserve consumed bytes, and an idle bucket is only reclaimed when its credit has fully refilled.
+Behavior:
 
-Envoy forwards whole callback batches. A batch within burst capacity waits for sufficient credit; a larger batch waits for all prior consumption to refill, then passes whole and is charged in full. **Burst bytes are therefore not a strict wire-level burst cap:** oversized callbacks can exceed them, including with Envoy 1.40.2. Buffer watermarks are configured separately. CONNECT concurrency and distinct-bucket capacity remain hard admission limits without burst.
-
-For tenant/sandbox grouping, add two `filterState` actions and two matching descriptor entries. `(tenant=A, sandbox=X)` and `(tenant=B, sandbox=X)` then use different buckets. A complete exact descriptor takes precedence over wildcards; otherwise the first matching wildcard wins. Multiple matching action groups charge their budgets together. Missing required identity returns 403; a complete unmatched descriptor is unlimited. A new key exceeding dynamic capacity returns 503. Active buckets and unpaid byte debt are retained, including across reconnects. This API supports filter state and fixed sources, not CEL expressions.
-
-After the last CONNECT stream closes, its bucket is removed immediately if its byte debt is settled; otherwise it is reclaimed automatically once both directions' debt expires, even without new requests. This uses stream lifetime and accounting state, not sandbox deletion notifications.
-
-The controller validates settings and generates the Rust dynamic-module `filter_config` on `connect_terminate`, after identity processing and connection-rate limiting and before the router. It supplies a stable budget name derived from the gateway namespace/name. The `.so` is included in the gateway image; no runtime download is required. Legacy proxyv2 cannot use this module and compilation rejects this setting. CONNECT-UDP and bypass traffic are not shaped.
-
-**Router retry is unsupported on the bandwidth-shaped CONNECT chain.** The generated CONNECT route has no retry policy; do not add one at route or virtual-host level through patches, or use retry-policy extensions. The module returns 400 (`bandwidth_retry_unsupported`) for `x-envoy-retry-on` or `x-envoy-retry-grpc-on` headers that reach it. Internal redirects, buffered mirroring and other filters that retain already-forwarded bytes in the shared body buffer are also unsupported, because resuming that buffer can duplicate data. The module cannot inspect route retry policies through the current ABI. Retries on the separate inner HTTP chain remain supported and unchanged.
-
-Rate and capacity changes reuse the existing shared buckets, including managed streams on draining listeners. Unpaid bytes are converted to waiting time at the new rate, and waiting streams are notified. Lowering capacity retains existing buckets but blocks new keys until space is available. Actions, descriptors, matching order and enablement can change through ECDS on CONNECT streams that already have a bandwidth filter instance. Buckets are identified by action sources and their resolved values, not descriptor array positions: adding an exact override or reordering descriptors preserves consumption for an unchanged key. Changing action sources or grouping creates a new accounting scope; historical bytes cannot be exactly split or merged into that new scope. Old unreferenced buckets are reclaimed once their debt expires. Removing the setting disables pacing on existing instances and stops creating instances for new streams. Streams created while the filter was off remain unshaped after re-enablement; existing managed streams can resume shaping.
-
-The latest accepted ECDS configuration supplies rates, including for managed streams created under older policies. Candidate construction does not change live budgets. As with concurrency limits, enabling bandwidth uses RDS without changing HCM or draining existing HTTP/2 connections. Check Envoy ACK/rejection and traffic behavior when verifying rollout; RDS/ECDS delivery, worker migration and the two independent filters do not form an atomic multi-resource transaction.
-
-Limits are per Envoy process, not pooled across replicas. Shaping permits a callback-sized burst. Waiting streams take FIFO turns for whole batches, separately per direction; this prevents repeated wake-up races from starving a stream, but does not guarantee equal byte shares or minimum bandwidth. Several simultaneous budgets can introduce head-of-line waiting behind a batch constrained by its slowest budget. See the [module documentation](../../extensions/envoy/network-limits/README.md) for the verified Envoy CONNECT close limitation and runtime tests.
-
-#### Identity and activation boundaries for network-limit updates
-
-A rule may start using any filter-state field already retained by the trusted identity filters on a managed CONNECT stream; it need not have appeared in the previous rule. Updating a rule does not query Porter again or reconstruct missing identity from a deleted sandbox. A new stream with an enabled filter and missing required identity receives 403. If a new rule needs identity absent from an already accepted managed stream, the module resets that stream instead of letting it bypass the rule. A stream created without that filter cannot acquire it later, even if the required identity is available.
-
-Bandwidth updates govern future bytes; previously forwarded bytes cannot be recalled. Same-key byte debt survives rate changes, descriptor overrides and reconnects. Different action groups start separate budgets. This is per Envoy process, not a cross-replica quota or a fairness guarantee. Native `connectRateLimit` still applies only to connection attempts and keeps Envoy's native configuration lifecycle.
+- All connections and workers matching a descriptor share its budget; reconnecting does not reset it.
+- **Burst bytes are not a strict wire-level burst cap:** a callback batch larger than the burst capacity can exceed it.
+- A complete exact descriptor takes precedence over wildcards; otherwise the first matching wildcard wins. Multiple matching action groups charge their budgets together.
+- Missing required identity returns 403; a complete unmatched descriptor is unlimited; a new key exceeding dynamic capacity returns 503.
+- Lowering capacity retains existing buckets but blocks new keys until space is available.
+- **Router retries are unsupported on the bandwidth-shaped CONNECT chain;** do not add retry policies at the route or virtual-host level through patches.
+- Removing the setting disables pacing on existing instances and stops creating instances for new streams.
+- Limits are per gateway process, not pooled across replicas.
 
 ### Static service entries
 
@@ -570,15 +624,13 @@ A `serviceEntries` entry binds one or more destination hosts to static upstream 
 | `hosts` | `string[]` | Empty | Exact FQDNs matched against the HTTP Host / `:authority` and TLS SNI identities. Wildcards are not supported. At least one host is required, and a host must not repeat across the `serviceEntries` of one gateway. |
 | `endpoints[].address` | String | Empty | IPv4 address of the upstream endpoint. At least one endpoint is required, and addresses must be unique within one entry. Requests are distributed evenly across the endpoints. |
 
-ServiceEntry selection occurs before EPE processing, independently of whether `egressauthz` is enabled or EPE is deployed. The gateway records the selected endpoint and original destination port in request-local `agentio.route.upstream` filter state. Path rewrites and `clearRouteCache` do not replace this target. An explicit internal EPE `route.Upstream` can override it. Public HeaderMutation configuration and HTTP callout responses continue to reject Host and pseudo-header mutations; this change does not introduce target reselection or an additional EPE call.
+ServiceEntry selection occurs before EPE processing. When EPE target authorization is enabled, EPE checks the selected endpoint against TrafficPolicy and pins the authorized address. A denied endpoint returns HTTP 403 without trying another endpoint, the original destination, or DNS; mixed allowed/denied endpoints can therefore produce partial request failures. Selecting a target alone does not authorize it.
 
-When EPE `egressauthz` is enabled, EPE checks the final target against TrafficPolicy and pins the authorized address for DFP. A denied endpoint returns HTTP 403 without trying another endpoint, the original destination, or DNS; mixed allowed/denied endpoints can therefore produce partial request failures. Retries within a request retain the selected endpoint; distribution across endpoints occurs between requests. Selecting a target alone does not authorize it.
-
-For enforcement, configure the EPE provider's request header mode as `SEND` (the default), keep `failureModeAllow: false`. EPE target authorization is enabled by default; configure `EPEConfig.egressAuthorization.deniedCIDRs` for global restrictions and use `--enable-xds-egressauthz` for additional Workload/TrafficPolicy authorization. Skipping external processing or allowing transport failures to pass through does not enforce target authorization. Upgrade the gateway and EPE together: an older gateway does not supply the ServiceEntry candidate, and an older EPE does not authorize it.
+For enforcement, keep the EPE provider's request header mode as `SEND` (the default) and `failureModeAllow: false`. Upgrade the gateway and EPE together: an older gateway does not supply the ServiceEntry candidate, and an older EPE does not authorize it.
 
 Static entries apply to ordinary HTTP requests, including HTTPS selected for TLS termination. Application-level CONNECT requests are forwarded to the original upstream proxy through a separate route and do not use these entries. A routed HTTPS connection that is not terminated stays on the TCP forwarding chain and still uses DNS resolution.
 
-Hosts are normalized to lowercase without a trailing dot. Route settings still follow the [HTTP routing rules](#http-routing-and-tcp-timeouts): the most specific `http.routing.hostOverrides` host pattern matching a static host supplies its `timeout` and `retries`, otherwise `http.routing.fallback` applies. An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer, and Agentio retains the last successfully applied configuration.
+Hosts are normalized to lowercase without a trailing dot. Route settings still follow the [HTTP routing rules](#http-routing-and-tcp-timeouts): the most specific `http.routing.hostOverrides` host pattern matching a static host supplies its `timeout` and `retries`, otherwise `http.routing.fallback` applies. An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer.
 
 ```yaml
 egressGateways:
@@ -612,9 +664,11 @@ is now enabled by default; set `http.acceptHttp10: false` to disable it. Both
 values route HTTP/1.0 through the HTTP filter chain; disabling it rejects the
 request instead of forwarding it as opaque TCP.
 
-Old paths are configuration errors, not aliases. Invalid updates retain the
-last effective configuration. Migrate the configuration when deploying the new
-control plane; retained configuration does not survive a process restart.
+Old paths are not aliases. AgentioConfig ignores them with a warning, so their
+settings do not take effect. Gateway API `parametersRef` payloads reject unknown
+fields, including these old paths. Migrate both sources when deploying the new
+control plane. Invalid updates retain the last effective configuration;
+retained configuration does not survive a process restart.
 External processor `clusterSettings` and EPE HTTP-callout `connectionPool`
 settings are separate APIs and are unchanged.
 

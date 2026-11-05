@@ -49,14 +49,14 @@ func TestCompileAudit_TimeoutResolvedAtLoad(t *testing.T) {
 		{"configured value is kept", &metav1.Duration{Duration: 7 * time.Second}, 7 * time.Second},
 		{"over the cap is clamped", &metav1.Duration{Duration: time.Hour}, audit.MaxRequestTimeout},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := compileAudit(auditActionWithTimeout(tt.timeout))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := compileAudit(auditActionWithTimeout(tc.timeout))
 			if err != nil {
 				t.Fatalf("compileAudit: %v", err)
 			}
-			if got.Webhook.Timeout != tt.want {
-				t.Errorf("Timeout = %v, want %v", got.Webhook.Timeout, tt.want)
+			if got.Webhook.Timeout != tc.want {
+				t.Errorf("Timeout = %v, want %v", got.Webhook.Timeout, tc.want)
 			}
 			if got.Webhook.Timeout <= 0 {
 				t.Error("a compiled timeout must always be positive; " +

@@ -11,7 +11,7 @@ use std::{sync::Mutex, time::Duration};
 const CONFIG: &str = r#"{
   "rate_limits":[{"actions":[
     {"filter_state":{"key":"tenant.id","descriptor_key":"tenant"}},
-    {"filter_state":{"key":"sandbox.id","descriptor_key":"sandbox"}}
+    {"filter_state":{"key":"agentio.sandbox.uid","descriptor_key":"sandbox"}}
   ]}],
   "descriptors":[
     {"entries":[{"key":"tenant"},{"key":"sandbox"}],"bandwidth_limit":{"upload_bytes_per_second":100,"download_bytes_per_second":200}},
@@ -65,7 +65,7 @@ fn invalid_configuration_fails_at_the_boundary() {
             "\"upload_bytes_per_second\":0",
         ),
         CONFIG.replace("\"key\":\"sandbox\"", "\"key\":\"unknown\""),
-        CONFIG.replace("\"sandbox.id\"", "\"\""),
+        CONFIG.replace("\"agentio.sandbox.uid\"", "\"\""),
         CONFIG.replace("\"rate_limits\":", "\"typo\":"),
         CONFIG.replace(
             "\"rate_limits\":",
@@ -143,7 +143,7 @@ fn capacity_retains_live_and_unpaid_buckets() {
 fn multiple_descriptors_charge_atomically_and_deduplicate() {
     let json = r#"{"rate_limits":[
       {"actions":[{"filter_state":{"key":"tenant.id","descriptor_key":"tenant"}}]},
-      {"actions":[{"filter_state":{"key":"sandbox.id","descriptor_key":"sandbox"}}]},
+      {"actions":[{"filter_state":{"key":"agentio.sandbox.uid","descriptor_key":"sandbox"}}]},
       {"actions":[{"filter_state":{"key":"tenant.id","descriptor_key":"tenant"}}]}
     ],"descriptors":[
       {"entries":[{"key":"tenant"}],"bandwidth_limit":{"upload_bytes_per_second":1000}},

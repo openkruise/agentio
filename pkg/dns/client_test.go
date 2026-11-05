@@ -32,7 +32,7 @@ func TestFamiliesAndOwnedResults(t *testing.T) {
 	}), 0)
 	now := time.Unix(1000, 0)
 	r.cache.now = func() time.Time { return now }
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		family Family
 		want   []netip.Addr
 	}{
@@ -40,23 +40,23 @@ func TestFamiliesAndOwnedResults(t *testing.T) {
 		{IPv6Only, []netip.Addr{v6}},
 		{DualStack, []netip.Addr{v4, v6}},
 	} {
-		first, err := r.Resolve(context.Background(), "API.example.", test.family)
-		if err != nil || !reflect.DeepEqual(first.Addresses, test.want) {
+		first, err := r.Resolve(context.Background(), "API.example.", tc.family)
+		if err != nil || !reflect.DeepEqual(first.Addresses, tc.want) {
 			t.Fatalf("result=%+v, err=%v", first, err)
 		}
 		expires := first.ExpiresAt
 		first.Addresses[0] = netip.Addr{} // Miss results must not alias stored data.
 		now = now.Add(time.Second)
-		second, err := r.Resolve(context.Background(), "api.example", test.family)
-		if err != nil || !reflect.DeepEqual(second.Addresses, test.want) {
+		second, err := r.Resolve(context.Background(), "api.example", tc.family)
+		if err != nil || !reflect.DeepEqual(second.Addresses, tc.want) {
 			t.Fatalf("cache result=%+v, err=%v", second, err)
 		}
 		if second.ExpiresAt != expires {
 			t.Fatal("cache hit extended expiration")
 		}
 		second.Addresses[0] = netip.Addr{} // Hit results must also be independent.
-		third, err := r.Resolve(context.Background(), "api.example", test.family)
-		if err != nil || !reflect.DeepEqual(third.Addresses, test.want) {
+		third, err := r.Resolve(context.Background(), "api.example", tc.family)
+		if err != nil || !reflect.DeepEqual(third.Addresses, tc.want) {
 			t.Fatalf("cache result=%+v, err=%v", third, err)
 		}
 	}

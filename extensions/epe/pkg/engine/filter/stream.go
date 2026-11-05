@@ -27,19 +27,35 @@ type Body struct {
 	Complete bool
 }
 
-// Stream is the per-request view handed to every filter. Filters must treat
-// its fields as read-only.
-type Stream struct {
+// RequestContext is prepared before filters run and remains fixed for the stream.
+// Effective request views copy this value; maps and compiled policies stay shared and read-only.
+type RequestContext struct {
 	Caller    CallerContext
 	Request   httpreq.HTTPRequest
 	RequestID string
-	// Upstream is the destination selected by preceding request filters.
-	// The engine supplies a read-only view, reusing it while routing is unchanged.
-	// Routing filters must precede authorization.
+	Policies  PolicySnapshot `json:"-"`
+}
+
+// PolicySnapshot keeps the native policy and SecurityProfile execution units together.
+// Each unit owns its Profile/Rule scope and references that profile's immutable inputs.
+type PolicySnapshot struct {
+	// Global static restrictions are applied separately from the request-bound policies.
+	DestinationAuthorizer DestinationAuthorizer
+	FilterRules           []Unit
+	StreamLogger          StreamLogger
+}
+
+// Stream is the request context and the current phase's runtime view.
+// Filters must treat both as read-only; the engine owns runtime updates.
+type Stream struct {
+	RequestContext
+	StreamRuntime
+}
+
+// StreamRuntime contains observations and data populated or changed during execution.
+type StreamRuntime struct {
+	// Upstream changes while routing, then authorization pins the final destination.
 	Upstream *UpstreamTarget
-	// Response is populated from OnResponseHeaders onward.
 	Response httpreq.HTTPResponse
-	// Info accumulates observations from the engine and authorizer; the
-	// stream loggers read it at stream end.
-	Info *StreamInfo
+	Info     *StreamInfo
 }

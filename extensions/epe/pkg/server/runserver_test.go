@@ -252,8 +252,8 @@ func TestNew_SecureServing(t *testing.T) {
 			expectError: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ca := newTestCA(t)
 			serverCert := ca.issueLeaf(t, 10, "", x509.ExtKeyUsageServerAuth)
 
@@ -268,7 +268,7 @@ func TestNew_SecureServing(t *testing.T) {
 				SecureServing:     true,
 				Resolve:           resolveNone,
 				CertProvider:      &staticProvider{cert: &serverCert, roots: ca.pool},
-				RequireClientCert: tt.requireClientCert,
+				RequireClientCert: tc.requireClientCert,
 			}, logr.Discard())
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -292,7 +292,7 @@ func TestNew_SecureServing(t *testing.T) {
 			// connection sits in the accept queue until Serve picks it up.
 
 			clientCfg := &tls.Config{RootCAs: ca.pool, NextProtos: []string{"h2"}}
-			if cert := tt.clientCert(t, ca); cert != nil {
+			if cert := tc.clientCert(t, ca); cert != nil {
 				// Always present the supplied certificate so rejection tests exercise
 				// server verification, rather than client-side issuer selection.
 				clientCfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
@@ -321,7 +321,7 @@ func TestNew_SecureServing(t *testing.T) {
 					t.Error(closeErr)
 				}
 			}
-			if tt.expectError {
+			if tc.expectError {
 				if err == nil {
 					t.Fatal("expected client certificate rejection, got nil")
 				}

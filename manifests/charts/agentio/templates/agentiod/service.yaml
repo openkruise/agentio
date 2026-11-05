@@ -1,3 +1,4 @@
+{{- define "agentiod.service" -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,6 +13,9 @@ metadata:
 spec:
   selector:
     {{- include "agentiod.selectorLabels" . | nindent 4 }}
+    {{- if eq (.Values.agentiod.controlPlanePool | default "proxy") "policy" }}
+    agentio.kruise.io/control-plane-pool: policy
+    {{- end }}
   ports:
     - name: grpc-xds
       port: 15012
@@ -24,3 +28,5 @@ spec:
       port: 443
       targetPort: https-webhook
     {{- end }}
+{{- end -}}
+{{ include "agentiod.service" . }}

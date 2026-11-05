@@ -85,18 +85,18 @@ func TestScopeRendersTemplatePaths(t *testing.T) {
 			want: "gold",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tp, err := eval.CompileTemplate("p", tt.tmpl)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tp, err := eval.CompileTemplate("p", tc.tmpl)
 			if err != nil {
-				t.Fatalf("CompileTemplate(%q): %v", tt.tmpl, err)
+				t.Fatalf("CompileTemplate(%q): %v", tc.tmpl, err)
 			}
 			var buf bytes.Buffer
 			if err := tp.Execute(&buf, scope); err != nil {
 				t.Fatalf("template Execute: %v", err)
 			}
-			if buf.String() != tt.want {
-				t.Errorf("template output: want %q, got %q", tt.want, buf.String())
+			if buf.String() != tc.want {
+				t.Errorf("template output: want %q, got %q", tc.want, buf.String())
 			}
 		})
 	}
@@ -214,20 +214,20 @@ func TestScopeInvariants(t *testing.T) {
 		// Scalars.
 		{name: "scalars", expr: `request.host == "api.example.com" && request.path == "/v1/chat" && request.method == "POST" && request.scheme == "https" && pod.name == "pn" && pod.namespace == "pns" && pod.ip == "1.2.3.4"`, want: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalBoolOnScope(t, invariantScope(), tt.expr)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err = %v, want one containing %q", err, tt.wantErr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalBoolOnScope(t, invariantScope(), tc.expr)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("%s = %v, want %v", tt.expr, got, tt.want)
+			if got != tc.want {
+				t.Errorf("%s = %v, want %v", tc.expr, got, tc.want)
 			}
 		})
 	}

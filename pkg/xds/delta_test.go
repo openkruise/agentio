@@ -98,7 +98,7 @@ func TestPushFailuresAreRecordedByStage(t *testing.T) {
 	invalid := valid
 	invalid.Value = &anypb.Any{TypeUrl: model.WorkloadType, Value: valid.Value.GetValue()}
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		stage     string
 		generator ResourceGenerator
@@ -121,17 +121,17 @@ func TestPushFailuresAreRecordedByStage(t *testing.T) {
 			sendErr:   fmt.Errorf("send failed"),
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			previousMetrics := metrics.Default
 			registry := metrics.NewRegistry()
 			metrics.Default = registry
 			t.Cleanup(func() { metrics.Default = previousMetrics })
 
 			server := newTestServerWithGenerators(t, ztunnelScope(), nil, map[string]ResourceGenerator{
-				model.AddressType: test.generator,
+				model.AddressType: tc.generator,
 			})
 			stream := newFakeStream(context.Background(), 1)
-			stream.setSendErr(test.sendErr)
+			stream.setSendErr(tc.sendErr)
 			watch := &watchState{names: sets.New[string](), sent: make(map[string]string)}
 			err := server.server.generateAndSend(stream, log, watch, GenerationRequest{
 				Scope:        server.scope,
@@ -139,7 +139,7 @@ func TestPushFailuresAreRecordedByStage(t *testing.T) {
 				Subscription: newSubscriptionView(watch),
 				Snapshot:     server.resources.Snapshot(),
 				Full:         true,
-			}, true)
+			}, true, nil)
 			if err == nil {
 				t.Fatal("push unexpectedly succeeded")
 			}
@@ -148,11 +148,11 @@ func TestPushFailuresAreRecordedByStage(t *testing.T) {
 			registry.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 			body := recorder.Body.String()
 			line := fmt.Sprintf(
-				`agentio_xds_push_failures_total{stage="%s",type="address"} 1`, test.stage)
+				`agentio_xds_push_failures_total{stage="%s",type="address"} 1`, tc.stage)
 			if !strings.Contains(body, line+"\n") {
 				t.Fatalf("metrics do not contain %q:\n%s", line, body)
 			}
-			if test.stage == "send" {
+			if tc.stage == "send" {
 				for _, line := range []string{
 					"agentio_xds_pushes_total 0",
 					"agentio_xds_push_duration_seconds_count{} 0",
@@ -470,7 +470,7 @@ func TestWildcardAddressIncrementalMembershipUsesExactChanges(t *testing.T) {
 	oldWorkload := selectionWorkload(t, "uid-a", "demo", "node-a", "svc-a", "")
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	server := newTestServer(t, scope, []model.Resource{service, oldWorkload}, nil)
@@ -610,7 +610,7 @@ func TestNamedServiceSubscriptionTracksEndpointScopeAndDeletion(t *testing.T) {
 	service := selectionService(t, "demo/svc-a", "/10.96.0.1")
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	server := newTestServer(t, scope, []model.Resource{workloadA, service}, nil)
@@ -676,7 +676,7 @@ func TestNamedServiceUnsubscribeRemovesDerivedWorkloads(t *testing.T) {
 	service := selectionService(t, "demo/svc-a", "/10.96.0.1")
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	server := newTestServer(t, scope, []model.Resource{workload, service}, nil)
@@ -835,7 +835,7 @@ func TestNodeNamedAddressSubscriptionTracksAllLocalWorkloads(t *testing.T) {
 	remote := selectionWorkload(t, "uid-remote", "demo", "node-b", "svc-a", "")
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("demo", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("demo", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	server := newTestServer(t, scope, []model.Resource{serviceA, serviceB, localA, localB, remote}, nil)
@@ -909,7 +909,7 @@ func TestAuthorizationSelectionMovesWithWorkloadReference(t *testing.T) {
 	authorizationB := selectionAuthorization(t, "demo/selector-b", model.AuthorizationScopeWorkload, "")
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -1326,7 +1326,7 @@ func TestWildcardReferencedGatewayLifecycle(t *testing.T) {
 		Class:       model.ClientDedicatedZTunnel,
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 	}
 	plain := selectionWorkload(t, "uid-a", "demo", "node-a", "", "")
 	withReference := func(key string) model.Resource {
@@ -1400,12 +1400,12 @@ func TestPushConcurrencyIsGloballyScheduled(t *testing.T) {
 
 	first := newFakeStream(ctx, 4)
 	second := newFakeStream(ctx, 4)
-	firstDone := server.start(first)
-	secondDone := server.start(second)
 	first.send(nodeRequest(model.AddressType))
+	firstDone := server.start(first)
 	initial := first.awaitResponses(t, model.AddressType, 1)[0]
 	first.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 	second.send(nodeRequest(model.AddressType))
+	secondDone := server.start(second)
 	initial = second.awaitResponses(t, model.AddressType, 1)[0]
 	second.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: initial.Nonce})
 
@@ -1775,7 +1775,7 @@ func TestFailedSendDoesNotCommitGeneratedDelta(t *testing.T) {
 		TypeURL:      model.AddressType,
 		Subscription: newSubscriptionView(watch),
 		Full:         true,
-	}, false)
+	}, false, nil)
 	if err == nil || err.Error() != "send failed" {
 		t.Fatalf("send error = %v, want send failed", err)
 	}
@@ -1891,7 +1891,7 @@ func TestExpiredSecretSendCommitsOnlyWireResources(t *testing.T) {
 					TypeURL:      model.SecretType,
 					Full:         true,
 					Subscription: newSubscriptionView(watch),
-				}, false)
+				}, false, nil)
 				if failSend {
 					if err == nil || len(watch.sent) != 1 ||
 						watch.sent[expired.XDSName] != expired.Hash || watch.nonceSent != "previous" {

@@ -133,7 +133,7 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	st.Response = httpreq.HTTPResponse{Status: 418, Headers: map[string]string{"x-original": "yes"}}
 	units := unitsFor([][]string{{"before", "paused", "later", "after"}})
 
@@ -263,7 +263,7 @@ func TestEvalResponseBody_ResumedWalkHonorsBoundedScope(t *testing.T) {
 				},
 			})
 			e := NewEngine(regs, 0)
-			st := &filter.Stream{Info: filter.NewStreamInfo()}
+			st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 			// The pausing pair precedes the bypass point, so it stays in scope
 			// while "later" falls after it.
 			units := unitsFor([][]string{{"paused", "bypass", "later"}})
@@ -378,7 +378,7 @@ func TestEvalResponseBody_FailClosedSynthesizesBlocked(t *testing.T) {
 		},
 	}})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"cfg"}})
 	hr, err := e.EvalResponseHeaders(context.Background(), st, units, ResponseScope{})
 	if err != nil {

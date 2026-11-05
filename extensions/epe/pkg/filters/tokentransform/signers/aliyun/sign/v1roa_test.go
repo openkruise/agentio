@@ -84,14 +84,14 @@ func TestSignV1ROA_InvalidInput(t *testing.T) {
 			wantErr: "nil request snapshot",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := SignV1ROA(tt.req, tt.triplet)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SignV1ROA(tc.req, tc.triplet)
 			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -189,27 +189,27 @@ func TestSignV1ROA_QueryCanonicalization(t *testing.T) {
 			wantPrefix: "acs AK:",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			req := &RequestSnapshot{
-				Method:   tt.method,
+				Method:   tc.method,
 				Scheme:   "https",
 				Host:     "cs.cn-hangzhou.aliyuncs.com",
-				Path:     tt.path,
-				RawQuery: tt.rawQuery,
-				Headers:  tt.headers,
+				Path:     tc.path,
+				RawQuery: tc.rawQuery,
+				Headers:  tc.headers,
 			}
-			res, err := SignV1ROA(req, tt.triplet)
+			res, err := SignV1ROA(req, tc.triplet)
 			if err != nil {
 				t.Fatalf("SignV1ROA: %v", err)
 			}
 			authz := findHeader(t, res, "authorization")
-			if !strings.HasPrefix(authz, tt.wantPrefix) {
-				t.Errorf("authorization = %q, want prefix %q", authz, tt.wantPrefix)
+			if !strings.HasPrefix(authz, tc.wantPrefix) {
+				t.Errorf("authorization = %q, want prefix %q", authz, tc.wantPrefix)
 			}
 
 			// Recompute to verify consistency.
-			wantSig, err := computeV1ROASignature(req, tt.triplet)
+			wantSig, err := computeV1ROASignature(req, tc.triplet)
 			if err != nil {
 				t.Fatalf("computeV1ROASignature: %v", err)
 			}

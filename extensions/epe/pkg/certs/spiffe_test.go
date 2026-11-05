@@ -82,11 +82,11 @@ func TestSPIFFEAllowListValidation(t *testing.T) {
 			expectError: "invalid SPIFFE ID",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewSPIFFEAllowList(tt.ids...)
-			if tt.expectError != "" {
-				mustErrorContains(t, err, tt.expectError)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewSPIFFEAllowList(tc.ids...)
+			if tc.expectError != "" {
+				mustErrorContains(t, err, tc.expectError)
 				return
 			}
 			if err != nil {
@@ -97,7 +97,7 @@ func TestSPIFFEAllowListValidation(t *testing.T) {
 }
 
 func TestSPIFFEValidationAcrossTLSRoles(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		id    string
 		valid bool
 	}{
@@ -114,14 +114,14 @@ func TestSPIFFEValidationAcrossTLSRoles(t *testing.T) {
 		{id: "spiffe://cluster.local/service#epe"},
 		{id: "spiffe://cluster.local/service#"},
 	} {
-		t.Run(tt.id, func(t *testing.T) {
-			_, epeErr := NewSPIFFEAllowList(tt.id)
+		t.Run(tc.id, func(t *testing.T) {
+			_, epeErr := NewSPIFFEAllowList(tc.id)
 			gatewayErr := model.ValidateExtProcTLS(&configv1.ExtProcTLSSettings{
 				Mode:          configv1.ExtProcTLSSettings_MUTUAL,
-				PeerSpiffeIds: []string{tt.id},
+				PeerSpiffeIds: []string{tc.id},
 			})
-			if (epeErr == nil) != tt.valid || (gatewayErr == nil) != tt.valid {
-				t.Fatalf("valid=%v: EPE error=%v, gateway error=%v", tt.valid, epeErr, gatewayErr)
+			if (epeErr == nil) != tc.valid || (gatewayErr == nil) != tc.valid {
+				t.Fatalf("valid=%v: EPE error=%v, gateway error=%v", tc.valid, epeErr, gatewayErr)
 			}
 		})
 	}
@@ -191,15 +191,15 @@ func TestSPIFFEAllowListVerifyPeer(t *testing.T) {
 			expectError: "no verified chains",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			list, err := NewSPIFFEAllowList(tt.allowed...)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			list, err := NewSPIFFEAllowList(tc.allowed...)
 			if err != nil {
 				t.Fatalf("NewSPIFFEAllowList: %v", err)
 			}
-			err = list.VerifyPeer(tt.chains)
-			if tt.expectError != "" {
-				mustErrorContains(t, err, tt.expectError)
+			err = list.VerifyPeer(tc.chains)
+			if tc.expectError != "" {
+				mustErrorContains(t, err, tc.expectError)
 				return
 			}
 			if err != nil {
@@ -321,13 +321,13 @@ func TestSPIFFEHandshake(t *testing.T) {
 			expectError: "not in allow-list",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ca := certstest.New(t)
 			serverCert, serverLeaf := ca.Issue(t, certstest.LeafSpec{Serial: 330})
 			clientCert, _ := ca.Issue(t, certstest.LeafSpec{
 				Serial:      331,
-				URIs:        []string{tt.clientID},
+				URIs:        []string{tc.clientID},
 				ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 			})
 
@@ -352,8 +352,8 @@ func TestSPIFFEHandshake(t *testing.T) {
 			}
 
 			_, err = doHandshake(t, serverCfg, clientCfg)
-			if tt.expectError != "" {
-				mustErrorContains(t, err, tt.expectError)
+			if tc.expectError != "" {
+				mustErrorContains(t, err, tc.expectError)
 				return
 			}
 			if err != nil {

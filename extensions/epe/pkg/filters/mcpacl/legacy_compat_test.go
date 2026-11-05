@@ -91,7 +91,7 @@ func (p *legacyPlugin) Finalize(ctx context.Context, rctx *legacyRctx, _ any, ru
 		ID:  filter.UnitID{Scope: "test/p", Name: rule.Name},
 		Cfg: configOf(rule.Policy),
 	})
-	st := &filter.Stream{Request: rctx.Request}
+	st := &filter.Stream{RequestContext: filter.RequestContext{Request: rctx.Request}}
 	act, err := f.OnRequestBody(ctx, st, filter.Body{Bytes: rctx.RequestBody, Complete: true})
 	if err != nil {
 		return legacyResult{}, err

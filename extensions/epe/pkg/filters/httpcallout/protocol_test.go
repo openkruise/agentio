@@ -364,14 +364,14 @@ func TestInvocationValidateRejectsInvalidContract(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			invocation := valid
 			request := *valid.Request
 			invocation.Request = &request
-			tt.mutate(&invocation)
-			if err := invocation.Validate(); err == nil || !strings.Contains(strings.ToLower(err.Error()), tt.wantErr) {
-				t.Fatalf("Validate error = %v, want one containing %q", err, tt.wantErr)
+			tc.mutate(&invocation)
+			if err := invocation.Validate(); err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+				t.Fatalf("Validate error = %v, want one containing %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -694,9 +694,9 @@ func TestDecisionValidateAcceptsPhaseContracts(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.decision.Validate(tt.phase); err != nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.decision.Validate(tc.phase); err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
 		})
@@ -1014,10 +1014,12 @@ func TestDecisionValidateRejectsInvalidContract(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.decision.Validate(tt.phase); err == nil || !strings.Contains(strings.ToLower(err.Error()), tt.wantErr) {
-				t.Fatalf("Validate error = %v, want one containing %q", err, tt.wantErr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.decision.Validate(tc.phase)
+			if err == nil ||
+				!strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+				t.Fatalf("Validate error = %v, want one containing %q", err, tc.wantErr)
 			}
 		})
 	}

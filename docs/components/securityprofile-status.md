@@ -1,6 +1,6 @@
 # Policy validation status
 
-agentiod validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and GlobalTrafficPolicy and reports the result in their existing `status.conditions`. No CRD changes or new status fields are required. This is advisory validation: EPE still watches and compiles SecurityProfiles independently, and this controller neither distributes L7 configuration nor gates the existing data-plane loaders.
+`agentiod` validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and GlobalTrafficPolicy and reports the result in their existing `status.conditions`. No CRD changes or new status fields are required. This is advisory validation: the Egress Policy Enforcer (EPE) still watches and compiles SecurityProfiles independently, and this controller neither distributes L7 configuration nor gates the existing data-plane loaders.
 
 | Condition | True | False | Unknown |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on all four poli
 
 `ENABLE_POLICY_STATUS` defaults to `true`. Set it to `false` to disable the status controller, including its advisory validation, leader election and status writes. Existing status is retained; normal configuration compilation, distribution and EPE loading continue independently.
 
-The environment variable is read at process startup, so restart agentiod after changing it. With Helm, set:
+The environment variable is read at process startup, so restart `agentiod` after changing it. With Helm, set:
 
 ```yaml
 agentiod:
@@ -28,7 +28,7 @@ agentiod:
 
 ## Validation and reference scope
 
-- SecurityProfiles reuse EPE's match, audit, CEL, template and action parsers, plus agentiod's SNI and binding compiler. No network calls or filter execution are performed during validation.
+- SecurityProfiles reuse EPE's match, audit, CEL, template and action parsers, plus `agentiod`'s SNI and binding compiler. No network calls or filter execution are performed during validation.
 - TrafficPolicies reuse the native traffic and authorization projection compilers. Named Services must exist; a selector matching no objects is valid. An FQDN with no current addresses reports `DNSResolutionPending`, because the resolver does not expose enough detail to distinguish pending and failed DNS.
 - ConfigMap inputs use their explicit namespace or the namespaced profile's namespace. Global profiles must specify the ConfigMap namespace.
 - Secret references support both the typed union and the legacy spelling. Explicit namespaces take precedence. A namespaced profile otherwise uses its own namespace; a global profile without an explicit Secret namespace is excluded from reference checks, because EPE selects the requesting Pod's namespace.
@@ -39,7 +39,7 @@ ConfigMap, Secret, Service and DNS changes update reference status without a spe
 
 ## Writing status
 
-One agentiod replica holds the `agentiod-policy-status` Lease in the control-plane namespace. A new leader replays current results. Writes use server-side apply to the status subresource with resource version and UID preconditions, preserve other condition owners, skip stale generations and suppress unchanged writes. Failed writes retry with backoff until the writer stops or a newer result replaces them. The chart grants patch permission only for these four status subresources; it does not expand Secret access.
+The controller writes status in the background using a leader-election Lease and server-side apply. See [how status is written](../design/securityprofile-status-writes.md) for the implementation details.
 
 Inspect a policy with:
 

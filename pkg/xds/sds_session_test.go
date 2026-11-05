@@ -589,6 +589,7 @@ func TestSDSRotationPreservesPendingDemand(t *testing.T) {
 						Full:         true,
 					},
 					false,
+					nil,
 				); err != nil {
 					t.Fatal(err)
 				}

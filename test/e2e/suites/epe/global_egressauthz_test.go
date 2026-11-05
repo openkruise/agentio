@@ -32,7 +32,7 @@ import (
 	"github.com/openkruise/agentio/test/e2e/suites/internal/harness"
 )
 
-// Run without xDS arguments or TrafficPolicies so neither xDS nor ztunnel
+// Run without TrafficPolicy authorization so neither TrafficPolicy nor ztunnel
 // authorization can account for a rejection from the global EPE configuration.
 func TestEPEGlobalDeniedCIDRs(t *testing.T) {
 	fixture, scope := newEgressEPE(t, false)
@@ -95,7 +95,7 @@ func TestEPEGlobalDeniedCIDRs(t *testing.T) {
 			return nil
 		})
 	}
-	step("defaults_without_xds_or_identity", func(t *testing.T) {
+	step("defaults_without_trafficpolicy_or_identity", func(t *testing.T) {
 		for _, caller := range callers {
 			caller.wantHeaders(t, target, "/global-egress", true, 0)
 		}

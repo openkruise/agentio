@@ -27,6 +27,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kwatch "k8s.io/apimachinery/pkg/watch"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certstest"
@@ -78,7 +81,7 @@ func watch(
 }
 
 func TestWatchInitialConfiguration(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		absent bool
 		data   map[string]string
@@ -111,14 +114,14 @@ func TestWatchInitialConfiguration(t *testing.T) {
 `},
 		},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var objects []runtime.Object
-			if !tt.absent {
+			if !tc.absent {
 				objects = append(objects, &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "epe", Namespace: "system"},
-					Data:       tt.data,
+					Data:       tc.data,
 				})
 			}
 			client := kube.NewFakeClient(objects...)
@@ -137,17 +140,17 @@ func TestWatchInitialConfiguration(t *testing.T) {
 			if !reg.WaitUntilSynced(ctx.Done()) {
 				t.Fatal("initial sync did not complete")
 			}
-			if tt.name == "empty registry" {
+			if tc.name == "empty registry" {
 				if _, err := registry.Fetch(ctx, tokentransform.Ref{}); err == nil {
 					t.Fatal("cleared defaults still available")
 				}
 			} else if token(t, registry, ctx, "") != "environment" {
 				t.Fatal("initial configuration must use the defaults")
 			}
-			if tt.name == "cross-namespace Secret" {
+			if tc.name == "cross-namespace Secret" {
 				waitForAvailableProvider(t, registry, "a")
 			}
-			if tt.name == "missing Secret" {
+			if tc.name == "missing Secret" {
 				registry.mu.Lock()
 				defer registry.mu.Unlock()
 				if provider := registry.current.providers["a"]; provider == nil || provider.err == nil {
@@ -172,6 +175,16 @@ defaultProviders: {credentialProvider: additional}
 `, dynamic.Server.URL)},
 	}
 	client := kube.NewFakeClient()
+	fake := client.Kube().(*kubefake.Clientset)
+	watchStarted := make(chan struct{})
+	fake.PrependWatchReactor("configmaps", func(action ktesting.Action) (bool, kwatch.Interface, error) {
+		watcher, err := fake.Tracker().Watch(action.GetResource(), action.GetNamespace())
+		if err != nil {
+			return true, nil, err
+		}
+		close(watchStarted)
+		return true, watcher, nil
+	})
 	reg := watch(
 		t,
 		client,
@@ -188,6 +201,12 @@ defaultProviders: {credentialProvider: additional}
 	}
 	if token(t, registry, t.Context(), "") != "environment" {
 		t.Fatal("absent ConfigMap must use the environment provider")
+	}
+	// The fake tracker cannot replay a Create between the initial LIST and WATCH.
+	select {
+	case <-watchStarted:
+	case <-ctx.Done():
+		t.Fatal("ConfigMap watch did not start")
 	}
 	if _, err := client.Kube().CoreV1().ConfigMaps("system").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)

@@ -55,7 +55,7 @@ func (f *fakeNodeResolver) ResolveScope(_ model.PeerIdentity, nodeName string) (
 func TestScopeFuncsDispatchesByAuthenticatedAttestation(t *testing.T) {
 	want := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("agentio-system", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("agentio-system", "ztunnel"),
 		NodeName:  "node-a",
 	}
 	calls := 0
@@ -160,14 +160,14 @@ func TestKubernetesScopeFuncVerifiesBoundIdentity(t *testing.T) {
 			wantError: "node name",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			resolver := &fakeNodeResolver{scope: model.ClientScope{Class: model.ClientDedicatedZTunnel}}
 			scopeFunc := KubernetesScopeFunc(resolver)
-			scope, err := scopeFunc(nodeWithMetadata(test.metadata), peer)
-			if test.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantError) {
-					t.Fatalf("err = %v, want mismatch on %s", err, test.wantError)
+			scope, err := scopeFunc(nodeWithMetadata(tc.metadata), peer)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("err = %v, want mismatch on %s", err, tc.wantError)
 				}
 				if resolver.calls != 0 {
 					t.Fatal("mismatched metadata reached the resolver")
@@ -180,8 +180,8 @@ func TestKubernetesScopeFuncVerifiesBoundIdentity(t *testing.T) {
 			if scope != resolver.scope || resolver.calls != 1 {
 				t.Fatalf("scope = %#v calls = %d", scope, resolver.calls)
 			}
-			if resolver.nodeName != test.wantNodeName {
-				t.Fatalf("nodeName = %q, want %q", resolver.nodeName, test.wantNodeName)
+			if resolver.nodeName != tc.wantNodeName {
+				t.Fatalf("nodeName = %q, want %q", resolver.nodeName, tc.wantNodeName)
 			}
 		})
 	}
@@ -213,7 +213,7 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 		AttestedBy: model.AttestationKubernetes,
 		Kubernetes: model.KubernetesPeer{Namespace: "demo", ServiceAccount: "egress"},
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		nodeID    string
 		scope     model.ClientScope
@@ -224,6 +224,9 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 			nodeID: "waypoint~10.0.0.1~egress.demo~demo.svc.cluster.local",
 			scope:  model.ClientScope{Class: model.ClientEgressGateway},
 		},
+		{name: "EPE declares its own role", nodeID: "epe~10.0.0.1~processor.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientEPE}},
+		{name: "EPE cannot claim gateway role", nodeID: "waypoint~10.0.0.1~processor.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientEPE}, wantError: true},
+		{name: "ordinary Pod cannot claim EPE role", nodeID: "epe~10.0.0.1~client.demo~demo.svc.cluster.local", scope: model.ClientScope{Class: model.ClientDedicatedZTunnel}, wantError: true},
 		{
 			name:      "missing node type cannot obtain gateway scope",
 			scope:     model.ClientScope{Class: model.ClientEgressGateway},
@@ -269,15 +272,15 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 			wantError: true,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			resolver := &fakeNodeResolver{scope: test.scope}
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &fakeNodeResolver{scope: tc.scope}
 			node := nodeWithMetadata(nil)
-			node.Id = test.nodeID
+			node.Id = tc.nodeID
 			_, err := KubernetesScopeFunc(resolver)(node, peer)
-			if test.wantError && err == nil {
+			if tc.wantError && err == nil {
 				t.Fatal("scope resolved despite proxy type mismatch")
 			}
-			if !test.wantError && err != nil {
+			if !tc.wantError && err != nil {
 				t.Fatalf("matching proxy type rejected: %v", err)
 			}
 		})
@@ -287,13 +290,13 @@ func TestKubernetesScopeFuncMatchesProxyTypeToResolvedScope(t *testing.T) {
 func TestScopeFuncsWaitsForLocalState(t *testing.T) {
 	peer := model.PeerIdentity{AttestedBy: model.AttestationKubernetes}
 	denied := errors.New("Pod UID changed")
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		terminal error
 	}{
 		{name: "ready"}, {name: "ownership changed", terminal: denied},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			want := ztunnelScope()
 			funcs := ScopeFuncs{peer.AttestedBy: func(*corev3.Node, model.PeerIdentity) (model.ClientScope, error) {
@@ -301,10 +304,10 @@ func TestScopeFuncsWaitsForLocalState(t *testing.T) {
 				if calls <= 2 {
 					return model.ClientScope{}, fmt.Errorf("Pod not yet observed: %w", model.ErrScopeNotReady)
 				}
-				return want, tt.terminal
+				return want, tc.terminal
 			}}
 			got, err := funcs.ResolveScope(t.Context(), &corev3.Node{}, peer)
-			if !errors.Is(err, tt.terminal) || calls != 3 {
+			if !errors.Is(err, tc.terminal) || calls != 3 {
 				t.Fatalf("scope=%v err=%v calls=%d", got, err, calls)
 			}
 			if err == nil && got != want {
@@ -315,7 +318,7 @@ func TestScopeFuncsWaitsForLocalState(t *testing.T) {
 }
 
 func TestScopeFuncsWaitHonorsContext(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name   string
 		cancel bool
 		want   error
@@ -323,12 +326,12 @@ func TestScopeFuncsWaitHonorsContext(t *testing.T) {
 		{name: "deadline", want: context.DeadlineExceeded},
 		{name: "cancel", cancel: true, want: context.Canceled},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 			defer cancel()
 			funcs := ScopeFuncs{
 				model.AttestationKubernetes: func(*corev3.Node, model.PeerIdentity) (model.ClientScope, error) {
-					if tt.cancel {
+					if tc.cancel {
 						cancel()
 					}
 					return model.ClientScope{}, model.ErrScopeNotReady
@@ -339,8 +342,8 @@ func TestScopeFuncsWaitHonorsContext(t *testing.T) {
 				&corev3.Node{},
 				model.PeerIdentity{AttestedBy: model.AttestationKubernetes},
 			)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("err=%v, want %v", err, tt.want)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v, want %v", err, tc.want)
 			}
 		})
 	}

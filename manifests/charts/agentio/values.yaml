@@ -19,6 +19,28 @@ agentiod:
   nameOverride: agentiod
   fullnameOverride: ""
   replicaCount: 1
+  # Optional agentiod instances dedicated to gateway, Porter and managed EPE.
+  # Creates a separate <agentiod-name>-policy Deployment and Service.
+  # Policy Pods carry agentio.kruise.io/control-plane-pool: policy.
+  # Shares agentiod's image, configuration, ServiceAccount and CA root; each pool
+  # has a serving certificate for its own Service name. Policy replicas do not run
+  # the injector, client trust distributor or gateway deployment controller.
+  policyPool:
+    # Switches gateway/Porter/EPE default ADS and CA endpoints to the policy Service.
+    # The original agentiod Deployment/Service and ztunnel addresses stay unchanged.
+    # No automatic fallback to agentiod; migrate clients back before disabling.
+    enabled: false
+    # Independent of agentiod.replicaCount and the original Deployment's HPA.
+    replicaCount: 2
+    # Per-policy-Pod resources; does not inherit agentiod.resources.
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+    # Independent nodeSelector, tolerations and affinity for policy replicas.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    # Inherits agentiod.env; entries here override it only for policy replicas.
+    env: {}
   image:
     repository: ""
     name: agentiod
@@ -62,6 +84,7 @@ agentiod:
       drop: [ALL]
     readOnlyRootFilesystem: true
   tokenAudience: agentio-ca
+  kubernetesWorkloadAuthMode: tokenreview
   logging:
     level: info
     format: text
@@ -88,10 +111,6 @@ agentiod:
     values: {}
     sourcesName: agentio-config-sources
     sources: ""
-  # Upstream trust-manager Debian package, 20250419~deb12u1.1. Pin updates by digest.
-  # Prepared automatically when client trust is enabled and sources include defaultCAs.
-  trustPackage:
-    image: "quay.io/jetstack/trust-pkg-debian-bookworm@sha256:36d3128ce4661ee863bfe0dac12826b092c14eb0a88f8242e60a1fad4c806acd"
   clientTrustBundle:
     # Store CA sources in the Agentio system namespace with the default RBAC.
     # References require namespace/name/key; sources do not grant additional Secret permissions.
@@ -104,7 +123,6 @@ agentiod:
   injector:
     clientTrust:
       # Master switch for client CA distribution and injection.
-      # The public CA package init is included when sources select defaultCAs.
       # Pod annotations can opt out, but cannot enable this feature when disabled here.
       # Independent of Gateway TLS termination and SNI traffic policy configuration.
       enabled: false
@@ -348,6 +366,9 @@ egressGateway:
         protocol: HBONE
 
 epe:
+  xdsCache:
+    idleTTL: 10m
+    maxEntries: 10000
   # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
   # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
   # null leaves the base externally managed; primary is always externally managed.
@@ -365,6 +386,11 @@ epe:
     tag: ""
     digest: ""
   replicaCount: 1
+  # Keep serving while endpoint withdrawal propagates; zero omits the sleep hook.
+  # Requires PodLifecycleSleepAction (enabled by default in Kubernetes 1.30+).
+  preStopDelaySeconds: 10
+  # Includes preStop and EPE's 30-second gRPC drain, plus cleanup time.
+  terminationGracePeriodSeconds: 45
   serviceAccount:
     create: true
     name: ""

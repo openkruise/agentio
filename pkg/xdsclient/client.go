@@ -54,6 +54,10 @@ type Watch struct {
 	TypeURL  string
 	Wildcard bool
 	Validate func(value *anypb.Any) error
+	// ReconnectGrace retains named resources briefly across disconnects, without
+	// replaying idle subscriptions. Demand renews each interest on the new stream.
+	// Zero preserves the normal subscription replay and synchronization behavior.
+	ReconnectGrace time.Duration
 	// Transform runs once per interested resource, after wire validation. Only
 	// its result is cached. Nil keeps the complete Any. The result must be
 	// immutable after publication; callbacks must not call back into Client.
@@ -81,19 +85,27 @@ type Config struct {
 // Each update replaces the Resource rather than mutating a published value.
 type Resource struct {
 	Value any
+	epoch uint64
 }
 
 // Snapshot owns its maps and shares immutable Resources across types.
 // Connected reports whether the ADS stream is open. Synced reports whether a
 // type has accepted a response on that stream, not whether every name is ready.
 // Disconnection retains Resources but resets Synced; NACK preserves both.
-// Consumers decide whether retained, unsynchronized values are usable.
+// InGrace marks types whose retained values are still usable during reconnect.
 type Snapshot struct {
 	Connected bool
 	Resources map[string]map[string]*Resource
 	Synced    map[string]bool
+	InGrace   map[string]bool
 	Changed   <-chan struct{}
 }
+
+// Usable includes the bounded reconnect grace, independently of stream readiness.
+func (s Snapshot) Usable(typ string) bool {
+	return s.Synced[typ] || s.InGrace[typ]
+}
+
 type typeState struct {
 	watch           Watch
 	names           map[string]*subscription
@@ -104,6 +116,9 @@ type typeState struct {
 	resourceAliases map[string][]string
 	resources       map[string]*Resource
 	synced          bool
+	epoch           uint64
+	graceUntil      time.Time
+	graceTimer      *time.Timer
 }
 
 // Client maintains synchronized Delta ADS resources and named subscriptions.
@@ -133,7 +148,8 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Client, error) {
 		wake:    make(chan struct{}, 1),
 	}
 	for _, w := range cfg.Watches {
-		if w.TypeURL == "" || c.types[w.TypeURL] != nil {
+		if w.TypeURL == "" || c.types[w.TypeURL] != nil || w.ReconnectGrace < 0 ||
+			(w.Wildcard && w.ReconnectGrace != 0) {
 			return nil, fmt.Errorf("invalid or duplicate watch %q", w.TypeURL)
 		}
 		c.types[w.TypeURL] = &typeState{
@@ -162,7 +178,7 @@ func (c *Client) notifyLocked() {
 }
 
 // Observe returns readiness and the signal closed by the next cache update.
-// Readiness means each type has accepted a response on the current stream.
+// Availability means each type has accepted a response or is in reconnect grace.
 // Individual names may still be missing; Demand waits for those independently.
 // Both are captured under the same lock, without copying resource payloads.
 func (c *Client) Observe(types ...string) (<-chan struct{}, bool) {
@@ -170,7 +186,11 @@ func (c *Client) Observe(types ...string) (<-chan struct{}, bool) {
 	defer c.mu.Unlock()
 	for _, typ := range types {
 		st := c.types[typ]
-		if st == nil || !st.synced {
+		if st == nil {
+			return c.changed, false
+		}
+		c.expireGraceLocked(st)
+		if !st.synced && st.graceUntil.IsZero() {
 			return c.changed, false
 		}
 	}
@@ -179,6 +199,12 @@ func (c *Client) Observe(types ...string) (<-chan struct{}, bool) {
 
 // Snapshot copies the publication maps; resource values are shared and read-only.
 func (c *Client) Snapshot() Snapshot {
+	return c.SnapshotFor(nil)
+}
+
+// SnapshotFor captures only the named resources under one lock. A nil selection
+// captures all resources; an empty selection captures only synchronization state.
+func (c *Client) SnapshotFor(names map[string][]string) Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Snapshot{
@@ -188,9 +214,27 @@ func (c *Client) Snapshot() Snapshot {
 		Changed:   c.changed,
 	}
 	for typ, st := range c.types {
+		c.expireGraceLocked(st)
 		s.Synced[typ] = st.synced
-		s.Resources[typ] = maps.Clone(st.resources)
+		if !st.graceUntil.IsZero() {
+			if s.InGrace == nil {
+				s.InGrace = map[string]bool{}
+			}
+			s.InGrace[typ] = true
+		}
+		if names == nil {
+			s.Resources[typ] = maps.Clone(st.resources)
+			continue
+		}
+		values := make(map[string]*Resource, len(names[typ]))
+		for _, name := range names[typ] {
+			if resource := st.resources[name]; resource != nil {
+				values[name] = resource
+			}
+		}
+		s.Resources[typ] = values
 	}
+	s.Changed = c.changed
 	return s
 }
 
@@ -199,7 +243,43 @@ func (c *Client) reset() {
 	defer c.mu.Unlock()
 	c.connected = false
 	for _, st := range c.types {
+		if st.watch.ReconnectGrace > 0 {
+			c.expireGraceLocked(st)
+			if st.synced {
+				st.epoch++
+				if st.graceUntil.IsZero() {
+					st.graceUntil = time.Now().Add(st.watch.ReconnectGrace)
+					st.graceTimer = time.AfterFunc(st.watch.ReconnectGrace, func() {
+						c.mu.Lock()
+						defer c.mu.Unlock()
+						c.expireGraceLocked(st)
+					})
+				}
+			}
+			st.pending = map[string]struct{}{}
+			for name, sub := range st.names {
+				sub.active = sub.waiters > 0
+				if sub.active {
+					st.pending[name] = struct{}{}
+				}
+			}
+		}
 		st.synced = false
+	}
+	c.notifyLocked()
+}
+
+// A reconnect or partial response must never extend old resources' grace.
+func (c *Client) expireGraceLocked(st *typeState) {
+	if st.graceUntil.IsZero() || time.Now().Before(st.graceUntil) {
+		return
+	}
+	st.graceTimer.Stop()
+	st.graceUntil = time.Time{}
+	for name, value := range st.resources {
+		if value.epoch != st.epoch {
+			st.removeResource(name)
+		}
 	}
 	c.notifyLocked()
 }
@@ -352,7 +432,8 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var removedAliases []string
-	if !st.synced {
+	c.expireGraceLocked(st)
+	if !st.synced && st.watch.ReconnectGrace == 0 {
 		// This stream does not resume resource versions. Replace retained data
 		// on its first accepted response, then accumulate only fresh deltas.
 		// Remember aliases of explicitly removed canonical resources before
@@ -390,6 +471,7 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 		if sub == nil && !st.interested(res.Name, res.Aliases) {
 			continue
 		}
+		values[i].epoch = st.epoch
 		st.resources[res.Name] = values[i]
 		st.addResourceAliases(res.Name, res.Aliases)
 		for _, alias := range res.Aliases {

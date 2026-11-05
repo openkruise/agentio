@@ -61,12 +61,12 @@ func TestSplitHostPort(t *testing.T) {
 		{"[::1]", "::1", 0},
 		{"[unclosed", "[unclosed", 0},
 	}
-	for _, tt := range tests {
-		t.Run(tt.in, func(t *testing.T) {
-			gotHost, gotPort := splitHostPort(tt.in)
-			if gotHost != tt.wantHost || gotPort != tt.wantPort {
+	for _, tc := range tests {
+		t.Run(tc.in, func(t *testing.T) {
+			gotHost, gotPort := splitHostPort(tc.in)
+			if gotHost != tc.wantHost || gotPort != tc.wantPort {
 				t.Errorf("splitHostPort(%q) = (%q,%d), want (%q,%d)",
-					tt.in, gotHost, gotPort, tt.wantHost, tt.wantPort)
+					tc.in, gotHost, gotPort, tc.wantHost, tc.wantPort)
 			}
 		})
 	}
@@ -84,12 +84,12 @@ func TestSplitPathAndQuery(t *testing.T) {
 		{"/foo?", "/foo", ""},
 		{"?onlyquery", "", "onlyquery"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.in, func(t *testing.T) {
-			p, q := splitPathAndQuery(tt.in)
-			if p != tt.wantPath || q != tt.wantQuery {
+	for _, tc := range tests {
+		t.Run(tc.in, func(t *testing.T) {
+			p, q := splitPathAndQuery(tc.in)
+			if p != tc.wantPath || q != tc.wantQuery {
 				t.Errorf("splitPathAndQuery(%q) = (%q,%q), want (%q,%q)",
-					tt.in, p, q, tt.wantPath, tt.wantQuery)
+					tc.in, p, q, tc.wantPath, tc.wantQuery)
 			}
 		})
 	}
@@ -189,19 +189,19 @@ func TestParseHTTPRequest_InfersPortFromScheme(t *testing.T) {
 		{"unknown scheme leaves Port=0", "api.example.com", "ftp", 0},
 		{"missing scheme leaves Port=0", "api.example.com", "", 0},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			h := map[string]string{
-				":authority": tt.authority,
+				":authority": tc.authority,
 				":path":      "/",
 				":method":    "GET",
 			}
-			if tt.scheme != "" {
-				h[":scheme"] = tt.scheme
+			if tc.scheme != "" {
+				h[":scheme"] = tc.scheme
 			}
 			info := parseHTTPRequest(context.Background(), h)
-			if info.Port != tt.wantPort {
-				t.Errorf("got Port=%d, want %d", info.Port, tt.wantPort)
+			if info.Port != tc.wantPort {
+				t.Errorf("got Port=%d, want %d", info.Port, tc.wantPort)
 			}
 		})
 	}

@@ -50,6 +50,11 @@ message AgentioConfig {
   // Names must be unique DNS labels. Empty lists remove all additional processors.
   repeated ExtProcProvider additional_ext_procs = 5;
 
+  // Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy
+  // discovery. Empty disables EPE access. Clients must authenticate and use
+  // the epe node type; declaring an identity in node metadata is not sufficient.
+  repeated string trusted_epe_identities = 6 [json_name = "trustedEPEIdentities"];
+
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same
@@ -73,7 +78,7 @@ message EgressGateway {
   // Per-gateway ext_proc override. When set, this gateway uses its own
   // ext_proc endpoint instead of the global AgentioConfig.sandbox_ext_proc.
   // nil means fall back to the global configuration.
-  // An explicit provider with an empty service disables ext_proc for this gateway.
+  // An explicit provider without service or service_ref disables ext_proc for this gateway.
   ExtProcProvider ext_proc = 4;
 
   // Per-gateway connect rate limit. Controls the rate at which new
@@ -110,6 +115,33 @@ message EgressGateway {
 
   // TLS origination settings. TLS interception remains in tls_termination.
   GatewayTlsSettings tls = 12;
+
+  // Additional CA sources for destination and HTTPS proxy TLS verification.
+  // The built-in public CA package is always retained.
+  UpstreamTrustBundle upstream_trust_bundle = 13;
+}
+
+// Configures the gateway's upstream CA union, independently of client trust.
+message UpstreamTrustBundle {
+  // Omitted or empty adds no extra CAs. Referenced ConfigMaps and Secrets are
+  // watched; invalid updates retain the last valid gateway output.
+  repeated UpstreamTrustSource additional_sources = 1;
+}
+
+message UpstreamTrustSource {
+  // Exactly one source is required.
+  oneof source {
+    TrustSourceReference config_map_ref = 1;
+    TrustSourceReference secret_ref = 2;
+  }
+}
+
+message TrustSourceReference {
+  // Required object name in Agentiod's mesh root namespace. Cross-namespace
+  // references are not supported.
+  string name = 1;
+  // Required data key containing one or more PEM CA certificates, without private keys.
+  string key = 2;
 }
 
 // CONNECT admission limits shared across workers/connections in one process.
@@ -271,10 +303,11 @@ enum HeaderSendMode {
 
 // ExtProcProvider configures the external processing endpoint.
 message ExtProcProvider {
-  // Service hostname or address for the ext_proc endpoint.
+  // DNS hostname or address. Used only when service_ref is absent.
   string service = 1;
 
-  // Service port for the ext_proc endpoint.
+  // Service port for the ext_proc endpoint. Defaults to 9002.
+  // With service_ref, this is the Service port, mapped to EndpointSlice ports.
   uint32 port = 2;
 
   // Request processing mode options.
@@ -303,6 +336,17 @@ message ExtProcProvider {
   // independently of list position. The processor may request buffered bodies
   // using mode_override; the initial mode sends only request headers by default.
   string name = 9;
+
+  // Kubernetes Service discovered through EDS. Takes precedence over service.
+  // Both namespace and name are required. Missing Services or ready endpoints
+  // produce an empty endpoint assignment; they do not fall back to DNS.
+  ServiceReference service_ref = 10;
+}
+
+// ServiceReference identifies a Kubernetes Service for external processing.
+message ServiceReference {
+  string namespace = 1;
+  string name = 2;
 }
 
 // ExtProcTLSSettings configures the gateway's transport to an external processor.

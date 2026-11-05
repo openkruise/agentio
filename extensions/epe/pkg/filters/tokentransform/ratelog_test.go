@@ -68,11 +68,11 @@ func TestLimiterAllow(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			now := time.Unix(0, 0)
-			l := NewLimiter(tt.ttl, func() time.Time { return now })
-			for _, s := range tt.steps {
+			l := NewLimiter(tc.ttl, func() time.Time { return now })
+			for _, s := range tc.steps {
 				now = now.Add(s.advance)
 				if got := l.Allow(s.key); got != s.want {
 					t.Fatalf("%s: Allow(%q) = %v, want %v", s.name, s.key, got, s.want)

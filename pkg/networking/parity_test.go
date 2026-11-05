@@ -15,6 +15,7 @@
 package networking
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -260,7 +261,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 			t.Fatalf("decode TLS relay filter %s: %v", filter.GetName(), err)
 		}
 		for _, state := range config.GetOnNewConnection() {
-			wantSkip := state.GetObjectKey() != model.FilterStateSandboxID && state.GetObjectKey() != "sandbox.token"
+			wantSkip := state.GetObjectKey() != model.FilterStateSandboxUID && state.GetObjectKey() != "sandbox.token"
 			if state.GetSkipIfEmpty() != wantSkip || !state.GetFormatString().GetOmitEmptyValues() {
 				t.Errorf(
 					"TLS relay key %q: skip_if_empty must be %v and omit_empty_values must be true",
@@ -823,6 +824,9 @@ func readNormalizedGatewayGolden(t *testing.T, path string) map[string]proto.Mes
 		t.Fatalf("read gateway golden %s: %v", path, err)
 	}
 	var golden gatewayGolden
+	// Apply the intentional UID key/header rename without rewriting frozen snapshots.
+	data = bytes.ReplaceAll(data, []byte(`"sandbox.id"`), []byte(`"agentio.sandbox.uid"`))
+	data = bytes.ReplaceAll(data, []byte("X-AGENTIO-SANDBOX-ID"), []byte("X-AGENTIO-SANDBOX-UID"))
 	if err := json.Unmarshal(data, &golden); err != nil {
 		t.Fatalf("decode gateway golden %s: %v", path, err)
 	}

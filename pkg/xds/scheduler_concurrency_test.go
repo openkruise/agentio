@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
@@ -89,8 +90,7 @@ func TestPushSchedulerMergeInterleavings(t *testing.T) {
 				scheduler.Enqueue(other, added)
 				if tc.action == "cancel" {
 					cancel()
-					// Invoke synchronously too, so cleanup has finished before
-					// checking capacity. The context callback may race this.
+					// Race explicit cleanup with the context callback.
 					scheduler.cancel(connection)
 					return
 				}
@@ -140,9 +140,12 @@ func TestPushSchedulerMergeInterleavings(t *testing.T) {
 				_, processing := scheduler.processing[connection]
 				_, registered := scheduler.cancellations[connection]
 				scheduler.mu.Unlock()
-				if pending || processing || registered || len(scheduler.slots) != 0 {
-					t.Fatal("merge revived a cancelled/closed connection or leaked capacity")
+				if pending || processing || registered {
+					t.Fatal("merge revived a cancelled/closed connection")
 				}
+				// AfterFunc can remove the entry before releasing its slot.
+				testutil.Eventually(t, func() bool { return len(scheduler.slots) == 0 },
+					"scheduler capacity was not released")
 				return
 			}
 			push := nextSchedulerPush(t, scheduler)

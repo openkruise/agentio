@@ -20,6 +20,28 @@ agentio:
     nameOverride: agentiod
     fullnameOverride: ""
     replicaCount: 1
+    # Optional agentiod instances dedicated to gateway, Porter and managed EPE.
+    # Creates a separate <agentiod-name>-policy Deployment and Service.
+    # Policy Pods carry agentio.kruise.io/control-plane-pool: policy.
+    # Shares agentiod's image, configuration, ServiceAccount and CA root; each pool
+    # has a serving certificate for its own Service name. Policy replicas do not run
+    # the injector, client trust distributor or gateway deployment controller.
+    policyPool:
+      # Switches gateway/Porter/EPE default ADS and CA endpoints to the policy Service.
+      # The original agentiod Deployment/Service and ztunnel addresses stay unchanged.
+      # No automatic fallback to agentiod; migrate clients back before disabling.
+      enabled: false
+      # Independent of agentiod.replicaCount and the original Deployment's HPA.
+      replicaCount: 2
+      # Per-policy-Pod resources; does not inherit agentiod.resources.
+      resources:
+        requests: {cpu: 500m, memory: 512Mi}
+      # Independent nodeSelector, tolerations and affinity for policy replicas.
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      # Inherits agentiod.env; entries here override it only for policy replicas.
+      env: {}
     image:
       repository: ""
       name: agentiod
@@ -63,6 +85,7 @@ agentio:
         drop: [ALL]
       readOnlyRootFilesystem: true
     tokenAudience: agentio-ca
+    kubernetesWorkloadAuthMode: tokenreview
     logging:
       level: info
       format: text
@@ -168,6 +191,9 @@ agentio:
           port: 15008
           protocol: HBONE
   epe:
+    xdsCache:
+      idleTTL: 10m
+      maxEntries: 10000
     # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
     # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
     # null leaves the base externally managed; primary is always externally managed.
@@ -185,6 +211,11 @@ agentio:
       tag: ""
       digest: ""
     replicaCount: 1
+    # Keep serving while endpoint withdrawal propagates; zero omits the sleep hook.
+    # Requires PodLifecycleSleepAction (enabled by default in Kubernetes 1.30+).
+    preStopDelaySeconds: 10
+    # Includes preStop and EPE's 30-second gRPC drain, plus cleanup time.
+    terminationGracePeriodSeconds: 45
     serviceAccount:
       create: true
       name: ""

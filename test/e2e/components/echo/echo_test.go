@@ -175,11 +175,11 @@ func TestManifestsRejectInvalidPortModels(t *testing.T) {
 		{name: "TLS on HTTP", ports: []Port{{Name: "bad", Protocol: HTTP, ServicePort: 80, WorkloadPort: 18080, TLS: true}}, want: "TLS requires HTTPS"},
 		{name: "HTTPS without TLS", ports: []Port{{Name: "bad", Protocol: HTTPS, ServicePort: 443, WorkloadPort: 18443}}, want: "HTTPS requires TLS"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := manifests(Config{Name: "server", Namespace: "sandbox", Ports: test.ports})
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("manifests() error = %v, want %q", err, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := manifests(Config{Name: "server", Namespace: "sandbox", Ports: tc.ports})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("manifests() error = %v, want %q", err, tc.want)
 			}
 		})
 	}
@@ -242,14 +242,19 @@ func TestCommandArgsForProtocolsAndGRPC(t *testing.T) {
 		{TCP, "10.0.0.1", []string{"/usr/local/bin/client", "tcp://10.0.0.1:9090", "--count", "2", "--timeout", "3s"}},
 		{UDP, "server", []string{"/usr/local/bin/client", "udp://server:9200", "--count", "2", "--timeout", "3s"}},
 	}
-	for _, tt := range tests {
-		t.Run(string(tt.protocol), func(t *testing.T) {
-			got, err := commandArgs(CallOptions{Protocol: tt.protocol, Address: tt.address, Count: 2, Timeout: 3 * time.Second})
+	for _, tc := range tests {
+		t.Run(string(tc.protocol), func(t *testing.T) {
+			got, err := commandArgs(CallOptions{
+				Protocol: tc.protocol,
+				Address:  tc.address,
+				Count:    2,
+				Timeout:  3 * time.Second,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("args = %#v, want %#v", got, tt.want)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("args = %#v, want %#v", got, tc.want)
 			}
 		})
 	}
@@ -328,14 +333,14 @@ func TestCommandArgsPreserveProtocolFlagsWithExplicitPortAndPath(t *testing.T) {
 			wantArg: "--http2",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			args, err := commandArgs(test.options)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := commandArgs(tc.options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if args[1] != test.wantURL || !containsString(args, test.wantArg) {
-				t.Fatalf("args = %#v, want URL %q and %q", args, test.wantURL, test.wantArg)
+			if args[1] != tc.wantURL || !containsString(args, tc.wantArg) {
+				t.Fatalf("args = %#v, want URL %q and %q", args, tc.wantURL, tc.wantArg)
 			}
 		})
 	}
@@ -389,17 +394,17 @@ func TestCommandArgsDefaultHostMatchesAgentio(t *testing.T) {
 			absent:  "Host:192.0.2.1",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			args, err := commandArgs(test.options)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := commandArgs(tc.options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.want != "" && !containsSubsequence(args, []string{"--header", test.want}) {
-				t.Fatalf("args = %#v, want header %q", args, test.want)
+			if tc.want != "" && !containsSubsequence(args, []string{"--header", tc.want}) {
+				t.Fatalf("args = %#v, want header %q", args, tc.want)
 			}
-			if test.absent != "" && containsSubsequence(args, []string{"--header", test.absent}) {
-				t.Fatalf("args = %#v, do not want header %q", args, test.absent)
+			if tc.absent != "" && containsSubsequence(args, []string{"--header", tc.absent}) {
+				t.Fatalf("args = %#v, do not want header %q", args, tc.absent)
 			}
 		})
 	}

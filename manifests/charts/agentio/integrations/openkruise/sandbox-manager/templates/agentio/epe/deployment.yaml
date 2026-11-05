@@ -6,8 +6,8 @@
 {{- $certificateSource := .Values.agentio.epe.tls.certificateSource | default dict }}
 {{- $ca := $certificateSource.ca | default dict }}
 {{- $caMode := and .Values.agentio.epe.tls.enabled (not (hasKey $certificateSource "file")) }}
-{{- $mountRoot := and $caMode (not (hasKey $ca "caCertificateFile")) }}
-{{- $mountToken := and $caMode (not (hasKey $ca "tokenFile")) }}
+{{- $mountRoot := not (hasKey $ca "caCertificateFile") }}
+{{- $mountToken := not (hasKey $ca "tokenFile") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,6 +38,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "agentio.epe.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.agentio.epe.terminationGracePeriodSeconds }}
       {{- with .Values.agentio.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -51,10 +52,17 @@ spec:
             - -epe-config-primary={{ include "agentio.epe.fullname" . }}-config-primary
             - -namespace={{ (include "agentio.namespace" .) }}
             - -secret-watch-scope={{ .Values.agentio.epe.secretWatchScope }}
+            - --xds-address={{ include "agentio.gateway.xdsAddress" . }}
+            - --xds-cluster-id={{ .Values.agentio.global.clusterId }}
+            - --xds-cache-idle-ttl={{ .Values.agentio.epe.xdsCache.idleTTL }}
+            - --xds-cache-max-entries={{ .Values.agentio.epe.xdsCache.maxEntries }}
+            - --domain={{ .Values.agentio.global.clusterDomain }}
+            - {{ printf "--xds-token-path=%s" (default "/var/run/secrets/tokens/agentio-token" $ca.tokenFile) | quote }}
+            - {{ printf "--xds-root-path=%s" (default "/var/run/secrets/agentio/root-cert.pem" $ca.caCertificateFile) | quote }}
             {{- if .Values.agentio.epe.tls.enabled }}
             {{- if $caMode }}
             - -tls-source=ca
-            - {{ printf "-ca-address=%s" (default (include "agentio.agentiod.caAddress" .) $ca.address) | quote }}
+            - {{ printf "-ca-address=%s" (default (include "agentio.gateway.xdsAddress" .) $ca.address) | quote }}
             - {{ printf "-ca-token-path=%s" (default "/var/run/secrets/tokens/agentio-token" $ca.tokenFile) | quote }}
             - {{ printf "-ca-root-path=%s" (default "/var/run/secrets/agentio/root-cert.pem" $ca.caCertificateFile) | quote }}
             - -tls-spiffe-id={{ printf "spiffe://%s/ns/%s/sa/%s" .Values.agentio.global.trustDomain (include "agentio.namespace" .) (include "agentio.epe.serviceAccountName" .) }}
@@ -76,6 +84,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
             - name: IDENTITY_PROVIDER_URL
               value: {{ .Values.agentio.epe.credentialProvider.url | quote }}
             - name: TOKEN_CACHE_TTL
@@ -102,6 +116,12 @@ spec:
             - {name: extproc, containerPort: {{ .Values.agentio.epe.service.grpcPort }}}
             - {name: health, containerPort: {{ .Values.agentio.epe.service.healthPort }}}
             - {name: metrics, containerPort: {{ .Values.agentio.epe.service.metricsPort }}}
+          {{- if gt (int .Values.agentio.epe.preStopDelaySeconds) 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.agentio.epe.preStopDelaySeconds }}
+          {{- end }}
           livenessProbe:
             grpc: {port: {{ .Values.agentio.epe.service.healthPort }}, service: liveness}
             initialDelaySeconds: 5

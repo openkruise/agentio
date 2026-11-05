@@ -105,7 +105,7 @@ func testDeployedCalloutTransport(
 			return err
 		}
 		req := probe.request(name+"-http."+namespace+".svc.cluster.local:8080", path, true)
-		req.Attributes["envoy.filters.http.ext_proc"].Fields["filter_state['agentio.workload.labels']"] = structpb.NewStringValue(
+		req.Attributes["envoy.filters.http.ext_proc"].Fields["filter_state['sandbox.labels']"] = structpb.NewStringValue(
 			base64.StdEncoding.EncodeToString([]byte("app=" + trafficFixture.Client.Name())),
 		)
 		if err = stream.Send(req); err != nil {

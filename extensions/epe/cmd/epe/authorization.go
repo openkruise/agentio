@@ -58,7 +58,7 @@ func newRequestAuthorizer(
 	})
 	authorizers := []egressauthz.Authorizer{global}
 	if resources != nil {
-		authorizers = append(authorizers, trafficpolicy.NewAuthorizer(resources))
+		authorizers = append(authorizers, trafficpolicy.NewAuthorizer())
 	}
 	// Serving waits for reg to sync, so the first request sees the configured restrictions.
 	return egressauthz.NewAggregate(client, authorizers...).Authorize, reg

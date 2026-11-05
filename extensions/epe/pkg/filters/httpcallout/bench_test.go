@@ -81,18 +81,17 @@ func benchStream(nOperator int) *filter.Stream {
 		reqHeaders["x-agent-"+suffix] = "request-value-" + suffix
 		respHeaders["x-upstream-"+suffix] = "response-value-" + suffix
 	}
-	return &filter.Stream{
-		Caller: filter.CallerContext{
-			Token: &filter.SandboxToken{AccessToken: "secret-token", SandboxClientID: "client-1"},
-			Subject: subject.Subject{
-				Workload: subject.Workload{
-					Namespace: "default",
-					Name:      "agent-0",
-					IP:        "10.0.0.8",
-					Labels:    map[string]string{"app": "agent", "version": "v2"},
-				},
+	return &filter.Stream{RequestContext: filter.RequestContext{Caller: filter.CallerContext{
+		Token: &filter.SandboxToken{AccessToken: "secret-token", SandboxClientID: "client-1"},
+		Subject: subject.Subject{
+			Workload: subject.Workload{
+				Namespace: "default",
+				Name:      "agent-0",
+				IP:        "10.0.0.8",
+				Labels:    map[string]string{"app": "agent", "version": "v2"},
 			},
 		},
+	},
 		RequestID: benchRequestID,
 		Request: httpreq.HTTPRequest{
 			Host:     "api.example.com",
@@ -102,8 +101,8 @@ func benchStream(nOperator int) *filter.Stream {
 			Method:   "POST",
 			Scheme:   "https",
 			Headers:  reqHeaders,
-		},
-		Response: httpreq.HTTPResponse{Status: 200, Headers: respHeaders},
+		}},
+		StreamRuntime: filter.StreamRuntime{Response: httpreq.HTTPResponse{Status: 200, Headers: respHeaders}},
 	}
 }
 

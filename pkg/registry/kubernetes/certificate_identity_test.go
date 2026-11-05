@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/attestation"
 )
@@ -65,7 +66,7 @@ func TestCertificateAttestationBindsSourceAndGatewayMembership(t *testing.T) {
 	auth := r.DelegatedIdentityAuthorizer()
 	target := func(p *corev1.Pod) attestation.CertificateTarget {
 		return attestation.CertificateTarget{
-			Principal: mustTestPrincipal("cluster.local", "ns/"+p.Namespace+"/sa/"+p.Spec.ServiceAccountName),
+			Principal: model.MustServiceAccountPrincipal(p.Namespace, p.Spec.ServiceAccountName),
 			Workload:  &attestation.WorkloadReference{Namespace: p.Namespace, Name: p.Name},
 		}
 	}
@@ -77,7 +78,15 @@ func TestCertificateAttestationBindsSourceAndGatewayMembership(t *testing.T) {
 		allow bool
 	}{
 		{"own pod", caller(a), aid, true},
-		{"unregistered principal", caller(a), attestation.CertificateTarget{Principal: mustTestPrincipal("cluster.local", "ns/demo/sa/app"), Workload: aid.Workload}, false},
+		{
+			"unregistered principal",
+			caller(a),
+			attestation.CertificateTarget{
+				Principal: model.MustServiceAccountPrincipal("demo", "app"),
+				Workload:  aid.Workload,
+			},
+			false,
+		},
 		{"same SA different pod", caller(a), bid, false},
 		{"gateway role forgery", caller(a), gid, false},
 		{"bound gateway with matching SA", caller(gateway), gid, true},
@@ -127,7 +136,7 @@ func TestCertificateAttestationBindsSourceAndGatewayMembership(t *testing.T) {
 	if _, err := r.client.CoreV1().Pods(b.Namespace).Update(t.Context(), b, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return authorizeCertificate(auth, t.Context(), caller(node), bid) != nil
 	}, "cross-node delegation denied")
 }

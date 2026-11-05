@@ -16,11 +16,38 @@ package model
 
 import (
 	"fmt"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	configsecurity "istio.io/istio/pkg/config/security"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 )
+
+// ValidateUpstreamTrustBundle checks references without resolving their contents.
+func ValidateUpstreamTrustBundle(bundle *configv1.UpstreamTrustBundle) error {
+	for i, source := range bundle.GetAdditionalSources() {
+		field := fmt.Sprintf("upstreamTrustBundle.additionalSources[%d]", i)
+		ref := source.GetConfigMapRef()
+		if ref != nil {
+			field += ".configMapRef"
+		} else {
+			ref = source.GetSecretRef()
+			field += ".secretRef"
+		}
+		if ref == nil {
+			return fmt.Errorf("upstreamTrustBundle.additionalSources[%d] requires configMapRef or secretRef", i)
+		}
+		if problems := validation.IsDNS1123Subdomain(ref.GetName()); len(problems) > 0 {
+			return fmt.Errorf("%s.name: %s", field, strings.Join(problems, "; "))
+		}
+		if problems := validation.IsConfigMapKey(ref.GetKey()); len(problems) > 0 || ref.GetKey() == "" {
+			return fmt.Errorf("%s.key must be a non-empty data key", field)
+		}
+	}
+	return nil
+}
 
 // ValidateUpstreamTLS checks the common TLS configuration accepted by both
 // AgentioConfig and Gateway API parameters, without changing caller-owned data.

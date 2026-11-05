@@ -76,6 +76,11 @@ func TestBuildWDSAddressPublishesDiscoveryOnlyWorkload(t *testing.T) {
 		refs.TypeUrl != model.TrafficPolicyType || len(refs.ResourceNames) != 0 {
 		t.Fatalf("native empty policy binding = %v", refs)
 	}
+	refs = new(extensionsv1.PolicyReference)
+	if !compatibilityExtension(t, wireWorkload, "security-profile-reference", refs) ||
+		refs.TypeUrl != model.SecurityProfileType || len(refs.ResourceNames) != 0 {
+		t.Fatalf("native empty SecurityProfile binding = %v", refs)
+	}
 	if resource.Facts.Workload == nil {
 		t.Fatal("discovery-only Address lost its Workload facts")
 	}
@@ -148,7 +153,7 @@ func projectionTestWorkload() model.Workload {
 		Name:      "client",
 		Addresses: []string{"10.0.0.1"},
 		Ready:     true,
-		Principal: mustTestPrincipal("cluster.local", "ns/"+("demo")+"/sa/"+("client")),
+		Principal: model.MustServiceAccountPrincipal("demo", "client"),
 	}
 }
 
@@ -206,7 +211,7 @@ func TestWorkloadMetadataFiltersLabels(t *testing.T) {
 }
 
 func TestServiceResourcePreservesNormalizedTargetPort(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name string
 		port model.ServicePort
 		want *workloadv1.Port
@@ -222,12 +227,12 @@ func TestServiceResourcePreservesNormalizedTargetPort(t *testing.T) {
 			want: &workloadv1.Port{ServicePort: 80, TargetPort: 0},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			resource, err := buildWDSService(model.Service{
 				Namespace: "demo",
 				Name:      "backend",
 				Hostname:  "backend.demo.svc.cluster.local",
-				Ports:     []model.ServicePort{test.port},
+				Ports:     []model.ServicePort{tc.port},
 			}, "")
 			if err != nil {
 				t.Fatal(err)
@@ -237,8 +242,8 @@ func TestServiceResourcePreservesNormalizedTargetPort(t *testing.T) {
 				t.Fatalf("unmarshal Service Address: %v", err)
 			}
 			ports := address.GetService().GetPorts()
-			if len(ports) != 1 || !proto.Equal(ports[0], test.want) {
-				t.Fatalf("service ports = %+v, want [%+v]", ports, test.want)
+			if len(ports) != 1 || !proto.Equal(ports[0], tc.want) {
+				t.Fatalf("service ports = %+v, want [%+v]", ports, tc.want)
 			}
 		})
 	}
@@ -281,7 +286,7 @@ func TestServiceResourcePreservesNetworkingSemantics(t *testing.T) {
 }
 
 func TestServiceResourceTrafficPolicyEncoding(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name     string
 		service  model.Service
 		wantLB   *workloadv1.LoadBalancing
@@ -352,8 +357,8 @@ func TestServiceResourceTrafficPolicyEncoding(t *testing.T) {
 			wantIPFs: workloadv1.IPFamilies_IPV6_ONLY,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			service := test.service
+		t.Run(tc.name, func(t *testing.T) {
+			service := tc.service
 			service.Namespace, service.Name = "demo", "backend"
 			service.Hostname = "backend.demo.svc.cluster.local"
 			resource, err := buildWDSService(service, "")
@@ -365,11 +370,11 @@ func TestServiceResourceTrafficPolicyEncoding(t *testing.T) {
 				t.Fatalf("unmarshal Service Address: %v", err)
 			}
 			wire := address.GetService()
-			if !proto.Equal(wire.GetLoadBalancing(), test.wantLB) {
-				t.Fatalf("load balancing = %+v, want %+v", wire.GetLoadBalancing(), test.wantLB)
+			if !proto.Equal(wire.GetLoadBalancing(), tc.wantLB) {
+				t.Fatalf("load balancing = %+v, want %+v", wire.GetLoadBalancing(), tc.wantLB)
 			}
-			if wire.GetIpFamilies() != test.wantIPFs {
-				t.Fatalf("ip families = %v, want %v", wire.GetIpFamilies(), test.wantIPFs)
+			if wire.GetIpFamilies() != tc.wantIPFs {
+				t.Fatalf("ip families = %v, want %v", wire.GetIpFamilies(), tc.wantIPFs)
 			}
 		})
 	}
@@ -446,7 +451,7 @@ func TestBuildWDSAddressEncodingIsDeterministic(t *testing.T) {
 
 func TestWDSRejectsUnrepresentableIdentity(t *testing.T) {
 	workload := projectionTestWorkload()
-	workload.Principal = mustTestPrincipal(workload.Principal.TrustDomain(), "workload/app")
+	workload.Principal = model.MustPrincipal(workload.Principal.TrustDomain(), "workload/app")
 	if _, err := buildWDSAddress(wdsProjection{Workload: workload}); err == nil {
 		t.Fatal("WDS accepted an unrepresentable principal")
 	}

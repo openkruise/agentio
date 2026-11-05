@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -30,7 +31,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	securityapi "istio.io/api/security/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 
+	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/compiler"
 	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
 	"github.com/openkruise/agentio/pkg/features"
@@ -71,6 +74,18 @@ func grpcServerKeepaliveParameters() keepalive.ServerParameters {
 	}
 }
 
+func loadGatewayTrustBundle(packagePath string) (string, error) {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		return "", fmt.Errorf("read gateway trust package: %w", err)
+	}
+	p, err := clienttrust.ParsePackage(data)
+	if err != nil {
+		return "", fmt.Errorf("parse gateway trust package: %w", err)
+	}
+	return p.Bundle, nil
+}
+
 func run(ctx context.Context, options Options, opts ...Option) error {
 	started := time.Now()
 	composition := applyOptions(opts)
@@ -88,6 +103,10 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		return nil
 	}
 	logStartup(options)
+	gatewayTrustBundle, err := loadGatewayTrustBundle(features.ClientTrustPackagePath)
+	if err != nil {
+		return err
+	}
 	config, err := kube.LoadConfig(options.Kubeconfig)
 	if err != nil {
 		return err
@@ -102,15 +121,48 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	})
 	kubeCoreClient := kubeClient.Kube()
 	krtBuilder := krt.NewOptionsBuilder(ctx.Done(), "", nil)
-	tokenReviewer, err := attestation.NewTokenReviewer(
-		kubeCoreClient,
-		[]string{features.TokenAudience},
-	)
+	registry, err := kubernetesregistry.New(kubeClient, kubernetesregistry.Options{
+		EnableKruise:          features.SandboxMode,
+		ClusterID:             options.ClusterID,
+		TrustDomain:           options.TrustDomain,
+		RootNamespace:         options.RootNamespace,
+		ZTunnelServiceAccount: ztunnelAccount,
+		ScopedSecrets:         features.ScopedSecrets,
+		AgentioConfigMaps: &kubernetesregistry.AgentioConfigMapOptions{
+			BaseName:    features.AgentioConfigMapName,
+			PrimaryName: features.PrimaryAgentioConfigMapName,
+		},
+		ClusterDomain: options.ClusterDomain,
+		DebounceAfter: features.KRTDebounceAfter,
+		DebounceMax:   features.KRTDebounceMax,
+	}, ctx.Done())
+	if err != nil {
+		return err
+	}
+	var kubernetesAuthenticator attestation.Authenticator
+	authenticationSynced := func() bool { return true }
+	if features.KubernetesWorkloadAuthMode == "local" {
+		accounts := krt.NewInformer[*corev1.ServiceAccount](
+			kubeClient,
+			krt.WithStop(ctx.Done()),
+			krt.WithName("authentication-serviceaccounts"),
+		)
+		kubernetesAuthenticator, err = attestation.NewLocalJWTAuthenticator(
+			ctx,
+			kubeCoreClient.CoreV1().RESTClient(),
+			registry.Pods,
+			accounts,
+			features.TokenAudience,
+		)
+		authenticationSynced = accounts.HasSynced
+	} else {
+		kubernetesAuthenticator, err = attestation.NewTokenReviewer(kubeCoreClient, []string{features.TokenAudience})
+	}
 	if err != nil {
 		return err
 	}
 	authenticatorChain := mergeAuthenticators(
-		attestation.AuthenticatorChain{tokenReviewer}, composition.authenticators)
+		attestation.AuthenticatorChain{kubernetesAuthenticator}, composition.authenticators)
 	// The registered attestation set is the scope-function key set; the
 	// functions themselves are composed later, once the registry exists.
 	registeredAttestations := []model.Attestation{model.AttestationKubernetes}
@@ -146,24 +198,6 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		ConfigMapName: features.TrustBundleConfigMapName,
 		LeaseName:     features.TrustBundleLeaseName,
 	})
-	if err != nil {
-		return err
-	}
-	registry, err := kubernetesregistry.New(kubeClient, kubernetesregistry.Options{
-		EnableKruise:          features.SandboxMode,
-		ClusterID:             options.ClusterID,
-		TrustDomain:           options.TrustDomain,
-		RootNamespace:         options.RootNamespace,
-		ZTunnelServiceAccount: ztunnelAccount,
-		ScopedSecrets:         features.ScopedSecrets,
-		AgentioConfigMaps: &kubernetesregistry.AgentioConfigMapOptions{
-			BaseName:    features.AgentioConfigMapName,
-			PrimaryName: features.PrimaryAgentioConfigMapName,
-		},
-		ClusterDomain: options.ClusterDomain,
-		DebounceAfter: features.KRTDebounceAfter,
-		DebounceMax:   features.KRTDebounceMax,
-	}, ctx.Done())
 	if err != nil {
 		return err
 	}
@@ -229,6 +263,8 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		Pods:                       registry.Pods,
 		KubernetesServices:         registry.KubernetesServices,
 		EndpointSlices:             registry.EndpointSlices,
+		ConfigMaps:                 registry.ConfigMaps,
+		Secrets:                    registry.Secrets,
 		Services:                   sources.Services,
 		Endpoints:                  sources.Endpoints,
 		Gateways:                   sources.Gateways,
@@ -241,6 +277,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		Resolve:                    resolver.Resolve,
 		DiscoveryAddress:           features.ServiceName + ":15012",
 		TrustDomain:                options.TrustDomain,
+		GatewayTrustBundle:         gatewayTrustBundle,
 	}, krtBuilder)
 	if err != nil {
 		return err
@@ -337,6 +374,13 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		},
 		features.PushConcurrency,
 		features.RequestRateLimit,
+		xds.FlowControlOptions{
+			InitialAdmission: features.XDSInitialAdmissionTimeout,
+			RateLimit:        features.XDSRateLimitTimeout,
+			Send:             features.XDSSendTimeout,
+			ACK:              features.XDSACKTimeout,
+			MaxPodStreams:    features.XDSMaxPodStreams,
+		},
 	)
 	if err != nil {
 		return err
@@ -428,7 +472,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	nextSyncLog := time.Now().Add(10 * time.Second)
-	for !registry.HasSynced() || !resourceCompiler.HasSynced() {
+	for !registry.HasSynced() || !resourceCompiler.HasSynced() || !authenticationSynced() {
 		select {
 		case <-ctx.Done():
 			return nil
@@ -437,8 +481,17 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		case <-ticker.C:
 		}
 		if time.Now().After(nextSyncLog) {
-			log.Info("waiting for initial configuration sync", "elapsed", time.Since(started),
-				"registry_synced", registry.HasSynced(), "compiler_synced", resourceCompiler.HasSynced())
+			log.Info(
+				"waiting for initial configuration sync",
+				"elapsed",
+				time.Since(started),
+				"registry_synced",
+				registry.HasSynced(),
+				"compiler_synced",
+				resourceCompiler.HasSynced(),
+				"authentication_synced",
+				authenticationSynced(),
+			)
 			nextSyncLog = time.Now().Add(10 * time.Second)
 		}
 	}

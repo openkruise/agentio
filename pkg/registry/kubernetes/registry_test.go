@@ -28,6 +28,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	kubetesting "k8s.io/client-go/testing"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/attestation"
@@ -42,7 +43,7 @@ var _ attestation.DelegatedIdentityAuthorizer = (*DelegatedIdentityAuthorizer)(n
 var _ mitm.GatewayCertificateAuthorizer = (*GatewayCertificateAuthorizer)(nil)
 
 func TestRegistrySecretScope(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name           string
 		scopedSecrets  bool
 		watchNamespace string
@@ -51,7 +52,7 @@ func TestRegistrySecretScope(t *testing.T) {
 		{name: "root namespace", scopedSecrets: true, watchNamespace: "agentio-system", secretCount: 1},
 		{name: "all namespaces", secretCount: 2},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			client := &fakeKubeClient{
 				Client: kube.NewFakeClient(
@@ -64,7 +65,7 @@ func TestRegistrySecretScope(t *testing.T) {
 				ClusterID:     "test",
 				TrustDomain:   "cluster.local",
 				RootNamespace: "agentio-system",
-				ScopedSecrets: tt.scopedSecrets,
+				ScopedSecrets: tc.scopedSecrets,
 			}, ctx.Done())
 			if err != nil {
 				t.Fatal(err)
@@ -76,8 +77,8 @@ func TestRegistrySecretScope(t *testing.T) {
 				}
 			}
 			client.Run(ctx.Done())
-			eventually(t, registry.Secrets.HasSynced, "Secret cache synchronization")
-			eventually(t, func() bool {
+			testutil.Eventually(t, registry.Secrets.HasSynced, "Secret cache synchronization")
+			testutil.Eventually(t, func() bool {
 				for _, action := range fake.Actions() {
 					if action.GetResource().Resource == "secrets" && action.GetVerb() == "watch" {
 						return true
@@ -85,13 +86,13 @@ func TestRegistrySecretScope(t *testing.T) {
 				}
 				return false
 			}, "shared Secret watch")
-			if got := len(registry.Secrets.List()); got != tt.secretCount {
-				t.Fatalf("cached Secrets = %d, want %d", got, tt.secretCount)
+			if got := len(registry.Secrets.List()); got != tc.secretCount {
+				t.Fatalf("cached Secrets = %d, want %d", got, tc.secretCount)
 			}
 			if registry.Secrets.GetKey("agentio-system/roots") == nil {
 				t.Fatal("root namespace Secret is missing")
 			}
-			if got := registry.Secrets.GetKey("other/roots") != nil; got == tt.scopedSecrets {
+			if got := registry.Secrets.GetKey("other/roots") != nil; got == tc.scopedSecrets {
 				t.Fatalf("other namespace Secret visible = %v", got)
 			}
 			watches := 0
@@ -99,8 +100,8 @@ func TestRegistrySecretScope(t *testing.T) {
 				if action.GetResource().Resource != "secrets" {
 					continue
 				}
-				if action.GetNamespace() != tt.watchNamespace {
-					t.Fatalf("Secret request namespace = %q, want %q", action.GetNamespace(), tt.watchNamespace)
+				if action.GetNamespace() != tc.watchNamespace {
+					t.Fatalf("Secret request namespace = %q, want %q", action.GetNamespace(), tc.watchNamespace)
 				}
 				if action.GetVerb() == "watch" {
 					watches++
@@ -115,7 +116,7 @@ func TestRegistrySecretScope(t *testing.T) {
 			if err := fake.CoreV1().Secrets("agentio-system").Delete(ctx, "roots", metav1.DeleteOptions{}); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				return registry.Secrets.GetKey("agentio-system/roots") == nil
 			}, "Secret deletion in shared cache")
 		})
@@ -146,7 +147,7 @@ func TestRegistrySyncDoesNotRequireSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.Run(ctx.Done())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		for _, action := range fake.Actions() {
 			if action.GetResource().Resource == "secrets" && action.GetVerb() == "list" {
 				return true
@@ -154,7 +155,7 @@ func TestRegistrySyncDoesNotRequireSecrets(t *testing.T) {
 		}
 		return false
 	}, "Secret list attempt")
-	eventually(t, registry.HasSynced, "registry synchronization without Secret access")
+	testutil.Eventually(t, registry.HasSynced, "registry synchronization without Secret access")
 	if registry.Secrets.HasSynced() {
 		t.Fatal("Secret cache unexpectedly synced without list permission")
 	}
@@ -182,7 +183,7 @@ func TestDelegatedAuthorizationUsesEffectivePrincipalIndex(t *testing.T) {
 	}
 	registry := newTestRegistry(t, ctx, objects, nil)
 
-	requested := mustTestPrincipal("cluster.local", "ns/demo/sa/app")
+	requested := model.MustServiceAccountPrincipal("demo", "app")
 	key := target.Spec.NodeName + "|" + requested.String()
 	candidates := registry.DelegatedIdentityAuthorizer().targetsByNodePrincipal.Lookup(key)
 	if len(candidates) != 1 || candidates[0].Name != target.Name {
@@ -249,7 +250,7 @@ func TestRegistrySandboxPolicies(t *testing.T) {
 				t.Fatal(err)
 			}
 			client.Run(ctx.Done())
-			eventually(t, r.HasSynced, "registry synchronization")
+			testutil.Eventually(t, r.HasSynced, "registry synchronization")
 			sharedKey := "namespaced/tenant/same-name"
 			if p := r.SecurityProfiles.GetKey(sharedKey); p == nil {
 				t.Fatal("shared profile missing or replaced by inline profile")
@@ -277,7 +278,7 @@ func TestRegistrySandboxPolicies(t *testing.T) {
 				Update(ctx, sandbox, metav1.UpdateOptions{}); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				current := r.Sandboxes.GetKey("kruise:sandbox-id")
 				return current != nil && current.Policies != nil && current.Policies.InputError != "" &&
 					r.SecurityProfiles.GetKey(sharedKey) != nil

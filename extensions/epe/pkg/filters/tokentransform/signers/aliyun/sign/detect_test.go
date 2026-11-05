@@ -129,10 +129,10 @@ func TestNeedsBody(t *testing.T) {
 			want:    false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NeedsBody(tt.v, tt.method, tt.headers); got != tt.want {
-				t.Fatalf("NeedsBody(%v, %q, %v) = %v, want %v", tt.v, tt.method, tt.headers, got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NeedsBody(tc.v, tc.method, tc.headers); got != tc.want {
+				t.Fatalf("NeedsBody(%v, %q, %v) = %v, want %v", tc.v, tc.method, tc.headers, got, tc.want)
 			}
 		})
 	}
@@ -255,10 +255,10 @@ func TestDetect(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := Detect(tt.req); got != tt.want {
-				t.Fatalf("Detect = %v, want %v", got, tt.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Detect(tc.req); got != tc.want {
+				t.Fatalf("Detect = %v, want %v", got, tc.want)
 			}
 		})
 	}

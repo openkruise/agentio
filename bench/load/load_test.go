@@ -72,6 +72,9 @@ func TestRateLatencyIncludesQueueing(t *testing.T) {
 		if err != nil || result.P50MS != 300 || result.MaxMS != 400 || result.Seconds != .6 {
 			t.Fatalf("queue delay missing: %+v, %v", result, err)
 		}
+		if result.QueueP99MS != 200 || result.OperationP99MS != 200 {
+			t.Fatalf("incorrect queue/operation split: %+v", result)
+		}
 	})
 }
 

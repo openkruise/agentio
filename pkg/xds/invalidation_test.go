@@ -130,7 +130,7 @@ func TestMergedUpdateWithdrawsIntermediateDependencies(t *testing.T) {
 		updateBetween(middle, base, middle.Diff(base)),
 	)
 	scope := model.ClientScope{Class: model.ClientSharedZTunnel, NodeName: "node-a"}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		typeURL   string
 		generator ResourceGenerator
 		removed   []string
@@ -140,20 +140,20 @@ func TestMergedUpdateWithdrawsIntermediateDependencies(t *testing.T) {
 		{model.TrafficPolicyType, TrafficPolicyGenerator{}, []string{"p"}},
 		{model.WorkloadAuthorizationType, AuthorizationGenerator{}, []string{"auth"}},
 	} {
-		t.Run(test.typeURL, func(t *testing.T) {
+		t.Run(tc.typeURL, func(t *testing.T) {
 			subscription := initializedSubscription(
 				t,
-				test.generator,
+				tc.generator,
 				scope,
-				test.typeURL,
+				tc.typeURL,
 				middle,
 				SubscriptionView{wildcard: true},
 			)
-			delta, err := test.generator.Generate(
+			delta, err := tc.generator.Generate(
 				t.Context(),
 				GenerationRequest{
 					Scope:        scope,
-					TypeURL:      test.typeURL,
+					TypeURL:      tc.typeURL,
 					Snapshot:     base,
 					Subscription: subscription,
 					Update:       update,
@@ -162,11 +162,11 @@ func TestMergedUpdateWithdrawsIntermediateDependencies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(delta.Removed, test.removed) {
-				t.Fatalf("removals = %v, want %v", delta.Removed, test.removed)
+			if !slices.Equal(delta.Removed, tc.removed) {
+				t.Fatalf("removals = %v, want %v", delta.Removed, tc.removed)
 			}
 			for _, resource := range delta.Resources {
-				if slices.Contains(test.removed, resource.XDSName) {
+				if slices.Contains(tc.removed, resource.XDSName) {
 					t.Fatalf("revoked dependency %s was resent", resource.XDSName)
 				}
 			}
@@ -428,16 +428,16 @@ func TestMergedDependencyScopesRemainImmutable(t *testing.T) {
 	first := updateBetween(before, middle, before.Diff(middle))
 	second := updateBetween(middle, after, middle.Diff(after))
 	merged := xdsstore.Merge(first, second)
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		update xdsstore.Update
 		scopes int
 	}{{first, 1}, {second, 1}, {merged, 2}} {
 		found := false
-		for _, candidate := range test.update.Candidates(model.AddressType) {
+		for _, candidate := range tc.update.Candidates(model.AddressType) {
 			if candidate.Key == service.Key {
 				found = true
-				if len(candidate.Identities) != 1 || len(candidate.Identities[0].Workloads) != test.scopes {
-					t.Fatalf("dependency scopes mutated or lost: %+v, want %d", candidate, test.scopes)
+				if len(candidate.Identities) != 1 || len(candidate.Identities[0].Workloads) != tc.scopes {
+					t.Fatalf("dependency scopes mutated or lost: %+v, want %d", candidate, tc.scopes)
 				}
 			}
 		}

@@ -125,23 +125,7 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				if len(restored.OnRequestHeaders) != 4 {
 					t.Fatalf("identity state=%v", restored)
 				}
-				for i, key := range []string{model.FilterStateWorkloadLabels, "sandbox.labels"} {
-					state := restored.OnRequestHeaders[2+i]
-					factory := "envoy.hashable_string"
-					if key == "sandbox.labels" {
-						factory = "envoy.string"
-					}
-					if state.GetObjectKey() != key ||
-						state.GetFactoryKey() != factory ||
-						state.GetFormatString().
-							GetTextFormatSource().
-							GetInlineString() !=
-							"%DYNAMIC_METADATA(agentio:workload_labels)%" ||
-						state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE {
-						t.Fatalf("new and legacy labels must share the same WDS value: %v", state)
-					}
-				}
-				for i, field := range []string{"name", "namespace"} {
+				for i, field := range []string{"name", "namespace", "uid"} {
 					state := restored.OnRequestHeaders[i]
 					if state.GetObjectKey() != "agentio.workload."+field ||
 						state.GetFactoryKey() != "envoy.hashable_string" ||
@@ -171,21 +155,19 @@ func TestWorkloadStateTLSRelay(t *testing.T) {
 		t.Fatal("unused workload instance must not be relayed")
 	}
 	for _, key := range []string{
-		model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
+		model.FilterStateSandboxUID, "sandbox.token", "agentio.sandbox.metadata",
 		model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
-		model.FilterStateWorkloadLabels, "sandbox.labels",
+		model.FilterStateWorkloadUID,
 	} {
 		state := states[key]
 		factory := "envoy.hashable_string"
-		if key == "sandbox.labels" {
-			factory = "envoy.string"
-		}
 		if state.GetFactoryKey() != factory ||
 			state.GetFormatString().GetTextFormatSource().GetInlineString() != "%FILTER_STATE("+key+":PLAIN)%" ||
 			state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE {
 			t.Errorf("%s must survive TLS termination but stop sharing at main_forward: %v", key, state)
 		}
-		if wantSkip := key != model.FilterStateSandboxID && key != "sandbox.token"; state.GetSkipIfEmpty() != wantSkip {
+		if wantSkip := key != model.FilterStateSandboxUID &&
+			key != "sandbox.token"; state.GetSkipIfEmpty() != wantSkip {
 			t.Errorf("%s skip_if_empty = %v, want %v", key, state.GetSkipIfEmpty(), wantSkip)
 		}
 	}

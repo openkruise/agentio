@@ -105,6 +105,14 @@ func (s *Server) HandleRequestHeaders(
 
 	// Resolve identity-dependent profiles only when a source identity is known.
 	// Empty resolution still passes through the independent authorizer below.
+	if caller.Subject.Workload.HasIdentity() && s.resolveContext != nil {
+		resolved, err := s.resolveContext(ctx, st.RequestContext)
+		if err != nil {
+			return policyUnavailableDeny, err
+		}
+		st.RequestContext = resolved
+		caller = resolved.Caller
+	}
 	var res engine.Resolution
 	if caller.Subject.HasIdentity() {
 		res, err = s.resolve(ctx, caller.Subject, &req)
@@ -115,7 +123,7 @@ func (s *Server) HandleRequestHeaders(
 	// is the one error class audit never sees. Guarded so a resolution that
 	// carries no logger cannot erase one an earlier resolution installed.
 	if res.StreamLogger != nil {
-		state.streamLogger = res.StreamLogger
+		state.stream.Policies.StreamLogger = res.StreamLogger
 	}
 	if err != nil {
 		// A policy lookup failure must not become an ext_proc transport fail-open.
@@ -142,13 +150,13 @@ func (s *Server) HandleRequestHeaders(
 	// Record the resolved units only after the early returns, so a resolution
 	// that yields nothing cannot erase a previous one. The stream logger was
 	// already installed above, before the resolve error was honoured.
-	state.units = res.Units
-	subscriptions, err := s.eng.ValidateSubscriptions(state.engineUnits())
+	state.stream.Policies.FilterRules = res.Units
+	subscriptions, err := s.eng.ValidateSubscriptions(state.stream.Policies.FilterRules)
 	if err != nil {
 		return nil, err
 	}
 
-	reqHeadersRes, evalErr := s.eng.EvalRequestHeaders(ctx, st, state.engineUnits())
+	reqHeadersRes, evalErr := s.eng.EvalRequestHeaders(ctx, st, state.stream.Policies.FilterRules)
 	if evalErr != nil {
 		return nil, evalErr
 	}
@@ -281,7 +289,7 @@ func (s *Server) HandleResponseHeaders(
 	respHeadersRes, evalErr := s.eng.EvalResponseHeaders(
 		ctx,
 		state.stream,
-		state.engineUnits(),
+		state.stream.Policies.FilterRules,
 		state.responseScope,
 		evalOpts...)
 	if evalErr != nil {

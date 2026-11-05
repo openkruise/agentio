@@ -307,16 +307,16 @@ templates:
 	}
 	webhook := newTestWebhookWithValues(t, NativeSidecarModeDisabled, config, `{}`)
 
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name       string
 		annotation string
 	}{
 		{name: "comma-separated", annotation: "proxy, init"},
 		{name: "alias", annotation: "bundle"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			pod := testPod()
-			pod.Annotations = map[string]string{"inject.agentio.kruise.io/templates": tt.annotation}
+			pod.Annotations = map[string]string{"inject.agentio.kruise.io/templates": tc.annotation}
 			patched := injectTestPod(t, webhook, pod)
 
 			if FindContainer("agentio-proxy", patched.Spec.Containers) == nil {

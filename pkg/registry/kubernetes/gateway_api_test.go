@@ -24,9 +24,63 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestGatewayUpstreamTrustSources(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		bundle            string
+		invalid           bool
+		parametersInvalid bool
+	}{
+		{"empty", "{}", false, false},
+		{"empty sources", "{additionalSources: []}", false, false},
+		{"ConfigMap", "{additionalSources: [{configMapRef: {name: company-ca, key: ca.crt}}]}", false, false},
+		{"Secret", "{additionalSources: [{secretRef: {name: partner-ca, key: ca.pem}}]}", false, false},
+		{"missing source", "{additionalSources: [{}]}", true, true},
+		{"null source", "{additionalSources: [null]}", true, true},
+		{"missing name", "{additionalSources: [{configMapRef: {key: ca.crt}}]}", true, true},
+		{"missing key", "{additionalSources: [{secretRef: {name: company-ca}}]}", true, true},
+		{"invalid name", "{additionalSources: [{configMapRef: {name: 'bad/name', key: ca.crt}}]}", true, true},
+		{"invalid key", "{additionalSources: [{secretRef: {name: company-ca, key: 'bad/key'}}]}", true, true},
+		{"unknown namespace", "{additionalSources: [{configMapRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false, true},
+		{"unknown secret namespace", "{additionalSources: [{secretRef: {name: company-ca, namespace: other, key: ca.crt}}]}", false, true},
+		{"conflicting sources", "{additionalSources: [{configMapRef: {name: a, key: ca.crt}, secretRef: {name: b, key: ca.crt}}]}", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := "upstreamTrustBundle: " + tc.bundle
+			for name, decode := range map[string]func() (*configv1.EgressGateway, error){
+				"AgentioConfig": func() (*configv1.EgressGateway, error) {
+					got, err := applyAgentioConfig("egressGateways:\n- name: egress\n  namespace: demo\n  "+content, nil)
+					if err != nil {
+						return nil, err
+					}
+					return got.GetEgressGateways()[0], nil
+				},
+				"Gateway API parameters": func() (*configv1.EgressGateway, error) {
+					return decodeEgressGateway(content)
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					got, err := decode()
+					invalid := tc.invalid
+					if name == "Gateway API parameters" {
+						invalid = tc.parametersInvalid
+					}
+					if (err != nil) != invalid {
+						t.Fatalf("decode() = %v, %v; invalid=%t", got, err, invalid)
+					}
+					if err == nil && got.GetUpstreamTrustBundle() == nil {
+						t.Fatal("upstreamTrustBundle was not decoded")
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestGatewayConfigurationProtocolSettings(t *testing.T) {
 	const content = `
@@ -125,7 +179,38 @@ serviceEntries:
 	}
 }
 
-func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
+func TestExtProcServiceReferenceConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		ref     string
+		invalid bool
+	}{
+		{"{namespace: agentio-system, name: agentio-epe}", false},
+		{"{}", true},
+		{"{name: agentio-epe}", true},
+		{"{namespace: agentio-system}", true},
+		{"{namespace: agentio-system, name: epe.invalid}", true},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			provider := "    service: legacy.invalid\n    serviceRef: " + tc.ref + "\n    port: 9002\n"
+			for _, raw := range []string{
+				"sandboxExtProc:\n" + provider,
+				"egressGateways:\n- name: egress\n  namespace: agentio-system\n  extProc:\n" + provider,
+			} {
+				if _, err := applyAgentioConfig(raw, nil); (err != nil) != tc.invalid {
+					t.Fatalf("AgentioConfig error=%v, want invalid=%v", err, tc.invalid)
+				}
+			}
+			if _, err := decodeEgressGateway("extProc:\n" + provider); (err != nil) != tc.invalid {
+				t.Fatalf("Gateway parameters error=%v, want invalid=%v", err, tc.invalid)
+			}
+		})
+	}
+	if _, err := decodeEgressGateway("extProc: {serviceRef: {namespace: system, name: epe}}"); err != nil {
+		t.Fatalf("reference-only Gateway parameters: %v", err)
+	}
+}
+
+func TestGatewayConfigurationRemovedPaths(t *testing.T) {
 	for _, content := range []string{
 		"connectionPool: {tcp: {idleTimeout: 30s}}",
 		"upstreamTls: {minProtocolVersion: TLSV1_2}",
@@ -139,8 +224,8 @@ func TestGatewayConfigurationRejectsRemovedPaths(t *testing.T) {
 			if _, err := applyAgentioConfig(
 				"egressGateways:\n- name: egress\n  namespace: agentio-system\n  "+content,
 				nil,
-			); err == nil {
-				t.Fatal("AgentioConfig accepted a removed path")
+			); err != nil {
+				t.Fatalf("AgentioConfig must ignore removed fields: %v", err)
 			}
 		})
 	}
@@ -223,7 +308,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 	if !configurations.WaitUntilSynced(stop) {
 		t.Fatal("Gateway API configuration collection did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil &&
 			gateway.Source == model.GatewaySourceGatewayAPI &&
@@ -235,7 +320,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 			Data:       map[string]string{gatewayConfigKey: content},
 		})
-		eventually(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			gateway := configurations.GetKey("demo/egress")
 			if gateway == nil || gateway.ValidateForUse() != nil {
 				return false
@@ -251,7 +336,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 		Data:       map[string]string{gatewayConfigKey: "extProc: {service: before-overlay.demo.svc.cluster.local}"},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.Config.GetExtProc().GetService() == "before-overlay.demo.svc.cluster.local"
 	}, "proxy configuration before switching to deployment-only parameters")
@@ -259,7 +344,7 @@ func TestGatewayAPIConfigurationsResolveSameNamespaceParameters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "egress-parameters"},
 		Data:       map[string]string{"deployment": "spec: {replicas: 2}"},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.ValidateForUse() == nil && gateway.Config.GetExtProc() == nil
 	}, "deployment-only parameters use default proxy configuration")
@@ -311,7 +396,7 @@ func TestGatewayAPIConfigurationsRetainLastKnownGoodParameters(t *testing.T) {
 	if !configurations.WaitUntilSynced(stop) {
 		t.Fatal("Gateway API configuration collection did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := configurations.GetKey("demo/egress")
 		return gateway != nil && gateway.Config.GetExtProc().GetService() == "valid.demo.svc.cluster.local"
 	}, "valid initial Gateway parameters")

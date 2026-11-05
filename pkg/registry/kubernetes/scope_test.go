@@ -15,16 +15,106 @@
 package kubernetes
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestResolveScopeAuthorizesTrustedEPEIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		namespace  string
+		account    string
+		configured string
+		want       model.ClientClass
+	}{
+		{"authorized", "agentio-system", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientEPE},
+		{"custom namespace", "tenant", "processor", "[spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+		{"multiple identities", "tenant", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor, spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+		{"wrong account", "agentio-system", "other", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"wrong namespace", "tenant", "processor", "[spiffe://cluster.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"wrong trust domain", "agentio-system", "processor", "[spiffe://other.local/ns/agentio-system/sa/processor]", model.ClientDedicatedZTunnel},
+		{"disabled", "agentio-system", "processor", "[]", model.ClientDedicatedZTunnel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := egressPod(tc.namespace, "processor", tc.account, "10.0.0.1")
+			pod.UID = "epe-pod"
+			pod.Spec.ServiceAccountName = tc.account
+			pod.Labels = map[string]string{"app.kubernetes.io/name": "agentio-epe"}
+			config := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
+				Data:       map[string]string{"config": "trustedEPEIdentities: " + tc.configured},
+			}
+			r := newTestRegistry(t, t.Context(), []runtime.Object{pod, config}, nil)
+			resolver := r.PodScopeResolver(r.Workloads)
+			scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
+			if err != nil || scope.Class != tc.want {
+				t.Fatalf("scope=%+v err=%v", scope, err)
+			}
+			if err := scope.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			stale := gatewayTestPeer(pod)
+			stale.Kubernetes.WorkloadUID = "old-pod"
+			if _, err := resolver.ResolveScope(stale, ""); err == nil {
+				t.Fatal("stale Pod token accepted")
+			}
+		})
+	}
+}
+
+func TestResolveScopeUpdatesTrustedEPEIdentities(t *testing.T) {
+	pod := egressPod("tenant", "processor", "processor", "10.0.0.1")
+	pod.UID = "epe-pod"
+	pod.Spec.ServiceAccountName = "processor"
+	config := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "agentio-config"},
+		Data: map[string]string{
+			"config": "trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]",
+		},
+	}
+	r := newTestRegistry(t, t.Context(), []runtime.Object{pod, config}, nil)
+	resolver := r.PodScopeResolver(r.Workloads)
+	if scope, err := resolver.ResolveScope(gatewayTestPeer(pod), ""); err != nil || scope.Class != model.ClientEPE {
+		t.Fatalf("initial scope=%+v err=%v", scope, err)
+	}
+	for _, update := range []struct {
+		config string
+		want   model.ClientClass
+	}{
+		{"trustedEPEIdentities: []", model.ClientDedicatedZTunnel},
+		{"trustedEPEIdentities: [spiffe://cluster.local/ns/tenant/sa/processor]", model.ClientEPE},
+	} {
+		config.Data["config"] = update.config
+		var err error
+		config, err = r.client.CoreV1().ConfigMaps(config.Namespace).Update(t.Context(), config, metav1.UpdateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := wait.PollUntilContextTimeout(
+			t.Context(),
+			10*time.Millisecond,
+			time.Second,
+			true,
+			func(context.Context) (bool, error) {
+				scope, err := resolver.ResolveScope(gatewayTestPeer(pod), "")
+				return scope.Class == update.want, err
+			},
+		); err != nil {
+			t.Fatalf("scope did not change to %s: %v", update.want, err)
+		}
+	}
+}
 
 func TestResolveScopeAuthorizesEnrolledGatewayPods(t *testing.T) {
 	ctx := t.Context()
@@ -57,7 +147,7 @@ func TestResolveScopeAuthorizesEnrolledGatewayPods(t *testing.T) {
 		nil,
 	)
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name           string
 		pod            *corev1.Pod
 		serviceAccount string
@@ -70,13 +160,13 @@ func TestResolveScopeAuthorizesEnrolledGatewayPods(t *testing.T) {
 		{name: "label cannot grant gateway scope", pod: spoofed, serviceAccount: "attacker", wantClass: model.ClientDedicatedZTunnel, wantSandboxUID: "test//Pod/demo/attacker"},
 		{name: "unregistered identity gets only sandbox scope", pod: unconfigured, serviceAccount: "missing", wantClass: model.ClientDedicatedZTunnel, wantSandboxUID: "test//Pod/demo/missing"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			principal := model.KubernetesPeer{Namespace: test.pod.Namespace, ServiceAccount: test.serviceAccount}
+		t.Run(tc.name, func(t *testing.T) {
+			principal := model.KubernetesPeer{Namespace: tc.pod.Namespace, ServiceAccount: tc.serviceAccount}
 			peer := model.PeerIdentity{
 				AttestedBy: model.AttestationKubernetes,
 				Kubernetes: model.KubernetesPeer{
-					WorkloadName:   test.pod.Name,
-					WorkloadUID:    string(test.pod.UID),
+					WorkloadName:   tc.pod.Name,
+					WorkloadUID:    string(tc.pod.UID),
 					Namespace:      principal.Namespace,
 					ServiceAccount: principal.ServiceAccount,
 				},
@@ -85,14 +175,14 @@ func TestResolveScopeAuthorizesEnrolledGatewayPods(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveScope(): %v", err)
 			}
-			if scope.Class != test.wantClass || scope.GatewayKey != test.wantKey ||
-				(test.wantClass != model.ClientEgressGateway && scope.WorkloadUID != test.wantSandboxUID) {
+			if scope.Class != tc.wantClass || scope.GatewayKey != tc.wantKey ||
+				(tc.wantClass != model.ClientEgressGateway && scope.WorkloadUID != tc.wantSandboxUID) {
 				t.Fatalf(
 					"ResolveScope() = %+v, want class %s gateway %q sandbox %q",
 					scope,
-					test.wantClass,
-					test.wantKey,
-					test.wantSandboxUID,
+					tc.wantClass,
+					tc.wantKey,
+					tc.wantSandboxUID,
 				)
 			}
 		})
@@ -111,7 +201,7 @@ func TestResolveScopeAuthorizesEnrolledGatewayAPIPod(t *testing.T) {
 	r := newGatewayTestRegistry(t, ctx, watcher, ownedGatewayClass(), ownedGateway(), pod, config)
 	watcher.install(gatewayResource, ctx.Done())
 	watcher.install(gatewayClassResource, ctx.Done())
-	eventually(t, func() bool { return r.Gateways.GetKey("demo/egress") != nil }, "Gateway API registration")
+	testutil.Eventually(t, func() bool { return r.Gateways.GetKey("demo/egress") != nil }, "Gateway API registration")
 
 	peer := model.PeerIdentity{
 		AttestedBy: model.AttestationKubernetes,
@@ -157,12 +247,12 @@ func TestResolveScopeRejectsUnboundTokensForPodScopes(t *testing.T) {
 	}
 	gateway.Labels["member"] = "egress"
 	r := newTestRegistry(t, ctx, []runtime.Object{config, gateway, sandbox, gatewayTestService("demo", "egress")}, nil)
-	eventually(t, func() bool { return len(r.Pods.List()) == 2 }, "pods loaded")
+	testutil.Eventually(t, func() bool { return len(r.Pods.List()) == 2 }, "pods loaded")
 
 	gatewayPrincipal := model.KubernetesPeer{Namespace: "demo", ServiceAccount: "egress"}
 	sandboxPrincipal := model.KubernetesPeer{Namespace: "demo", ServiceAccount: "app"}
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		principal model.KubernetesPeer
 		bound     bool
@@ -193,14 +283,14 @@ func TestResolveScopeRejectsUnboundTokensForPodScopes(t *testing.T) {
 			wantKey:   "test//Pod/demo/sandbox",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			peer := model.PeerIdentity{AttestedBy: model.AttestationKubernetes, Kubernetes: test.principal}
-			if test.bound {
-				peer.Kubernetes.WorkloadName = test.podName
-				peer.Kubernetes.WorkloadUID = test.podUID
+		t.Run(tc.name, func(t *testing.T) {
+			peer := model.PeerIdentity{AttestedBy: model.AttestationKubernetes, Kubernetes: tc.principal}
+			if tc.bound {
+				peer.Kubernetes.WorkloadName = tc.podName
+				peer.Kubernetes.WorkloadUID = tc.podUID
 			}
 			scope, err := r.PodScopeResolver(r.Workloads).ResolveScope(peer, "")
-			if !test.bound {
+			if !tc.bound {
 				if err == nil {
 					t.Fatalf("ResolveScope() = %+v, want unbound token rejection", scope)
 				}
@@ -209,14 +299,14 @@ func TestResolveScopeRejectsUnboundTokensForPodScopes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveScope(): %v", err)
 			}
-			if scope.Class != test.wantClass {
-				t.Fatalf("ResolveScope() class = %v, want %v", scope.Class, test.wantClass)
+			if scope.Class != tc.wantClass {
+				t.Fatalf("ResolveScope() class = %v, want %v", scope.Class, tc.wantClass)
 			}
-			if test.wantClass == model.ClientEgressGateway && scope.GatewayKey != test.wantKey {
-				t.Fatalf("ResolveScope() gateway key = %q, want %q", scope.GatewayKey, test.wantKey)
+			if tc.wantClass == model.ClientEgressGateway && scope.GatewayKey != tc.wantKey {
+				t.Fatalf("ResolveScope() gateway key = %q, want %q", scope.GatewayKey, tc.wantKey)
 			}
-			if test.wantClass == model.ClientDedicatedZTunnel && scope.WorkloadUID != test.wantKey {
-				t.Fatalf("ResolveScope() sandbox UID = %q, want %q", scope.WorkloadUID, test.wantKey)
+			if tc.wantClass == model.ClientDedicatedZTunnel && scope.WorkloadUID != tc.wantKey {
+				t.Fatalf("ResolveScope() sandbox UID = %q, want %q", scope.WorkloadUID, tc.wantKey)
 			}
 		})
 	}
@@ -253,7 +343,7 @@ func TestResolveSharedZTunnelRequiresPodBoundToken(t *testing.T) {
 		},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{ztunnel, elsewhere}, nil)
-	eventually(t, func() bool { return len(r.Pods.List()) == 2 }, "pods loaded")
+	testutil.Eventually(t, func() bool { return len(r.Pods.List()) == 2 }, "pods loaded")
 
 	principal := model.KubernetesPeer{Namespace: "agentio-system", ServiceAccount: "ztunnel"}
 	unbound := model.PeerIdentity{AttestedBy: model.AttestationKubernetes, Kubernetes: principal}
@@ -290,9 +380,9 @@ func TestResolveScopeRejectsReplacedPodUID(t *testing.T) {
 		Status: corev1.PodStatus{PodIP: "10.0.0.10"},
 	}
 	r := newTestRegistry(t, ctx, []runtime.Object{live}, nil)
-	eventually(t, func() bool { return len(r.Pods.List()) == 1 }, "replacement pod loaded")
+	testutil.Eventually(t, func() bool { return len(r.Pods.List()) == 1 }, "replacement pod loaded")
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		uid       string
 		wantError bool
@@ -300,12 +390,12 @@ func TestResolveScopeRejectsReplacedPodUID(t *testing.T) {
 		{name: "stale bound UID", uid: "original-uid", wantError: true},
 		{name: "matching bound UID", uid: "replacement-uid"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			peer := model.PeerIdentity{
 				AttestedBy: model.AttestationKubernetes,
 				Kubernetes: model.KubernetesPeer{
 					WorkloadName:   "sandbox",
-					WorkloadUID:    test.uid,
+					WorkloadUID:    tc.uid,
 					NodeName:       "node-a",
 					Namespace:      "demo",
 					ServiceAccount: "app",
@@ -313,7 +403,7 @@ func TestResolveScopeRejectsReplacedPodUID(t *testing.T) {
 			}
 
 			scope, err := r.PodScopeResolver(r.Workloads).ResolveScope(peer, "node-a")
-			if test.wantError {
+			if tc.wantError {
 				if err == nil {
 					t.Fatalf("ResolveScope() = %+v, want stale bound UID rejection", scope)
 				}
@@ -441,7 +531,7 @@ func TestResolveScopeDistinguishesPendingFromDenied(t *testing.T) {
 			WorkloadUID:    "pod-uid",
 		},
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		missing bool
 		mutate  func(*corev1.Pod)
@@ -460,16 +550,16 @@ func TestResolveScopeDistinguishesPendingFromDenied(t *testing.T) {
 		},
 		{name: "completed Pod", mutate: func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded }},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "worker", UID: "pod-uid"},
 				Spec:       corev1.PodSpec{ServiceAccountName: "worker"},
 			}
-			if tt.mutate != nil {
-				tt.mutate(pod)
+			if tc.mutate != nil {
+				tc.mutate(pod)
 			}
 			var pods []*corev1.Pod
-			if !tt.missing {
+			if !tc.missing {
 				pods = append(pods, pod)
 			}
 			resolver := &PodScopeResolver{
@@ -478,8 +568,8 @@ func TestResolveScopeDistinguishesPendingFromDenied(t *testing.T) {
 				synced:    func() bool { return true },
 			}
 			_, err := resolver.ResolveScope(peer, "")
-			if err == nil || errors.Is(err, model.ErrScopeNotReady) != tt.pending {
-				t.Fatalf("ResolveScope() = %v, want pending=%t", err, tt.pending)
+			if err == nil || errors.Is(err, model.ErrScopeNotReady) != tc.pending {
+				t.Fatalf("ResolveScope() = %v, want pending=%t", err, tc.pending)
 			}
 		})
 	}

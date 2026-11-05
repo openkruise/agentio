@@ -4,7 +4,7 @@
     "name": "ZTUNNEL_REPO_SHA",
     "repoName": "openkruise/ztunnel",
     "file": "",
-    "lastStableSHA": "0527e82c6a5ecf16a12de5c38016154e2590a0ed"
+    "lastStableSHA": "b31df188dacf1e3c5aa433266e4c70cb7e3a8f5b"
   },
   {
     "_comment": "Immutable digest of the multi-architecture CNI image.",
@@ -25,9 +25,10 @@
     "digest": "sha256:850848747fa0481a31b0f01d33c7202305a9c2df50d745bdaa2684bb635de098"
   },
   {
-    "_comment": "Public CA package from trust-manager, Debian Bookworm ca-certificates 20250419~deb12u1.1.",
+    "_comment": "Public CA package copied into the Agentiod image at build time.",
     "name": "TRUST_PACKAGE_IMAGE",
     "repository": "quay.io/jetstack/trust-pkg-debian-bookworm",
-    "digest": "sha256:36d3128ce4661ee863bfe0dac12826b092c14eb0a88f8242e60a1fad4c806acd"
+    "tag": "20250419-deb12u2.1",
+    "digest": "sha256:4965dedbe4f54e19af0eae7fafe2c7be54a0bde257e5130c93401a6d5f9489f6"
   }
 ]

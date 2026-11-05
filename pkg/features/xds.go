@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strconv"
 	"time"
 
 	"istio.io/istio/pkg/env"
@@ -48,7 +49,7 @@ var (
 	ClientQueueSize = env.Register(
 		"AGENTIO_CLIENT_QUEUE_SIZE",
 		100,
-		"Maximum requests queued per xDS client before the stream is considered stuck.",
+		"Maximum incoming requests buffered per xDS stream before reads apply backpressure.",
 	).Get()
 	MaxServerConnectionAge, maxServerConnectionAgeErr = time.ParseDuration(env.Register(
 		"AGENTIO_KEEPALIVE_MAX_SERVER_CONNECTION_AGE",
@@ -58,9 +59,33 @@ var (
 	PushConcurrency = env.Register(
 		"AGENTIO_PUSH_CONCURRENCY",
 		defaultPushConcurrency(),
-		"Concurrency limit for background pushes and for streams awaiting xDS acknowledgements, with independent initial-response, established-request, and background-response pools. "+
+		"Concurrency limit for initializing streams, background pushes, and streams awaiting xDS acknowledgements, with independent admission, initial-response, established-request, and background-response pools. "+
 			"Defaults to min(15 + 5 * GOMAXPROCS, 100).",
 	).Get()
+	XDSMaxPodStreams, xdsMaxPodStreamsErr = strconv.Atoi(
+		env.Register("AGENTIO_XDS_MAX_POD_STREAMS", "0", "Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity.").
+			Get(),
+	)
+	XDSInitialAdmissionTimeout, xdsInitialAdmissionTimeoutErr = time.ParseDuration(env.Register(
+		"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT",
+		"1s",
+		"Maximum wait for a new stream initialization slot before authentication; must be positive.",
+	).Get())
+	XDSRateLimitTimeout, xdsRateLimitTimeoutErr = time.ParseDuration(env.Register(
+		"AGENTIO_XDS_RATE_LIMIT_TIMEOUT",
+		"1s",
+		"Maximum wait for new-stream rate admission before authentication; must be positive.",
+	).Get())
+	XDSSendTimeout, xdsSendTimeoutErr = time.ParseDuration(env.Register(
+		"AGENTIO_XDS_SEND_TIMEOUT",
+		"5s",
+		"Maximum duration of one xDS response send before closing the stream; must be positive.",
+	).Get())
+	XDSACKTimeout, xdsACKTimeoutErr = time.ParseDuration(env.Register(
+		"AGENTIO_XDS_ACK_TIMEOUT",
+		"5s",
+		"Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive.",
+	).Get())
 	XDSCPUBudget = env.Register(
 		"AGENTIO_XDS_CPU_BUDGET",
 		"",
@@ -78,6 +103,29 @@ var (
 )
 
 func validateXDS() error {
+	if xdsMaxPodStreamsErr != nil {
+		return fmt.Errorf("parse AGENTIO_XDS_MAX_POD_STREAMS: %w", xdsMaxPodStreamsErr)
+	}
+	if XDSMaxPodStreams < 0 {
+		return fmt.Errorf("AGENTIO_XDS_MAX_POD_STREAMS must not be negative")
+	}
+	for _, timeout := range []struct {
+		name  string
+		value time.Duration
+		err   error
+	}{
+		{"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT", XDSInitialAdmissionTimeout, xdsInitialAdmissionTimeoutErr},
+		{"AGENTIO_XDS_RATE_LIMIT_TIMEOUT", XDSRateLimitTimeout, xdsRateLimitTimeoutErr},
+		{"AGENTIO_XDS_SEND_TIMEOUT", XDSSendTimeout, xdsSendTimeoutErr},
+		{"AGENTIO_XDS_ACK_TIMEOUT", XDSACKTimeout, xdsACKTimeoutErr},
+	} {
+		if timeout.err != nil {
+			return fmt.Errorf("parse %s: %w", timeout.name, timeout.err)
+		}
+		if timeout.value <= 0 {
+			return fmt.Errorf("%s must be positive", timeout.name)
+		}
+	}
 	if xdsCPUBudgetErr != nil {
 		return xdsCPUBudgetErr
 	}

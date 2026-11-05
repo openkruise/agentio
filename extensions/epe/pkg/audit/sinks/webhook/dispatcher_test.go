@@ -48,14 +48,14 @@ func TestNewBuffered_Sizing(t *testing.T) {
 		{name: "zero values fall back to defaults", buffer: 0, workers: 0, wantBuffer: DefaultBufferSize, wantWorkers: DefaultWorkers},
 		{name: "custom values kept", buffer: 100, workers: 4, wantBuffer: 100, wantWorkers: 4},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := NewBuffered(logr.Discard(), tt.buffer, tt.workers, false)
-			if d.d.Cap() != tt.wantBuffer {
-				t.Errorf("buffer size: want %d, got %d", tt.wantBuffer, d.d.Cap())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewBuffered(logr.Discard(), tc.buffer, tc.workers, false)
+			if d.d.Cap() != tc.wantBuffer {
+				t.Errorf("buffer size: want %d, got %d", tc.wantBuffer, d.d.Cap())
 			}
-			if d.d.Workers() != tt.wantWorkers {
-				t.Errorf("workers: want %d, got %d", tt.wantWorkers, d.d.Workers())
+			if d.d.Workers() != tc.wantWorkers {
+				t.Errorf("workers: want %d, got %d", tc.wantWorkers, d.d.Workers())
 			}
 			if d.client == nil {
 				t.Error("client should not be nil")
@@ -73,17 +73,17 @@ func TestNewBuffered_InsecureSkipVerify(t *testing.T) {
 		{name: "insecure true sets TLS config", insecureSkipVerify: true, wantTLSConfig: true},
 		{name: "insecure false leaves TLS config nil", insecureSkipVerify: false, wantTLSConfig: false},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := NewBuffered(logr.Discard(), 1, 1, tt.insecureSkipVerify)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewBuffered(logr.Discard(), 1, 1, tc.insecureSkipVerify)
 			tr := d.client.Transport.(*http.Transport)
-			if tt.wantTLSConfig && tr.TLSClientConfig == nil {
+			if tc.wantTLSConfig && tr.TLSClientConfig == nil {
 				t.Error("expected TLS config to be set")
 			}
-			if !tt.wantTLSConfig && tr.TLSClientConfig != nil {
+			if !tc.wantTLSConfig && tr.TLSClientConfig != nil {
 				t.Error("expected TLS config to be nil")
 			}
-			if tt.wantTLSConfig && !tr.TLSClientConfig.InsecureSkipVerify {
+			if tc.wantTLSConfig && !tr.TLSClientConfig.InsecureSkipVerify {
 				t.Error("expected InsecureSkipVerify to be true")
 			}
 		})
@@ -108,10 +108,10 @@ func TestBuffered_Enqueue_NilSafe(t *testing.T) {
 		{name: "nil dispatcher", d: nil},
 		{name: "zero value with nil channel", d: &Buffered{}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// Must not panic.
-			tt.d.Enqueue(Delivery{URL: "http://example.com"})
+			tc.d.Enqueue(Delivery{URL: "http://example.com"})
 		})
 	}
 }
@@ -293,8 +293,8 @@ func TestBuffered_DispatchOne_RequestShape(t *testing.T) {
 			wantBody: "test",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			var called atomic.Int32
 			var receivedBody string
 			var receivedHeaders http.Header
@@ -313,23 +313,23 @@ func TestBuffered_DispatchOne_RequestShape(t *testing.T) {
 				logger: logr.Discard(),
 			}
 
-			delivery := tt.delivery
+			delivery := tc.delivery
 			delivery.URL = srv.URL
 			d.dispatchOne(context.Background(), delivery)
 
 			if called.Load() != 1 {
 				t.Fatalf("expected 1 HTTP call, got %d", called.Load())
 			}
-			for name, want := range tt.wantHeaders {
+			for name, want := range tc.wantHeaders {
 				if got := receivedHeaders.Get(name); got != want {
 					t.Errorf("header %s: want %q, got %q", name, want, got)
 				}
 			}
-			if got := receivedHeaders.Get("Content-Type"); got != tt.wantContentType {
-				t.Errorf("content type: want %q, got %q", tt.wantContentType, got)
+			if got := receivedHeaders.Get("Content-Type"); got != tc.wantContentType {
+				t.Errorf("content type: want %q, got %q", tc.wantContentType, got)
 			}
-			if receivedBody != tt.wantBody {
-				t.Errorf("body: want %q, got %q", tt.wantBody, receivedBody)
+			if receivedBody != tc.wantBody {
+				t.Errorf("body: want %q, got %q", tc.wantBody, receivedBody)
 			}
 		})
 	}
@@ -344,10 +344,10 @@ func TestBuffered_DispatchOne_HTTPError(t *testing.T) {
 		{name: "500 internal server error", statusCode: 500},
 		{name: "503 service unavailable", statusCode: 503},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.statusCode)
+				w.WriteHeader(tc.statusCode)
 			}))
 			defer srv.Close()
 

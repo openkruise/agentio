@@ -40,7 +40,7 @@ func TestAuthorizationSelectionIncludesGlobalNamespaceAndWorkloadSelector(t *tes
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -68,7 +68,7 @@ func TestNodeAuthorizationSelectionUsesLocalWorkloadFacts(t *testing.T) {
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{
 		Class:     model.ClientSharedZTunnel,
-		Principal: serviceAccountPrincipal("agentio-system", "ztunnel"),
+		Principal: model.MustServiceAccountPrincipal("agentio-system", "ztunnel"),
 		NodeName:  "node-a",
 	}
 
@@ -131,7 +131,7 @@ func TestUnrelatedWorkloadAddressChangeDoesNotReconcileAuthorization(t *testing.
 	}})
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
@@ -215,7 +215,7 @@ func TestAuthorizationPolicyOnlyDeltaKeepsRenameAndRemovalSemantics(t *testing.T
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name                     string
 		names, selected, removed []string
 	}{
@@ -224,7 +224,7 @@ func TestAuthorizationPolicyOnlyDeltaKeepsRenameAndRemovalSemantics(t *testing.T
 		{"new-alias", []string{"demo/alias"}, []string{"demo/renamed"}, nil},
 		{"unrelated", []string{"demo/unrelated"}, nil, nil},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			delta := generateAuthorizationIncremental(
 				GenerationRequest{
 					Scope:   scope,
@@ -235,20 +235,20 @@ func TestAuthorizationPolicyOnlyDeltaKeepsRenameAndRemovalSemantics(t *testing.T
 						scope,
 						model.WorkloadAuthorizationType,
 						before,
-						SubscriptionView{wildcard: test.names == nil, names: test.names},
+						SubscriptionView{wildcard: tc.names == nil, names: tc.names},
 					),
 					Snapshot: after,
 					Update:   updateBetween(before, after, before.Diff(after)),
 				},
 			)
-			if !slices.Equal(selectedNames(delta.Resources), test.selected) ||
-				!slices.Equal(delta.Removed, test.removed) {
+			if !slices.Equal(selectedNames(delta.Resources), tc.selected) ||
+				!slices.Equal(delta.Removed, tc.removed) {
 				t.Fatalf(
 					"delta resources=%v removed=%v, want resources=%v removed=%v",
 					selectedNames(delta.Resources),
 					delta.Removed,
-					test.selected,
-					test.removed,
+					tc.selected,
+					tc.removed,
 				)
 			}
 		})
@@ -277,7 +277,7 @@ func TestAuthorizationPolicyOnlyDeltaKeepsRenameAndRemovalSemantics(t *testing.T
 
 func TestOpaquePrincipalKeepsSourceNamespacePolicySelection(t *testing.T) {
 	workload := selectionWorkload(t, "opaque", "demo", "node-a", "", "")
-	workload.Facts.Workload.Principal = mustTestPrincipal("cluster.local", "workload/app")
+	workload.Facts.Workload.Principal = model.MustPrincipal("cluster.local", "workload/app")
 	if got := workloadNamespaces([]model.Resource{workload}); !got.Contains("demo") {
 		t.Fatalf("source namespace lost for opaque principal: %v", got)
 	}

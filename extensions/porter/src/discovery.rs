@@ -315,7 +315,43 @@ impl Client {
         name: &str,
         request_deadline: Option<Instant>,
     ) -> Result<Arc<View>, DemandError> {
+        Ok(self.pin(kind, name, request_deadline).await?.value)
+    }
+
+    pub(crate) async fn pin(
+        self: &Arc<Self>,
+        kind: ResourceKind,
+        name: &str,
+        request_deadline: Option<Instant>,
+    ) -> Result<PinnedView, DemandError> {
         let mut lease = self.acquire(kind, name)?;
+        let value = self.wait(&mut lease, request_deadline).await?;
+        Ok(PinnedView {
+            value,
+            _lease: lease,
+        })
+    }
+
+    pub(crate) fn dependencies(
+        self: &Arc<Self>,
+        kind: ResourceKind,
+        deadline: Option<Instant>,
+    ) -> DependencySet {
+        DependencySet {
+            client: self.clone(),
+            kind,
+            deadline,
+            leases: Vec::new(),
+            failures: HashMap::new(),
+        }
+    }
+
+    async fn wait(
+        &self,
+        lease: &mut Lease,
+        request_deadline: Option<Instant>,
+    ) -> Result<Arc<View>, DemandError> {
+        let kind = lease.key.kind;
         let mut receiver = lease.generation.value.subscribe();
         self.metrics
             .cache_lookups
@@ -370,25 +406,26 @@ impl Client {
         names: &[String],
         request_deadline: Option<Instant>,
     ) -> Result<Vec<Arc<View>>, DemandError> {
-        if names.is_empty() {
-            return Ok(Vec::new());
-        }
-        if let Some(values) = self.cached_many(kind, names) {
-            self.metrics
-                .cache_lookups
-                .get_or_create(&DemandResult {
-                    resource_type: kind.type_url(),
-                    result: "hit",
-                })
-                .inc_by(names.len() as u64);
-            return Ok(values);
-        }
-        try_join_all(
-            names
-                .iter()
-                .map(|name| self.demand(kind, name, request_deadline)),
-        )
-        .await
+        self.dependencies(kind, request_deadline)
+            .resolve(names)
+            .await
+    }
+
+    // One cache publication supplies every object retained by a request snapshot.
+    pub(crate) fn capture(
+        &self,
+        keys: &[(ResourceKind, &str)],
+    ) -> Result<Vec<Option<Arc<View>>>, DemandError> {
+        let state = self.state.lock().unwrap();
+        keys.iter()
+            .map(
+                |(kind, name)| match state.types[kind.index()].resolve(name) {
+                    Outcome::Ready(value) => Ok(Some(value)),
+                    Outcome::Ambiguous => Err(DemandError::Ambiguous),
+                    Outcome::Missing | Outcome::Pending => Ok(None),
+                },
+            )
+            .collect()
     }
 
     fn cached_many(&self, kind: ResourceKind, names: &[String]) -> Option<Vec<Arc<View>>> {
@@ -419,6 +456,14 @@ impl Client {
             }
             self.expiry.notify_one();
         }
+        drop(state);
+        self.metrics
+            .cache_lookups
+            .get_or_create(&DemandResult {
+                resource_type: kind.type_url(),
+                result: "hit",
+            })
+            .inc_by(names.len() as u64);
         Some(values)
     }
 
@@ -780,6 +825,64 @@ impl Client {
             "applied ADS response"
         );
         Ok(())
+    }
+}
+
+pub(crate) struct PinnedView {
+    pub value: Arc<View>,
+    _lease: Lease,
+}
+
+// Keep dependency interests and terminal failures local to one snapshot construction.
+pub(crate) struct DependencySet {
+    client: Arc<Client>,
+    kind: ResourceKind,
+    deadline: Option<Instant>,
+    leases: Vec<Lease>,
+    failures: HashMap<String, DemandError>,
+}
+
+impl DependencySet {
+    pub async fn resolve(&mut self, names: &[String]) -> Result<Vec<Arc<View>>, DemandError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        for name in names {
+            if let Some(error) = self.failures.get(name) {
+                return Err(*error);
+            }
+        }
+        if let Some(values) = self.client.cached_many(self.kind, names) {
+            return Ok(values);
+        }
+        let mut leases = names
+            .iter()
+            .map(|name| self.client.acquire(self.kind, name))
+            .collect::<Result<Vec<_>, _>>()?;
+        let client = &self.client;
+        let deadline = self.deadline;
+        let result = try_join_all(
+            leases
+                .iter_mut()
+                .enumerate()
+                .map(|(index, lease)| async move {
+                    client
+                        .wait(lease, deadline)
+                        .await
+                        .map_err(|error| (names[index].clone(), error))
+                }),
+        )
+        .await;
+        match result {
+            Ok(values) => {
+                self.leases.extend(leases);
+                Ok(values)
+            }
+            Err((name, error)) => {
+                self.failures.insert(name, error);
+                Err(error)
+            }
+        }
     }
 }
 

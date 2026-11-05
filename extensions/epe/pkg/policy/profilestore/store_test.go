@@ -136,16 +136,16 @@ func TestMatches(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			store := MakeFakeStore()
-			store.ProfileSet(newTestProfile("test-profile", "default", tt.profileLabels))
+			store.ProfileSet(newTestProfile("test-profile", "default", tc.profileLabels))
 
 			matched := store.ProfilesFor(
-				subject.Subject{Workload: subject.Workload{Namespace: tt.ns, Labels: tt.workloadLabels}},
+				subject.Subject{Workload: subject.Workload{Namespace: tc.ns, Labels: tc.workloadLabels}},
 			)
-			if len(matched) != tt.want {
-				t.Fatalf("expected %d profiles, got %d", tt.want, len(matched))
+			if len(matched) != tc.want {
+				t.Fatalf("expected %d profiles, got %d", tc.want, len(matched))
 			}
 		})
 	}
@@ -290,10 +290,10 @@ func TestMatches_PriorityOrdering(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			store := MakeFakeStore()
-			for _, p := range tt.profiles {
+			for _, p := range tc.profiles {
 				store.ProfileSet(p)
 			}
 			matched := store.ProfilesFor(
@@ -301,11 +301,11 @@ func TestMatches_PriorityOrdering(t *testing.T) {
 					Workload: subject.Workload{Namespace: "default", Labels: map[string]string{"app": "test"}},
 				},
 			)
-			if len(matched) != len(tt.want) {
-				t.Fatalf("expected %d profiles, got %d", len(tt.want), len(matched))
+			if len(matched) != len(tc.want) {
+				t.Fatalf("expected %d profiles, got %d", len(tc.want), len(matched))
 			}
 			got := profileNames(matched)
-			for i, w := range tt.want {
+			for i, w := range tc.want {
 				if got[i] != w {
 					t.Fatalf("position %d: expected %q, got %q (full order: %v)", i, w, got[i], got)
 				}

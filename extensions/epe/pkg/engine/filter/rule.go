@@ -43,3 +43,11 @@ type RuleConfig[C any] struct {
 	// Scope is the immutable CEL/template evaluation scope for this unit.
 	Scope *inputs.Scope
 }
+
+// Unit is one bound policy rule, with its immutable evaluation scope and configs.
+type Unit struct {
+	ID    UnitID
+	Scope *inputs.Scope
+	// Cfgs[i] belongs to filter registration i; nil means no config for that filter.
+	Cfgs []any
+}

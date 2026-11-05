@@ -102,5 +102,5 @@ func (s *Server) pushPendingConfigs(
 		Snapshot:        snapshot,
 		Full:            true,
 		SubscribedNames: names,
-	}, false)
+	}, false, nil)
 }

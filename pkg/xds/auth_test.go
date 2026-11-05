@@ -65,19 +65,19 @@ func TestClientVersionFromNode(t *testing.T) {
 		},
 		{name: "absent", mutate: func(*discoveryv3.DeltaDiscoveryRequest) {}, version: ""},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			request := requestWithMetadata("client-pod", "demo", "node-a")
-			tt.mutate(request)
-			if version := clientVersion(request.GetNode()); version != tt.version {
-				t.Fatalf("clientVersion() = %q, want %q", version, tt.version)
+			tc.mutate(request)
+			if version := clientVersion(request.GetNode()); version != tc.version {
+				t.Fatalf("clientVersion() = %q, want %q", version, tc.version)
 			}
 		})
 	}
 }
 
 func TestScopeAllowsGatewayOwnedResources(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name    string
 		scope   model.ClientScope
 		owner   string
@@ -90,10 +90,18 @@ func TestScopeAllowsGatewayOwnedResources(t *testing.T) {
 		{name: "dedicated client", scope: model.ClientScope{Class: model.ClientDedicatedZTunnel, GatewayKey: "demo/egress"}, owner: "demo/egress"},
 		{name: "shared client", scope: model.ClientScope{Class: model.ClientSharedZTunnel, GatewayKey: "demo/egress"}, owner: "demo/egress"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			resource := model.Resource{Key: model.ResourceKey{TypeURL: model.SecretType, Name: "secret"}, Facts: model.ResourceFacts{GatewayOwner: tt.owner}}
-			if got := scopeAllows(tt.scope, resource); got != tt.allowed {
-				t.Fatalf("scopeAllows() = %v, want %v", got, tt.allowed)
+		t.Run(tc.name, func(t *testing.T) {
+			resource := model.Resource{
+				Key: model.ResourceKey{
+					TypeURL: model.SecretType,
+					Name:    "secret",
+				},
+				Facts: model.ResourceFacts{
+					GatewayOwner: tc.owner,
+				},
+			}
+			if got := scopeAllows(tc.scope, resource); got != tc.allowed {
+				t.Fatalf("scopeAllows() = %v, want %v", got, tc.allowed)
 			}
 		})
 	}
@@ -103,6 +111,16 @@ func TestStandaloneSNIPolicyTypeIsUnknown(t *testing.T) {
 	for _, class := range []model.ClientClass{model.ClientDedicatedZTunnel, model.ClientSharedZTunnel, model.ClientEgressGateway} {
 		if known, allowed := typeAccess(class, model.SniTrafficPolicyType); known || allowed {
 			t.Fatalf("standalone SNI type access for %v = (%v, %v), want unknown and denied", class, known, allowed)
+		}
+	}
+}
+
+func TestEPETypeAccess(t *testing.T) {
+	for _, typ := range []string{model.WorkloadType, model.TrafficPolicyType, model.AddressType, model.SandboxType, model.SecretType, model.ClusterType, model.ListenerType} {
+		known, allowed := typeAccess(model.ClientEPE, typ)
+		want := typ == model.WorkloadType || typ == model.TrafficPolicyType
+		if !known || allowed != want {
+			t.Fatalf("EPE access to %s: known=%v allowed=%v", typ, known, allowed)
 		}
 	}
 }

@@ -57,9 +57,9 @@ func TestValidateDomains(t *testing.T) {
 		{
 			name: "networking",
 			mutate: func(t *testing.T) {
-				test.SetForTest(t, &GatewayRootCAPath, "certs/root.pem")
+				test.SetForTest(t, &ClientTrustPackagePath, " ")
 			},
-			wantErr: "gateway root CA path must be absolute",
+			wantErr: "public CA trust package path is required",
 		},
 		{
 			name: "ca rotation",
@@ -95,6 +95,13 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "token audience is required",
 		},
 		{
+			name: "Kubernetes workload authentication mode",
+			mutate: func(t *testing.T) {
+				test.SetForTest(t, &KubernetesWorkloadAuthMode, "unsupported")
+			},
+			wantErr: "unsupported Kubernetes workload authentication mode",
+		},
+		{
 			name: "gateway deployer",
 			mutate: func(t *testing.T) {
 				test.SetForTest(t, &EnableGatewayDeployer, true)
@@ -103,12 +110,12 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "gateway deployer lease name is required",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			setValidFeatures(t)
-			tt.mutate(t)
-			if err := Validate(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
+			tc.mutate(t)
+			if err := Validate(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -122,6 +129,14 @@ func TestValidateAllowsDisabledMaxServerConnectionAge(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsLocalJWTAuthentication(t *testing.T) {
+	setValidFeatures(t)
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "local")
+	if err := Validate(); err != nil {
+		t.Fatalf("Validate() rejected local JWT authentication: %v", err)
+	}
+}
+
 func TestValidatePreservesFirstErrorOrder(t *testing.T) {
 	setValidFeatures(t)
 	test.SetForTest(t, &KRTDebounceAfter, time.Duration(0))
@@ -129,6 +144,54 @@ func TestValidatePreservesFirstErrorOrder(t *testing.T) {
 
 	if err := Validate(); err == nil || !strings.Contains(err.Error(), "KRT debounce quiet period") {
 		t.Fatalf("Validate() error = %v, want KRT validation before networking validation", err)
+	}
+}
+
+func TestValidateNetworkingWithTrustPackage(t *testing.T) {
+	test.SetForTest(t, &ClientTrustPackagePath, "/packages/ca.json")
+	test.SetForTest(t, &GatewayRootCAPath, "unused-relative-path")
+	if err := validateNetworking(); err != nil {
+		t.Fatal(err)
+	}
+	test.SetForTest(t, &GatewayConnectTimeout, time.Duration(0))
+	if err := validateNetworking(); err == nil {
+		t.Fatal("trust package must not bypass connect timeout validation")
+	}
+}
+
+func TestClientTrustPackagePathEnvironment(t *testing.T) {
+	const expectedEnv = "AGENTIO_TEST_TRUST_PACKAGE_PATH"
+	if want, helper := os.LookupEnv(expectedEnv); helper {
+		if ClientTrustPackagePath != want {
+			t.Fatalf("ClientTrustPackagePath = %q, want %q", ClientTrustPackagePath, want)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"default", "", "/usr/local/share/agentio/trust-package/cert-manager-package-debian.json"},
+		{"override", "/packages/custom.json", "/packages/custom.json"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "-test.run=^TestClientTrustPackagePathEnvironment$")
+			for _, variable := range os.Environ() {
+				if !strings.HasPrefix(variable, "AGENTIO_CLIENT_TRUST_PACKAGE_PATH=") &&
+					!strings.HasPrefix(variable, expectedEnv+"=") {
+					command.Env = append(command.Env, variable)
+				}
+			}
+			command.Env = append(command.Env, expectedEnv+"="+tc.want)
+			if tc.name != "default" {
+				command.Env = append(command.Env, "AGENTIO_CLIENT_TRUST_PACKAGE_PATH="+tc.value)
+			}
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("environment test: %v\n%s", err, output)
+			}
+		})
 	}
 }
 
@@ -162,11 +225,16 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &PushDebounceAfter, time.Millisecond)
 	test.SetForTest(t, &PushDebounceMax, 2*time.Millisecond)
 	test.SetForTest(t, &PushConcurrency, 1)
+	test.SetForTest(t, &XDSMaxPodStreams, 0)
+	test.SetForTest(t, &XDSInitialAdmissionTimeout, time.Second)
+	test.SetForTest(t, &XDSRateLimitTimeout, time.Second)
+	test.SetForTest(t, &XDSSendTimeout, 5*time.Second)
+	test.SetForTest(t, &XDSACKTimeout, 5*time.Second)
 	test.SetForTest(t, &RequestRateLimit, 1)
 	test.SetForTest(t, &ClientQueueSize, 1)
 	test.SetForTest(t, &MaxServerConnectionAge, 30*time.Minute)
 	test.SetForTest(t, &GatewayConnectTimeout, time.Second)
-	test.SetForTest(t, &GatewayRootCAPath, "/etc/ssl/certs/ca-certificates.crt")
+	test.SetForTest(t, &ClientTrustPackagePath, "/packages/ca.json")
 	test.SetForTest(t, &CARootLifetime, 10*time.Hour)
 	test.SetForTest(t, &CARenewBefore, 3*time.Hour)
 	test.SetForTest(t, &CARotationCheckInterval, time.Hour)
@@ -182,8 +250,39 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &WorkloadCertLifetime, 2*time.Hour)
 	test.SetForTest(t, &WorkloadCertRenewBefore, time.Hour)
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "tokenreview")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
+}
+
+func TestValidateXDSFlowControlTimeouts(t *testing.T) {
+	for _, timeout := range []struct {
+		name  string
+		value *time.Duration
+	}{
+		{"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT", &XDSInitialAdmissionTimeout},
+		{"AGENTIO_XDS_RATE_LIMIT_TIMEOUT", &XDSRateLimitTimeout},
+		{"AGENTIO_XDS_SEND_TIMEOUT", &XDSSendTimeout},
+		{"AGENTIO_XDS_ACK_TIMEOUT", &XDSACKTimeout},
+	} {
+		for _, invalid := range []time.Duration{0, -time.Second} {
+			t.Run(timeout.name+"/"+invalid.String(), func(t *testing.T) {
+				setValidFeatures(t)
+				test.SetForTest(t, timeout.value, invalid)
+				if err := Validate(); err == nil || !strings.Contains(err.Error(), timeout.name) {
+					t.Fatalf("Validate() = %v, want named timeout validation", err)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateRejectsNegativeMaxStreams(t *testing.T) {
+	setValidFeatures(t)
+	test.SetForTest(t, &XDSMaxPodStreams, -1)
+	if err := Validate(); err == nil || !strings.Contains(err.Error(), "AGENTIO_XDS_MAX_POD_STREAMS") {
+		t.Fatalf("Validate=%v", err)
+	}
 }
 
 func TestValidateAllowsDisabledPushDebounce(t *testing.T) {

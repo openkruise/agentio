@@ -40,6 +40,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	kubetesting "k8s.io/client-go/testing"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/security/internal/casecret"
@@ -145,7 +146,7 @@ func TestSecretModeReadsExistingSecretWithoutMutatingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(t, func() bool { return signer.State().Get() != nil }, "SECRET signer state")
+	testutil.Eventually(t, func() bool { return signer.State().Get() != nil }, "SECRET signer state")
 	if _, err := signer.SignDNS(ctx, "api.example.com", time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +193,7 @@ func TestSelfSignModeCreatesOneSharedSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(t, func() bool { return signer.State().Get() != nil }, "SELF_SIGN signer state")
+	testutil.Eventually(t, func() bool { return signer.State().Get() != nil }, "SELF_SIGN signer state")
 	secret, err := client.Kube().CoreV1().Secrets("agentio-system").Get(ctx, "mitm", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +260,7 @@ func TestSelfSignModeRecoversExpiredRootAtStartup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitForMITM(
+			testutil.Eventually(
 				t,
 				func() bool { return signer.State().Get() != nil && signer.TrustBundles().Get() != nil },
 				"recovered SELF_SIGN state",
@@ -346,18 +347,6 @@ func newMITMSecret(t *testing.T, namespace, name string, lifetime time.Duration,
 	return secret
 }
 
-func waitForMITM(t *testing.T, condition func() bool, description string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", description)
-}
-
 func TestMITMPublicTrustBundleLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -372,7 +361,7 @@ func TestMITMPublicTrustBundleLifecycle(t *testing.T) {
 	}
 	assertBundle := func(expected []byte) {
 		t.Helper()
-		waitForMITM(t, func() bool {
+		testutil.Eventually(t, func() bool {
 			bundle, state := signer.TrustBundles().Get(), signer.State().Get()
 			return bundle != nil && state != nil && bundle.PEM == string(expected) && bundle.Revision == state.Revision
 		}, "matching public trust and signing revision")
@@ -402,7 +391,7 @@ func TestMITMPublicTrustBundleLifecycle(t *testing.T) {
 		Delete(ctx, secret.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(
+	testutil.Eventually(
 		t,
 		func() bool { return signer.State().Get() == nil && signer.TrustBundles().Get() == nil },
 		"CA deletion",
@@ -422,7 +411,7 @@ func TestMITMPublicTrustBundleLifecycle(t *testing.T) {
 		Update(ctx, staged, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(
+	testutil.Eventually(
 		t,
 		func() bool { return signer.State().Get() == nil && signer.TrustBundles().Get() == nil },
 		"invalid CA removal",
@@ -524,7 +513,7 @@ func TestMITMSignerIndependentLeafKeysAndCARotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(t, func() bool { return signer.State().Get() != nil }, "initial CA")
+	testutil.Eventually(t, func() bool { return signer.State().Get() != nil }, "initial CA")
 	first, err := signer.SignDNS(ctx, "first.example.com", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -566,7 +555,7 @@ func TestMITMSignerIndependentLeafKeysAndCARotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(t, func() bool { return replica.State().Get() != nil }, "replica CA")
+	testutil.Eventually(t, func() bool { return replica.State().Get() != nil }, "replica CA")
 	other, err := replica.SignDNS(ctx, "first.example.com", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -582,7 +571,7 @@ func TestMITMSignerIndependentLeafKeysAndCARotation(t *testing.T) {
 		Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForMITM(
+	testutil.Eventually(
 		t,
 		func() bool {
 			s := signer.State().Get()

@@ -17,8 +17,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
@@ -33,6 +34,29 @@ func reqInfo(host, path, method string, port int32, headers map[string]string, q
 		Method:  method,
 		Headers: headers,
 		Query:   query,
+	}
+}
+
+func TestCompileRulesExcludesTLSFromHTTP(t *testing.T) {
+	for _, action := range []v1alpha1.TLSActionType{v1alpha1.TLSActionDeny, v1alpha1.TLSActionPassthrough} {
+		t.Run(string(action), func(t *testing.T) {
+			rules := []v1alpha1.SecurityRule{
+				{
+					Name:    "tls",
+					Match:   []v1alpha1.RuleMatch{{Domains: []string{"*"}}},
+					Actions: v1alpha1.SecurityRuleActions{TLS: &v1alpha1.TLSAction{Action: action}},
+				},
+				matchAllRule("http"),
+			}
+			compiled, err := compileRules(rules)
+			if err != nil || len(compiled) != 1 || compiled[0].Name != "http" {
+				t.Fatalf("HTTP rules = %+v, error = %v", compiled, err)
+			}
+			rules[0].Actions.Bypass = true
+			if _, err := compileRules(rules); err == nil {
+				t.Fatal("mixed TLS/HTTP action accepted")
+			}
+		})
 	}
 }
 
@@ -197,7 +221,9 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 			name: "header prefix match",
 			raw: v1alpha1.RuleMatch{
 				Domains: []string{"*"},
-				Headers: []v1alpha1.HeaderMatch{{Name: "Authorization", Type: v1alpha1.StringMatchTypePrefix, Value: "Bearer "}},
+				Headers: []v1alpha1.HeaderMatch{
+					{Name: "Authorization", Type: v1alpha1.StringMatchTypePrefix, Value: "Bearer "},
+				},
 			},
 			req:  reqInfo("h", "/", "GET", 0, map[string]string{"authorization": "Bearer xyz"}, nil),
 			want: true,
@@ -206,7 +232,9 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 			name: "header regex match",
 			raw: v1alpha1.RuleMatch{
 				Domains: []string{"*"},
-				Headers: []v1alpha1.HeaderMatch{{Name: "X-RequestID", Type: v1alpha1.StringMatchTypeRegex, Value: `^[a-f0-9]{8}$`}},
+				Headers: []v1alpha1.HeaderMatch{
+					{Name: "X-RequestID", Type: v1alpha1.StringMatchTypeRegex, Value: `^[a-f0-9]{8}$`},
+				},
 			},
 			req:  reqInfo("h", "/", "GET", 0, map[string]string{"x-requestid": "deadbeef"}, nil),
 			want: true,
@@ -224,8 +252,10 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 		{
 			name: "query param exact match",
 			raw: v1alpha1.RuleMatch{
-				Domains:     []string{"*"},
-				QueryParams: []v1alpha1.QueryParamMatch{{Name: "model", Type: v1alpha1.StringMatchTypeExact, Value: "gpt-4"}},
+				Domains: []string{"*"},
+				QueryParams: []v1alpha1.QueryParamMatch{
+					{Name: "model", Type: v1alpha1.StringMatchTypeExact, Value: "gpt-4"},
+				},
 			},
 			req:  reqInfo("h", "/", "GET", 0, nil, url.Values{"model": {"gpt-4"}}),
 			want: true,
@@ -233,8 +263,10 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 		{
 			name: "query param missing fails",
 			raw: v1alpha1.RuleMatch{
-				Domains:     []string{"*"},
-				QueryParams: []v1alpha1.QueryParamMatch{{Name: "model", Type: v1alpha1.StringMatchTypeExact, Value: "gpt-4"}},
+				Domains: []string{"*"},
+				QueryParams: []v1alpha1.QueryParamMatch{
+					{Name: "model", Type: v1alpha1.StringMatchTypeExact, Value: "gpt-4"},
+				},
 			},
 			req:  reqInfo("h", "/", "GET", 0, nil, url.Values{}),
 			want: false,
@@ -242,8 +274,10 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 		{
 			name: "query param regex match",
 			raw: v1alpha1.RuleMatch{
-				Domains:     []string{"*"},
-				QueryParams: []v1alpha1.QueryParamMatch{{Name: "v", Type: v1alpha1.StringMatchTypeRegex, Value: `^\d+$`}},
+				Domains: []string{"*"},
+				QueryParams: []v1alpha1.QueryParamMatch{
+					{Name: "v", Type: v1alpha1.StringMatchTypeRegex, Value: `^\d+$`},
+				},
 			},
 			req:  reqInfo("h", "/", "GET", 0, nil, url.Values{"v": {"42"}}),
 			want: true,
@@ -543,15 +577,15 @@ func TestMatchingIndex(t *testing.T) {
 			wantIndex: -1,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			cr := Rule{}
-			for _, d := range tt.domains {
+			for _, d := range tc.domains {
 				cr.Matches = append(cr.Matches, Match{Domains: d})
 			}
-			got := cr.MatchingIndex(&httpreq.HTTPRequest{Host: tt.host})
-			if got != tt.wantIndex {
-				t.Errorf("MatchingIndex = %d, want %d", got, tt.wantIndex)
+			got := cr.MatchingIndex(&httpreq.HTTPRequest{Host: tc.host})
+			if got != tc.wantIndex {
+				t.Errorf("MatchingIndex = %d, want %d", got, tc.wantIndex)
 			}
 		})
 	}
@@ -616,13 +650,13 @@ func TestSortProfiles(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			// Run against both input orderings to prove the comparator is a
 			// total order rather than order-preserving on ties.
 			for _, reversed := range []bool{false, true} {
-				in := make([]*Profile, len(tt.input))
-				copy(in, tt.input)
+				in := make([]*Profile, len(tc.input))
+				copy(in, tc.input)
 				if reversed {
 					for i, j := 0, len(in)-1; i < j; i, j = i+1, j-1 {
 						in[i], in[j] = in[j], in[i]
@@ -633,9 +667,9 @@ func TestSortProfiles(t *testing.T) {
 				for i, p := range in {
 					got[i] = sortKey(p)
 				}
-				for i := range tt.want {
-					if got[i] != tt.want[i] {
-						t.Errorf("reversed=%v: order = %v, want %v", reversed, got, tt.want)
+				for i := range tc.want {
+					if got[i] != tc.want[i] {
+						t.Errorf("reversed=%v: order = %v, want %v", reversed, got, tc.want)
 						break
 					}
 				}

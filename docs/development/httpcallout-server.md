@@ -1,6 +1,6 @@
 # Develop an HTTPCallout server
 
-An HTTPCallout server receives a JSON `Invocation` from EPE and returns a JSON `Decision`. The wire format is the same over HTTP1, HTTPS HTTP2 and cleartext HTTP2 (h2c); it is not gRPC. This example allows requests by default, rejects the illustrative destination `blocked.example`, and adds a verdict header to the message for the current phase.
+An HTTPCallout server receives a JSON `Invocation` from the Egress Policy Enforcer (EPE) and returns a JSON `Decision`. The wire format is the same over HTTP1, HTTPS HTTP2 and cleartext HTTP2 (h2c); it is not gRPC. This example allows requests by default, rejects the illustrative destination `blocked.example`, and adds a verdict header to the message for the current phase. It is a minimal HTTP-only server: it sets up no TLS listener and no Kubernetes Service.
 
 ## Run the example
 
@@ -83,7 +83,7 @@ func main() {
 go run /tmp/httpcallout-example.go -h2c
 ```
 
-Without `-h2c`, the server accepts HTTP1 only. With it, the same listener accepts both HTTP1 and HTTP2 prior knowledge, matching EPE's `protocol: HTTP2` with an `http://` URL. h2c provides no TLS encryption. For HTTPS, serve TLS with HTTP2/ALPN enabled and configure the provider's TLS settings; the example above does not create a TLS listener.
+Without `-h2c`, the server accepts HTTP1 only. With it, the same listener accepts both HTTP1 and HTTP2 prior knowledge, matching EPE's `protocol: HTTP2` with an `http://` URL. h2c provides no TLS encryption; for HTTPS, serve TLS with HTTP2/ALPN enabled and configure the provider's TLS settings.
 
 `Continue(inv.Phase)` targets request mutations in the request phase and response mutations in the response phase. `Respond(inv.Phase, statusCode)` always constructs a local response. Both return a builder with `SetHeader`, `AppendHeader`, `RemoveHeader`, `Body`, `StatusCode` and `Reason` methods; `Build()` supplies the protocol version and checks the existing decision contract. `Body("")` explicitly clears the body, while omitting it leaves the body unchanged. Header operations keep their call order. Invalid combinations, such as `Continue(PhaseRequest).StatusCode(403)` or removing a header from a new local response, return an error from `Build()`.
 
@@ -147,7 +147,7 @@ extensionProviders:
         maxConcurrentStreams: 32
 ```
 
-Replace the URL with an address reachable from EPE. The service name above assumes you deploy the server behind that Kubernetes Service; this example does not create it. For a container deployment, run the server with `-listen :18080 -h2c`. A laptop's `127.0.0.1` is not reachable as localhost from an EPE Pod. If running the server without `-h2c`, select `HTTP1` instead. The explicit 1s timeout is illustrative; an omitted timeout defaults to 500ms. See [transport configuration and capacity planning](../reference/epe-configuration.md#httpcallout-transport) for pool defaults and tuning.
+Replace the URL with an address reachable from EPE. The service name above assumes you deploy the server behind that Kubernetes Service. For a container deployment, run the server with `-listen :18080 -h2c`; a laptop's `127.0.0.1` is not reachable as localhost from an EPE Pod. If you run the server without `-h2c`, select `HTTP1` instead. The explicit 1s timeout is illustrative; an omitted timeout defaults to 500ms. See [transport configuration and capacity planning](../reference/epe-configuration.md#httpcallout-transport) for pool defaults and tuning.
 
 Add this action to a matching SecurityProfile rule for the selected workload:
 
@@ -172,9 +172,9 @@ This sends the request body and selected headers, and enables a metadata-only re
 ## Extend the handler
 
 - Replace the example host comparison with your service's decision logic. For backend calls, propagate `r.Context()` so work can stop when EPE cancels or times out; keep shared state safe for concurrent handlers.
-- Treat an absent body as “not collected,” distinct from a present empty string. Bodies are complete UTF-8 strings, not base64 or streamed chunks. In the response phase only `response.body` can be present; the original request body is not retained. Enable the corresponding phase body in the policy before relying on it for scanning.
+- Treat an absent body as "not collected," distinct from a present empty string. Bodies are complete UTF-8 strings, not base64 or streamed chunks. In the response phase only `response.body` can be present; the original request body is not retained. Enable the corresponding phase body in the policy before relying on it for scanning.
 - Set `request` mutations only when continuing the request phase and `response` mutations when continuing the response phase. `respond` instead requires `response.statusCode` and cannot include request mutations. A body mutation replaces the whole body. The builder validates these rules in `Build()`; when constructing `Decision` structs directly, use `Decision.Validate(phase)` in your service's tests.
 - The example caps the encoded invocation JSON at 8 MiB, which is separate from the policy's original-body limit. JSON escaping and forwarded headers add bytes, so do not assume an 8 MiB original body fits in an 8 MiB invocation. Size this limit for your policy. EPE separately limits the decision JSON to 1 MiB by default through `HTTP_CALLOUT_MAX_RESPONSE_BYTES`.
-- Return a non-2xx status for service failures, and a 2xx response containing a valid decision for business outcomes. EPE does not follow redirects or perform application-level retries of failed callouts. Avoid logging forwarded bodies, credentials or cookies; use `request.id` and the source/policy metadata for correlation.
+- Return a non-2xx status for service failures and a 2xx response with a valid decision for business outcomes. EPE does not follow redirects or retry failed callouts. Avoid logging forwarded bodies, credentials or cookies; use `request.id` and the source/policy metadata for correlation.
 
 For reusable integration testing, the [existing test server](../../test/fixtures/httpcallout/README.md) already provides continue, mutation, denial, delay, reset and malformed-response endpoints, plus configurable HTTP2 streams and receive windows. Its [handler](../../test/fixtures/httpcallout/handler.go) is a larger example using the same production protocol types.

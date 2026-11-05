@@ -46,15 +46,14 @@ const (
 	// FilterStateWorkloadNamespace carries the source workload namespace captured on HBONE CONNECT.
 	FilterStateWorkloadNamespace = "filter_state['agentio.workload.namespace']"
 	FilterStateWorkloadUID       = "filter_state['agentio.workload.uid']"
-	FilterStateSandboxID         = "filter_state['sandbox.id']"
+	FilterStateSandboxUID        = "filter_state['agentio.sandbox.uid']"
 	// AttrSourceAddress is Envoy's standard CEL attribute for the
 	// connection caller (the source workload, from the egress gateway's
 	// perspective). It is delivered as "<ip>:<port>"; only the IP half is
 	// what we want, so callers strip the trailing port. The egress
 	// gateway must list "source.address" in its ext_proc
 	// request_attributes for this to be populated.
-	AttrSourceAddress         = "source.address"
-	FilterStateWorkloadLabels = "filter_state['agentio.workload.labels']"
+	AttrSourceAddress = "source.address"
 	// FilterStateSandboxLabels is the legacy label attribute used during rolling upgrades.
 	FilterStateSandboxLabels   = "filter_state['sandbox.labels']"
 	FilterStateSandboxToken    = "filter_state['sandbox.token']"
@@ -100,18 +99,13 @@ func Extract(
 		IP:        extractWorkloadIP(attrs),
 	}
 	caller := filter.CallerContext{}
-	if uid := extractFilterStateString(attrs, FilterStateSandboxID); uid != "" {
+	if uid := extractFilterStateString(attrs, FilterStateSandboxUID); uid != "" {
 		caller.Subject.Sandbox = &subject.Sandbox{UID: uid}
 	}
-	labelsKey := FilterStateWorkloadLabels
-	if _, present := attrs[ExtProcAttrsKey].GetFields()[labelsKey]; !present {
-		labelsKey = FilterStateSandboxLabels
-	}
+	labelsKey := FilterStateSandboxLabels
 	workloadLabelsEncoded := extractFilterStateString(attrs, labelsKey)
 
-	// Workload labels use the new attribute when present, including empty values.
-	// Both attribute names carry the same base64-encoded
-	// "k1=v1,k2=v2" string.
+	// Legacy ztunnels carry Base64 label pairs in sandbox.labels.
 	workloadLabels := labels.ParseSandboxLabels(workloadLabelsEncoded)
 	if workloadLabelsEncoded != "" && len(workloadLabels) == 0 {
 		loggerD.Info("workload labels were present but failed to decode", "attribute", labelsKey)

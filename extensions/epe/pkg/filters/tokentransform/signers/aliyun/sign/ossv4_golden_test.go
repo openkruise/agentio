@@ -232,14 +232,14 @@ func TestSignOSSV4_Oss2GoldenSignatures(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, err := SignOSSV4(tt.req, tt.triplet, OSSV4Params{Region: goldenRegion})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := SignOSSV4(tc.req, tc.triplet, OSSV4Params{Region: goldenRegion})
 			if err != nil {
 				t.Fatalf("SignOSSV4: %v", err)
 			}
 			authz := findHeader(t, res, "authorization")
-			wantSub := "Signature=" + tt.wantSig
+			wantSub := "Signature=" + tc.wantSig
 			if !strings.Contains(authz, wantSub) {
 				t.Fatalf("signature mismatch vs oss2 oracle\n got  Authorization: %s\n want substring: %s", authz, wantSub)
 			}
@@ -250,7 +250,7 @@ func TestSignOSSV4_Oss2GoldenSignatures(t *testing.T) {
 			}
 			// The forwarded x-oss-security-token must byte-for-byte match the
 			// token that participated in the signature.
-			if tt.wantToken == "" {
+			if tc.wantToken == "" {
 				if !containsString(res.RemoveHeaders, "x-oss-security-token") {
 					t.Fatalf("expected x-oss-security-token in RemoveHeaders, got %+v", res)
 				}
@@ -261,8 +261,8 @@ func TestSignOSSV4_Oss2GoldenSignatures(t *testing.T) {
 				}
 			} else {
 				got := findHeader(t, res, "x-oss-security-token")
-				if got != tt.wantToken {
-					t.Fatalf("forwarded x-oss-security-token = %q, want %q", got, tt.wantToken)
+				if got != tc.wantToken {
+					t.Fatalf("forwarded x-oss-security-token = %q, want %q", got, tc.wantToken)
 				}
 			}
 		})
@@ -320,13 +320,13 @@ func TestSignOSSV4_Oss2GoldenSubresourceQuery(t *testing.T) {
 			wantSig:  "67b1351866cded4b241169863456976f6081ac27ed8043a3b47d17a9c5fd6dc1",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			req := &RequestSnapshot{
-				Method:   tt.method,
+				Method:   tc.method,
 				Host:     goldenHost,
-				Path:     tt.path,
-				RawQuery: tt.rawQuery,
+				Path:     tc.path,
+				RawQuery: tc.rawQuery,
 				Headers: map[string]string{
 					"host":                 goldenHost,
 					"x-oss-date":           goldenDate,
@@ -339,9 +339,9 @@ func TestSignOSSV4_Oss2GoldenSubresourceQuery(t *testing.T) {
 				t.Fatalf("SignOSSV4: %v", err)
 			}
 			authz := findHeader(t, res, "authorization")
-			if !strings.Contains(authz, "Signature="+tt.wantSig) {
+			if !strings.Contains(authz, "Signature="+tc.wantSig) {
 				t.Fatalf("signature mismatch vs oss2 oracle (canonicalQuery=%q)\n got  %s\n want substring Signature=%s",
-					ossV4CanonicalQuery(tt.rawQuery), authz, tt.wantSig)
+					ossV4CanonicalQuery(tc.rawQuery), authz, tc.wantSig)
 			}
 			// No AdditionalHeaders were declared, so the segment must be absent.
 			if strings.Contains(authz, "AdditionalHeaders=") {
@@ -387,13 +387,13 @@ func TestSignOSSV4_GoSDKGoldenVerbatimQuery(t *testing.T) {
 			wantSig:  "113a1287d4f2b2399da9b3f54aba95879491232ba3e7317ad1edcd026f0454f5",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			req := &RequestSnapshot{
 				Method:   "GET",
 				Host:     goldenHost,
 				Path:     "/",
-				RawQuery: tt.rawQuery,
+				RawQuery: tc.rawQuery,
 				Headers: map[string]string{
 					"host":                 goldenHost,
 					"x-oss-date":           goldenDate,
@@ -406,9 +406,9 @@ func TestSignOSSV4_GoSDKGoldenVerbatimQuery(t *testing.T) {
 				t.Fatalf("SignOSSV4: %v", err)
 			}
 			authz := findHeader(t, res, "authorization")
-			if !strings.Contains(authz, "Signature="+tt.wantSig) {
+			if !strings.Contains(authz, "Signature="+tc.wantSig) {
 				t.Fatalf("signature mismatch vs Go SDK oracle (canonicalQuery=%q)\n got  %s\n want substring Signature=%s",
-					ossV4CanonicalQuery(tt.rawQuery), authz, tt.wantSig)
+					ossV4CanonicalQuery(tc.rawQuery), authz, tc.wantSig)
 			}
 		})
 	}
@@ -471,18 +471,18 @@ func TestSignOSSV4_Oss2GoldenAdditionalHeaders(t *testing.T) {
 			wantSegment: "range",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			headers := map[string]string{
 				"host":                 goldenHost,
 				"x-oss-date":           goldenDate,
 				"x-oss-content-sha256": "UNSIGNED-PAYLOAD",
 				"authorization": "OSS4-HMAC-SHA256 Credential=OLDAK/" + goldenDate[:8] +
-					"/" + goldenRegion + "/oss/aliyun_v4_request,Signature=stale,AdditionalHeaders=" + tt.declared,
+					"/" + goldenRegion + "/oss/aliyun_v4_request,Signature=stale,AdditionalHeaders=" + tc.declared,
 			}
-			maps.Copy(headers, tt.extra)
+			maps.Copy(headers, tc.extra)
 			req := &RequestSnapshot{
-				Method:  tt.method,
+				Method:  tc.method,
 				Host:    goldenHost,
 				Path:    "/path/to/object.txt",
 				Headers: headers,
@@ -496,17 +496,21 @@ func TestSignOSSV4_Oss2GoldenAdditionalHeaders(t *testing.T) {
 				t.Fatalf("Resign: %v", err)
 			}
 			authz := findHeader(t, res, "authorization")
-			if !strings.Contains(authz, "Signature="+tt.wantSig) {
-				t.Fatalf("signature mismatch vs oss2 oracle\n got  %s\n want substring Signature=%s", authz, tt.wantSig)
+			if !strings.Contains(authz, "Signature="+tc.wantSig) {
+				t.Fatalf("signature mismatch vs oss2 oracle\n got  %s\n want substring Signature=%s", authz, tc.wantSig)
 			}
-			if tt.wantSegment == "" {
+			if tc.wantSegment == "" {
 				if strings.Contains(authz, "AdditionalHeaders=") {
 					t.Fatalf("expected no AdditionalHeaders= segment, got %s", authz)
 				}
 				return
 			}
-			if !strings.Contains(authz, "AdditionalHeaders="+tt.wantSegment) {
-				t.Fatalf("AdditionalHeaders segment mismatch\n got  %s\n want substring AdditionalHeaders=%s", authz, tt.wantSegment)
+			if !strings.Contains(authz, "AdditionalHeaders="+tc.wantSegment) {
+				t.Fatalf(
+					"AdditionalHeaders segment mismatch\n got  %s\n want substring AdditionalHeaders=%s",
+					authz,
+					tc.wantSegment,
+				)
 			}
 		})
 	}
@@ -594,14 +598,14 @@ func TestOSSCanonicalResource_EndpointMatrix(t *testing.T) {
 			wantResult: "/probe/a.txt",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := virtualHostedBucket(tt.host); got != tt.wantBucket {
-				t.Errorf("virtualHostedBucket(%q) = %q, want %q", tt.host, got, tt.wantBucket)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := virtualHostedBucket(tc.host); got != tc.wantBucket {
+				t.Errorf("virtualHostedBucket(%q) = %q, want %q", tc.host, got, tc.wantBucket)
 			}
-			if got := ossCanonicalResource(tt.host, tt.wirePath); got != tt.wantResult {
+			if got := ossCanonicalResource(tc.host, tc.wirePath); got != tc.wantResult {
 				t.Errorf("ossCanonicalResource(%q, %q) = %q, want %q",
-					tt.host, tt.wirePath, got, tt.wantResult)
+					tc.host, tc.wirePath, got, tc.wantResult)
 			}
 		})
 	}
@@ -676,8 +680,8 @@ func TestSignOSSV4_NeverRewritesPayloadHashHeader(t *testing.T) {
 			payloadHash: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			req := &RequestSnapshot{
 				Method: "PUT",
 				Host:   goldenHost,
@@ -685,7 +689,7 @@ func TestSignOSSV4_NeverRewritesPayloadHashHeader(t *testing.T) {
 				Headers: map[string]string{
 					"host":                 goldenHost,
 					"x-oss-date":           goldenDate,
-					"x-oss-content-sha256": tt.payloadHash,
+					"x-oss-content-sha256": tc.payloadHash,
 				},
 			}
 			res, err := SignOSSV4(req, Triplet{
@@ -705,8 +709,8 @@ func TestSignOSSV4_NeverRewritesPayloadHashHeader(t *testing.T) {
 				t.Fatal("signer must not remove x-oss-content-sha256")
 			}
 			// The caller's map must be left alone as well.
-			if got := req.Headers["x-oss-content-sha256"]; got != tt.payloadHash {
-				t.Fatalf("caller's header map mutated: %q, want %q", got, tt.payloadHash)
+			if got := req.Headers["x-oss-content-sha256"]; got != tc.payloadHash {
+				t.Fatalf("caller's header map mutated: %q, want %q", got, tc.payloadHash)
 			}
 		})
 	}

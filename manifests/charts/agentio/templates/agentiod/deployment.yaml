@@ -1,10 +1,5 @@
+{{- define "agentiod.deployment" -}}
 {{- $clientTrustEnabled := and (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled -}}
-{{- $useTrustPackage := false -}}
-{{- range .Values.agentiod.clientTrustBundle.sources -}}
-{{- if .defaultCAs -}}
-{{- $useTrustPackage = $clientTrustEnabled -}}
-{{- end -}}
-{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +14,9 @@ spec:
   selector:
     matchLabels:
       {{- include "agentiod.selectorLabels" . | nindent 6 }}
+      {{- if eq (.Values.agentiod.controlPlanePool | default "proxy") "policy" }}
+      agentio.kruise.io/control-plane-pool: policy
+      {{- end }}
   strategy:
     rollingUpdate:
       maxSurge: {{ .Values.agentiod.rollingUpdate.maxSurge }}
@@ -28,6 +26,9 @@ spec:
       labels:
         {{- include "agentiod.selectorLabels" . | nindent 8 }}
         app: agentiod
+        {{- if eq (.Values.agentiod.controlPlanePool | default "proxy") "policy" }}
+        agentio.kruise.io/control-plane-pool: policy
+        {{- end }}
         agentio.kruise.io/dataplane-mode: none
         {{- with .Values.agentiod.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -46,29 +47,6 @@ spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- if $useTrustPackage }}
-      initContainers:
-        - name: client-trust-package
-          image: {{ .Values.agentiod.trustPackage.image | quote }}
-          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          args: ["/debian-package", "/packages"]
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            capabilities:
-              drop: [ALL]
-          resources:
-            requests: {cpu: 10m, memory: 16Mi}
-            limits: {memory: 64Mi}
-          volumeMounts:
-            - name: client-trust-package
-              mountPath: /packages
-      volumes:
-        - name: client-trust-package
-          emptyDir:
-            sizeLimit: 5Mi
       {{- end }}
       containers:
         - name: discovery
@@ -114,10 +92,6 @@ spec:
             {{- end }}
             - name: AGENTIO_SANDBOX_MODE
               value: {{ .Values.sandbox.enabled | quote }}
-            {{- if $useTrustPackage }}
-            - name: AGENTIO_CLIENT_TRUST_PACKAGE_PATH
-              value: /var/run/agentio/trust-package/cert-manager-package-debian.json
-            {{- end }}
             - name: AGENTIO_LOG_LEVEL
               value: {{ .Values.agentiod.logging.level | quote }}
             - name: AGENTIO_LOG_FORMAT
@@ -128,6 +102,8 @@ spec:
               value: {{ include "agentiod.fullname" . | quote }}
             - name: AGENTIO_TOKEN_AUDIENCE
               value: {{ .Values.agentiod.tokenAudience | quote }}
+            - name: AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE
+              value: {{ .Values.agentiod.kubernetesWorkloadAuthMode | quote }}
             - name: AGENTIO_TRUSTED_NODE_ACCOUNTS
               value: {{ .Values.agentiod.trustedNodeServiceAccount | quote }}
             - name: AGENTIO_CONFIGMAP_NAME
@@ -174,12 +150,6 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
-          {{- if $useTrustPackage }}
-          volumeMounts:
-            - name: client-trust-package
-              mountPath: /var/run/agentio/trust-package
-              readOnly: true
-          {{- end }}
           resources:
             {{- toYaml .Values.agentiod.resources | nindent 12 }}
       {{- with .Values.agentiod.nodeSelector }}
@@ -198,3 +168,5 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end -}}
+{{ include "agentiod.deployment" . }}

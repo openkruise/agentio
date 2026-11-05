@@ -161,9 +161,7 @@ func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.Upstr
 			TlsParams: upstreamTLSParameters(settings),
 			ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
 				ValidationContext: &tlsv3.CertificateValidationContext{
-					TrustedCa: &corev3.DataSource{
-						Specifier: &corev3.DataSource_Filename{Filename: features.ResolveGatewayRootCAPath()},
-					},
+					TrustedCa: b.upstreamTrustedCA(),
 				},
 			},
 			// HTTP pools supply ALPN; TCP must not advertise HTTP protocols.
@@ -234,9 +232,7 @@ func (b *resourceBuilder) buildDFPCluster(
 			TlsParams: upstreamTLSParameters(settings),
 			ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
 				ValidationContext: &tlsv3.CertificateValidationContext{
-					TrustedCa: &corev3.DataSource{
-						Specifier: &corev3.DataSource_Filename{Filename: features.ResolveGatewayRootCAPath()},
-					},
+					TrustedCa: b.upstreamTrustedCA(),
 				},
 			},
 			AlpnProtocols: []string{"h2", "http/1.1"},
@@ -247,6 +243,13 @@ func (b *resourceBuilder) buildDFPCluster(
 		ConfigType: &corev3.TransportSocket_TypedConfig{TypedConfig: tlsConfig},
 	}
 	return cluster
+}
+
+func (b *resourceBuilder) upstreamTrustedCA() *corev3.DataSource {
+	if b.upstreamTrustBundle != "" {
+		return &corev3.DataSource{Specifier: &corev3.DataSource_InlineString{InlineString: b.upstreamTrustBundle}}
+	}
+	return &corev3.DataSource{Specifier: &corev3.DataSource_Filename{Filename: features.ResolveGatewayRootCAPath()}}
 }
 
 func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider, name string) *clusterv3.Cluster {
@@ -302,6 +305,17 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 			},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{httpProtocolOptionsType: protocolAny},
+	}
+	if provider.GetServiceRef() != nil {
+		cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_EDS}
+		cluster.LoadAssignment = nil
+		cluster.EdsClusterConfig = &clusterv3.Cluster_EdsClusterConfig{
+			ServiceName: name,
+			EdsConfig: &corev3.ConfigSource{
+				ResourceApiVersion:    corev3.ApiVersion_V3,
+				ConfigSourceSpecifier: &corev3.ConfigSource_Ads{Ads: &corev3.AggregatedConfigSource{}},
+			},
+		}
 	}
 	if provider.GetTls().GetMode() == configv1.ExtProcTLSSettings_MUTUAL {
 		secret := func(name string) *tlsv3.SdsSecretConfig {

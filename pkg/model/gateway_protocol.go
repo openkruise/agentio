@@ -24,10 +24,10 @@ const (
 const (
 	FilterStateOuterSNI          = "agentio.tls.outer_sni"
 	FilterStateDenialReason      = "agentio.egress.denial_reason"
-	FilterStateWorkloadLabels    = "agentio.workload.labels"
+	FilterStateWorkloadUID       = "agentio.workload.uid"
 	FilterStateWorkloadName      = "agentio.workload.name"
 	FilterStateWorkloadNamespace = "agentio.workload.namespace"
-	FilterStateSandboxID         = "sandbox.id"
+	FilterStateSandboxUID        = "agentio.sandbox.uid"
 	FilterStateConnectAuthority  = "agentio.connect.authority"
 	FilterStatePeerCertificate   = "agentio.peer.certificate"
 	FilterStatePeerIP            = "agentio.downstream.ip"
@@ -42,11 +42,11 @@ const (
 // ExtProc attributes requested by Envoy and consumed by Porter and EPE.
 const (
 	ExtProcAttributesKey       = "envoy.filters.http.ext_proc"
-	AttributeWorkloadLabels    = "filter_state['" + FilterStateWorkloadLabels + "']"
+	AttributeWorkloadUID       = "filter_state['" + FilterStateWorkloadUID + "']"
 	AttributeWorkloadName      = "filter_state['" + FilterStateWorkloadName + "']"
 	AttributeWorkloadNamespace = "filter_state['" + FilterStateWorkloadNamespace + "']"
 	AttributeRouteUpstream     = "filter_state['" + FilterStateRouteUpstream + "']"
-	AttributeSandboxID         = "filter_state['" + FilterStateSandboxID + "']"
+	AttributeSandboxUID        = "filter_state['" + FilterStateSandboxUID + "']"
 	AttributePeerCertificate   = "filter_state['" + FilterStatePeerCertificate + "']"
 	AttributePeerIP            = "filter_state['" + FilterStatePeerIP + "']"
 	AttributePeerPrincipal     = "filter_state['" + FilterStatePeerPrincipal + "']"

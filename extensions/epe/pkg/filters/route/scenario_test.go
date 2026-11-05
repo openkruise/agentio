@@ -35,11 +35,7 @@ func routeHarness(t *testing.T, configs []route.Config, buffered bool, denyBody 
 	definitions := []filter.Definition{filter.Define(route.Descriptor(),
 		func(json.RawMessage) (route.Config, error) { return route.Config{}, nil })}
 	if buffered {
-		definitions = append(definitions, filter.Define(filter.Descriptor[bool]{
-			Name:   "bodycheck",
-			Phases: filter.PhaseRequestHeaders | filter.PhaseRequestBody,
-			New:    func(cfg filter.RuleConfig[bool]) filter.Filter { return &bodyCheck{deny: cfg.Cfg} },
-		}, func(json.RawMessage) (bool, error) { return false, nil }))
+		definitions = append(definitions, enginetest.BodyGate())
 	}
 	regs, err := filter.Build(definitions...)
 	if err != nil {
@@ -133,20 +129,4 @@ func TestScenario_RouteSelectedBeforeBufferedDecision(t *testing.T) {
 			}
 		})
 	}
-}
-
-type bodyCheck struct {
-	filter.PassThrough
-	deny bool
-}
-
-func (*bodyCheck) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
-}
-
-func (f *bodyCheck) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
-	if f.deny {
-		return filter.Stop(filter.Reply{Status: 403}), nil
-	}
-	return filter.Continue(), nil
 }

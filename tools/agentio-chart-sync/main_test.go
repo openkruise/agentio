@@ -496,7 +496,7 @@ func TestSandboxManagerAgentioNamespaceIsIndependentFromReleaseNamespace(t *test
 		t.Fatalf("buildSandboxManagerBundle() error = %v", err)
 	}
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		namespace string
 		values    map[string]any
@@ -519,10 +519,10 @@ func TestSandboxManagerAgentioNamespaceIsIndependentFromReleaseNamespace(t *test
 			},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			for resource, namespace := range renderAgentioResourceNamespaces(t, target, test.values) {
-				if namespace != test.namespace {
-					t.Errorf("%s namespace = %q, want %q", resource, namespace, test.namespace)
+		t.Run(tc.name, func(t *testing.T) {
+			for resource, namespace := range renderAgentioResourceNamespaces(t, target, tc.values) {
+				if namespace != tc.namespace {
+					t.Errorf("%s namespace = %q, want %q", resource, namespace, tc.namespace)
 				}
 			}
 		})
@@ -539,7 +539,7 @@ func TestSandboxManagerCreatesAndRetainsAgentioNamespace(t *testing.T) {
 		t.Fatalf("buildSandboxManagerBundle() error = %v", err)
 	}
 
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name      string
 		values    map[string]any
 		wantName  string
@@ -577,9 +577,9 @@ func TestSandboxManagerCreatesAndRetainsAgentioNamespace(t *testing.T) {
 			values: map[string]any{"agentio": map[string]any{"enabled": false}},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			namespace := renderAgentioNamespace(t, target, test.values)
-			if !test.wantFound {
+		t.Run(tc.name, func(t *testing.T) {
+			namespace := renderAgentioNamespace(t, target, tc.values)
+			if !tc.wantFound {
 				if namespace != nil {
 					t.Fatalf("rendered Namespace %q, want none", namespace.Name)
 				}
@@ -588,8 +588,8 @@ func TestSandboxManagerCreatesAndRetainsAgentioNamespace(t *testing.T) {
 			if namespace == nil {
 				t.Fatal("rendered chart contains no Agentio Namespace")
 			}
-			if namespace.Name != test.wantName {
-				t.Errorf("Namespace name = %q, want %q", namespace.Name, test.wantName)
+			if namespace.Name != tc.wantName {
+				t.Errorf("Namespace name = %q, want %q", namespace.Name, tc.wantName)
 			}
 			if got := namespace.Annotations["helm.sh/resource-policy"]; got != "keep" {
 				t.Errorf("Namespace resource policy = %q, want keep", got)
@@ -1094,4 +1094,29 @@ func renderChart(t *testing.T, target string, values map[string]any) map[string]
 		}
 	}
 	return rendered
+}
+
+func TestExportedPolicyControlPlane(t *testing.T) {
+	target := t.TempDir()
+	writeTestFile(t, target, "Chart.yaml", "apiVersion: v2\nname: sandbox-manager\nversion: 0.1.0\n")
+	writeTestFile(t, target, "values.yaml", "manager: unchanged\n")
+	if err := buildSandboxManagerBundle(repositoryAgentioChart(t), target); err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderChart(t, target, map[string]any{"agentio": map[string]any{
+		"enabled":       true,
+		"global":        map[string]any{"namespace": "policy-system"},
+		"agentiod":      map[string]any{"policyPool": map[string]any{"enabled": true, "replicaCount": 3}},
+		"egressGateway": map[string]any{"mode": "static"},
+		"epe":           map[string]any{"mode": "managed"},
+	}})
+	var all string
+	for _, content := range rendered {
+		all += content
+	}
+	for _, want := range []string{"name: agentiod-policy", "replicas: 3", "namespace: policy-system", "control-plane-pool: policy", "--xds-address=agentiod-policy.policy-system.svc.cluster.local:15012"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("exported chart is missing %q", want)
+		}
+	}
 }

@@ -15,14 +15,68 @@
 package securitypolicy
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"text/template"
+
+	utilexec "k8s.io/client-go/util/exec"
 
 	agentiocomponent "github.com/openkruise/agentio/test/e2e/components/agentio"
 	"github.com/openkruise/agentio/test/e2e/components/echo"
+	"github.com/openkruise/agentio/test/e2e/kube"
 	"github.com/openkruise/agentio/test/e2e/suites/internal/harness"
 )
+
+func TestTLSActionManifests(t *testing.T) {
+	for _, kind := range []string{"SecurityProfile", "GlobalSecurityProfile"} {
+		for _, tc := range sniTLSCases {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				manifest := template.Must(
+					template.New("tls-profile").Option("missingkey=error").Parse(sniTLSProfileYAML),
+				)
+				var rendered bytes.Buffer
+				if err := manifest.Execute(&rendered, map[string]any{
+					"Kind":     kind,
+					"Name":     "tls-actions",
+					"Priority": tc.priority,
+					"Selector": "selected",
+					"Rules":    tc.rules,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				objects, err := kube.DecodeYAML(&rendered)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(objects) != 1 || objects[0].GetKind() != kind {
+					t.Fatalf("expected one %s, got %v", kind, objects)
+				}
+			})
+		}
+	}
+}
+
+func TestTLSConnectionDenied(t *testing.T) {
+	for _, code := range []int{6, 7, 28, 35, 56, 60} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			err := fmt.Errorf("exec curl: %w", utilexec.CodeExitError{Err: errors.New("curl failed"), Code: code})
+			want := code == 35 || code == 56
+			if got := isTLSConnectionDenied("000", err); got != want {
+				t.Fatalf("curl exit %d: denied = %t, want %t", code, got, want)
+			}
+			if isTLSConnectionDenied("200", err) {
+				t.Fatal("HTTP response must not count as TLS denial")
+			}
+		})
+	}
+	if isTLSConnectionDenied("000", nil) || isTLSConnectionDenied("000", errors.New("exec unavailable")) {
+		t.Fatal("success or Kubernetes exec failure must not count as TLS denial")
+	}
+}
 
 func TestSNIEchoFixtureManifest(t *testing.T) {
 	tests := []struct {
@@ -31,16 +85,16 @@ func TestSNIEchoFixtureManifest(t *testing.T) {
 		{name: "selected", namespace: "sni-policy", policyValue: "selected"},
 		{name: "global", namespace: "sni-policy-global", policyValue: "global"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			config := sniEchoConfig(test.name, test.namespace, test.policyValue)
-			if config.Name != test.name || config.Namespace != test.namespace {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			config := sniEchoConfig(tc.name, tc.namespace, tc.policyValue)
+			if config.Name != tc.name || config.Namespace != tc.namespace {
 				t.Fatalf("SNI echo identity = %s/%s", config.Namespace, config.Name)
 			}
 			if config.Image != echo.DefaultImage || !strings.Contains(config.Image, "@sha256:") {
 				t.Fatalf("SNI echo image = %q, want immutable default", config.Image)
 			}
-			wantLabels := map[string]string{"app": test.name, sniPolicyLabel: test.policyValue}
+			wantLabels := map[string]string{"app": tc.name, sniPolicyLabel: tc.policyValue}
 			if !reflect.DeepEqual(config.Labels, wantLabels) {
 				t.Fatalf("SNI echo labels = %#v, want %#v", config.Labels, wantLabels)
 			}

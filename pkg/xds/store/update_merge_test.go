@@ -91,11 +91,11 @@ func TestMergeFullScopes(t *testing.T) {
 			new:  Update{full: true},
 			full: true},
 	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.new.version = "new"
-			got := Merge(tt.old, tt.new)
-			if got.version != "new" || got.full != tt.full || !reflect.DeepEqual(got.fullTypes, tt.types) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.new.version = "new"
+			got := Merge(tc.old, tc.new)
+			if got.version != "new" || got.full != tc.full || !reflect.DeepEqual(got.fullTypes, tc.types) {
 				t.Fatalf("unexpected full merge: %#v", got)
 			}
 		})
@@ -144,7 +144,7 @@ func TestMergeIncrementalAndTypedFull(t *testing.T) {
 		key: {Key: key, Identities: []Identity{{Name: "workload"}}},
 	})
 	full := Update{version: "full", full: true, fullTypes: sets.New(model.SecretType)}
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		older Update
 		newer Update
@@ -152,9 +152,9 @@ func TestMergeIncrementalAndTypedFull(t *testing.T) {
 		{"incremental then full", incremental, full},
 		{"full then incremental", full, incremental},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			merged := Merge(test.older, test.newer)
-			if merged.Version() != test.newer.Version() {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := Merge(tc.older, tc.newer)
+			if merged.Version() != tc.newer.Version() {
 				t.Fatal("merge did not retain the newer notice version")
 			}
 			for _, typeURL := range []string{model.AddressType, model.WorkloadType} {

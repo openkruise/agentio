@@ -12,10 +12,11 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--root', type=Path, required=True)
-parser.add_argument('--count', type=int, choices=[10000, 50000, 100000], required=True)
+parser.add_argument('--count', type=int, choices=[10000, 50000, 100000, 200000, 300000], required=True)
 parser.add_argument('--node', default='agentio-sidecar-auto-control-plane')
 parser.add_argument('--namespace', default='sandbox-scale-system')
 parser.add_argument('--seconds', type=int, default=300)
+parser.add_argument('--watch-per-pod', action='store_true')
 args = parser.parse_args()
 root = args.root.resolve()
 root.mkdir(parents=True, exist_ok=True)
@@ -124,13 +125,14 @@ def watch_snapshot():
 
 def convergence(previous=None):
     started = time.time()
+    expected = args.count if args.watch_per_pod else args.count // 100
     while time.time() - started < 120:
         current = watch_snapshot()
         versions = current.get('policy_versions', {})
         if (datetime.fromisoformat(current['time'].replace('Z', '+00:00')).timestamp() >= started and
-            current['ready'] == args.count // 100 and
+            current['ready'] == expected and
             current['resources'].get('type.googleapis.com/agentio.sandbox.Sandbox') == args.count and
-            len(versions) == 1 and sum(versions.values()) == args.count // 100 and
+            len(versions) == 1 and sum(versions.values()) == expected and
             (previous is None or set(versions) != set(previous))):
             event('wds_converged', seconds=time.time()-started, snapshot=current)
             return current

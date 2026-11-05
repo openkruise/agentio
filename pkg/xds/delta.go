@@ -159,13 +159,13 @@ func (s *Server) handleRequest(
 				Snapshot:        snapshot,
 				Full:            true,
 				SubscribedNames: staticDemand,
-			}, initial && len(watch.sds.jobs) == 0)
+			}, initial && len(watch.sds.jobs) == 0, nil)
 		}
 		return nil
 	}
+	snapshot := s.resources.Snapshot()
 	if !initial && !watch.wildcard &&
-		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress) {
-		snapshot := s.resources.Snapshot()
+		(scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress || scope.Class == model.ClientEPE) {
 		if view, ok := demandReconciliationView(snapshot, typeURL, scope, watch,
 			request.GetResourceNamesSubscribe(), request.GetResourceNamesUnsubscribe()); ok {
 			return s.generateAndSend(stream, connLog, watch, GenerationRequest{
@@ -175,10 +175,17 @@ func (s *Server) handleRequest(
 				Snapshot:        snapshot,
 				Full:            true,
 				SubscribedNames: append([]string(nil), request.GetResourceNamesSubscribe()...),
-			}, true)
+			}, true, watches[model.WorkloadType])
 		}
 	}
-	return s.sendDiffForNames(stream, scope, connLog, typeURL, watch, true, request.GetResourceNamesSubscribe())
+	return s.generateAndSend(stream, connLog, watch, GenerationRequest{
+		Scope:           scope,
+		TypeURL:         typeURL,
+		Snapshot:        snapshot,
+		Subscription:    newSubscriptionView(watch),
+		Full:            true,
+		SubscribedNames: append([]string(nil), request.GetResourceNamesSubscribe()...),
+	}, true, watches[model.WorkloadType])
 }
 
 func orderedWatchedTypes(watches map[string]*watchState, update xdsstore.Update) []string {
@@ -211,9 +218,13 @@ func (s *Server) pushUpdate(
 	update xdsstore.Update,
 ) error {
 	snapshot := s.resources.Snapshot()
+	if scope.Class == model.ClientDedicatedZTunnel {
+		update = update.ForWorkload(scope.WorkloadUID, snapshot)
+	}
 	for _, typeURL := range orderedWatchedTypes(watches, update) {
 		watch := watches[typeURL]
-		full := update.FullFor(typeURL)
+		// Dedicated Sandbox scopes are indexed; reselect them instead of scanning a cluster-wide batch.
+		full := update.FullFor(typeURL) || typeURL == model.SandboxType && scope.Class == model.ClientDedicatedZTunnel
 		var subscription SubscriptionView
 		if full {
 			subscription = newSubscriptionView(watch)
@@ -227,7 +238,7 @@ func (s *Server) pushUpdate(
 			Snapshot:     snapshot,
 			Update:       update,
 			Full:         full,
-		}, false); err != nil {
+		}, false, nil); err != nil {
 			return err
 		}
 		if err := s.pushPendingConfigs(stream, scope, connLog, typeURL, watch, snapshot, update); err != nil {
@@ -260,7 +271,7 @@ func (s *Server) sendDiffForNames(
 		Snapshot:        snapshot,
 		Full:            true,
 		SubscribedNames: append([]string(nil), subscribedNames...),
-	}, force)
+	}, force, nil)
 }
 
 // sendIncremental reselects candidates from the current snapshot. Named and
@@ -276,7 +287,7 @@ func (s *Server) sendIncremental(stream DeltaStream,
 		Snapshot:     s.resources.Snapshot(),
 		Update:       update,
 	}
-	return s.generateAndSend(stream, connLog, watch, request, false)
+	return s.generateAndSend(stream, connLog, watch, request, false, nil)
 }
 
 func (s *Server) generateAndSend(
@@ -285,6 +296,7 @@ func (s *Server) generateAndSend(
 	watch *watchState,
 	request GenerationRequest,
 	force bool,
+	workloadWatch *watchState,
 ) error {
 	started := time.Now()
 	if watch.recovering {
@@ -332,6 +344,20 @@ func (s *Server) generateAndSend(
 		metrics.Default.RecordXDSPushFailure(metrics.XDSPushFailureGenerate, request.TypeURL)
 		logPushFailure(connLog, "generate", request.TypeURL, started, err)
 		return err
+	}
+	if request.TypeURL == model.TrafficPolicyType && len(delta.Removed) > 0 && workloadWatch != nil &&
+		workloadWatch.started {
+		// A demand can overtake a queued push. Send current bindings before
+		// reporting a missing policy, using the same publication for both.
+		if err := s.generateAndSend(stream, connLog, workloadWatch, GenerationRequest{
+			Scope:        request.Scope,
+			TypeURL:      model.WorkloadType,
+			Snapshot:     request.Snapshot,
+			Subscription: newSubscriptionView(workloadWatch),
+			Full:         true,
+		}, false, nil); err != nil {
+			return err
+		}
 	}
 	return s.sendGeneratedDelta(stream, connLog, watch, request, delta, force, started)
 }

@@ -20,10 +20,11 @@ import (
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
-	legacyproto "github.com/golang/protobuf/proto" //nolint:staticcheck // jsonpb requires the legacy adapter.
+	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"sigs.k8s.io/yaml"
 
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -48,17 +49,29 @@ var (
 )
 
 func decodeEgressGateway(content string) (*configv1.EgressGateway, error) {
+	data, err := yaml.YAMLToJSONStrict([]byte(content))
+	if err != nil {
+		return nil, fmt.Errorf("parse egress gateway YAML: %w", err)
+	}
 	value := &configv1.EgressGateway{}
-	if err := decodeAgentioYAML(content, "egress gateway", legacyproto.MessageV1(value)); err != nil {
-		return nil, err
+	if err := protojson.Unmarshal(data, value); err != nil {
+		return nil, fmt.Errorf("decode egress gateway: %w", err)
 	}
 	if value.GetName() != "" || value.GetNamespace() != "" {
 		return nil, fmt.Errorf("name and namespace must be omitted; Gateway metadata is authoritative")
 	}
-	if service := value.GetExtProc().GetService(); service != "" && strings.TrimSpace(service) == "" {
+	if err := model.ValidateExtProcServiceRef(value.GetExtProc()); err != nil {
+		return nil, fmt.Errorf("extProc: %w", err)
+	}
+	if service := value.GetExtProc().
+		GetService(); value.GetExtProc().GetServiceRef() == nil && service != "" &&
+		strings.TrimSpace(service) == "" {
 		return nil, fmt.Errorf("ext_proc service must not be whitespace-only")
 	}
 	if err := model.ValidateUpstreamTLS(value.GetTls().GetOrigination()); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateUpstreamTrustBundle(value.GetUpstreamTrustBundle()); err != nil {
 		return nil, err
 	}
 	if err := model.ValidateAccessLogFormat(value.GetAccessLogFormat()); err != nil {

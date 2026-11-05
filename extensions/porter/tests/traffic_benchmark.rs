@@ -171,6 +171,7 @@ fn inventory(
                             .map(|j| SniRule {
                                 r#match: Some(SniMatch {
                                     sni: vec![format!("host-{j}.example.com")],
+                                    ..Default::default()
                                 }),
                                 action: SniAction::TlsTermination as i32,
                             })

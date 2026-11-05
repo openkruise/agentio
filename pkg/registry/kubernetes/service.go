@@ -192,9 +192,15 @@ func endpointsFromSlice(clusterDomain string, slice *discoveryv1.EndpointSlice) 
 	hostname := serviceName + "." + slice.Namespace + ".svc." + clusterDomain
 	serviceKey := slice.Namespace + "/" + hostname
 	sourceKey := slice.Namespace + "/" + slice.Name
-	result := make([]model.Endpoint, 0, len(slice.Endpoints)*len(slice.Ports))
+	type keyedEndpoint struct {
+		key   string
+		value model.Endpoint
+	}
+	result := make([]keyedEndpoint, 0, len(slice.Endpoints)*len(slice.Ports))
 	for _, endpoint := range slice.Endpoints {
 		ready := endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready
+		serving := endpoint.Conditions.Serving == nil || *endpoint.Conditions.Serving
+		terminating := endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating
 		zone := ""
 		if endpoint.Zone != nil {
 			zone = *endpoint.Zone
@@ -227,7 +233,7 @@ func endpointsFromSlice(clusterDomain string, slice *discoveryv1.EndpointSlice) 
 						targetNamespace = slice.Namespace
 					}
 				}
-				result = append(result, model.Endpoint{
+				value := model.Endpoint{
 					ServiceKey:      serviceKey,
 					SourceKey:       sourceKey,
 					Address:         address,
@@ -235,16 +241,24 @@ func endpointsFromSlice(clusterDomain string, slice *discoveryv1.EndpointSlice) 
 					Port:            uint32(*port.Port),
 					Protocol:        string(protocol),
 					Ready:           ready,
+					Serving:         serving,
+					Terminating:     terminating,
 					Zone:            zone,
 					HasTargetRef:    hasTargetRef,
 					TargetKind:      targetKind,
 					TargetUID:       targetUID,
 					TargetName:      targetName,
 					TargetNamespace: targetNamespace,
-				})
+				}
+				result = append(result, keyedEndpoint{key: value.ResourceName(), value: value})
 			}
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ResourceName() < result[j].ResourceName() })
-	return result
+	// Resource names include ownership metadata; format once rather than on every comparison.
+	sort.Slice(result, func(i, j int) bool { return result[i].key < result[j].key })
+	endpoints := make([]model.Endpoint, len(result))
+	for i := range result {
+		endpoints[i] = result[i].value
+	}
+	return endpoints
 }

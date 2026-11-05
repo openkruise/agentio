@@ -74,7 +74,7 @@ func TestParsePrincipalRejectsInvalidIdentities(t *testing.T) {
 }
 
 func TestClientScopeValidateRequiresClassOwnership(t *testing.T) {
-	principal := mustTestPrincipal("cluster.local", "workload/app")
+	principal := MustPrincipal("cluster.local", "workload/app")
 	tests := []struct {
 		name  string
 		scope ClientScope
@@ -127,13 +127,13 @@ func TestClientScopeValidateRequiresClassOwnership(t *testing.T) {
 		{"unknown", ClientScope{Class: "spoofed", Principal: principal, NodeName: "node-a"}, false},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.scope.Validate()
-			if tt.valid && err != nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.scope.Validate()
+			if tc.valid && err != nil {
 				t.Fatalf("valid scope rejected: %v", err)
 			}
-			if !tt.valid && err == nil {
+			if !tc.valid && err == nil {
 				t.Fatal("invalid scope accepted")
 			}
 		})

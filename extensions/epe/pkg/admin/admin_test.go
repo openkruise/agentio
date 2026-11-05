@@ -161,23 +161,23 @@ func TestHandleProfiles_MatchMode(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newTestHandler(t, true, sps, gsps)
 			var bodyReader *strings.Reader
-			if tt.body != "" {
-				bodyReader = strings.NewReader(tt.body)
+			if tc.body != "" {
+				bodyReader = strings.NewReader(tc.body)
 			} else {
 				bodyReader = strings.NewReader("")
 			}
-			req := httptest.NewRequest(tt.method, tt.target, bodyReader)
+			req := httptest.NewRequest(tc.method, tc.target, bodyReader)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
 			}
-			if tt.wantStatus != http.StatusOK {
+			if tc.wantStatus != http.StatusOK {
 				return
 			}
 
@@ -185,25 +185,25 @@ func TestHandleProfiles_MatchMode(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if resp.Count != len(tt.wantNames) {
-				t.Fatalf("count = %d, want %d", resp.Count, len(tt.wantNames))
+			if resp.Count != len(tc.wantNames) {
+				t.Fatalf("count = %d, want %d", resp.Count, len(tc.wantNames))
 			}
-			for i, want := range tt.wantNames {
+			for i, want := range tc.wantNames {
 				if resp.Profiles[i].Name != want {
 					t.Errorf("profiles[%d].name = %q, want %q", i, resp.Profiles[i].Name, want)
 				}
 			}
-			for i, want := range tt.wantKinds {
+			for i, want := range tc.wantKinds {
 				if resp.Profiles[i].Kind != want {
 					t.Errorf("profiles[%d].kind = %q, want %q", i, resp.Profiles[i].Kind, want)
 				}
 			}
 			if len(resp.Profiles) > 0 {
 				gotSpec := resp.Profiles[0].Spec != nil
-				if gotSpec != tt.wantSpec {
-					t.Errorf("profiles[0].spec populated = %v, want %v", gotSpec, tt.wantSpec)
+				if gotSpec != tc.wantSpec {
+					t.Errorf("profiles[0].spec populated = %v, want %v", gotSpec, tc.wantSpec)
 				}
-				if !tt.wantSpec && resp.Profiles[0].CreationTimestamp != nil {
+				if !tc.wantSpec && resp.Profiles[0].CreationTimestamp != nil {
 					t.Errorf("default mode should not populate creationTimestamp")
 				}
 			}
@@ -247,9 +247,9 @@ func TestHandleProfiles_ListMode(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
@@ -260,10 +260,10 @@ func TestHandleProfiles_ListMode(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if resp.Count != len(tt.wantNames) {
-				t.Fatalf("count = %d, want %d", resp.Count, len(tt.wantNames))
+			if resp.Count != len(tc.wantNames) {
+				t.Fatalf("count = %d, want %d", resp.Count, len(tc.wantNames))
 			}
-			for i, want := range tt.wantNames {
+			for i, want := range tc.wantNames {
 				if resp.Profiles[i].Name != want {
 					t.Errorf("profiles[%d].name = %q, want %q", i, resp.Profiles[i].Name, want)
 				}
@@ -297,9 +297,9 @@ func TestHandleProfiles_ListMode_POST(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/debug/profiles", strings.NewReader(tt.body))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/debug/profiles", strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
@@ -310,10 +310,10 @@ func TestHandleProfiles_ListMode_POST(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if resp.Count != len(tt.wantNames) {
-				t.Fatalf("count = %d, want %d", resp.Count, len(tt.wantNames))
+			if resp.Count != len(tc.wantNames) {
+				t.Fatalf("count = %d, want %d", resp.Count, len(tc.wantNames))
 			}
-			for i, want := range tt.wantNames {
+			for i, want := range tc.wantNames {
 				if resp.Profiles[i].Name != want {
 					t.Errorf("profiles[%d].name = %q, want %q", i, resp.Profiles[i].Name, want)
 				}
@@ -398,29 +398,29 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, tt.target, strings.NewReader(tt.body))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
 			}
-			if tt.wantStatus != http.StatusOK {
+			if tc.wantStatus != http.StatusOK {
 				return
 			}
 			var resp ListResponse
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if resp.Count != len(tt.wantNames) {
-				t.Fatalf("count = %d, want %d (body: %s)", resp.Count, len(tt.wantNames), rec.Body.String())
+			if resp.Count != len(tc.wantNames) {
+				t.Fatalf("count = %d, want %d (body: %s)", resp.Count, len(tc.wantNames), rec.Body.String())
 			}
-			for i := range tt.wantNames {
-				if resp.Profiles[i].Name != tt.wantNames[i] || resp.Profiles[i].Kind != tt.wantKinds[i] {
+			for i := range tc.wantNames {
+				if resp.Profiles[i].Name != tc.wantNames[i] || resp.Profiles[i].Kind != tc.wantKinds[i] {
 					t.Errorf("profiles[%d] = %s/%s, want %s/%s", i,
-						resp.Profiles[i].Kind, resp.Profiles[i].Name, tt.wantKinds[i], tt.wantNames[i])
+						resp.Profiles[i].Kind, resp.Profiles[i].Name, tc.wantKinds[i], tc.wantNames[i])
 				}
 			}
 		})

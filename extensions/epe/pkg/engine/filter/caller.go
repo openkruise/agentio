@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -25,6 +26,14 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
+
+// ContextResolver prepares request-owned identity and policy data before filters execute.
+type ContextResolver func(context.Context, RequestContext) (RequestContext, error)
+
+// DestinationAuthorizer evaluates immutable policies against a request's targets.
+type DestinationAuthorizer interface {
+	Authorize(context.Context, *Stream, []netip.AddrPort) ([]netip.AddrPort, error)
+}
 
 // CallerContext carries the request's Workload/Sandbox identities and its credential.
 // Credentials are separate from Subject and never expression-visible.

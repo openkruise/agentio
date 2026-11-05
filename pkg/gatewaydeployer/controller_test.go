@@ -47,6 +47,7 @@ import (
 	gatewayclientv1 "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
@@ -274,18 +275,6 @@ func (r *controllerTestRig) newControllerInNamespace(systemNamespace string) *De
 	return d
 }
 
-func waitCondition(t *testing.T, timeout time.Duration, f func() bool, msg string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if f() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", msg)
-}
-
 func egressGatewayFixture(name, namespace string) *gatewayv1.Gateway {
 	mesh := gatewayv1.ProtocolType("HBONE")
 	return &gatewayv1.Gateway{
@@ -337,7 +326,7 @@ func TestReconcileAppliesRenderedManifests(t *testing.T) {
 }
 
 func TestReconcileReportsGatewayAcceptedAndProgrammedFromDeploymentReadiness(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name             string
 		deployment       *appsv1.Deployment
 		programmedStatus metav1.ConditionStatus
@@ -365,12 +354,12 @@ func TestReconcileReportsGatewayAcceptedAndProgrammedFromDeploymentReadiness(t *
 			programmedReason: string(gatewayv1.GatewayReasonProgrammed),
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			gw := egressGatewayFixture("egress", "agentio-system")
 			gw.Generation = 4
 			objects := []runtime.Object{gw}
-			if test.deployment != nil {
-				objects = append(objects, test.deployment)
+			if tc.deployment != nil {
+				objects = append(objects, tc.deployment)
 			}
 			rig := newControllerTestRig(t, objects...)
 			defer rig.close()
@@ -410,10 +399,10 @@ func TestReconcileReportsGatewayAcceptedAndProgrammedFromDeploymentReadiness(t *
 				t.Fatalf("Accepted condition = %+v", accepted)
 			}
 			programmed := apiMeta.FindStatusCondition(conditions, string(gatewayv1.GatewayConditionProgrammed))
-			if programmed == nil || programmed.Status != test.programmedStatus ||
-				programmed.Reason != test.programmedReason || programmed.ObservedGeneration != gw.Generation {
+			if programmed == nil || programmed.Status != tc.programmedStatus ||
+				programmed.Reason != tc.programmedReason || programmed.ObservedGeneration != gw.Generation {
 				t.Fatalf("Programmed condition = %+v, want status=%s reason=%s generation=%d",
-					programmed, test.programmedStatus, test.programmedReason, gw.Generation)
+					programmed, tc.programmedStatus, tc.programmedReason, gw.Generation)
 			}
 		})
 	}
@@ -646,7 +635,7 @@ func TestChildResourceChangeRequeuesParentGateway(t *testing.T) {
 	if _, err := rig.kubeClient.AppsV1().Deployments("agentio-system").Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed deployment: %v", err)
 	}
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.deployments.Get("egress", "agentio-system") != nil
 	}, "deployment informer to observe seeded deployment")
 
@@ -654,7 +643,7 @@ func TestChildResourceChangeRequeuesParentGateway(t *testing.T) {
 	defer close(stop)
 	go d.Run(stop)
 
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.patcher.find("services") != nil
 	}, "initial reconcile from Gateway Add to apply the Service")
 
@@ -669,7 +658,7 @@ func TestChildResourceChangeRequeuesParentGateway(t *testing.T) {
 		t.Fatalf("update deployment: %v", err)
 	}
 
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.patcher.find("services") != nil
 	}, "child Deployment update to requeue and re-reconcile the owning Gateway")
 }
@@ -693,7 +682,7 @@ func TestChildResourceChangeRequeuesParentGatewayNonControllerOwnerRef(t *testin
 	if _, err := rig.kubeClient.AppsV1().Deployments("agentio-system").Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed deployment: %v", err)
 	}
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.deployments.Get("egress", "agentio-system") != nil
 	}, "deployment informer to observe seeded deployment")
 
@@ -701,7 +690,7 @@ func TestChildResourceChangeRequeuesParentGatewayNonControllerOwnerRef(t *testin
 	defer close(stop)
 	go d.Run(stop)
 
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.patcher.find("services") != nil
 	}, "initial reconcile from Gateway Add to apply the Service")
 
@@ -716,7 +705,7 @@ func TestChildResourceChangeRequeuesParentGatewayNonControllerOwnerRef(t *testin
 		t.Fatalf("update deployment: %v", err)
 	}
 
-	waitCondition(t, 5*time.Second, func() bool {
+	testutil.WaitFor(t, 5*time.Second, func() bool {
 		return rig.patcher.find("services") != nil
 	}, "child Deployment update with Controller=false ownerReference to still requeue and re-reconcile the owning Gateway")
 }
@@ -791,16 +780,16 @@ func TestManagedGatewayControllerVersionProtocol(t *testing.T) {
 		{name: "newer", annotation: "6", hasAnnotation: true, wantTakeOver: false, wantShouldHandle: false},
 		{name: "unparseable", annotation: "abc", hasAnnotation: true, wantTakeOver: false, wantShouldHandle: false},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			gw := gatewayv1.Gateway{}
-			if tt.hasAnnotation {
-				gw.Annotations = map[string]string{ControllerVersionAnnotation: tt.annotation}
+			if tc.hasAnnotation {
+				gw.Annotations = map[string]string{ControllerVersionAnnotation: tc.annotation}
 			}
 			_, takeOver, shouldHandle := managedGatewayControllerVersion(gw)
-			if takeOver != tt.wantTakeOver || shouldHandle != tt.wantShouldHandle {
+			if takeOver != tc.wantTakeOver || shouldHandle != tc.wantShouldHandle {
 				t.Fatalf("managedGatewayControllerVersion() = (takeOver=%v, shouldHandle=%v), want (%v, %v)",
-					takeOver, shouldHandle, tt.wantTakeOver, tt.wantShouldHandle)
+					takeOver, shouldHandle, tc.wantTakeOver, tc.wantShouldHandle)
 			}
 		})
 	}

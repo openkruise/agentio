@@ -853,7 +853,7 @@ func TestBuildSupportsDeployedSandboxConnectPatch(t *testing.T) {
 func TestGatewayExtProcOverride(t *testing.T) {
 	global := &configv1.ExtProcProvider{Service: "global-ext-proc.agentio-system.svc", Port: 9002}
 	override := &configv1.ExtProcProvider{Service: "gateway-ext-proc.agentio-system.svc", Port: 9003}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		global   *configv1.ExtProcProvider
 		override *configv1.ExtProcProvider
@@ -868,31 +868,31 @@ func TestGatewayExtProcOverride(t *testing.T) {
 		{name: "override global", global: global, override: override, want: override},
 		{name: "override without global", override: override, want: override},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			resources, err := Build(Inputs{
 				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 				TrustDomain:      "cluster.local",
-				Gateway:          testGateway(&configv1.EgressGateway{ExtProc: tt.override}),
-				GlobalExtProc:    tt.global,
+				Gateway:          testGateway(&configv1.EgressGateway{ExtProc: tc.override}),
+				GlobalExtProc:    tc.global,
 			})
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
 			cluster := messagesOf(t, resources, model.ClusterType,
 				func() *clusterv3.Cluster { return &clusterv3.Cluster{} })[ExtProcCluster]
-			if (cluster != nil) != (tt.want != nil) {
-				t.Fatalf("ext_proc cluster present = %v, want %v", cluster != nil, tt.want != nil)
+			if (cluster != nil) != (tc.want != nil) {
+				t.Fatalf("ext_proc cluster present = %v, want %v", cluster != nil, tc.want != nil)
 			}
-			if tt.want != nil {
+			if tc.want != nil {
 				socket := cluster.GetLoadAssignment().GetEndpoints()[0].GetLbEndpoints()[0].
 					GetEndpoint().GetAddress().GetSocketAddress()
-				if socket.GetAddress() != tt.want.GetService() || socket.GetPortValue() != tt.want.GetPort() {
+				if socket.GetAddress() != tc.want.GetService() || socket.GetPortValue() != tc.want.GetPort() {
 					t.Errorf(
 						"ext_proc endpoint = %s:%d, want %s:%d",
 						socket.GetAddress(),
 						socket.GetPortValue(),
-						tt.want.GetService(),
-						tt.want.GetPort(),
+						tc.want.GetService(),
+						tc.want.GetPort(),
 					)
 				}
 			}
@@ -906,8 +906,8 @@ func TestGatewayExtProcOverride(t *testing.T) {
 				if got := hasHTTPFilter(
 					findHCM(t, listeners[name]),
 					"envoy.filters.http.ext_proc",
-				); got != (tt.want != nil) {
-					t.Errorf("listener %s ext_proc filter present = %v, want %v", name, got, tt.want != nil)
+				); got != (tc.want != nil) {
+					t.Errorf("listener %s ext_proc filter present = %v, want %v", name, got, tc.want != nil)
 				}
 			}
 		})
@@ -942,7 +942,7 @@ func TestBuildRejectsRelativeGatewayRootCAPath(t *testing.T) {
 func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 	test.SetForTest(t, &features.EnableSNITrafficPolicy, true)
 	expression := "connection.requested_server_name != 'skip.example.com'"
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		disabled bool
 		filter   *string
@@ -952,13 +952,15 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 		{name: "filtered", filter: &expression, want: 1},
 		{name: "disabled", disabled: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var policies []model.Telemetry
-			if tt.disabled || tt.filter != nil {
+			if tc.disabled || tc.filter != nil {
 				policy, err := model.NewTelemetry(model.TelemetryMetadata{
 					Namespace: "agentio-system", Name: "logs", Source: "agentio-system/logs",
 				}, []string{"agentio-system/egress"}, nil, nil, []model.TelemetryAccessLogging{{
-					Mode: model.TelemetryModeServer, Disabled: &tt.disabled, Filter: tt.filter,
+					Mode:     model.TelemetryModeServer,
+					Disabled: &tc.disabled,
+					Filter:   tc.filter,
 				}})
 				if err != nil {
 					t.Fatal(err)
@@ -981,8 +983,8 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 			chain := findFilterChain(t, listeners[MainInternal], sniDenyChain)
 			deny := &tcpproxyv3.TcpProxy{}
 			filters := chain.GetFilters()
-			if len(filters) != tt.want+1 {
-				t.Fatalf("deny chain filters = %d, want %d", len(filters), tt.want+1)
+			if len(filters) != tc.want+1 {
+				t.Fatalf("deny chain filters = %d, want %d", len(filters), tc.want+1)
 			}
 			if err := filters[len(filters)-1].GetTypedConfig().UnmarshalTo(deny); err != nil {
 				t.Fatal(err)
@@ -990,10 +992,10 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 			if chain.GetTransportSocket() != nil || deny.GetCluster() != BlackHoleCluster {
 				t.Fatal("denial must remain a raw black-hole connection")
 			}
-			if len(deny.GetAccessLog()) != tt.want {
-				t.Fatalf("deny logs = %d, want %d", len(deny.GetAccessLog()), tt.want)
+			if len(deny.GetAccessLog()) != tc.want {
+				t.Fatalf("deny logs = %d, want %d", len(deny.GetAccessLog()), tc.want)
 			}
-			if tt.want == 0 {
+			if tc.want == 0 {
 				return
 			}
 			state := &setstatenetworkv3.Config{}
@@ -1017,7 +1019,7 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 			if got := fileLog.GetLogFormat().GetJsonFormat().GetFields()["denial_reason"].GetStringValue(); got != "%FILTER_STATE("+values[0].GetObjectKey()+":PLAIN)%" {
 				t.Fatalf("denial log does not read the captured reason: %q", got)
 			}
-			if tt.filter == nil {
+			if tc.filter == nil {
 				if deny.AccessLog[0].GetFilter() != nil {
 					t.Fatal("default deny log must not be restricted to NR")
 				}
@@ -1035,6 +1037,24 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLegacySandboxLabelsHeaderFilterState(t *testing.T) {
+	filter := buildConnectAuthorityFilter("envoy.string", legacyPeerPrincipal, legacyLocalPrincipal, true)
+	config := &setstatehttpv3.Config{}
+	if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range config.GetOnRequestHeaders() {
+		if state.GetObjectKey() == "sandbox.labels" {
+			if state.GetFormatString().GetTextFormatSource().GetInlineString() != "%REQ(X-AGENTIO-SANDBOX-LABELS)%" ||
+				state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_TRANSITIVE {
+				t.Fatalf("legacy label headers must survive internal hops: %v", state)
+			}
+			return
+		}
+	}
+	t.Fatal("legacy sandbox.labels capture is missing")
 }
 
 func TestSandboxHeaderFilterState(t *testing.T) {
@@ -1058,7 +1078,7 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		states = config.GetOnRequestHeaders()
 	}
 	for key, header := range map[string]string{
-		"sandbox.id":               "X-AGENTIO-SANDBOX-ID",
+		"agentio.sandbox.uid":      "X-AGENTIO-SANDBOX-UID",
 		"sandbox.token":            "X-AGENTIO-SANDBOX-TOKEN",
 		"agentio.sandbox.metadata": "X-AGENTIO-SANDBOX-METADATA",
 	} {

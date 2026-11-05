@@ -231,7 +231,7 @@ func BenchmarkEvalRequestHeaders(b *testing.B) {
 					// hygiene: RecordUnitAction appends to Matched and scans
 					// it linearly, so a reused Info would grow without bound
 					// and report a quadratic cost the engine does not have.
-					st := &filter.Stream{Info: filter.NewStreamInfo()}
+					st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 					res, err := e.EvalRequestHeaders(ctx, st, units)
 					if err != nil {
 						b.Fatal(err)
@@ -257,7 +257,7 @@ func BenchmarkEvalResponseHeaders(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					st := &filter.Stream{Info: filter.NewStreamInfo()}
+					st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 					res, err := e.EvalResponseHeaders(ctx, st, units, ResponseScope{})
 					if err != nil {
 						b.Fatal(err)
@@ -275,7 +275,7 @@ func BenchmarkStreamSetup(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		benchSink = &filter.Stream{Info: filter.NewStreamInfo()}
+		benchSink = &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	}
 }
 
@@ -299,7 +299,7 @@ func BenchmarkEvalRequestHeaders_Budget(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				st := &filter.Stream{Info: filter.NewStreamInfo()}
+				st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 				res, err := e.EvalRequestHeaders(ctx, st, units)
 				if err != nil {
 					b.Fatal(err)
@@ -357,7 +357,11 @@ func BenchmarkEvalRequestBody(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			e := NewEngine(regs, 0)
 			ctx := context.Background()
-			prior, err := e.EvalRequestHeaders(ctx, &filter.Stream{Info: filter.NewStreamInfo()}, units)
+			prior, err := e.EvalRequestHeaders(
+				ctx,
+				&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
+				units,
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -365,7 +369,7 @@ func BenchmarkEvalRequestBody(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				st := &filter.Stream{Info: filter.NewStreamInfo()}
+				st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 				res, err := e.EvalRequestBody(ctx, st, prior, body)
 				if err != nil {
 					b.Fatal(err)
@@ -386,7 +390,12 @@ func BenchmarkEvalResponseBody(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			e := NewEngine(regs, 0)
 			ctx := context.Background()
-			prior, err := e.EvalResponseHeaders(ctx, &filter.Stream{Info: filter.NewStreamInfo()}, units, ResponseScope{})
+			prior, err := e.EvalResponseHeaders(
+				ctx,
+				&filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}},
+				units,
+				ResponseScope{},
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -394,7 +403,7 @@ func BenchmarkEvalResponseBody(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				st := &filter.Stream{Info: filter.NewStreamInfo()}
+				st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 				res, err := e.EvalResponseBody(ctx, st, prior, body)
 				if err != nil {
 					b.Fatal(err)

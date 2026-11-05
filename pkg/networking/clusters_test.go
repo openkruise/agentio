@@ -67,6 +67,40 @@ func TestGatewayClustersUseConfiguredConnectTimeoutAndRootCA(t *testing.T) {
 	}
 }
 
+func TestGatewayTLSOriginationUsesSharedPublicTrustBundle(t *testing.T) {
+	const bundle = "validated public CA bundle from trustPackage"
+	// Inline trust must not depend on a gateway-local CA path.
+	test.SetForTest(t, &features.GatewayRootCAPath, "unused-relative-path")
+	for _, legacy := range []bool{false, true} {
+		resources, err := Build(Inputs{
+			LegacyGateway:       legacy,
+			DiscoveryAddress:    "agentiod.agentio-system.svc:15012",
+			TrustDomain:         "cluster.local",
+			Gateway:             testGateway(nil),
+			UpstreamTrustBundle: bundle,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clusters := messagesOf(
+			t,
+			resources,
+			model.ClusterType,
+			func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
+		)
+		for _, name := range []string{TLSConnectOriginate, TLSProxyOriginate} {
+			ctx := &tlsv3.UpstreamTlsContext{}
+			if err := clusters[name].GetTransportSocket().GetTypedConfig().UnmarshalTo(ctx); err != nil {
+				t.Fatal(err)
+			}
+			ca := ctx.GetCommonTlsContext().GetValidationContext().GetTrustedCa()
+			if ca.GetInlineString() != bundle || ca.GetFilename() != "" {
+				t.Fatalf("legacy=%t cluster=%s trusted CA=%v", legacy, name, ca)
+			}
+		}
+	}
+}
+
 func TestGatewayTLSOriginationUsesDefaultSessionCache(t *testing.T) {
 	resources, err := Build(Inputs{
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
@@ -166,7 +200,7 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 		"AES128-GCM-SHA256", "AES256-GCM-SHA384",
 	}
 	replacement := []string{"AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name     string
 		settings *configv1.UpstreamTlsSettings
 		min, max tlsv3.TlsParameters_TlsProtocol
@@ -179,10 +213,10 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 		{"TLS 1.3 only", &configv1.UpstreamTlsSettings{MinProtocolVersion: configv1.UpstreamTlsSettings_TLSV1_3}, tlsv3.TlsParameters_TLSv1_3, tlsv3.TlsParameters_TLSv1_3, defaults},
 		{"replace ciphers in order", &configv1.UpstreamTlsSettings{CipherSuites: replacement}, tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, replacement},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			gateway := testGateway(&configv1.EgressGateway{
 				Tls: &configv1.GatewayTlsSettings{
-					Origination: tt.settings,
+					Origination: tc.settings,
 				},
 			})
 			before := proto.Clone(gateway.Config)
@@ -200,7 +234,7 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				minVersion, maxVersion, ciphers := tt.min, tt.max, tt.ciphers
+				minVersion, maxVersion, ciphers := tc.min, tc.max, tc.ciphers
 				if !selected {
 					minVersion, maxVersion, ciphers = tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, defaults
 				}

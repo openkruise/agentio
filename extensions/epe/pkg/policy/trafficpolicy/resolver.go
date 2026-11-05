@@ -16,30 +16,19 @@ package trafficpolicy
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
-	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
-type resolver struct{ source Resources }
+type authorizer struct{}
 
-func (s *resolver) config(ctx context.Context, subject subject.Subject) (egressauthz.Config, error) {
-	snapshot, err := lookup(ctx, s.source, subject)
-	if err != nil {
-		return egressauthz.Config{}, err
-	}
-	return snapshot.entry.compiled.config, snapshot.entry.compiled.err
-}
+// NewAuthorizer evaluates the immutable policy snapshot prepared with the caller.
+func NewAuthorizer() egressauthz.Authorizer { return authorizer{} }
 
-// NewAuthorizer loads immutable workload policies for aggregate authorization.
-// It is independent of SecurityProfile resolution and bypass semantics.
-func NewAuthorizer(source Resources) egressauthz.Authorizer {
-	return &resolver{source: source}
-}
-
-func (s *resolver) Authorize(
+func (authorizer) Authorize(
 	ctx context.Context,
 	stream *filter.Stream,
 	candidates []netip.AddrPort,
@@ -52,9 +41,8 @@ func (s *resolver) Authorize(
 		})
 		return nil, nil
 	}
-	cfg, err := s.config(ctx, caller.Subject)
-	if err != nil {
-		return nil, err
+	if stream.Policies.DestinationAuthorizer == nil {
+		return nil, fmt.Errorf("workload policy snapshot is not prepared")
 	}
-	return cfg.Authorize(ctx, stream, candidates)
+	return stream.Policies.DestinationAuthorizer.Authorize(ctx, stream, candidates)
 }

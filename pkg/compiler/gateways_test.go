@@ -38,6 +38,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
@@ -149,7 +150,7 @@ func TestGatewayAPIDeclarationOverridesOnlyLegacyPolicyFallback(t *testing.T) {
 	if !merged.WaitUntilSynced(stop) {
 		t.Fatal("merged gateway declarations did not sync")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := merged.GetKey("agentio-system/egress")
 		return gateway != nil && gateway.Source == model.GatewaySourceGatewayAPI &&
 			gateway.Config.GetExtProc().GetService() == externalConfig.GetExtProc().GetService()
@@ -217,41 +218,34 @@ func TestGatewayAPIParameterUpdatePublishesIncrementalRoutesWithLegacyPolicyRefe
 		}
 		return 0
 	}
-	eventually(t, func() bool { return routeTimeout() == 7*time.Second }, "initial Gateway API route timeout")
+	testutil.Eventually(t, func() bool { return routeTimeout() == 7*time.Second }, "initial Gateway API route timeout")
 	recorder := newRecorder(compiled.Resources())
 
 	gatewayAPI.ConditionalUpdateObject(gatewayWithTimeout(11 * time.Second))
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return routeTimeout() == 11*time.Second && recorder.has(gatewayResourceName(
 			model.RouteType, "agentio-system/egress", networking.HTTPDynamicForwardProxy))
 	}, "parametersRef-equivalent update to publish an incremental RDS resource")
 }
 
 func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
-	const rootCAPath = "/etc/ssl/custom.pem"
+	const trustBundle = "public CA bundle supplied by agentiod"
 	test.SetForTest(t, &features.GatewayConnectTimeout, 7*time.Second)
-	test.SetForTest(t, &features.GatewayRootCAPath, rootCAPath)
-	resources, err := gatewayResourcesFor(
-		model.Gateway{
+	resources, err := gatewayResourcesFor(networking.Inputs{
+		Gateway: model.Gateway{
 			Namespace: "agentio-system",
 			Name:      "egress",
 			Config:    &configv1.EgressGateway{},
 		},
-		nil,
-		nil,
-		"agentiod.agentio-system.svc:15012",
-		"cluster.local",
-		nil,
-		"",
-		"",
-		nil,
-		nil,
-	)
+		DiscoveryAddress:    "agentiod.agentio-system.svc:15012",
+		TrustDomain:         "cluster.local",
+		UpstreamTrustBundle: trustBundle,
+	})
 	if err != nil {
 		t.Fatalf("gatewayResourcesFor: %v", err)
 	}
 	clusters := make(map[string]*clusterv3.Cluster)
-	for _, resource := range resources {
+	for _, resource := range resources.StaticResources {
 		if resource.Key.TypeURL != model.ClusterType {
 			continue
 		}
@@ -270,8 +264,11 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 		UnmarshalTo(tlsContext); err != nil {
 		t.Fatalf("unmarshal TLS origination context: %v", err)
 	}
-	if got := tlsContext.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename(); got != rootCAPath {
-		t.Fatalf("TLS origination root CA = %q, want %q", got, rootCAPath)
+	if got := tlsContext.GetCommonTlsContext().
+		GetValidationContext().
+		GetTrustedCa().
+		GetInlineString(); got != trustBundle {
+		t.Fatalf("TLS origination root CA = %q, want %q", got, trustBundle)
 	}
 }
 
@@ -301,7 +298,7 @@ func TestGatewayAccessLogFormatUpdateAndReset(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "custom-format", Value: updated},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource := fixture.compiler.graph.resources.GetKey(wantA)
 		if resource == nil || !recorder.has(wantA) {
 			return false
@@ -335,7 +332,7 @@ func TestGatewayAccessLogFormatUpdateAndReset(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "reset-format", Value: config},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return maps.Equal(beforeA, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"))
 	}, "removing the override to restore the default gateway graph")
 	settle()
@@ -379,7 +376,7 @@ func TestGatewayExtProcDisableAndRestoreInheritance(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "disable", Value: disabled},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		after := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
 		return after[clusterA] == "" &&
 			after[internalA] != "" && after[internalA] != beforeA[internalA] &&
@@ -401,7 +398,7 @@ func TestGatewayExtProcDisableAndRestoreInheritance(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "inherit-again", Value: config},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return maps.Equal(beforeA, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"))
 	}, "removing the override restores the inherited ext_proc graph")
 }
@@ -444,7 +441,7 @@ func TestGatewayTelemetryChangeAffectsOnlyTargetGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.telemetry.ConditionalUpdateObject(policy)
-	eventually(t, func() bool { return recorder.has(wantA) }, "target Gateway Telemetry listener update")
+	testutil.Eventually(t, func() bool { return recorder.has(wantA) }, "target Gateway Telemetry listener update")
 	settle()
 	for _, changed := range recorder.names() {
 		if strings.Contains(changed, "|demo/egress-b|") {
@@ -492,7 +489,7 @@ func TestConflictingTelemetryRetainsTargetGatewayLastKnownGood(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.telemetry.ConditionalUpdateObject(first)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return !failed
 	}, "first Telemetry accepted")
@@ -508,7 +505,7 @@ func TestConflictingTelemetryRetainsTargetGatewayLastKnownGood(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.telemetry.ConditionalUpdateObject(second)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return failed
 	}, "same-layer Telemetry conflict recorded")
@@ -518,7 +515,7 @@ func TestConflictingTelemetryRetainsTargetGatewayLastKnownGood(t *testing.T) {
 	}
 
 	fixture.telemetry.DeleteObject(second.ResourceName())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return !failed
 	}, "Telemetry conflict recovery")
@@ -544,7 +541,7 @@ func TestEnvoyFilterChangeAffectsOnlyTargetGateway(t *testing.T) {
 	fixture.gatewayPatches.ConditionalUpdateObject(testClusterGatewayPatch(t,
 		"patch-a", "agentio-system/config-sources", "1", "demo/egress-a", "patched-a"))
 
-	eventually(t, func() bool { return recorder.has(aCluster) }, "target Gateway cluster patched")
+	testutil.Eventually(t, func() bool { return recorder.has(aCluster) }, "target Gateway cluster patched")
 	settle()
 	for _, changed := range recorder.names() {
 		if strings.Contains(changed, "|demo/egress-b|") {
@@ -572,7 +569,7 @@ func TestDuplicateEnvoyFilterIdentityRetainsTargetGatewayLastKnownGood(t *testin
 
 	filter := testClusterGatewayPatch(t, "shared", "agentio-system/source-a", "1", "demo/egress", "last-good")
 	fixture.gatewayPatches.ConditionalUpdateObject(filter)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return !maps.Equal(gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress"), baseline)
 	}, "first EnvoyFilter applied")
 	settle()
@@ -582,7 +579,7 @@ func TestDuplicateEnvoyFilterIdentityRetainsTargetGatewayLastKnownGood(t *testin
 	duplicate.Source = "agentio-system/source-b"
 	duplicate.ResourceVersion = "2"
 	fixture.gatewayPatches.ConditionalUpdateObject(duplicate)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return found
 	}, "duplicate EnvoyFilter records target Gateway failure")
@@ -612,14 +609,14 @@ func TestDuplicateEnvoyFilterIdentityAcrossTargetsFailsTargetUnionClosed(t *test
 
 	first := testClusterGatewayPatch(t, "shared", "agentio-system/source-a", "1", "demo/egress-a", "patched-a")
 	fixture.gatewayPatches.ConditionalUpdateObject(first)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return !maps.Equal(gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"), baselineA)
 	}, "first source establishes gateway A last-known-good graph")
 	lastGoodA := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
 
 	duplicate := testClusterGatewayPatch(t, "shared", "agentio-system/source-b", "2", "demo/egress-b", "patched-b")
 	fixture.gatewayPatches.ConditionalUpdateObject(duplicate)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		failures := fixture.compiler.Failures()
 		_, failedA := failures["Gateway/demo/egress-a"]
 		_, failedB := failures["Gateway/demo/egress-b"]
@@ -634,7 +631,7 @@ func TestDuplicateEnvoyFilterIdentityAcrossTargetsFailsTargetUnionClosed(t *test
 	}
 
 	fixture.gatewayPatches.DeleteObject(duplicate.ResourceName())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return len(fixture.compiler.Failures()) == 0
 	}, "removing one source resolves both target Gateway conflicts")
 	if got := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")[wantA]; got != lastGoodA[wantA] {
@@ -669,7 +666,7 @@ func TestGatewayConfigChangesAffectOnlyConfiguredGateway(t *testing.T) {
 		},
 	})
 	bProxy := gatewayResourceName(model.ProxyConfigType, "demo/egress-b", "agentio-proxy")
-	eventually(t, func() bool { return recorder.has(bProxy) }, "configured gateway add")
+	testutil.Eventually(t, func() bool { return recorder.has(bProxy) }, "configured gateway add")
 	settle()
 	for _, changed := range recorder.names() {
 		if strings.Contains(changed, "|demo/egress-a|") {
@@ -691,7 +688,7 @@ func TestGatewayConfigChangesAffectOnlyConfiguredGateway(t *testing.T) {
 		},
 	})
 	bExtProc := gatewayResourceName(model.ClusterType, "demo/egress-b", networking.ExtProcCluster)
-	eventually(t, func() bool { return recorder.has(bExtProc) }, "configured gateway update")
+	testutil.Eventually(t, func() bool { return recorder.has(bExtProc) }, "configured gateway update")
 	settle()
 	for _, changed := range recorder.names() {
 		if strings.Contains(changed, "|demo/egress-a|") {
@@ -706,7 +703,7 @@ func TestGatewayConfigChangesAffectOnlyConfiguredGateway(t *testing.T) {
 			EgressGateways: []*configv1.EgressGateway{a},
 		},
 	})
-	eventually(t, func() bool { return recorder.has(bProxy) }, "configured gateway delete")
+	testutil.Eventually(t, func() bool { return recorder.has(bProxy) }, "configured gateway delete")
 	settle()
 	for _, changed := range recorder.names() {
 		if strings.Contains(changed, "|demo/egress-a|") {
@@ -734,7 +731,7 @@ func TestDuplicateGatewayConfigPublishesNoGraphAndRecordsFailure(t *testing.T) {
 	})
 	waitSynced(t, fixture.compiler)
 
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return found
 	}, "duplicate gateway configuration failure")
@@ -749,7 +746,7 @@ func TestDuplicateGatewayConfigPublishesNoGraphAndRecordsFailure(t *testing.T) {
 		ResourceVersion: "removed",
 		Value:           &configv1.AgentioConfig{},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return !failed
 	}, "removed initially invalid gateway clears failure")
@@ -798,7 +795,7 @@ func TestInvalidSemanticConfigurationRetainsGatewayGraphUntilRecovery(t *testing
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "invalid", Value: invalid},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["AgentioConfig/configuration"]
 		return found
 	}, "invalid semantic configuration failure")
@@ -830,7 +827,7 @@ func TestInvalidSemanticConfigurationRetainsGatewayGraphUntilRecovery(t *testing
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "recovered", Value: recovered},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current := fixture.compiler.graph.configuration.Get()
 		if current == nil || current.ResourceVersion != "recovered" {
 			return false
@@ -841,7 +838,7 @@ func TestInvalidSemanticConfigurationRetainsGatewayGraphUntilRecovery(t *testing
 }
 
 func TestInitialInvalidEgressAndTLSGatewayDoNotCreateSandboxReference(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name   string
 		config *configv1.AgentioConfig
 	}{
@@ -865,13 +862,13 @@ func TestInitialInvalidEgressAndTLSGatewayDoNotCreateSandboxReference(t *testing
 			}},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			fixture := newIncrementalFixture(t)
 			client := testWorkload("demo", "client", "10.0.0.2")
 			fixture.sandboxes.ConditionalUpdateObject(testSandboxForWorkload(client))
 			fixture.workloads.ConditionalUpdateObject(client)
 			fixture.agentioConfig.ConditionalUpdateObject(
-				model.AgentioConfiguration{ResourceVersion: "initial", Value: test.config},
+				model.AgentioConfiguration{ResourceVersion: "initial", Value: tc.config},
 			)
 			waitSynced(t, fixture.compiler)
 			awaitSteadyState(t, fixture.compiler, addressResourceName("demo", "client"))
@@ -899,7 +896,7 @@ func TestInitialInvalidEgressAndTLSGatewayDoNotCreateSandboxReference(t *testing
 func TestGatewayWDSOwnershipLifecycle(t *testing.T) {
 	fixture := newIncrementalFixture(t)
 	gatewaySandbox := testWorkload("demo", "egress-pod", "10.0.0.10")
-	gatewaySandbox.Principal = mustTestPrincipal("cluster.local", "ns/demo/sa/gateway-bootstrap")
+	gatewaySandbox.Principal = model.MustPrincipal("cluster.local", "ns/demo/sa/gateway-bootstrap")
 	unrelatedSandbox := testWorkload("other", "client", "10.0.1.10")
 	gatewayService := model.Service{
 		Namespace: "demo",
@@ -953,7 +950,7 @@ func TestGatewayWDSOwnershipLifecycle(t *testing.T) {
 			Name:      "egress",
 		}}},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, fixture.compiler)
 		workload, workloadFound := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: gatewaySandbox.UID})
 		service, serviceFound := snapshot.Get(
@@ -981,7 +978,7 @@ func TestGatewayWDSOwnershipLifecycle(t *testing.T) {
 		ResourceVersion: "remove",
 		Value:           &configv1.AgentioConfig{},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		snapshot := currentSnapshot(t, fixture.compiler)
 		workload, workloadFound := snapshot.Get(model.ResourceKey{TypeURL: model.AddressType, Name: gatewaySandbox.UID})
 		service, serviceFound := snapshot.Get(
@@ -1014,7 +1011,7 @@ func TestInvalidGatewayUpdateRetainsLastKnownGoodGraph(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "duplicate", Value: duplicate},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, found := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return found
 	}, "duplicate gateway update failure")
@@ -1027,7 +1024,7 @@ func TestInvalidGatewayUpdateRetainsLastKnownGoodGraph(t *testing.T) {
 		ResourceVersion: "removed",
 		Value:           &configv1.AgentioConfig{},
 	})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return !failed && len(gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress")) == 0
 	}, "removed invalid gateway clears failure and last-known-good graph")
@@ -1040,7 +1037,7 @@ func TestInvalidGatewayUpdateRetainsLastKnownGoodGraph(t *testing.T) {
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "recovered", Value: recovered},
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress"]
 		return !failed && !maps.Equal(gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress"), baseline)
 	}, "valid gateway recovery replaces last known good graph")
@@ -1052,11 +1049,11 @@ func TestGatewayWDSResourcesCarryOwnership(t *testing.T) {
 	options := []krt.CollectionOption{krt.WithStop(stop)}
 	configuredWorkload := testWDSWorkload("egress-a-pod", "egress-a-uid", "10.0.0.10")
 	configuredWorkload.Namespace = "agentio-system"
-	configuredWorkload.Principal = mustTestPrincipal("cluster.local", "ns/agentio-system/sa/gateway-bootstrap")
+	configuredWorkload.Principal = model.MustPrincipal("cluster.local", "ns/agentio-system/sa/gateway-bootstrap")
 	configuredWorkload.GatewayKey = "agentio-system/egress-a"
 	lookalikeWorkload := testWDSWorkload("lookalike", "lookalike-uid", "10.0.0.11")
 	lookalikeWorkload.Namespace = "agentio-system"
-	lookalikeWorkload.Principal = mustTestPrincipal("cluster.local", "ns/agentio-system/sa/gateway-bootstrap")
+	lookalikeWorkload.Principal = model.MustPrincipal("cluster.local", "ns/agentio-system/sa/gateway-bootstrap")
 	configuredService := model.Service{
 		Namespace: "agentio-system",
 		Name:      "egress-a",
@@ -1181,7 +1178,7 @@ func TestAdditionalExtProcHotUpdate(t *testing.T) {
 			next.AdditionalExtProcs = tc.providers
 			// Keep ResourceVersion unchanged: content alone must invalidate the projection.
 			fixture.agentioConfig.ConditionalUpdateObject(model.AgentioConfiguration{Value: next})
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				if !slices.Equal(readNames(), tc.want) {
 					return false
 				}
@@ -1201,11 +1198,11 @@ func TestAdditionalExtProcHotUpdate(t *testing.T) {
 	}
 	config.AdditionalExtProcs = []*configv1.ExtProcProvider{first}
 	fixture.agentioConfig.ConditionalUpdateObject(model.AgentioConfiguration{Value: config})
-	eventually(t, func() bool { return slices.Equal(readNames(), []string{"first"}) }, "restore processor")
+	testutil.Eventually(t, func() bool { return slices.Equal(readNames(), []string{"first"}) }, "restore processor")
 	next := proto.Clone(config).(*configv1.AgentioConfig)
 	next.AdditionalExtProcs[0].Service = "replacement.demo.svc"
 	fixture.agentioConfig.ConditionalUpdateObject(model.AgentioConfiguration{Value: next})
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		resource := fixture.compiler.graph.resources.GetKey(
 			gatewayResourceName(model.ClusterType, "demo/egress", "agentio.additional-ext-proc.first"),
 		)
@@ -1234,30 +1231,25 @@ func TestNetworkLimitsCompileCommunityVariant(t *testing.T) {
 				limit = `"maxConcurrentStreams":2`
 				filterName = "agentio.connect_concurrency"
 			}
-			raw := `{"` + field + `":{"rateLimits":[{"actions":[{"filterState":{"key":"sandbox.id","descriptorKey":"sandbox"}}]}],"descriptors":[{"entries":[{"key":"sandbox"}],` + limit + `}]}}`
+			raw := `{"` + field + `":{"rateLimits":[{"actions":[{"filterState":{"key":"agentio.sandbox.uid","descriptorKey":"sandbox"}}]}],"descriptors":[{"entries":[{"key":"sandbox"}],` + limit + `}]}}`
 			if err := protojson.Unmarshal([]byte(raw), settings); err != nil {
 				t.Fatal(err)
 			}
-			resources, err := gatewayResourcesFor(
-				model.Gateway{Name: "egress", Namespace: "demo", Config: settings},
-				nil,
-				nil,
-				"agentiod:15012",
-				"cluster.local",
-				nil,
-				"Kubernetes",
-				"agentio-system",
-				nil,
-				nil,
-			)
+			resources, err := gatewayResourcesFor(networking.Inputs{
+				Gateway:                model.Gateway{Name: "egress", Namespace: "demo", Config: settings},
+				DiscoveryAddress:       "agentiod:15012",
+				TrustDomain:            "cluster.local",
+				TelemetryClusterID:     "Kubernetes",
+				TelemetryRootNamespace: "agentio-system",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(resources) == 0 {
+			if len(resources.StaticResources) == 0 {
 				t.Fatal("community gateway resources missing")
 			}
 			found := false
-			for _, resource := range resources {
+			for _, resource := range resources.StaticResources {
 				if !resource.Facts.AgentioEgress {
 					t.Fatalf("unsupported legacy variant published: %v", resource.Key)
 				}

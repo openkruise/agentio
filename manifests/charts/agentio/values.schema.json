@@ -32,6 +32,10 @@
     "agentiod": {
       "type": "object",
       "properties": {
+        "kubernetesWorkloadAuthMode": {
+          "type": "string",
+          "enum": ["tokenreview", "local"]
+        },
         "replicaCount": {
           "type": "integer",
           "minimum": 1
@@ -71,16 +75,6 @@
             "maxServerConnectionAge": {
               "type": "string",
               "minLength": 1
-            }
-          }
-        },
-        "trustPackage": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "image": {
-              "type": "string",
-              "pattern": ".+@sha256:[a-f0-9]{64}$"
             }
           }
         },
@@ -363,6 +357,40 @@
               }
             }
           }
+        },
+        "policyPool": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "replicaCount": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "resources": {
+              "type": "object"
+            },
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "tolerations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "affinity": {
+              "type": "object"
+            },
+            "env": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -466,6 +494,13 @@
         "mode"
       ],
       "properties": {
+        "xdsCache": {
+          "type": "object",
+          "properties": {
+            "idleTTL": { "type": "string" },
+            "maxEntries": { "type": "integer", "minimum": 0 }
+          }
+        },
         "mode": {
           "type": "string",
           "enum": [
@@ -475,6 +510,14 @@
           ]
         },
         "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "preStopDelaySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminationGracePeriodSeconds": {
           "type": "integer",
           "minimum": 1
         },

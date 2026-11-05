@@ -101,10 +101,10 @@ func TestRetentionMatrix(t *testing.T) {
 		{name: "borrowed success always", policy: RetainAlways, wantPreserve: true},
 		{name: "borrowed failure always", testCode: 1, policy: RetainAlways, wantPreserve: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s, source := newUnitSuite(t, tt.owned)
-			s.config.Lifecycle.Retain = tt.policy
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, source := newUnitSuite(t, tc.owned)
+			s.config.Lifecycle.Retain = tc.policy
 			cleaned := false
 			s.cleanupResources = func(context.Context, *Environment) error {
 				cleaned = true
@@ -112,19 +112,19 @@ func TestRetentionMatrix(t *testing.T) {
 			}
 			code := s.run(context.Background(), func() int {
 				deferred := s.Environment(t).DefersResourceCleanup()
-				if want := tt.policy != RetainNever; deferred != want {
+				if want := tc.policy != RetainNever; deferred != want {
 					t.Fatalf("defer per-test resource cleanup = %v, want %v", deferred, want)
 				}
-				return tt.testCode
+				return tc.testCode
 			})
-			if code != tt.testCode {
-				t.Fatalf("code = %d, want %d", code, tt.testCode)
+			if code != tc.testCode {
+				t.Fatalf("code = %d, want %d", code, tc.testCode)
 			}
-			if cleaned != tt.wantCleanup {
-				t.Fatalf("resource cleanup = %v, want %v", cleaned, tt.wantCleanup)
+			if cleaned != tc.wantCleanup {
+				t.Fatalf("resource cleanup = %v, want %v", cleaned, tc.wantCleanup)
 			}
-			if source.preserve != tt.wantPreserve {
-				t.Fatalf("preserve = %v, want %v", source.preserve, tt.wantPreserve)
+			if source.preserve != tc.wantPreserve {
+				t.Fatalf("preserve = %v, want %v", source.preserve, tc.wantPreserve)
 			}
 		})
 	}

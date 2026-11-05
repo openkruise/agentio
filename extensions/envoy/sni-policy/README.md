@@ -1,6 +1,6 @@
 # Agentio SNI listener module
 
-This Rust dynamic module runs after Envoy's HTTP and TLS inspectors on the gateway's internal listener. It evaluates the actual TLS SNI against a canonical `SniTrafficPolicy` in `agentio.sni.policy` filter state and writes `agentio.tls.action`: `terminate`, `passthrough`, `deny` or `cleartext`.
+This Rust dynamic module runs after Envoy's original-destination, HTTP and TLS inspectors on the gateway's internal listener. It evaluates the actual TLS SNI and restored original destination port against a canonical `SniTrafficPolicy` in `agentio.sni.policy` filter state and writes `agentio.tls.action`: `terminate`, `passthrough`, `deny` or `cleartext`. Each match ANDs its SNI patterns with its optional `ports` list; a restricted list never matches a missing destination port. Rules use first-match order.
 
 Porter supplies the ordered policy through ext_proc dynamic metadata. The control plane copies `%DYNAMIC_METADATA(agentio:sni:policy)%` to hashable filter state on CONNECT and shares it with the internal connection. The module does not trust `x-agentio-sni` or an action from CONNECT headers. A preexisting action closes the connection.
 

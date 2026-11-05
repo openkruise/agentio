@@ -2,11 +2,15 @@
 
 The Egress Policy Enforcer (EPE) is deployed by the Agentio chart as `agentio-epe` when `epe.mode` is `managed`. This reference separates the Helm surface from EPE process settings so operators can see which controls a normal chart upgrade can change.
 
+Managed mode configures gateways with a Kubernetes Service `serviceRef` and pushes EPE's ready, non-terminating Pod endpoints through endpoint discovery. The chart also keeps the DNS `service` field for older controllers. External mode continues to use DNS unless `agentiod.config.values.sandboxExtProc.serviceRef` is set. See [external processing configuration](agentio-configuration.md#external-processing-provider) for reference precedence and port mapping.
+
 ## Watched EPEConfig
 
 EPE always watches its base and primary configuration ConfigMaps and referenced Secrets, CA ConfigMaps, and certificate files. The chart selects `<epe-name>-config` and `<epe-name>-config-primary` in the installation namespace; standalone EPE defaults to `agentio-epe-config` and `agentio-epe-config-primary` in `agentio-system`. Set `epe.config` to have Helm create the base with global destination restrictions and named `httpCallout` and `credentialProvider` extensions. SecurityProfile rules select a named provider with `actions.httpCallout.provider.name`; see [HTTP callouts](security-profile.md#http-callouts). `epe.config: null` leaves the base externally managed; primary is always externally managed.
 
 Environment settings supply the default EPEConfig layer, alongside built-in destination restrictions, followed by base and primary. Missing ConfigMaps or blank `data.config` leave the lower layer unchanged; EPE watches for later creation. Invalid content is logged and discarded, retaining the last good configuration, or the defaults before any valid configuration has been loaded.
+
+Unknown EPEConfig fields are ignored with a warning listing their full paths. Known fields still undergo type and semantic validation; invalid enum names, duplicate YAML keys, and conflicting oneof members reject the update. Keep older versions' required fields when adding configuration for a newer version.
 
 `extensionProviders` merges by name across layers. New names are added; a same-name entry replaces the whole provider, including its type, timeout, and TLS settings. Omitted or null lists inherit the lower layer; an explicit `extensionProviders: []` clears the inherited list. Duplicate names within one layer are invalid. Each update recomputes from defaults: removing an entry or deleting a ConfigMap restores any lower-layer definition. Unchanged providers keep their clients and caches; replaced providers are recreated when restored.
 
@@ -51,9 +55,9 @@ Pool defaults depend on the configured protocol, not the negotiated result: `AUT
 
 Changing a provider's protocol, pool settings, stream limit, URL or TLS material installs a new pool. Calls that already selected the old provider finish on that version; old connections close after their last response body is consumed or closed. Idle old connections close immediately. Unchanged providers retain their pools. The connection cap applies to each configuration version, so old and new pools may briefly overlap during draining.
 
-Choose `HTTP2` when the configured endpoint supports it and multiplexing is desired. A larger stream cap is not necessarily faster: large request bodies can contend for the peer's connection receive window. EPE's stream cap limits sharing; the callout server controls its receive window. Start with the default 32 and compare throughput, tail latency and connection counts for the actual workload.
+Choose `HTTP2` when the configured endpoint supports it and multiplexing is desired. A larger stream cap is not necessarily faster: large request bodies can contend for the peer's connection receive window. Start with the default 32 and compare throughput, tail latency and connection counts for the actual workload.
 
-### Capacity planning and measured defaults
+### Sizing the connection pool
 
 Use per-provider callout RPS on one EPE process when sizing the pool, rather than total ingress RPS across replicas. A request can invoke a provider in multiple phases, and only requests matching the callout policy contribute to that provider's load. Estimate occupied capacity from the mean time a call holds a connection or stream, including network and body transfer, before adding headroom for bursts and tail latency:
 
@@ -64,32 +68,11 @@ HTTP2 connections ≈ ceil(concurrent calls / (target utilization × effective s
 effective streams per connection = min(http2.maxConcurrentStreams, peer SETTINGS limit)
 ```
 
-A target utilization of 70% is a planning starting point, not an enforced limit or a measured optimum. For example, 1,000 callouts/s with a 200ms mean occupied time suggests about 286 HTTP1 connections or nine HTTP2 connections at 32 streams per connection. The default HTTP1 pool of 128 cannot sustain that workload; the HTTP2 pool of 32 has capacity headroom. The default HTTP2 pool provides at most 1,024 concurrent calls only when the peer permits at least 32 streams per connection.
-
-The following results informed the defaults. Tests ran on 2026-10-23 through Envoy → EPE → callout, with a 1 KiB body over local TCP without TLS, separate generator/EPE/endpoint/upstream processes (GOMAXPROCS 4/4/8/4), Go 1.26.8, Envoy v1.39.4 with two workers, and a server permitting 250 HTTP2 streams. The final default matrix covered 34 cases, 46 rounds and 352,352 attempts. Three deliberately overloaded HTTP1 cases produced 12,385 errors; every other case passed response and exact-call-count checks. All final rounds recorded zero refused HTTP2 streams. HTTP1 used the 128/64 pool and HTTP2 used the 32/8 pool with 32 streams per connection. Fixed-rate and closed-loop rows are individual trials, so use them as capacity references rather than universal performance guarantees.
-
-| Workload | Provider timeout | HTTP1 result | HTTP2 result |
-| --- | --- | --- | --- |
-| 5ms endpoint delay, 1,000 offered RPS, 32 workers | Default 500ms | Zero errors; P99 7.5ms; eight peak connections | Zero errors; P99 7.6ms; one peak connection |
-| 50ms endpoint delay, 2,000 offered RPS, 256 workers | Default 500ms | Zero errors; P99 150.7ms; reached 128 connections | Zero errors; P99 136.7ms; eight peak connections |
-| 200ms endpoint delay, 1,000 offered RPS, 512 workers | Default 500ms | Overloaded: 5,508 failures out of 6,000 attempts | Zero errors; P99 223.5ms; eight peak connections |
-| 200ms endpoint delay, 1,024 workers in a closed loop | Explicit 2s | 611.7 RPS; P99 1,776.7ms; zero errors | 3,228.4 RPS; P99 499.8ms; zero errors; 32 peak connections |
-
-Zero errors alone do not prove that a pool can sustain the offered rate. With a 500ms endpoint delay, 2,500 offered RPS and an explicit 2s timeout, the default HTTP2 pool completed about 2,048 requests/s during steady intervals and accumulated backlog. The whole-run rate, including draining, was 1,950.1 RPS and P99 reached 2.28s despite zero errors. Fixed-rate latency includes waiting in the load generator before the provider timeout starts. A larger pool kept up with the offered rate using 50 peak connections and had P99 near 600ms. For this workload, the 70% utilization estimate suggests about 56 connections; configuring `maxConnections: 64` is a reasonable starting point to validate.
-
-Retaining eight idle HTTP2 connections trades fewer idle sockets for more connection establishment. Across three repeated burst trials at 1,536 workers and 50ms endpoint delay, the new 32/8 pool had warm-round median throughput of 13,093 RPS and P99 of 164.9ms, comparable to 12,794 RPS and 163.2ms with the former 128/64 pool. All burst requests succeeded. However, the new pool opened 122–137 connections cumulatively across three rounds per trial, compared with 45–48 for the old pool. For frequent bursts over higher RTT or TLS, measure whether retaining 16 or 32 idle connections reduces latency; this local TCP result does not establish an optimal idle limit for those networks.
-
-A longer timeout permits more waiting but does not increase sustained capacity. Set it to cover expected service latency, body transfer, connection establishment and acceptable queueing; a service that itself takes around 500ms needs more than the default 500ms budget. Before increasing connections or streams, check the provider's own capacity, CPU, tail latency and HTTP2 receive windows. Measure successful RPS, errors, queue growth, P99 and peak connections together.
-
-A separate controlled 1 MiB-body comparison at concurrency 256 ran 10,000 requests per trial, with three trials per variant. The production HTTP2 client with 32 streams and a 4 MiB server connection receive window achieved median 857.7 RPS and P99 396.7ms, compared with 834.2 RPS and P99 751.0ms for the original experimental Go h2c client with 250 streams and a 1 MiB window. Replacing the client while keeping the original stream cap and window gave little improvement; most of the gain came from tuning the server receive window. These results do not establish a general HTTP2 speedup or predict performance over TLS or higher RTT networks.
-
-Cold-start validation before the default retuning completed two fresh-process runs of 4,096 requests each at concurrency 256, with a 200ms endpoint delay, a peer limit of 16 streams and a client limit of 32. Both runs had zero errors and zero refused streams, and neither exceeded 16 simultaneous handlers per connection. The deployed `TestEPEHTTPCallout` was rerun on the final defaults and passed all eight datapath cases plus the ConfigMap transport-lifecycle test. It covers 64 cold calls against a four-stream server, a protocol change while an old response remains active, and eight isolated configuration updates with the URL and protocol held fixed: maximum connections (2 → 1), retained idle connections (2 → 1), and idle timeout (30s → 500ms) for both HTTP1 and HTTP2, plus HTTP2 streams per connection (1 → 2 and 2 → 1). Each isolated update verifies closure of the retired idle connection, enforcement of the new pool capacity and idle limits, queuing of an extra call, successful completion of old active calls, and closure of their drained connection. All these calls completed successfully with zero refused streams.
-
-See the [benchmark instructions](../../bench/epe/callout/README.md#protocol-default-capacity-matrix) to reproduce the matrix. Test conclusions are maintained here; generated measurements and execution logs are kept outside the repository.
+A target utilization of 70% is a planning starting point, not an enforced limit. For example, 1,000 callouts/s with a 200ms mean occupied time suggests about 286 HTTP1 connections or nine HTTP2 connections at 32 streams per connection. Measured results that informed the defaults are in [EPE HTTPCallout benchmarks](../design/epe-benchmarks.md).
 
 ## Global destination authorization
 
-EPE authorizes and pins HTTP destinations by default, independently of xDS and SecurityProfile selection. Configure `egressAuthorization.deniedCIDRs` in the watched EPEConfig to reject destination IP ranges on every port for all requests that reach this authorization path. No per-Sandbox selector or policy binding is required. For example, these Helm values add two deployment-specific destinations to the mandatory built-in restrictions:
+EPE authorizes and pins HTTP destinations by default, independently of discovery and SecurityProfile selection. Configure `egressAuthorization.deniedCIDRs` in the watched EPEConfig to reject destination IP ranges on every port for all requests that reach this authorization path. No per-Sandbox selector or policy binding is required. For example, these Helm values add two deployment-specific destinations to the mandatory built-in restrictions:
 
 ```yaml
 epe:
@@ -115,27 +98,31 @@ These restrictions cannot be disabled through EPEConfig. Private service network
 
 Global denies run before TrafficPolicy matching and cannot be overridden by an allow-all policy or a SecurityProfile `bypass`. A global miss continues to the existing workload policy semantics: no workload policies means allow, while configured policies with no matching rule mean deny. A missing workload identity skips profile selection but still runs static destination authorization. `--fail-closed-on-missing-identity` remains available for deployments that also require identity.
 
-Without an explicit upstream, EPE resolves hostname targets with IPv4-only (`A`) queries, matching the gateway's `V4_ONLY` DNS cache, and checks candidate IPs. AAAA queries are not issued, and IPv6 addresses in custom DNS records are excluded. A hostname with no IPv4 candidates fails resolution; denied IPv4 candidates cannot fall back to IPv6. IPv4 and IPv6 literal hosts and explicit upstream targets still undergo authorization without DNS. A domain resolving to a forbidden address is therefore covered. Denied DNS candidates are skipped. EPE retains the address family of the first surviving candidate and selects an allowed candidate uniformly at random within that family, pinning it for the gateway to connect to. This distributes requests across allowed IPs without adding health checks or connection-failure failover. If the original destination is a DNS candidate and is denied, EPE rejects the request without choosing another candidate. Explicit ServiceEntry or route targets are checked directly and cannot fall back to another address. If no address is allowed, EPE returns HTTP 403 (`epe_egress_denied`). Resolution and policy-loading failures return a local error, never an allow decision.
+Without an explicit upstream, EPE resolves hostname targets with IPv4-only (`A`) queries and checks candidate IPs. AAAA queries are not issued, and IPv6 addresses in custom DNS records are excluded. A hostname with no IPv4 candidates fails resolution; denied IPv4 candidates cannot fall back to IPv6. IPv4 and IPv6 literal hosts and explicit upstream targets still undergo authorization without DNS. A domain resolving to a forbidden address is therefore covered. Denied DNS candidates are skipped. EPE retains the address family of the first surviving candidate and selects an allowed candidate uniformly at random within that family, pinning it for the gateway to connect to. This distributes requests across allowed IPs without adding health checks or connection-failure failover. If the original destination is a DNS candidate and is denied, EPE rejects the request without choosing another candidate. Explicit ServiceEntry or route targets are checked directly and cannot fall back to another address. If no address is allowed, EPE returns HTTP 403 (`epe_egress_denied`). Resolution and policy-loading failures return a local error, never an allow decision.
 
 Omitting or setting `egressAuthorization` to null inherits the lower configuration layer. Supplying the block replaces inherited user entries; mandatory restrictions are appended again. `egressAuthorization: {deniedCIDRs: []}` clears only the inherited user entries, preserving mandatory restrictions and workload policies. Updates apply without a restart and each authorizer uses one immutable configuration for its entire candidate set. Invalid updates retain the last valid EPEConfig; an invalid initial configuration uses the startup defaults, including all mandatory destination restrictions. Check the configuration logs and verify rejection after applying a restriction. Initial synchronization of the authorization configuration gates EPE readiness and listener startup.
 
-### Optional xDS policies and migration
+### Discovery and TrafficPolicy authorization
 
-Set `--enable-xds-egressauthz=true` to additionally retrieve the calling Workload and its TrafficPolicy resources from Agentiod. Supply `--xds-address` and the existing xDS TLS/token settings. The xDS authorizer rejects missing or incomplete workload identity with HTTP 403 before querying resources; audit records use the reason `missing_source_identity`. Unavailable policies also fail closed. Enabling xDS does not change `--fail-closed-on-missing-identity`: that separate flag rejects missing identity at the request boundary, before any authorizer runs. `--enable-xds-egressauthz` defaults to false; when this xDS flag is disabled, authorization does not connect to xDS or query Workload/TrafficPolicy resources.
+Every EPE deployment must supply `--xds-address` and discovery TLS/token settings. EPE always retrieves Workloads through workload discovery to read ordered SecurityProfile references and metadata; SecurityProfile bodies come from local Kubernetes watches. Set `--enable-xds-egressauthz=true` to additionally retrieve and enforce referenced TrafficPolicy resources. It defaults to `false`; disabling it skips TrafficPolicy authorization, while workload discovery remains required for SecurityProfile resolution.
 
-Replace the former `--enable-egressauthz` argument with `--enable-xds-egressauthz` when upgrading a deployment that used native TrafficPolicy authorization. The old argument is removed. Deployments without either argument now perform target resolution and pinning too, and enforce the mandatory destination restrictions even when the user list is empty. EPE must be able to resolve the destination names previously resolved by the gateway; DNS failure now rejects the request.
+Unavailable policies and missing or incomplete workload identity fail closed. `--fail-closed-on-missing-identity` is separate: it rejects missing identity at the request boundary, before any authorizer runs.
 
-Keep gateway request header processing at `SEND` and `failureModeAllow: false`, and upgrade gateway and EPE together so the gateway consumes the pinned IP. Coverage is for HTTP forwarding through EPE, including HTTPS terminated into that path. This is not a blanket TCP/TLS passthrough or UDP restriction. Application-level CONNECT forwards through a separate upstream-proxy route; this HTTP DFP target-pinning guarantee does not describe that route or the proxy's eventual tunnel destination. Traffic that bypasses EPE is unaffected.
+Helm registers the managed EPE identity automatically; external deployments must register their identities explicitly in `AgentioConfig.trustedEPEIdentities`. See [Trusted EPE identities](agentio-configuration.md#trusted-epe-identities). Set `--domain` to the Kubernetes cluster DNS suffix used in the default node ID; `--xds-node-id` overrides the full ID.
+
+Replace the former `--enable-egressauthz` argument with `--enable-xds-egressauthz` when upgrading a deployment that used native TrafficPolicy authorization. The old argument is removed. Deployments without either argument still perform target resolution and pinning, and enforce the mandatory destination restrictions even when the user list is empty. EPE must be able to resolve the destination names previously resolved by the gateway; DNS failure now rejects the request.
+
+Keep gateway request header processing at `SEND` and `failureModeAllow: false`, and upgrade gateway and EPE together so the gateway consumes the pinned IP. Coverage is for HTTP forwarding through EPE, including HTTPS terminated into that path; it is not a blanket TCP/TLS passthrough or UDP restriction. Traffic that bypasses EPE is unaffected.
 
 ## Helm values
 
 | Value | Default | Rendered effect |
 | --- | --- | --- |
 | `epe.mode` | `disabled` | `managed` creates the EPE ServiceAccount, cluster RBAC, headless Service, Deployment, and PodDisruptionBudget and writes `sandboxExtProc` into `agentio-config`; `external` wires the configured external address without deploying EPE. |
-| `epe.nameOverride` | `agentio-epe` | Names the Kubernetes objects and the generated ext_proc Service hostname. |
+| `epe.nameOverride` | `agentio-epe` | Names the Kubernetes objects and the generated external-processing Service hostname. |
 | `epe.config` | `null` | When set, creates `<epe-name>-config` with EPEConfig in `data.config`. EPE watches this name even when the ConfigMap is absent. |
 | `epe.tls.enabled` | `false` | Enables gateway-to-EPE mTLS. Managed mode also configures the EPE listener. |
-| `epe.tls.certificateSource` | `{}` | Managed EPE certificate source: select `ca` or `file`. Omission or `{}` uses Agentiod with default token and root mounts. |
+| `epe.tls.certificateSource` | `{}` | Managed EPE certificate source: select `ca` or `file`. Omission or `{}` uses `agentiod` with default token and root mounts. |
 | `epe.tls.peerSpiffeIDs` | `[]` | EPE identities accepted by the gateway. Managed mode derives EPE's ServiceAccount identity; external mode requires an explicit list. |
 | `epe.extraVolumes`, `.extraVolumeMounts` | `[]` | Native Kubernetes volumes and EPE container mounts. Also available with TLS disabled. |
 | `epe.service.grpcPort` | `9002` | Service, container, EPE `-grpc-port`, and `sandboxExtProc.port`. |
@@ -147,6 +134,8 @@ Keep gateway request header processing at `SEND` and `failureModeAllow: false`, 
 | `epe.credentialProvider.mtls.insecureSkipVerify` | `false` | Rendered only when `true`. Disables provider server-certificate verification — exposes the bearer token to an on-path attacker. |
 | `epe.env` | `{}` | Adds arbitrary string environment variables to the container after the chart-managed variables, so a key set here overrides the same chart-managed variable. |
 | `epe.replicaCount` | `1` | Deployment replica count when autoscaling is disabled. |
+| `epe.preStopDelaySeconds` | `10` | Managed EPE's native Kubernetes preStop sleep duration. Zero omits the hook. Requires `PodLifecycleSleepAction`, enabled by default in Kubernetes 1.30+. |
+| `epe.terminationGracePeriodSeconds` | `45` | Managed EPE Pod termination budget, including preStop and RPC draining. Must exceed `epe.preStopDelaySeconds`. |
 | `epe.autoscaling.enabled` | `false` | Creates an HPA instead of setting Deployment replicas. |
 | `epe.autoscaling.minReplicas`, `.maxReplicas` | `2`, `20` | HPA bounds when enabled. |
 | `epe.autoscaling.targetCPUUtilizationPercentage` | `80` | Adds the CPU utilization metric when non-zero. |
@@ -165,13 +154,17 @@ The chart supplies the EPEConfig name and namespace, the Secret watch scope, the
 
 The Service is headless (`clusterIP: None`) and exposes TCP ports named `extproc` (`epe.service.grpcPort`), `health` (`epe.service.healthPort`), and `metrics` (`epe.service.metricsPort`). Its selector matches `app.kubernetes.io/name: <epe.nameOverride>`. The Deployment opts out of sidecar injection, adds Prometheus scrape annotations for port 9090, and configures gRPC liveness and readiness probes against the health port. Liveness starts after five seconds and runs every ten seconds; readiness starts after three seconds and runs every five seconds.
 
+During Pod deletion, the default 10-second preStop sleep keeps EPE serving while endpoint changes propagate to gateways through endpoint discovery or DNS. After the hook finishes, Kubernetes sends SIGTERM and EPE stops accepting new RPCs while allowing active gRPC streams up to 30 seconds to finish. The 45-second Pod budget includes the hook, RPC draining, and five seconds of cleanup allowance. When increasing the delay, increase the Pod budget to preserve the drain window. See [container lifecycle hooks](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/#hook-handler-execution) for the shared timeout semantics. Streams that outlive EPE's 30-second drain limit can still be interrupted.
+
+The sleep hook runs in the kubelet and requires no shell or `sleep` executable in the EPE image. On clusters without [PodLifecycleSleepAction](https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/), set `epe.preStopDelaySeconds: 0` to omit the hook. For production availability, run at least two EPE replicas (`epe.replicaCount: 2` or HPA minimum replicas of two); a waiting hook cannot maintain availability when no eligible endpoints remain.
+
 The chart grants the ServiceAccount `get/list/watch` on `SecurityProfile` and `GlobalSecurityProfile`, but only `get` on their status subresources. It also grants cluster-wide `get/list/watch` on CRDs and ConfigMaps. Secret `get/list/watch` is granted through a Role and RoleBinding in the EPE installation namespace. With `epe.secretWatchScope: cluster`, the existing EPE ClusterRole also grants Secret `list/watch` across all namespaces. EPE needs the CRD watch before its delayed profile informers can synchronize; without it the process cannot complete startup. Provider certificate Secret references default to `--namespace` (the installation namespace in Helm) and may explicitly name another namespace. With the default `system` scope, cross-namespace references require a separate Role and RoleBinding granting the EPE ServiceAccount `list/watch` on the referenced Secrets in that namespace. Watches are filtered by Secret name, so the Role can be restricted with `resourceNames`. Provider certificate Secret synchronization does not gate startup; unavailable required certificate material makes the affected provider unavailable while EPE retries in the background.
 
-SecurityProfile token transformations read a shared KRT Secret cache. With the default `--secret-watch-scope=system`, it watches all Secrets only in the system namespace selected by `--namespace`. Reference namespaces retain their existing resolution: explicit namespace, then SecurityProfile namespace, then Pod namespace. References outside the watch scope fail without an API lookup. To watch all namespaces, set `epe.secretWatchScope: cluster` (`--secret-watch-scope=cluster`) and Helm grants cluster-wide Secret `list/watch` through the existing EPE ClusterRole and ClusterRoleBinding. Custom deployments must grant these permissions separately. The chart keeps its namespace-scoped Role in either mode. Namespace-wide caching requires `list/watch` for the entire watched namespace; `get`-only or name-restricted Roles are insufficient. EPE starts its health and admin endpoints while waiting for EPEConfig, SecurityProfile, and token Secret caches to synchronize. Until initial synchronization completes, readiness reports not serving and the ext_proc listener does not start. Missing Secret permissions keep EPE unready while the informer retries; granting the permissions allows startup to proceed. After synchronization, a missing Secret follows the transformation's `failStrategy`. Watch interruptions retain previously cached credentials while reconnecting; updates and deletions take effect when observed, not synchronously with the API write. This setting does not change provider-certificate Secret watches.
+SecurityProfile token transformations read a shared Secret cache. With the default `--secret-watch-scope=system`, it watches all Secrets only in the system namespace selected by `--namespace`. Reference namespaces retain their existing resolution: explicit namespace, then SecurityProfile namespace, then Pod namespace. References outside the watch scope fail without an API lookup. To watch all namespaces, set `epe.secretWatchScope: cluster` (`--secret-watch-scope=cluster`) and Helm grants cluster-wide Secret `list/watch` through the existing EPE ClusterRole and ClusterRoleBinding. Custom deployments must grant these permissions separately. The chart keeps its namespace-scoped Role in either mode. Namespace-wide caching requires `list/watch` for the entire watched namespace; `get`-only or name-restricted Roles are insufficient. EPE starts its health and admin endpoints while waiting for EPEConfig, SecurityProfile, and token Secret caches to synchronize. Until initial synchronization completes, readiness reports not serving and the external-processing listener does not start. Missing Secret permissions keep EPE unready while the informer retries; granting the permissions allows startup to proceed. After synchronization, a missing Secret follows the transformation's `failStrategy`. Watch interruptions retain previously cached credentials while reconnecting; updates and deletions take effect when observed, not synchronously with the API write. This setting does not change provider-certificate Secret watches.
 
-With the default `epe.credentialProvider.mtls.source=none`, EPE presents no client certificate and verifies HTTPS credential providers against the system trust store. Set `source=secret` with `secret.namespace` and `secret.name` to watch TLS material directly through the Kubernetes API; the chart does not create or mount that Secret. EPEConfig also supports `caConfigMapRef` for a watched CA trust bundle, and `caCertificateFile` / `clientCertificateFiles` for provider TLS files; the deployment must supply these files inside the EPE container. See the [file configuration example](credential-provider.md#transport-security). Provider TLS settings do not enable TLS on the ext_proc listener.
+With the default `epe.credentialProvider.mtls.source=none`, EPE presents no client certificate and verifies HTTPS credential providers against the system trust store. Set `source=secret` with `secret.namespace` and `secret.name` to watch TLS material directly through the Kubernetes API; the chart does not create or mount that Secret. EPEConfig also supports `caConfigMapRef` for a watched CA trust bundle, and `caCertificateFile` / `clientCertificateFiles` for provider TLS files; the deployment must supply these files inside the EPE container. See the [file configuration example](credential-provider.md#transport-security). Provider TLS settings do not enable TLS on the external-processing listener.
 
-## Agentio ext_proc wiring
+## External processing wiring
 
 When EPE is enabled, `agentio-config` contains:
 
@@ -183,10 +176,10 @@ sandboxExtProc:
   request:
     headerMode: SEND
     attributes:
-      - filter_state['sandbox.id']
+      - filter_state['agentio.sandbox.uid']
       - filter_state['sandbox.token']
       - filter_state['agentio.sandbox.metadata']
-      - filter_state['agentio.workload.labels']
+      - filter_state['agentio.workload.uid']
       - filter_state['sandbox.labels'] # Compatibility with older gateways
       - filter_state['agentio.workload.name']
       - filter_state['agentio.workload.namespace']
@@ -203,9 +196,9 @@ The service name uses the chart namespace, so `agentio-system` above is only the
 
 When upgrading a custom provider or overriding `request.attributes`, include `filter_state['agentio.workload.name']` and `filter_state['agentio.workload.namespace']` to forward the source Pod headers captured by the gateway. Keep the two `downstream_peer` attributes for fallback when the headers are missing or empty.
 
-The generated provider leaves `failureModeAllow` unset, so its effective default is `false`. An unavailable EPE service, gRPC processing error, or ext_proc message timeout therefore fails the gateway request closed. Setting `agentiod.config.values.sandboxExtProc.failureModeAllow: true` keeps traffic moving but bypasses all EPE enforcement during those failures. A per-gateway override can choose differently through `egressGateways[].extProc.failureModeAllow`, but it must also repeat the complete provider service, port, modes, attributes, and timeout because the gateway provider replaces the global one. This provider outage setting is separate from a matched token transformation's `failStrategy`, which handles request-time transformation failures after EPE has received and projected the policy.
+The generated provider leaves `failureModeAllow` unset, so its effective default is `false`. An unavailable EPE service, gRPC processing error, or external-processing message timeout therefore fails the gateway request closed. Setting `agentiod.config.values.sandboxExtProc.failureModeAllow: true` keeps traffic moving but bypasses all EPE enforcement during those failures. A per-gateway override can choose differently through `egressGateways[].extProc.failureModeAllow`, but it must also repeat the complete provider service, port, modes, attributes, and timeout because the gateway provider replaces the global one. This provider outage setting is separate from a matched token transformation's `failStrategy`, which handles request-time transformation failures after EPE has received and projected the policy.
 
-The generated `5s` message timeout must remain above EPE's default `--plugin-budget=4.5s`. An EPE action that exceeds its plugin budget follows that action's failure policy. If Envoy itself reaches the ext_proc message timeout, the provider-level `failureModeAllow` behavior above applies. A response header mode of `SKIP` means EPE does not receive upstream response headers by default.
+The generated `5s` message timeout must remain above EPE's default `--plugin-budget=4.5s`. An EPE action that exceeds its plugin budget follows that action's failure policy. If Envoy itself reaches the external-processing message timeout, the provider-level `failureModeAllow` behavior above applies. A response header mode of `SKIP` means EPE does not receive upstream response headers by default.
 
 ## Process flags and listeners
 
@@ -217,15 +210,15 @@ EPE uses its deployment namespace as the system namespace. EPEConfig and the def
 | `--epe-config-primary` | `agentio-epe-config-primary` | ConfigMap applied after base; empty disables the overlay. Missing or empty content leaves base unchanged. |
 | `--namespace` | `POD_NAMESPACE` | EPE system namespace: where EPE runs, EPEConfig lives, and EPEConfig resource references default. The chart sets this to the installation namespace. Required explicitly when `POD_NAMESPACE` is unset. |
 | `--secret-watch-scope` | `system` | Watch token Secrets in the system namespace (`system`) or all namespaces (`cluster`). Other values fail startup. |
-| `--grpc-port` | `9002` | ext_proc gRPC listener. The chart sets it from `epe.service.grpcPort`. |
+| `--grpc-port` | `9002` | External-processing gRPC listener. The chart sets it from `epe.service.grpcPort`. |
 | `--grpc-health-port` | `9003` | gRPC health listener used by Kubernetes probes. |
 | `--metrics-port` | `9090` | HTTP listener serving only `/metrics`. |
 | `--admin-addr` | `127.0.0.1:15000` | Admin HTTP bind address. |
 | `--enable-debug` | `true` | Registers the `/debug/profiles` and `/debug/logging` admin endpoints. |
 | `--enable-pprof` | `false` | Starts Go pprof on `--pprof-addr`. |
 | `--pprof-addr` | `:6060` | pprof listener address when enabled. |
-| `--observe-responses` | `false` | Requests response headers through ext_proc so audit can record upstream status. |
-| `--plugin-budget` | `4.5s` | Per-evaluation-phase limit; `0` disables it. Keep it below Envoy's ext_proc message timeout. |
+| `--observe-responses` | `false` | Requests response headers so audit can record upstream status. |
+| `--plugin-budget` | `4.5s` | Per-evaluation-phase limit; `0` disables it. Keep it below the external-processing message timeout. |
 | `--kubeconfig` | empty | Kubeconfig path; empty selects in-cluster configuration. |
 | `--v` | `0` | Log verbosity: 0 (info), 1 (debug), 2 (trace), unless `--zap-log-level` is supplied. |
 | `--audit-log-buffer-size` | `4096` | Access-log queue capacity; full queues drop entries. |
@@ -235,11 +228,11 @@ EPE uses its deployment namespace as the system namespace. EPEConfig and the def
 
 The binary also accepts controller-runtime Zap flags, including `--zap-log-level` and `--zap-stacktrace-level`. The metrics and health listeners bind all interfaces because they are constructed from their port numbers. The chart exposes both through its headless Service. The admin listener is loopback-only by default and is not in that Service. pprof binds all interfaces by default when enabled; only enable it with an intentionally restricted bind address and network exposure.
 
-Use the [runtime logging admin endpoint](epe-admin-api.md#runtime-log-level) to inspect or change verbosity without restarting EPE. For example, PUT `{"output_level":"debug"}` to `/debug/logging/default` to enable EPE debug logs, then PUT `{"output_level":"info"}` to restore the default. The request format matches agentiod; EPE exposes only the process-wide `default` scope. Changes apply to one process and are lost on restart.
+Use the [runtime logging admin endpoint](epe-admin-api.md#runtime-log-level) to inspect or change verbosity without restarting EPE. For example, PUT `{"output_level":"debug"}` to `/debug/logging/default` to enable EPE debug logs, then PUT `{"output_level":"info"}` to restore the default. The request format matches `agentiod`; EPE exposes only the process-wide `default` scope. Changes apply to one process and are lost on restart.
 
-## TLS for ext_proc
+## TLS for external processing
 
-With `--tls-source=none`, EPE serves plaintext ext_proc gRPC. To enable workload mTLS, configure both the gateway client and EPE server. The gateway uses its existing local SDS `default` certificate and `ROOTCA` trust bundle, with exact URI SAN matching for the EPE identity.
+With `--tls-source=none`, EPE serves plaintext external-processing gRPC. To enable workload mTLS, configure both the gateway client and EPE server. The gateway uses its existing local SDS `default` certificate and `ROOTCA` trust bundle, with exact URI SAN matching for the EPE identity.
 
 For the managed Helm deployment:
 
@@ -251,9 +244,9 @@ epe:
     certificateSource: {}
 ```
 
-With an omitted or empty `certificateSource`, EPE generates a private key in memory and requests its ServiceAccount's SPIFFE certificate from Agentiod. The chart mounts a projected ServiceAccount token with Agentiod's configured audience and the existing `agentio-ca-root-cert` trust bundle (or its configured name). Each request reads the current token and opens a CA connection using the current roots and DNS verification. The private key is never uploaded or written to a Secret. Neither sandbox tokens nor SecurityProfile changes are required.
+With an omitted or empty `certificateSource`, EPE generates a private key in memory and requests its ServiceAccount's SPIFFE certificate from `agentiod`. The chart mounts a projected ServiceAccount token with `agentiod`'s configured audience and the existing `agentio-ca-root-cert` trust bundle (or its configured name). Each request reads the current token and opens a CA connection using the current roots and DNS verification. The private key is never uploaded or written to a Secret. Neither sandbox tokens nor SecurityProfile changes are required.
 
-Set `certificateSource.ca` to override the CA connection. It uses the Istio `CreateCertificate` API, not xDS/SDS. All three fields are optional; omit a field to retain its default. For example:
+Set `certificateSource.ca` to override the CA connection. It uses the Istio `CreateCertificate` API, not discovery/SDS. All three fields are optional; omit a field to retain its default. For example:
 
 ```yaml
 epe:
@@ -324,14 +317,14 @@ Managed mode derives the expected EPE identity from the configured trust domain,
 | Flag | Requirement and behavior |
 | --- | --- |
 | `--tls-source` | `none` (default), `ca`, or `file`. CA and file settings cannot be mixed. |
-| `--ca-address` | CA `host:port`; defaults to `agentiod.agentio-system.svc:15012`. Helm uses `certificateSource.ca.address`, defaulting to the chart's Agentiod address. |
-| `--tls-spiffe-id` | Required expected ServiceAccount SPIFFE identity in CA mode. Agentiod derives the actual identity from the authenticated token. |
+| `--ca-address` | CA `host:port`; defaults to `agentiod.agentio-system.svc:15012`. Helm uses `certificateSource.ca.address`, defaulting to the chart's `agentiod` address. |
+| `--tls-spiffe-id` | Required expected ServiceAccount SPIFFE identity in CA mode. `agentiod` derives the actual identity from the authenticated token. |
 | `--ca-token-path`, `--ca-root-path` | Projected token and trust bundle paths. Defaults: `/var/run/secrets/tokens/agentio-token` and `/var/run/secrets/agentio/root-cert.pem`. |
-| `--tls-cert-lifetime` | Requested lifetime, default `24h`, capped by Agentiod. Renewal follows the returned certificate's actual expiry. |
+| `--tls-cert-lifetime` | Requested lifetime, default `24h`, capped by `agentiod`. Renewal follows the returned certificate's actual expiry. |
 | `--tls-cert-path`, `--tls-key-path` | Require `--tls-source=file` and must be set together. They load the serving certificate and key from PEM files and enable server TLS. Material reloads after file events and a 10-second polling backstop. |
 | `--tls-ca-path` | Requires the serving certificate and key. It enables required, CA-verified client certificates. Missing trust anchors reject new handshakes. |
 
-Client certificates are verified at TLS handshakes. Before each new mTLS ext_proc stream, including streams on existing HTTP/2 connections, EPE also checks that its serving certificate and trust material remain available. In-flight streams may finish. Certificate/trust updates affect new connections; established connections are not forcibly terminated. mTLS session resumption is disabled so new connections revalidate the current trust bundle. Enabling/disabling TLS or changing certificate paths requires restarting EPE; EPEConfig does not configure inbound TLS.
+Client certificates are verified at TLS handshakes. Before each new mTLS external-processing stream, including streams on existing HTTP/2 connections, EPE also checks that its serving certificate and trust material remain available. In-flight streams may finish. Certificate/trust updates affect new connections; established connections are not forcibly terminated. mTLS session resumption is disabled so new connections revalidate the current trust bundle. Enabling/disabling TLS or changing certificate paths requires restarting EPE; EPEConfig does not configure inbound TLS.
 
 Invalid TLS flag combinations, unreadable initial certificate/key files, or an invalid initial CA bundle fail EPE startup. A malformed later certificate update retains the last good certificate; deleting certificate material makes new handshakes unavailable. The serving Secret is independent of the credential-provider client Secret. Neither provider TLS settings nor `epe.env` configures these flags directly.
 
@@ -343,7 +336,7 @@ The cache environment variables configure every credential provider, whether reg
 
 `HTTP_CALLOUT_MAX_RESPONSE_BYTES` bounds the Decision response read by each HTTPCallout client. It defaults to `1048576` bytes (1 MiB); non-positive or invalid values use that default. The client reads the setting once at initialization, so changing it in a deployment requires restarting EPE. It does not affect credential lookups or the rule's `maxBodyBytes` disclosure limit. Each SecurityProfile callout uses this client limit.
 
-EPE shares agentiod's Kubernetes client limits: `AGENTIO_KUBERNETES_API_QPS=80` and `AGENTIO_KUBERNETES_API_BURST=160`. These limits also apply to synchronous Sandbox metadata lookups. Ordinary workloads without a matching Sandbox still require an API lookup on each request; size these limits for that traffic until policy bindings are delivered through xDS.
+EPE shares `agentiod`'s Kubernetes client limits: `AGENTIO_KUBERNETES_API_QPS=80` and `AGENTIO_KUBERNETES_API_BURST=160`. These limits also apply to synchronous Sandbox metadata lookups. Ordinary workloads without a matching Sandbox still require an API lookup on each request; size these limits for that traffic. Workload SecurityProfile bindings do not remove the separate Sandbox metadata lookup.
 
 The following table is generated from EPE's Kubernetes client, credential-provider, token-cache, STS-cache, HTTPCallout, and audit-webhook registrations. It shows binary defaults; in particular, the chart sets `TOKEN_CACHE_MAX_SIZE=10000` while the binary defaults to `100000`.
 

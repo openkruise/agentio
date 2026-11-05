@@ -23,7 +23,7 @@ func TestConnectRateLimitGroupingAtBothEntrypoints(t *testing.T) {
 	valid := `connectRateLimit:
   rateLimits:
   - actions:
-    - filterState: {key: sandbox.id, descriptorKey: sandbox}
+    - filterState: {key: agentio.sandbox.uid, descriptorKey: sandbox}
     - genericKey: {descriptorKey: class, descriptorValue: default}
   descriptors:
   - entries: [{key: sandbox}, {key: class, value: default}]
@@ -36,10 +36,10 @@ func TestConnectRateLimitGroupingAtBothEntrypoints(t *testing.T) {
 	}{
 		{"grouped", valid, true},
 		{"global shorthand", "connectRateLimit:\n  tokenBucket: {maxTokens: 10, fillInterval: 1s}\n", true},
-		{"legacy CEL", "connectRateLimit:\n  descriptors:\n  - entries: [{key: sandbox, cel: 'filter_state[\"sandbox.id\"]'}]\n    tokenBucket: {maxTokens: 10, fillInterval: 1s}\n", true},
-		{"mixed CEL", strings.Replace(valid, "{key: sandbox}", "{key: sandbox, cel: 'filter_state[\"sandbox.id\"]'}", 1), false},
+		{"legacy CEL", "connectRateLimit:\n  descriptors:\n  - entries: [{key: sandbox, cel: 'filter_state[\"agentio.sandbox.uid\"]'}]\n    tokenBucket: {maxTokens: 10, fillInterval: 1s}\n", true},
+		{"mixed CEL", strings.Replace(valid, "{key: sandbox}", "{key: sandbox, cel: 'filter_state[\"agentio.sandbox.uid\"]'}", 1), false},
 		{"wrong order", strings.Replace(valid, "[{key: sandbox}, {key: class, value: default}]", "[{key: class, value: default}, {key: sandbox}]", 1), false},
-		{"missing source", strings.Replace(valid, "key: sandbox.id", `key: ""`, 1), false},
+		{"missing source", strings.Replace(valid, "key: agentio.sandbox.uid", `key: ""`, 1), false},
 		{"empty fixed value", strings.Replace(valid, "descriptorValue: default", `descriptorValue: ""`, 1), false},
 		{"two sources", strings.Replace(valid, "    - genericKey:", "      genericKey:", 1), false},
 		{"per connection wildcard", valid + "  perDownstreamConnection: true\n", false},

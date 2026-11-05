@@ -11,7 +11,7 @@ You need:
 - Helm 3 and a local clone of this repository.
 - An enrolled workload and an Agentio egress route that sends `www.example.com` through an egress gateway.
 
-Complete one onboarding guide, then [route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md). The onboarding guide exports `AGENTIO_DEMO_NAMESPACE`, `AGENTIO_WORKLOAD_LABEL`, and `AGENTIO_WORKLOAD_CONTAINER`, which the egress-route task consumes. Do not use the direct passthrough path for this verification: EPE is invoked only on the gateway-routed path.
+Complete one onboarding guide, then [route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md). The onboarding guide exports `AGENTIO_DEMO_NAMESPACE`, `AGENTIO_WORKLOAD_LABEL`, and `AGENTIO_WORKLOAD_CONTAINER`. Do not use the direct passthrough path for this verification: EPE is invoked only on the gateway-routed path.
 
 Confirm the sample workload is ready and record its Pod name:
 
@@ -43,11 +43,11 @@ $ helm upgrade --install agentio ./manifests/charts/agentio \
     --timeout 5m
 ```
 
-By default, this renders the `agentio-epe` Deployment and headless Service in `agentio-system`. The Service exposes the `extproc` port `9002`, health port `9003`, and metrics port `9090`; Agentio configures gateway Envoy to call `agentio-epe.agentio-system.svc.cluster.local:9002`.
+By default, this renders the `agentio-epe` Deployment and headless Service in `agentio-system`.
 
 ## Verify the EPE workload and Service
 
-Wait for the Deployment and inspect the Service ports:
+Wait for the Deployment and inspect the Service:
 
 ```console
 $ kubectl rollout status deployment/agentio-epe \
@@ -59,15 +59,13 @@ $ kubectl get service/agentio-epe \
     --output wide
 ```
 
-Confirm that the Helm-managed configuration contains the ext_proc service endpoint:
+Confirm that the Helm-managed configuration contains the EPE service endpoint:
 
 ```console
 $ kubectl get configmap agentio-config \
     --namespace agentio-system \
     --output jsonpath='{.data.config}'
 ```
-
-The output includes `sandboxExtProc` with the EPE Service address and port. It is control-plane configuration; the traffic test below is the enforcement check.
 
 ## Apply a minimal profile
 

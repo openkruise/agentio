@@ -71,13 +71,21 @@ func (g Gateway) ValidateForUse() error {
 	if g.Config.GetName() != "" || g.Config.GetNamespace() != "" {
 		return fmt.Errorf("gateway %s configuration contains source identity", g.ResourceName())
 	}
-	if service := g.Config.GetExtProc().GetService(); service != "" && strings.TrimSpace(service) == "" {
+	if err := ValidateExtProcServiceRef(g.Config.GetExtProc()); err != nil {
+		return fmt.Errorf("gateway %s extProc: %w", g.ResourceName(), err)
+	}
+	if service := g.Config.GetExtProc().
+		GetService(); g.Config.GetExtProc().GetServiceRef() == nil && service != "" &&
+		strings.TrimSpace(service) == "" {
 		return fmt.Errorf("gateway %s has a whitespace-only ext_proc service", g.ResourceName())
 	}
 	if err := ValidateExtProcTLS(g.Config.GetExtProc().GetTls()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
 	if err := ValidateUpstreamTLS(g.Config.GetTls().GetOrigination()); err != nil {
+		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
+	}
+	if err := ValidateUpstreamTrustBundle(g.Config.GetUpstreamTrustBundle()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
 	if err := ValidateAccessLogFormat(g.Config.GetAccessLogFormat()); err != nil {

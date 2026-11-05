@@ -30,9 +30,7 @@ import (
 // Authorizer filters a request's candidates once, returning only allowed entries
 // in their original order. It must not add or change destination addresses.
 // Implementations load their configuration once for the entire candidate set.
-type Authorizer interface {
-	Authorize(context.Context, *filter.Stream, []netip.AddrPort) ([]netip.AddrPort, error)
-}
+type Authorizer = filter.DestinationAuthorizer
 
 // StaticAuthorizer publishes immutable configurations for global authorization.
 // Construct with NewStaticAuthorizer before serving requests.

@@ -127,6 +127,7 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 		Config: trafficPolicyRefs,
 	})
 
+	// EPE resolves administrator profiles from this ordered binding, including an explicit empty list.
 	config, err := marshalDeterministicAny(&extensionsv1.PolicyReference{
 		TypeUrl:       model.SecurityProfileType,
 		ResourceNames: append([]string(nil), input.SecurityProfileNames...),

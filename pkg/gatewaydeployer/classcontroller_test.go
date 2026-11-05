@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agentio/pkg/kube/kclient"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +31,9 @@ import (
 	gatewayfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
 	gatewayclientv1 "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1"
+
+	"github.com/openkruise/agentio/internal/testutil"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
 func TestClassControllerReportsAcceptedForOwnedClass(t *testing.T) {
@@ -56,7 +58,7 @@ func TestClassControllerReportsAcceptedForOwnedClass(t *testing.T) {
 	controller := NewClassController(classes)
 	go controller.Run(stop)
 
-	assertEventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		current, err := client.GatewayV1().GatewayClasses().Get(context.Background(), "agentio-egress", metav1.GetOptions{})
 		if err != nil {
 			return false
@@ -105,7 +107,7 @@ func TestClassControllerCreatesMissingBuiltinClasses(t *testing.T) {
 	// The pre-existing "agentio-egress" class above already exists with a
 	// non-builtin controllerName, so the controller's initial reconcile must
 	// observe it via Get and skip Create entirely.
-	assertEventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return classes.Get("agentio-egress", "") != nil
 	}, "agentio-egress informer cache to observe pre-existing class")
 
@@ -127,7 +129,7 @@ func TestClassControllerCreatesMissingBuiltinClasses(t *testing.T) {
 	if err := client.GatewayV1().GatewayClasses().Delete(context.Background(), "agentio-egress", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	assertEventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		_, err := client.GatewayV1().GatewayClasses().Get(context.Background(), "agentio-egress", metav1.GetOptions{})
 		return err == nil
 	}, "agentio-egress to be recreated")
@@ -138,21 +140,9 @@ func TestClassControllerCreatesMissingBuiltinClasses(t *testing.T) {
 	if got := string(recreated.Spec.ControllerName); got != "agentio.kruise.io/egress-gateway-controller" {
 		t.Fatalf("recreated agentio-egress controllerName=%q, want agentio.kruise.io/egress-gateway-controller", got)
 	}
-	assertEventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return atomic.LoadInt32(&createCount) > baseline
 	}, "controller to issue a fresh Create after the delete event")
-}
-
-func assertEventually(t *testing.T, f func() bool, msg string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if f() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", msg)
 }
 
 // waitForCreateCountToStabilize waits until count stops changing across

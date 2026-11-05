@@ -59,3 +59,43 @@ func TestValidateAdditionalExtProcs(t *testing.T) {
 		}
 	}
 }
+
+func TestExtProcServiceReference(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ref     *configv1.ServiceReference
+		port    uint32
+		invalid bool
+	}{
+		{name: "DNS"},
+		{name: "reference", ref: &configv1.ServiceReference{Namespace: "system", Name: "epe"}},
+		{name: "missing namespace", ref: &configv1.ServiceReference{Name: "epe"}, invalid: true},
+		{name: "missing name", ref: &configv1.ServiceReference{Namespace: "system"}, invalid: true},
+		{name: "empty reference", ref: &configv1.ServiceReference{}, invalid: true},
+		{name: "invalid namespace", ref: &configv1.ServiceReference{Namespace: "System", Name: "epe"}, invalid: true},
+		{name: "invalid name", ref: &configv1.ServiceReference{Namespace: "system", Name: "epe.other"}, invalid: true},
+		{name: "invalid port", ref: &configv1.ServiceReference{Namespace: "system", Name: "epe"}, port: 65536, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &configv1.ExtProcProvider{
+				Name:       "processor",
+				Service:    "fallback.system.svc",
+				ServiceRef: tc.ref,
+				Port:       tc.port,
+			}
+			if err := ValidateExtProcServiceRef(provider); (err != nil) != tc.invalid {
+				t.Fatalf("target error=%v, want invalid=%v", err, tc.invalid)
+			}
+			if err := ValidateAdditionalExtProcs([]*configv1.ExtProcProvider{provider}); (err != nil) != tc.invalid {
+				t.Fatalf("additional processor error=%v, want invalid=%v", err, tc.invalid)
+			}
+		})
+	}
+	provider := &configv1.ExtProcProvider{
+		Name:       "processor",
+		ServiceRef: &configv1.ServiceReference{Namespace: "system", Name: "epe"},
+	}
+	if !ExtProcEnabled(provider) || ValidateAdditionalExtProcs([]*configv1.ExtProcProvider{provider}) != nil {
+		t.Fatal("reference-only provider must be enabled and valid")
+	}
+}

@@ -80,7 +80,7 @@ func TestResolveErrorStillInstallsStreamLogger(t *testing.T) {
 	if len(responses) != 1 || responses[0].GetImmediateResponse().GetStatus().GetCode() != 503 {
 		t.Fatalf("resolve failure must send a local 503 before closing the stream: %v", responses)
 	}
-	if state.streamLogger != filter.StreamLogger(logger) {
+	if state.stream.Policies.StreamLogger != filter.StreamLogger(logger) {
 		t.Fatal("resolve failure dropped the stream logger; the failed stream would never be audited")
 	}
 
@@ -131,7 +131,7 @@ func TestFinishAfterSendCommitCannotBeOverwrittenByLaterTeardown(t *testing.T) {
 	policyLogger := &recordingStreamLogger{}
 	srv := NewServer(ServerDeps{AuditLogger: accesslog})
 	state := newStreamState()
-	state.streamLogger = policyLogger
+	state.stream.Policies.StreamLogger = policyLogger
 	// A matched unit whose responses changed nothing is what "bypassed" now
 	// means, so set up that shape rather than asserting an outcome directly.
 	state.stream.Info.Matched = []filter.UnitRecord{{ID: filter.UnitID{Name: "r1"}}}

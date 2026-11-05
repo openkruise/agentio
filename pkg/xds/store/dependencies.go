@@ -32,11 +32,23 @@ func indexDependencies(
 ) {
 	namespaces := sets.New[string]()
 	for _, change := range changes {
-		if change.Key.TypeURL != model.AddressType {
-			continue
-		}
 		if change.Old != nil && change.New != nil && change.Old.Facts.Equal(change.New.Facts) &&
 			change.Old.XDSName == change.New.XDSName && slices.Equal(change.Old.Aliases, change.New.Aliases) {
+			continue
+		}
+		for _, resource := range []*model.Resource{change.Old, change.New} {
+			if resource == nil || resource.Facts.References == nil {
+				continue
+			}
+			for _, key := range resource.Facts.References.Keys {
+				for _, snapshot := range []model.ResourceSet{before, after} {
+					if target, exists := snapshot.Get(key); exists {
+						addCandidate(index, target, nil)
+					}
+				}
+			}
+		}
+		if change.Key.TypeURL != model.AddressType {
 			continue
 		}
 		indexWithdrawnScopes(index, before, change)

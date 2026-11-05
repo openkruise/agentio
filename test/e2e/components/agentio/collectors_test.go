@@ -154,15 +154,15 @@ func TestCollectorsSelectZtunnelForProfile(t *testing.T) {
 		},
 		{profile: "ambient", wantNamespace: "agentio-system", wantSelector: "app.kubernetes.io/name=ztunnel"},
 	}
-	for _, test := range tests {
-		t.Run(test.profile, func(t *testing.T) {
-			collectors := Collectors(Config{Profile: test.profile, Namespace: "agentio-system"})
+	for _, tc := range tests {
+		t.Run(tc.profile, func(t *testing.T) {
+			collectors := Collectors(Config{Profile: tc.profile, Namespace: "agentio-system"})
 			ztunnel, ok := collectors[3].(podCollector)
 			if !ok {
 				t.Fatalf("ztunnel collector has type %T", collectors[3])
 			}
-			if ztunnel.namespace != test.wantNamespace || ztunnel.selector != test.wantSelector ||
-				ztunnel.namespaceSelector != test.wantNamespaceSelector || ztunnel.requiredContainer != test.wantContainer {
+			if ztunnel.namespace != tc.wantNamespace || ztunnel.selector != tc.wantSelector ||
+				ztunnel.namespaceSelector != tc.wantNamespaceSelector || ztunnel.requiredContainer != tc.wantContainer {
 				t.Fatalf("ztunnel collector = %#v", ztunnel)
 			}
 		})

@@ -75,7 +75,7 @@ func runRawBody(t *testing.T, cfg Config, headers map[string]string, body []byte
 	if _, ok := headers[mcpProtocolVersionHeader]; !ok {
 		headers[mcpProtocolVersionHeader] = "2025-11-25"
 	}
-	st := &filter.Stream{Request: httpreq.HTTPRequest{Headers: headers}}
+	st := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Headers: headers}}}
 	f := New(filter.RuleConfig[Config]{ID: filter.UnitID{Scope: "ns/p", Name: "r"}, Cfg: cfg})
 	act, err := f.OnRequestBody(context.Background(), st, filter.Body{Bytes: body, Complete: true})
 	if err != nil {

@@ -154,7 +154,7 @@ func testAccessLogSNI(t *testing.T, format string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name      string
 		state     map[string][]byte
 		socketSNI string
@@ -166,12 +166,12 @@ func testAccessLogSNI(t *testing.T, format string) {
 		{name: "decrypted HTTPS", state: map[string][]byte{"agentio.tls.outer_sni": []byte("api.example.com")}, want: "api.example.com"},
 		{name: "outer SNI wins over inner connection", state: map[string][]byte{"agentio.tls.outer_sni": []byte("proxy.example.com")}, socketSNI: "inner.example.com", want: "proxy.example.com"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			// Envoy exposes an unstructured filter-state string as CEL bytes. No
 			// request attributes exist for TCP logs, so do not supply them here.
 			got, _, err := program.Eval(map[string]any{
-				"filter_state": tt.state,
-				"connection":   map[string]string{"requested_server_name": tt.socketSNI},
+				"filter_state": tc.state,
+				"connection":   map[string]string{"requested_server_name": tc.socketSNI},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -187,8 +187,8 @@ func testAccessLogSNI(t *testing.T, format string) {
 			default:
 				t.Fatalf("SNI result has unexpected type %T", value)
 			}
-			if printed != tt.want {
-				t.Errorf("SNI = %q, want %q", printed, tt.want)
+			if printed != tc.want {
+				t.Errorf("SNI = %q, want %q", printed, tc.want)
 			}
 		})
 	}
@@ -224,7 +224,7 @@ func TestDefaultAccessLogWorkloadIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, tt := range []struct {
+			for _, tc := range []struct {
 				name  string
 				state map[string]any
 				want  string
@@ -237,8 +237,8 @@ func TestDefaultAccessLogWorkloadIdentity(t *testing.T) {
 				{"no identity", map[string]any{}, ""},
 				{"empty header without peer", map[string]any{"agentio.workload." + field: []byte{}}, ""},
 			} {
-				t.Run(tt.name, func(t *testing.T) {
-					got, _, err := program.Eval(map[string]any{"filter_state": tt.state})
+				t.Run(tc.name, func(t *testing.T) {
+					got, _, err := program.Eval(map[string]any{"filter_state": tc.state})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -251,8 +251,8 @@ func TestDefaultAccessLogWorkloadIdentity(t *testing.T) {
 					default:
 						t.Fatalf("unexpected result type %T", value)
 					}
-					if printed != tt.want {
-						t.Errorf("workload_%s = %q, want %q", field, printed, tt.want)
+					if printed != tc.want {
+						t.Errorf("workload_%s = %q, want %q", field, printed, tc.want)
 					}
 				})
 			}

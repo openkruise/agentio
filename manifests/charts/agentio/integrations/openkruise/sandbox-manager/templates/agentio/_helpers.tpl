@@ -90,6 +90,9 @@
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.agentio.epe.mode "managed" -}}
+{{- if le (int .Values.agentio.epe.terminationGracePeriodSeconds) (int .Values.agentio.epe.preStopDelaySeconds) -}}
+{{- fail "epe.terminationGracePeriodSeconds must exceed epe.preStopDelaySeconds to leave time for RPC draining" -}}
+{{- end -}}
 {{- if not (has .Values.agentio.epe.secretWatchScope (list "system" "cluster")) -}}
 {{- fail "epe.secretWatchScope must be system or cluster" -}}
 {{- end -}}
@@ -124,6 +127,18 @@ app.kubernetes.io/component: control-plane
 {{- define "agentio.agentiod.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "agentio.agentiod.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{- define "agentio.agentiod.policyFullname" -}}
+{{- printf "%s-policy" (include "agentio.agentiod.fullname" . | trunc 56 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "agentio.agentiod.policyAddress" -}}
+{{- $service := include "agentio.agentiod.fullname" . -}}
+{{- if .Values.agentio.agentiod.policyPool.enabled -}}
+{{- $service = include "agentio.agentiod.policyFullname" . -}}
+{{- end -}}
+{{- printf "%s.%s.svc.%s:15012" $service (include "agentio.namespace" .) .Values.agentio.global.clusterDomain -}}
 {{- end -}}
 
 {{- define "agentio.agentiod.serviceAccountName" -}}
@@ -173,7 +188,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "agentio.gateway.image" -}}
 {{- if .Values.agentio.egressGateway.image.digest }}{{ printf "%s@%s" (required "egressGateway.image.repository is required when digest is set" .Values.agentio.egressGateway.image.repository) .Values.agentio.egressGateway.image.digest }}{{ else if .Values.agentio.egressGateway.image.repository }}{{ printf "%s:%s" .Values.agentio.egressGateway.image.repository (.Values.agentio.egressGateway.image.tag | default .Values.agentio.global.tag) }}{{ else }}{{ printf "%s/%s:%s" .Values.agentio.global.hub .Values.agentio.egressGateway.image.name (.Values.agentio.egressGateway.image.tag | default .Values.agentio.global.tag) }}{{ end }}
 {{- end -}}
-{{- define "agentio.gateway.xdsAddress" -}}{{ printf "%s.%s.svc.%s:15012" (include "agentio.agentiod.fullname" .) (include "agentio.namespace" .) .Values.agentio.global.clusterDomain }}{{- end -}}
+{{- define "agentio.gateway.xdsAddress" -}}{{ include "agentio.agentiod.policyAddress" . }}{{- end -}}
 {{- define "agentio.gateway.epeAddress" -}}{{ include "agentio.epeAddress" . }}{{- end -}}
 {{- define "agentio.gateway.labels" -}}
 helm.sh/chart: {{ include "agentio.chart" . }}

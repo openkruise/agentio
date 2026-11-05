@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/compiler"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -86,7 +87,7 @@ func TestRegistryPodSandboxesAndRuntimeOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 			client.Run(ctx.Done())
-			eventually(t, r.HasSynced, "registry synchronized")
+			testutil.Eventually(t, r.HasSynced, "registry synchronized")
 			if got := r.Sandboxes.List(); len(got) != 0 {
 				t.Fatalf("ordinary Pods must not create Sandbox resources: %+v", got)
 			}
@@ -117,7 +118,7 @@ func TestRegistryPodSandboxesAndRuntimeOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 			if kruiseEnabled {
-				eventually(t, func() bool {
+				testutil.Eventually(t, func() bool {
 					s := r.Sandboxes.GetKey("kruise:assigned-sandbox")
 					return s != nil && s.Attester != nil &&
 						s.Attester.WorkloadUID == podsource.WorkloadUID("test", warm)
@@ -216,6 +217,8 @@ func TestPodPoliciesReachWorkloadsWithoutSandboxes(t *testing.T) {
 				Pods:                       r.Pods,
 				KubernetesServices:         r.KubernetesServices,
 				EndpointSlices:             r.EndpointSlices,
+				ConfigMaps:                 r.ConfigMaps,
+				Secrets:                    r.Secrets,
 				Sandboxes:                  r.Sandboxes.Collection,
 				Workloads:                  r.Workloads,
 				Services:                   r.Services,
@@ -232,7 +235,7 @@ func TestPodPoliciesReachWorkloadsWithoutSandboxes(t *testing.T) {
 				t.Fatal(err)
 			}
 			client.Run(ctx.Done())
-			eventually(
+			testutil.Eventually(
 				t,
 				func() bool { return r.HasSynced() && c.HasSynced() },
 				"registry and compiler synchronized without Kruise integration",
@@ -259,7 +262,7 @@ func TestPodPoliciesReachWorkloadsWithoutSandboxes(t *testing.T) {
 				"namespaces/demo/trafficPolicies/selected",
 				"namespaces/demo/trafficPolicies/namespace",
 			}
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				if len(snapshot().List(model.SandboxType)) != 0 {
 					return false
 				}
@@ -280,7 +283,7 @@ func TestPodPoliciesReachWorkloadsWithoutSandboxes(t *testing.T) {
 			if _, err := client.Kube().CoreV1().Pods("demo").Update(ctx, ambient, metav1.UpdateOptions{}); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				w := getWorkload("ambient")
 				return w != nil && len(w.AuthorizationPolicies) == 0 && len(w.Extensions) == 4 &&
 					slices.Equal(c.PolicyNames(w.Uid, model.PolicyKindTrafficPolicy), []string{refs[0], refs[2]})

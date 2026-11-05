@@ -25,7 +25,7 @@ import (
 )
 
 func TestStripTrafficPolicy(t *testing.T) {
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		obj   any
 		check func(t *testing.T, got any)
@@ -41,16 +41,16 @@ func TestStripTrafficPolicy(t *testing.T) {
 			check: func(t *testing.T, got any) { checkTrafficPolicy(t, got.(*agentsv1alpha1.GlobalTrafficPolicy)) },
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := stripTrafficPolicy(test.obj)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := stripTrafficPolicy(tc.obj)
 			if err != nil {
 				t.Fatalf("stripTrafficPolicy(): %v", err)
 			}
-			if got == test.obj {
+			if got == tc.obj {
 				t.Fatal("stripTrafficPolicy() returned the caller-owned object")
 			}
-			test.check(t, got)
-			if !hasPolicyMetadata(test.obj) {
+			tc.check(t, got)
+			if !hasPolicyMetadata(tc.obj) {
 				t.Fatal("stripTrafficPolicy() mutated the caller-owned object")
 			}
 		})
@@ -59,7 +59,7 @@ func TestStripTrafficPolicy(t *testing.T) {
 
 func TestStripSecurityProfile(t *testing.T) {
 	priority := int32(23)
-	for _, test := range []struct {
+	for _, tc := range []struct {
 		name  string
 		obj   any
 		check func(t *testing.T, got any)
@@ -75,16 +75,16 @@ func TestStripSecurityProfile(t *testing.T) {
 			check: func(t *testing.T, got any) { checkSecurityProfile(t, got.(*agentsv1alpha1.GlobalSecurityProfile)) },
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := stripSecurityProfile(test.obj)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := stripSecurityProfile(tc.obj)
 			if err != nil {
 				t.Fatalf("stripSecurityProfile(): %v", err)
 			}
-			if got == test.obj {
+			if got == tc.obj {
 				t.Fatal("stripSecurityProfile() returned the caller-owned object")
 			}
-			test.check(t, got)
-			if !hasPolicyMetadata(test.obj) {
+			tc.check(t, got)
+			if !hasPolicyMetadata(tc.obj) {
 				t.Fatal("stripSecurityProfile() mutated the caller-owned object")
 			}
 		})

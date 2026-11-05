@@ -41,9 +41,9 @@ func TestCheckersAcceptExpectedOutcomes(t *testing.T) {
 		{name: "expected error", checker: Error(), err: callErr},
 		{name: "expected error text", checker: ErrorContains("refused"), err: callErr},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.checker(test.result, test.err); err != nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.checker(tc.result, tc.err); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -82,11 +82,11 @@ func TestCheckersExplainMismatches(t *testing.T) {
 		{name: "workloads", checker: ReachedWorkloads(2), want: "1 workload"},
 		{name: "and", checker: And(NoError(), Status(200)), want: "503"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := test.checker(result, test.err)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want %q", err, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.checker(result, tc.err)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 # Configure a TrafficPolicy
 
-This task applies a namespaced `TrafficPolicy` to an enrolled workload. The policy allows DNS and `www.example.com`, while rejecting unmatched outbound destinations.
+This task applies a namespaced `TrafficPolicy` to an enrolled workload. The policy allows DNS and `www.example.com` and rejects unmatched outbound destinations.
 
 ## Before you begin
 
@@ -60,7 +60,7 @@ $ kubectl exec "$AGENTIO_WORKLOAD_POD" \
 
 ## Apply the policy
 
-Every egress rule must declare `to`, and every ingress rule must declare `from`, including rules that only restrict ports or protocols. For an IPv4 rule covering all peers, use `cidr: 0.0.0.0/0`; use `::/0` for IPv6. Rules without the direction's peer field are skipped by the compiler and do not establish a default deny. Routing uses `GATEWAY` or `PASSTHROUGH`; express rejection with TrafficPolicy `action: reject`.
+Every egress rule must declare `to`, and every ingress rule must declare `from`, including rules that only restrict ports or protocols. For an IPv4 rule covering all peers, use `cidr: 0.0.0.0/0`; use `::/0` for IPv6. Routing uses `GATEWAY` or `PASSTHROUGH`; express rejection with `action: reject`.
 
 Create a `TrafficPolicy` in the workload namespace. The unquoted heredoc substitutes the selected app label into the manifest:
 
@@ -99,13 +99,7 @@ $ kubectl get trafficpolicy agentio-sample-egress \
 
 The resource status is not a reliable indication that the data plane has applied the policy. Verify the policy with real traffic instead.
 
-## FQDN resolution failures
-
-Agentiod resolves A and AAAA independently. A successful answer is available even while the other query is pending or failing. Each address family's cached answer expires according to its own TTL; a failed refresh does not extend that lifetime. A successful empty answer (NODATA) clears that family's old addresses. NXDOMAIN is recorded separately from NODATA. Neither is treated as a temporary DNS failure.
-
-Temporary failures are retried and logged with the hostname and query type. The `dns-results` diagnostic collection also records per-family errors. Until its TTL expires, the last successful answer for a failing family remains usable. Expired addresses are withdrawn even if a refresh is still queued or in progress; they are not retained indefinitely.
-
-Both `allow` and `reject` FQDN rules use only the remaining valid addresses. A failure does not broaden a `reject` rule to an entire address family. Consequently, if other rules allow the traffic, unknown or expired destination addresses may no longer be blocked by that FQDN reject rule. Use explicit CIDR rules when that DNS-dependent protection gap is unacceptable.
+FQDN rules resolve hostnames at the control plane. If an address family has no valid cached answer, it is not used by `allow` or `reject` rules; use explicit CIDR rules when that gap is unacceptable. See [FQDN resolution and DNS cache behavior](../design/fqdn-resolution-and-cache.md).
 
 ## Verify the policy
 

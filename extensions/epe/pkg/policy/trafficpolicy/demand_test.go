@@ -18,25 +18,30 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	xdsbackend "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
+	"github.com/openkruise/agentio/pkg/demandcache"
 	"github.com/openkruise/agentio/pkg/model"
 	controlxds "github.com/openkruise/agentio/pkg/xds"
 	controlstore "github.com/openkruise/agentio/pkg/xds/store"
@@ -52,6 +57,14 @@ func (demandAuthenticator) Authenticate(context.Context) (model.PeerIdentity, er
 // Exercise the EPE resolver through the real client, ADS generators and publication
 // store: a cold request must discover both its Workload and its policy dependencies.
 func TestDemandDiscovery(t *testing.T) {
+	testDemandDiscovery(t, 64)
+}
+
+func TestDemandCacheSmallCapacity(t *testing.T) {
+	testDemandDiscovery(t, 1)
+}
+
+func testDemandDiscovery(t *testing.T, capacity int) {
 	const clusterID = "edge"
 	const uid = "edge//Pod/ns/pod"
 	pack := func(value proto.Message) *anypb.Any {
@@ -79,12 +92,23 @@ func TestDemandDiscovery(t *testing.T) {
 				Name:      pod,
 				Namespace: "ns",
 				ClusterId: clusterID,
-				Extensions: []*workload.Extension{{
-					Name: "traffic-policy-reference",
-					Config: pack(&ext.PolicyReference{
-						TypeUrl:       model.TrafficPolicyType,
-						ResourceNames: []string{policy},
-					})}},
+				Extensions: []*workload.Extension{
+					{
+						Name: "traffic-policy-reference",
+						Config: pack(&ext.PolicyReference{
+							TypeUrl:       model.TrafficPolicyType,
+							ResourceNames: []string{policy},
+						})},
+					{
+						Name: "security-profile-reference",
+						Config: pack(
+							&ext.PolicyReference{
+								TypeUrl:       model.SecurityProfileType,
+								ResourceNames: []string{"global/" + policy},
+							},
+						),
+					},
+				},
 			}}},
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID:       name,
@@ -116,7 +140,7 @@ func TestDemandDiscovery(t *testing.T) {
 	server, err := controlxds.NewServer(demandAuthenticator{}, controlxds.ScopeFuncs{
 		model.AttestationKubernetes: func(*core.Node, model.PeerIdentity) (model.ClientScope, error) {
 			return model.ClientScope{
-				Class:       model.ClientEgressGateway,
+				Class:       model.ClientEPE,
 				Principal:   principal,
 				GatewayKey:  "gateways/egress",
 				WorkloadUID: "gateway",
@@ -163,7 +187,19 @@ func TestDemandDiscovery(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	aggregate := store.NewAggregate(xdsbackend.New(client))
+	native, err := xdsbackend.NewCached(client, demandcache.Config{IdleTTL: time.Hour, MaxEntries: capacity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDone := make(chan error, 1)
+	go func() { cacheDone <- native.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-cacheDone; err != nil {
+			t.Error(err)
+		}
+	})
+	aggregate := store.NewAggregate(native)
 	RegisterQueries(aggregate, clusterID)
 	await := func(condition func() bool) {
 		t.Helper()
@@ -180,8 +216,26 @@ func TestDemandDiscovery(t *testing.T) {
 			t.Fatalf("initial %s watch fetched %d unsolicited resources", typ, len(values))
 		}
 	}
-	resolver := &resolver{source: aggregate}
+	resolver := &resourceResolver{source: aggregate}
 	subj := subject.Subject{Workload: subject.Workload{Namespace: "ns", Name: "pod"}}
+	resolveWorkload := workloadResolver(aggregate)
+	beforeDemand := aggregate.Snapshot()
+	resolved, err := resolveWorkload(ctx, subj.Workload)
+	if err != nil || resolved.UID != uid || len(resolved.SecurityProfileReferences) != 1 {
+		t.Fatalf("cold Workload binding: %+v err=%v", resolved, err)
+	}
+	if snapshot := client.Snapshot(); len(snapshot.Resources[model.WorkloadType]) != 1 ||
+		len(snapshot.Resources[model.TrafficPolicyType]) != 0 {
+		t.Fatal("SecurityProfile lookup fetched unrelated Workloads or TrafficPolicies")
+	}
+	local := profilestore.MakeFakeStore()
+	for _, name := range []string{"policy", "unused"} {
+		local.GlobalProfileSet(&agentsv1alpha1.GlobalSecurityProfile{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	profiles, err := local.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+	if err != nil || len(profiles) != 1 || profiles[0].Meta.Name != "policy" {
+		t.Fatalf("referenced local profile: %v %v", profiles, err)
+	}
 	target := netip.MustParseAddrPort("203.0.113.7:443")
 	checkAction := func(want egressauthz.Action) {
 		t.Helper()
@@ -194,6 +248,56 @@ func TestDemandDiscovery(t *testing.T) {
 		}
 	}
 	checkAction(egressauthz.Allow)
+	if aggregate.Snapshot() != beforeDemand {
+		t.Fatal("cold dependency resolution rebuilt the global index")
+	}
+	// Source deletion can precede binding recomputation. Even a cold demand
+	// (capacity one evicts the policy when acquiring the Workload) must still work.
+	if _, err := publications.Apply(
+		[]model.ResourceChange{{Key: requestedPolicy.Key, Old: &requestedPolicy}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := publications.Snapshot().Get(requestedPolicy.Key); !exists {
+		t.Fatal("policy body disappeared before its Workload binding")
+	}
+	for range 10 {
+		checkAction(egressauthz.Allow)
+	}
+	if _, err := publications.Apply(
+		[]model.ResourceChange{{Key: requestedPolicy.Key, New: &requestedPolicy}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if capacity == 1 {
+		// A Workload plus its policy exceed the target; both remain pinned
+		// until the compiled view has been read, including concurrent readers.
+		var workers sync.WaitGroup
+		failures := make(chan error, 16)
+		for range 16 {
+			workers.Go(func() {
+				for range 10 {
+					cfg, err := resolver.config(ctx, subj)
+					if err != nil {
+						failures <- err
+						return
+					}
+					if cfg.Evaluate(target).Action != egressauthz.Allow {
+						t.Error("pinned policy denied")
+					}
+				}
+			})
+		}
+		workers.Wait()
+		close(failures)
+		for err := range failures {
+			t.Error(err)
+		}
+		if native.CacheEntries() > 1 {
+			t.Fatal("capacity did not recover after concurrent resolution")
+		}
+		return
+	}
 	for typ, values := range client.Snapshot().Resources {
 		if len(values) != 1 {
 			t.Fatalf("%s cached %d resources, want just the requested one", typ, len(values))
@@ -245,5 +349,13 @@ func TestDemandDiscovery(t *testing.T) {
 	if len(snapshot.Resources[model.WorkloadType]) != 1 || len(snapshot.Resources[model.TrafficPolicyType]) != 1 ||
 		snapshot.Resources[model.TrafficPolicyType]["unused"] == nil {
 		t.Fatal("rebinding should replace the policy without fetching unrelated Workloads")
+	}
+	resolved, err = resolveWorkload(ctx, subj.Workload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err = local.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+	if err != nil || len(profiles) != 1 || profiles[0].Meta.Name != "unused" {
+		t.Fatalf("updated SecurityProfile binding: %v %v", profiles, err)
 	}
 }

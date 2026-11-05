@@ -58,7 +58,8 @@ jobs:
               (.lastStableSHA | test("^[0-9a-f]{40}$"))) and
             image_pin("CNI_IMAGE") and
             image_pin("PROXY_INIT_IMAGE") and
-            image_pin("GATEWAY_IMAGE")
+            image_pin("GATEWAY_IMAGE") and
+            image_pin("TRUST_PACKAGE_IMAGE")
           ' agentio.deps >/dev/null
       - name: Install Porter build tools
         run: |
@@ -88,6 +89,21 @@ jobs:
           make lint.golangci GOLANGCI_LINT_ARGS="--new-from-rev=$base"
       - name: Run tests with the race detector
         run: make racetest
+
+  sni-policy-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and unit test SNI policy module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+          rustup toolchain install 1.93.0 --profile minimal --component rustfmt
+          rustup default 1.93.0
+          bash extensions/envoy/sni-policy/build.sh
 
   network-limits-runtime:
     runs-on: ubuntu-latest

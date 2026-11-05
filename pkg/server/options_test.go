@@ -30,7 +30,7 @@ func TestOptionsValidateAcceptsProductionDefaults(t *testing.T) {
 }
 
 func TestAgentioTrustedNodeAccountCompatibility(t *testing.T) {
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name       string
 		configured string
 		want       string
@@ -39,13 +39,13 @@ func TestAgentioTrustedNodeAccountCompatibility(t *testing.T) {
 		{name: "Agentio namespaced service account", configured: "agentio-system/ztunnel", want: "ztunnel"},
 		{name: "Agentio account list", configured: "other/node-proxy,agentio-system/ztunnel", want: "ztunnel"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := trustedNodeServiceAccount("agentio-system", tt.configured)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := trustedNodeServiceAccount("agentio-system", tc.configured)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != tt.want {
-				t.Fatalf("trustedNodeServiceAccount() = %q, want %q", got, tt.want)
+			if got != tc.want {
+				t.Fatalf("trustedNodeServiceAccount() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -72,13 +72,13 @@ func TestOptionsValidateRejectsUnsafeValues(t *testing.T) {
 		{"trust domain", func(o *Options) { o.TrustDomain = "" }, "trust domain"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			options := DefaultOptions()
-			tt.mutate(&options)
+			tc.mutate(&options)
 			err := options.Validate()
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Validate() error = %v, want error containing %q", err, tt.want)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want error containing %q", err, tc.want)
 			}
 		})
 	}
@@ -91,10 +91,11 @@ func TestFeaturesValidateRejectsUnsafeValues(t *testing.T) {
 			t.Fatalf("Validate() error = %v, want gateway connect timeout error", err)
 		}
 	})
-	t.Run("relative gateway root CA path", func(t *testing.T) {
-		test.SetForTest(t, &features.GatewayRootCAPath, "certs/root.pem")
-		if err := features.Validate(); err == nil || !strings.Contains(err.Error(), "gateway root CA path must be absolute") {
-			t.Fatalf("Validate() error = %v, want absolute gateway root CA path error", err)
+	t.Run("empty public CA package path", func(t *testing.T) {
+		test.SetForTest(t, &features.ClientTrustPackagePath, "")
+		if err := features.Validate(); err == nil ||
+			!strings.Contains(err.Error(), "public CA trust package path is required") {
+			t.Fatalf("Validate() error = %v, want required public CA package path error", err)
 		}
 	})
 	t.Run("gateway deployer lease", func(t *testing.T) {

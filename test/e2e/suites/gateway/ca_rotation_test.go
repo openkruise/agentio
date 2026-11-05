@@ -93,6 +93,9 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
+      upstreamTrustBundle:
+        additionalSources:
+        - configMapRef: {name: upstream-tls-ca, key: ca.crt}
       extProc: {}
       tlsTermination:
         includeHosts: ["{{ .Host }}"]

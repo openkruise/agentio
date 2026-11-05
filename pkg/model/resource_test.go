@@ -15,10 +15,68 @@
 package model
 
 import (
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
+	profile := ResourceKey{TypeURL: SecurityProfileType, Name: "same"}
+	sni := ResourceKey{TypeURL: SniTrafficPolicyType, Name: "same"}
+	tp := ResourceKey{TypeURL: TrafficPolicyType, Name: "same"}
+	keys := []ResourceKey{sni, profile, tp, profile}
+	raw := testWorkloadResource(t, "a", "one", "", "", nil, nil)
+	raw.Facts.References = &ResourceReferences{Keys: keys}
+	r, err := NewResource(raw.Key, raw.XDSName, raw.Value, raw.Aliases, raw.Facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys[0] = ResourceKey{TypeURL: SecurityProfileType, Name: "mutated"}
+	if len(r.Facts.References.Keys) != 3 || slices.Contains(r.Facts.References.Keys, keys[0]) {
+		t.Fatal("reference facts were not copied and deduplicated")
+	}
+	before, err := NewResourceSet([]Resource{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []ResourceKey{profile, sni, tp} {
+		if !before.HasReference(key) {
+			t.Fatalf("reference not indexed: %v", key)
+		}
+	}
+	facts := r.Facts
+	facts.References = &ResourceReferences{Keys: []ResourceKey{tp, sni}}
+	rebound, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebound.Hash == r.Hash || rebound.Facts.Equal(r.Facts) {
+		t.Fatal("changed references were ignored by equality or hashing")
+	}
+	after, _, err := before.Apply([]ResourceChange{{Key: r.Key, New: &rebound}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.HasReference(profile) || !before.HasReference(profile) || !after.HasReference(sni) {
+		t.Fatal("reference update corrupted the current or previous index")
+	}
+	permuted := facts
+	permuted.References = &ResourceReferences{Keys: []ResourceKey{sni, tp, tp}}
+	same, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, permuted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.Hash != rebound.Hash || !same.Facts.Equal(rebound.Facts) {
+		t.Fatal("reference order affected resource identity")
+	}
+	for _, invalid := range []ResourceKey{{Name: "missing-type"}, {TypeURL: SecurityProfileType}} {
+		facts.References = &ResourceReferences{Keys: []ResourceKey{invalid}}
+		if _, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, facts); err == nil {
+			t.Fatal("empty reference key was accepted")
+		}
+	}
+}
 
 // Hash is computed once at construction, so a resource built by NewResource
 // carries a hash that NewResourceSet accepts without re-encoding it.
@@ -116,9 +174,9 @@ func TestNewResourceRejectsInvalidFacts(t *testing.T) {
 			facts: ResourceFacts{Authorization: &AuthorizationResourceFacts{Scope: AuthorizationScopeNamespace}},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewResource(tt.key, "", tt.value, nil, tt.facts); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewResource(tc.key, "", tc.value, nil, tc.facts); err == nil {
 				t.Fatal("NewResource accepted invalid facts")
 			}
 		})
@@ -136,8 +194,8 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 		{name: "empty path segment", principal: Principal{uri: "spiffe://cluster.local//id"}, wantErr: true},
 		{name: "query in URI", principal: Principal{uri: "spiffe://cluster.local/workload/id?"}, wantErr: true},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewResource(
 				ResourceKey{TypeURL: AddressType, Name: "workload-a"},
 				"",
@@ -145,11 +203,11 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 				nil,
 				ResourceFacts{Workload: &WorkloadResourceFacts{
 					WorkloadUID: "sandbox-a",
-					Principal:   test.principal,
+					Principal:   tc.principal,
 				}},
 			)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("NewResource() error = %v, wantErr %t", err, test.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("NewResource() error = %v, wantErr %t", err, tc.wantErr)
 			}
 		})
 	}

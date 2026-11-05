@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/model"
@@ -112,7 +113,7 @@ func TestRegistryStartsGatewayAPIInformersForExistingCRDs(t *testing.T) {
 		ownedGatewayClass(),
 		ownedGateway(),
 	)
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return registry.Gateways.GetKey("demo/egress") != nil
 	}, "existing Gateway API object")
 }
@@ -130,7 +131,7 @@ func TestRegistryStartsGatewayAPIInformersAfterCRDsAreInstalled(t *testing.T) {
 
 	watcher.install(gatewayResource, ctx.Done())
 	watcher.install(gatewayClassResource, ctx.Done())
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		return registry.Gateways.GetKey("demo/egress") != nil
 	}, "Gateway API object after CRD installation")
 }
@@ -155,7 +156,7 @@ func newGatewayTestRegistry(
 		t.Fatalf("new registry: %v", err)
 	}
 	client.Run(ctx.Done())
-	eventually(t, registry.HasSynced, "registry synchronization")
+	testutil.Eventually(t, registry.HasSynced, "registry synchronization")
 	return registry
 }
 
@@ -181,13 +182,13 @@ func TestGatewaySourceMergeFailsOverlapClosedAndRecovers(t *testing.T) {
 	if !merged.WaitUntilSynced(stop) {
 		t.Fatal("merged Gateway source did not synchronize")
 	}
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := merged.GetKey("demo/egress")
 		return gateway != nil && gateway.Source == model.GatewaySourceConflict
 	}, "overlapping Gateway source conflict")
 
 	gatewayAPI.DeleteObject("demo/egress")
-	eventually(t, func() bool {
+	testutil.Eventually(t, func() bool {
 		gateway := merged.GetKey("demo/egress")
 		return gateway != nil && gateway.Source == model.GatewaySourceAgentioConfig
 	}, "Gateway source conflict recovery")

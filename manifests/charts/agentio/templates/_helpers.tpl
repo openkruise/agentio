@@ -97,6 +97,9 @@
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.epe.mode "managed" -}}
+{{- if le (int .Values.epe.terminationGracePeriodSeconds) (int .Values.epe.preStopDelaySeconds) -}}
+{{- fail "epe.terminationGracePeriodSeconds must exceed epe.preStopDelaySeconds to leave time for RPC draining" -}}
+{{- end -}}
 {{- if not (has .Values.epe.secretWatchScope (list "system" "cluster")) -}}
 {{- fail "epe.secretWatchScope must be system or cluster" -}}
 {{- end -}}
@@ -131,6 +134,18 @@ app.kubernetes.io/component: control-plane
 {{- define "agentiod.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "agentiod.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{- define "agentiod.policyFullname" -}}
+{{- printf "%s-policy" (include "agentiod.fullname" . | trunc 56 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "agentiod.policyAddress" -}}
+{{- $service := include "agentiod.fullname" . -}}
+{{- if .Values.agentiod.policyPool.enabled -}}
+{{- $service = include "agentiod.policyFullname" . -}}
+{{- end -}}
+{{- printf "%s.%s.svc.%s:15012" $service .Release.Namespace .Values.global.clusterDomain -}}
 {{- end -}}
 
 {{- define "agentiod.serviceAccountName" -}}
@@ -211,7 +226,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "gateway.image" -}}
 {{- if .Values.egressGateway.image.digest }}{{ printf "%s@%s" (required "egressGateway.image.repository is required when digest is set" .Values.egressGateway.image.repository) .Values.egressGateway.image.digest }}{{ else if .Values.egressGateway.image.repository }}{{ printf "%s:%s" .Values.egressGateway.image.repository (.Values.egressGateway.image.tag | default .Values.global.tag) }}{{ else }}{{ printf "%s/%s:%s" .Values.global.hub .Values.egressGateway.image.name (.Values.egressGateway.image.tag | default .Values.global.tag) }}{{ end }}
 {{- end -}}
-{{- define "gateway.xdsAddress" -}}{{ printf "%s.%s.svc.%s:15012" (include "agentiod.fullname" .) .Release.Namespace .Values.global.clusterDomain }}{{- end -}}
+{{- define "gateway.xdsAddress" -}}{{ include "agentiod.policyAddress" . }}{{- end -}}
 {{- define "gateway.epeAddress" -}}{{ include "agentio.epeAddress" . }}{{- end -}}
 {{- define "gateway.labels" -}}
 helm.sh/chart: {{ include "agentio.chart" . }}

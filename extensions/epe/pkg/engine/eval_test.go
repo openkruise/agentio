@@ -687,7 +687,7 @@ func TestEvalRequestBody_FoldsAllPendingMutationsAfterResume(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"before", "paused", "later", "after"}})
 
 	headersResult, err := e.EvalRequestHeaders(context.Background(), st, units)
@@ -792,7 +792,7 @@ func TestInvoke_FailOpenSkips(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	res, err := e.EvalRequestHeaders(context.Background(), st, unitsFor([][]string{{"f", "a"}}))
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
@@ -817,7 +817,7 @@ func TestInvoke_FailClosedSynthesizesBlocked(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	res, err := e.EvalRequestHeaders(context.Background(), st, unitsFor([][]string{{"s"}}))
 	if err != nil {
 		t.Fatalf("configured FailClosed returned engine error: %v", err)
@@ -960,7 +960,7 @@ func TestEvalResponseHeaders(t *testing.T) {
 				make:       tc.make,
 			}})
 			e := NewEngine(regs, 0)
-			st := &filter.Stream{Info: filter.NewStreamInfo()}
+			st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 			units := unitsFor([][]string{{"cfg"}})
 
 			res, err := e.EvalResponseHeaders(context.Background(), st, units, ResponseScope{})
@@ -1303,7 +1303,7 @@ func TestEvalResponseHeaders_BypassSuppressesLaterPairs(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	// Unit 0 bypasses at registration 0; its own registration 1 and everything
 	// in unit 1 lie after the bypass point.
 	units := unitsFor([][]string{{"bypass", "same-unit"}, {"later", "later"}})
@@ -1343,7 +1343,7 @@ func TestEvalResponseHeaders_BodyPhaseBypassSuppressesLaterPairs(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"pause", "later"}})
 
 	hr, err := e.EvalRequestHeaders(context.Background(), st, units)
@@ -1392,7 +1392,7 @@ func TestEvalRequestHeaders_InlineBodyBypassBoundsResponseScope(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"pause", "later"}})
 
 	// No continuation: the body is in hand, so NeedBody is satisfied inline and
@@ -1500,7 +1500,7 @@ func TestEvalResponseHeaders_StopBlocksAndDiscardsPending(t *testing.T) {
 			},
 		},
 	})
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	res, err := NewEngine(regs, 0).EvalResponseHeaders(context.Background(), st,
 		unitsFor([][]string{{"cfg", "cfg", "cfg"}}), ResponseScope{})
 	if err != nil {
@@ -1549,7 +1549,7 @@ func TestEvalResponseHeaders_BypassPreservesPendingAndSkipsLater(t *testing.T) {
 			},
 		},
 	})
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	res, err := NewEngine(regs, 0).EvalResponseHeaders(context.Background(), st,
 		unitsFor([][]string{{"cfg", "cfg", "cfg"}}), ResponseScope{})
 	if err != nil {
@@ -1612,7 +1612,7 @@ func TestEvalResponseHeaders_FailClosedSynthesisesBlocked(t *testing.T) {
 		},
 	}})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"cfg"}})
 	res, err := e.EvalResponseHeaders(context.Background(), st, units, ResponseScope{})
 	if err != nil {
@@ -1648,7 +1648,7 @@ func TestEvalResponseHeaders_FailOpenIsRecorded(t *testing.T) {
 		},
 	}})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	units := unitsFor([][]string{{"boom"}, {"ok"}})
 	res, err := e.EvalResponseHeaders(context.Background(), st, units, ResponseScope{})
 	if err != nil {
@@ -1686,7 +1686,7 @@ func TestEval_BypassDoesNotInvokeOrRecordFollowingBlock(t *testing.T) {
 		return regs, bypassC, blockC, nil, nil
 	}()
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	// unit 0: bypass; unit 1: block (skipped, never evaluated)
 	res, err := e.EvalRequestHeaders(context.Background(), st, unitsFor([][]string{
 		{"y", ""},
@@ -1727,7 +1727,7 @@ func TestEval_FilterRecordsIncludeFailOpenErr(t *testing.T) {
 		},
 	})
 	e := NewEngine(regs, 0)
-	st := &filter.Stream{Info: filter.NewStreamInfo()}
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()}}
 	res, err := e.EvalRequestHeaders(context.Background(), st, unitsFor([][]string{{"f"}}))
 	if err != nil {
 		t.Fatalf("Eval: %v", err)

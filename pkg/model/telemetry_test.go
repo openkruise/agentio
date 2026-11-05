@@ -97,9 +97,9 @@ func TestNewTelemetryRejectsInvalidNestedConfiguration(t *testing.T) {
 			logging: []TelemetryAccessLogging{{Mode: TelemetryModeServer, Filter: stringPointer("")}},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if policy, err := NewTelemetry(metadata, nil, test.metrics, test.tracing, test.logging); err == nil {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if policy, err := NewTelemetry(metadata, nil, tc.metrics, tc.tracing, tc.logging); err == nil {
 				t.Fatalf("invalid configuration produced policy %+v", policy)
 			}
 		})
