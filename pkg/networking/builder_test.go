@@ -958,7 +958,9 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 				policy, err := model.NewTelemetry(model.TelemetryMetadata{
 					Namespace: "agentio-system", Name: "logs", Source: "agentio-system/logs",
 				}, []string{"agentio-system/egress"}, nil, nil, []model.TelemetryAccessLogging{{
-					Mode: model.TelemetryModeServer, Disabled: &tc.disabled, Filter: tc.filter,
+					Mode:     model.TelemetryModeServer,
+					Disabled: &tc.disabled,
+					Filter:   tc.filter,
 				}})
 				if err != nil {
 					t.Fatal(err)

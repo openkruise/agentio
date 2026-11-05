@@ -250,7 +250,9 @@ func TestProxyImage(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			global := map[string]any{
-				"hub": tc.hub, "tag": tc.tag, "proxy": map[string]any{"image": tc.image},
+				"hub":   tc.hub,
+				"tag":   tc.tag,
+				"proxy": map[string]any{"image": tc.image},
 			}
 			if tc.variant != "" {
 				global["variant"] = tc.variant

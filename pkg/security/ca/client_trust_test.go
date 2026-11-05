@@ -219,7 +219,10 @@ func TestClientTrustBundleEvents(t *testing.T) {
 	defer registration.UnregisterHandler()
 	rig.signer.Set(&mitm.TrustBundle{PEM: next + rig.initial + next, Revision: "equivalent"})
 	rig.signer.Set(&mitm.TrustBundle{PEM: "-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----\n" + next})
-	testutil.Eventually(t, func() bool { c := rig.distributor.candidates.Get(); return c != nil && c.Error != "" }, "invalid source event")
+	testutil.Eventually(t, func() bool {
+		c := rig.distributor.candidates.Get()
+		return c != nil && c.Error != ""
+	}, "invalid source event")
 	if _, err := rig.client.Kube().CoreV1().Namespaces().Create(rig.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "during-error"}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}

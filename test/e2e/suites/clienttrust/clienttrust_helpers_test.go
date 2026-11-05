@@ -232,15 +232,20 @@ func (s *scenario) publish(t *testing.T) {
 }
 
 func (s *scenario) pod(name string) *corev1.Pod {
-	return &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{
-		Name: name, Namespace: s.namespace, Labels: map[string]string{"app": name, "test.agentio.io/client-trust": "true"},
-		Annotations: map[string]string{annotationPrefix + "native-sidecar": "true"},
-	}, Spec: corev1.PodSpec{
-		// Idle client fixtures have no state to drain during scenario cleanup.
-		TerminationGracePeriodSeconds: ptr.To[int64](5),
-		Containers:                    []corev1.Container{{Name: "app-main", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}, {Name: "app-metrics", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}},
-		InitContainers:                []corev1.Container{{Name: "bootstrap", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent, Command: []string{"sh", "-c", `test -r "$SSL_CERT_FILE"`}}},
-	}}
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   s.namespace,
+			Labels:      map[string]string{"app": name, "test.agentio.io/client-trust": "true"},
+			Annotations: map[string]string{annotationPrefix + "native-sidecar": "true"},
+		},
+		Spec: corev1.PodSpec{
+			// Idle client fixtures have no state to drain during scenario cleanup.
+			TerminationGracePeriodSeconds: ptr.To[int64](5),
+			Containers:                    []corev1.Container{{Name: "app-main", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}, {Name: "app-metrics", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent}},
+			InitContainers:                []corev1.Container{{Name: "bootstrap", Image: clientImage, ImagePullPolicy: corev1.PullIfNotPresent, Command: []string{"sh", "-c", `test -r "$SSL_CERT_FILE"`}}},
+		}}
 }
 
 func (s *scenario) admit(t *testing.T, pod *corev1.Pod) (*corev1.Pod, []string) {

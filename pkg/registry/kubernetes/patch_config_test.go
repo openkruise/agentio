@@ -117,7 +117,11 @@ patches:
 
 func TestPatchConfigRejectsMalformedInput(t *testing.T) {
 	replace := func(old, new string) string { return strings.Replace(validPatchConfig, old, new, 1) }
-	for _, tc := range []struct{ name, input, want string }{
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
 		{"null", "null", "expected one YAML object"},
 		{"array", "[]", "expected one YAML object"},
 		{"extra document", validPatchConfig + "---\n{}\n", "one YAML document"},
@@ -220,7 +224,12 @@ func matrixMatch(target, operation string) json.RawMessage {
 }
 
 func TestPatchRejectsUnusedMatchesAndMissingAnchors(t *testing.T) {
-	for _, tc := range []struct{ target, operation, match, want string }{
+	for _, tc := range []struct {
+		target    string
+		operation string
+		match     string
+		want      string
+	}{
 		{"listener", "MERGE", `{"filterChain":{}}`, "filterChain"},
 		{"listener", "MERGE", `{"listenerFilter":"test"}`, "listenerFilter"},
 		{"listener", "MERGE", `{"portNumber":65536}`, "portNumber"},
