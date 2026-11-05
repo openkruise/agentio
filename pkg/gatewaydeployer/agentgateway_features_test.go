@@ -161,6 +161,14 @@ func TestAgentgatewayGeneratedProcessorChain(t *testing.T) {
 	if err != nil || strings.Contains(content, "extProc") {
 		t.Fatalf("explicit disable must disable the entire processor chain: %s %v", content, err)
 	}
+	for _, provider := range []*configv1.ExtProcProvider{global.SandboxExtProc, global.AdditionalExtProcs[0]} {
+		provider.Request = &configv1.ProcessingModeOptions{Attributes: []string{model.AttributeWorkloadUID}}
+		_, err = agentgatewayEgressConfig(&configv1.EgressGateway{}, extractServicePorts(*gw), inputs)
+		if err == nil || !strings.Contains(err.Error(), "workload identity") {
+			t.Fatalf("identity must not exceed the native processor phases: %v", err)
+		}
+		provider.Request = nil
+	}
 	global.AdditionalExtProcs = append(global.AdditionalExtProcs, &configv1.ExtProcProvider{Service: "third.example"})
 	if _, err := agentgatewayEgressConfig(&configv1.EgressGateway{}, extractServicePorts(*gw), inputs); err == nil {
 		t.Fatal("native two-phase processor limit was silently exceeded")

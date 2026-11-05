@@ -141,6 +141,99 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
     )
 }
 
+#[tokio::test]
+async fn http_identity_uses_proxy_attributes_and_preserves_connect_validation() {
+    let mut p = processor();
+    p.enable_traffic_policy = false;
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(None),
+    );
+    let mut req = request("", false);
+    let fields = &mut req
+        .attributes
+        .get_mut("envoy.filters.http.ext_proc")
+        .unwrap()
+        .fields;
+    fields.insert("agentio.identity.mode".into(), view::string("http"));
+    let headers = &mut req
+        .request_headers
+        .as_mut()
+        .unwrap()
+        .headers
+        .as_mut()
+        .unwrap()
+        .headers;
+    headers
+        .iter_mut()
+        .find(|header| header.key == ":method")
+        .unwrap()
+        .value = "GET".into();
+    headers.push(extproc::HeaderValue {
+        key: "x-agentio-workload-name".into(),
+        value: "forged".into(),
+        ..Default::default()
+    });
+    let result = p.handle(req.clone()).await.unwrap();
+    let Some(prost_types::value::Kind::StructValue(agentio)) =
+        &result.dynamic_metadata.unwrap().fields["agentio"].kind
+    else {
+        panic!("expected resolved identity");
+    };
+    let Some(prost_types::value::Kind::StructValue(identity)) = &agentio.fields["workload"].kind
+    else {
+        panic!("expected resolved Workload");
+    };
+    assert_eq!(identity.fields["uid"], view::string(UID));
+    assert_eq!(identity.fields["name"], view::string("source"));
+
+    let mut unmarked = req.clone();
+    unmarked
+        .attributes
+        .get_mut("envoy.filters.http.ext_proc")
+        .unwrap()
+        .fields
+        .remove("agentio.identity.mode");
+    assert_eq!(
+        p.handle(unmarked).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    p.enable_traffic_policy = true;
+    assert_eq!(
+        p.handle(req.clone()).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    p.enable_traffic_policy = false;
+
+    let fields = &mut req
+        .attributes
+        .get_mut("envoy.filters.http.ext_proc")
+        .unwrap()
+        .fields;
+    fields.insert(
+        "filter_state['agentio.sandbox.uid']".into(),
+        view::string("forged"),
+    );
+    assert_eq!(
+        p.handle(req.clone()).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    let fields = &mut req
+        .attributes
+        .get_mut("envoy.filters.http.ext_proc")
+        .unwrap()
+        .fields;
+    fields.remove("filter_state['agentio.sandbox.uid']");
+    // A malformed captured certificate must not fall back to the otherwise valid IP/principal.
+    fields.insert(
+        "filter_state['agentio.peer.certificate']".into(),
+        view::string("invalid"),
+    );
+    assert!(!allowed(p.handle(req).await.unwrap()));
+}
+
 #[tokio::test(start_paused = true)]
 async fn sandbox_and_workload_policies_load_concurrently() {
     for udp in [false, true] {

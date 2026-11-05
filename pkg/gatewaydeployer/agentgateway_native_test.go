@@ -60,6 +60,7 @@ func TestAgentgatewayNativeGeneratedConfiguration(t *testing.T) {
 tcp: {idleTimeout: 0s}
 tls: {origination: {minProtocolVersion: TLSV1_2, maxProtocolVersion: TLSV1_3}}`,
 		`extProc: {serviceRef: {name: processor, namespace: system}, request: {attributes: [request.method]}, response: {headerMode: SEND, attributes: [response.code, response.headers]}}`,
+		`extProc: {service: processor.example, request: {attributes: ["filter_state['agentio.workload.uid']"]}}`,
 	} {
 		t.Run(settings, func(t *testing.T) {
 			content, err := agentgatewayEgressConfig(

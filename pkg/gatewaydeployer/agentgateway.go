@@ -117,6 +117,11 @@ func (d *DeploymentController) agentgatewayInput(input *TemplateInput) error {
 			)
 		}
 		input.AgentgatewayConfig = content
+		provider := gateway.ExtProc
+		if provider == nil {
+			provider = settings.Global.GetSandboxExtProc()
+		}
+		input.AgentgatewayIdentity = agentgatewayWorkloadIdentity(provider)
 		input.AgentgatewayTrustBundle = trustBundle
 		input.AgentgatewayConfigName = input.DeploymentName + "-native"
 		if input.AgentgatewayConfigName == cm.Name {
@@ -154,6 +159,9 @@ func (d *DeploymentController) agentgatewayInput(input *TemplateInput) error {
 	if input.AgentgatewayConfig != "" {
 		// Generated runtime settings are file-watched; only changing mode needs a rollout.
 		input.AgentgatewayConfigHash = "generated-v1.7.0"
+		if input.AgentgatewayIdentity {
+			input.AgentgatewayConfigHash += "-identity"
+		}
 	}
 	return nil
 }

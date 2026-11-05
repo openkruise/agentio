@@ -52,6 +52,7 @@ type TemplateInput struct {
 	AgentgatewayConfigHash    string
 	AgentgatewayConfig        string
 	AgentgatewayTrustBundle   string
+	AgentgatewayIdentity      bool
 }
 
 type renderer struct {

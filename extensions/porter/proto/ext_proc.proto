@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// CONNECT-only projection of envoy/service/ext_proc/v3/external_processor.proto.
+// Headers-only projection of envoy/service/ext_proc/v3/external_processor.proto.
 // Verified with Go-generated protobuf parity fixtures in tests/fixtures.json.
 syntax = "proto3";
 package envoy.service.ext_proc.v3;

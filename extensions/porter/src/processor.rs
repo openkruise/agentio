@@ -82,6 +82,19 @@ impl Processor {
         message: extproc::ProcessingRequest,
     ) -> Result<extproc::ProcessingResponse, Status> {
         let started = Instant::now();
+        // This attribute comes from the proxy's CEL configuration, never HTTP headers.
+        let http_identity = match attribute(
+            message.attributes.get("envoy.filters.http.ext_proc"),
+            "agentio.identity.mode",
+        ) {
+            "" => false,
+            "http" if !self.enable_traffic_policy => true,
+            _ => {
+                return Err(Status::invalid_argument(
+                    "unsupported identity processing mode",
+                ));
+            }
+        };
         let (udp, target) = {
             let headers = message
                 .request_headers
@@ -101,8 +114,12 @@ impl Processor {
                     String::from_utf8_lossy(&header.raw_value)
                 };
             }
-            let udp = method == "GET" && upgrade.eq_ignore_ascii_case("connect-udp");
-            if (method != "CONNECT" && !udp) || authority.is_empty() {
+            let udp =
+                !http_identity && method == "GET" && upgrade.eq_ignore_ascii_case("connect-udp");
+            if (!http_identity && method != "CONNECT" && !udp)
+                || authority.is_empty()
+                || method.is_empty()
+            {
                 return Err(Status::invalid_argument(
                     "expected CONNECT with an authority",
                 ));
@@ -127,6 +144,11 @@ impl Processor {
         let peer_ip = attribute(attributes, "filter_state['agentio.downstream.ip']");
         let principal = attribute(attributes, "filter_state['agentio.peer.principal']");
         let sandbox_id = attribute(attributes, "filter_state['agentio.sandbox.uid']");
+        if http_identity && !sandbox_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "HTTP identity mode does not support Sandbox identity",
+            ));
+        }
         let request_deadline = tokio::time::Instant::now() + self.timeout;
         let result = tokio::time::timeout_at(request_deadline, async {
             let mut invalidated = self.client.invalidations();

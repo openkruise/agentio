@@ -128,6 +128,7 @@ func chartValues(config Config) ([]byte, error) {
 	if config.GatewayDataplane == "agentgateway" {
 		values["egressGateway"] = map[string]any{
 			"mode":       "gatewayAPI",
+			"porter":     map[string]any{"image": porterImage},
 			"gatewayAPI": map[string]any{"create": false},
 			"agentgateway": map[string]any{
 				"image":        config.GatewayImage,

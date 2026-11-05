@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Adapted from Istio 1.31.0's agentgateway deployment template for file configuration and native workload certificate management.
 {{- $agentgateway := .Values.global.agentgateway | default (strdict) }}
+{{- $porter := .Values.global.porter | default (strdict) }}
+{{- $porterCache := $porter.cache | default (strdict) }}
 {{- $ca := $agentgateway.ca | default (strdict) }}
 {{- $sds := .Values.global.sds | default (strdict) }}
 {{- $token := $sds.token | default (strdict) }}
@@ -185,6 +187,53 @@ spec:
           mountPath: /etc/agentgateway/certs
           readOnly: true
         {{- end }}
+      {{- if .AgentgatewayIdentity }}
+      initContainers:
+      - name: agentio-porter
+        restartPolicy: Always
+        image: {{ $porter.image | quote }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" | quote }}
+        args:
+        - --domain=$(POD_NAMESPACE).svc.{{ .Values.global.proxy.clusterDomain }}
+        - --xds-address={{ .Values.global.gatewayXdsAddress | default .Values.global.xdsAddress | default .ProxyConfig.DiscoveryAddress | default .Values.global.caAddress }}
+        - --cluster-id={{ .ClusterID }}
+        - --grpc-port=9002
+        - --grpc-health-port=9003
+        - --xds-cache-idle-ttl={{ valueOrDefault $porterCache.idleTTL "10m" }}
+        - --xds-cache-max-entries={{ valueOrDefault $porterCache.maxEntries 0 }}
+        env:
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+        - name: POD_NAMESPACE
+          valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+        - name: POD_UID
+          valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+        - name: POD_IP
+          valueFrom: {fieldRef: {fieldPath: status.podIP}}
+        ports:
+        - {name: porter-health, containerPort: 9003}
+        - {name: porter-metrics, containerPort: 9004}
+        startupProbe:
+          grpc: {port: 9003, service: readiness}
+          periodSeconds: 1
+          failureThreshold: 30
+        readinessProbe:
+          grpc: {port: 9003, service: readiness}
+          periodSeconds: 5
+        livenessProbe:
+          grpc: {port: 9003, service: liveness}
+          periodSeconds: 10
+        securityContext:
+          capabilities: {drop: [ALL]}
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        {{- with $porter.resources }}
+        resources: {{ toJson (omitNil .) }}
+        {{- end }}
+        volumeMounts:
+        - {name: agentio-ca-root, mountPath: /var/run/secrets/agentio, readOnly: true}
+        - {name: agentio-ca-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+      {{- end }}
       volumes:
       - name: config
         configMap:

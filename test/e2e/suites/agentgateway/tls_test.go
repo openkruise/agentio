@@ -23,6 +23,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,8 @@ func TestAgentgatewayStaticTLSInterception(t *testing.T) {
 	env, scope := rig.BeginScenario(t)
 	ctx, cancel := e2e.Context(t, 5*time.Minute)
 	defer cancel()
-	const name, host = "tls-egress", "server.default.svc"
+	const name = "tls-egress"
+	host := fmt.Sprintf("tls-origin.%s.svc.cluster.local", traffic.Namespace.Name())
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -128,13 +130,13 @@ spec:
 serviceEntries:
 - hosts: [%s]
   endpoints: [{address: %s}]
-tlsTermination: {includeHosts: [server.default.svc]}
+tlsTermination: {includeHosts: [%s]}
 upstreamTrustBundle:
   additionalSources: [{secretRef: {name: %s, key: ca.crt}}]
 extProc:
   serviceRef: {name: ext-proc, namespace: %s}
   response: {headerMode: SEND}
-`, host, origin.Spec.ClusterIP, name, config.Namespace)}
+`, host, origin.Spec.ClusterIP, host, name, config.Namespace)}
 	gateway := native.Gateway(config.Namespace, name)
 	gateway.SetAnnotations(map[string]string{"gateway.agentio.kruise.io/agentgateway-certs": name})
 	for _, object := range []*unstructured.Unstructured{secret, settings, gateway} {
@@ -173,4 +175,56 @@ data:
 		),
 		Retry: harness.FixedRetry(2*time.Minute, time.Second),
 	})
+	e2econfig.New(scope).Eval(traffic.Namespace.Name(), nil, `
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata: {name: native-tls-workload}
+spec:
+  selector:
+    matchLabels: {app: client}
+  rules:
+  - name: tls-workload
+    match:
+    - domains: ["*"]
+      paths: [{type: Exact, value: /native-tls-identity}]
+    actions:
+      block: {statusCode: 453, body: native-tls-workload-block}
+`).ApplyOrFail(t, kube.CreateOnly)
+	data := settings.Object["data"].(map[string]any)
+	data["config"] = strings.Replace(
+		data["config"].(string),
+		fmt.Sprintf("serviceRef: {name: ext-proc, namespace: %s}\n  response: {headerMode: SEND}", config.Namespace),
+		fmt.Sprintf(
+			"serviceRef: {name: agentio-epe, namespace: %s}\n  request: {attributes: [\"filter_state['agentio.workload.uid']\"]}",
+			config.Namespace,
+		),
+		1,
+	)
+	if _, err := scope.Apply(ctx, settings, kube.ReconcileOwned); err != nil {
+		t.Fatal(err)
+	}
+	if err := native.WaitReadyHash(ctx, env, config.Namespace, name, "generated-v1.7.0-identity"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/native-tls-identity", "/native-static-tls"} {
+		want := 200
+		if path == "/native-tls-identity" {
+			want = 453
+		}
+		traffic.Client.CallOrFail(t, echo.CallOptions{
+			Protocol:   echo.HTTPS,
+			Address:    "192.0.2.1",
+			Port:       443,
+			ServerName: host,
+			Path:       path,
+			Count:      1,
+			Headers: map[string]string{
+				"Host":                    host,
+				"X-Agentio-Workload-Name": "forged",
+				"X-Agentio-Sandbox-Uid":   "forged",
+			},
+			Check: check.NoErrorAndStatus(want),
+			Retry: harness.FixedRetry(2*time.Minute, time.Second),
+		})
+	}
 }

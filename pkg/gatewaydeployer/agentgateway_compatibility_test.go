@@ -19,6 +19,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestAgentgatewayGeneratedUsesOfficialInterfaces(t *testing.T) {
@@ -56,6 +61,58 @@ extProc: {serviceRef: {name: epe, namespace: system}}
 		if listener["protocol"] == "HTTPS" {
 			t.Fatal("mounting a CA must not enable unsupported Porter-driven termination")
 		}
+	}
+}
+
+func TestAgentgatewayWorkloadIdentityUsesStandardExtProcPhases(t *testing.T) {
+	gateway, settings := agentgatewayFixture()
+	settings.Data = map[string]string{"config": `
+extProc:
+  service: epe.example
+  request:
+    attributes: ["filter_state['agentio.workload.uid']"]
+`}
+	rig := newControllerTestRig(t, gateway, settings)
+	defer rig.close()
+	controller := rig.newController()
+	controller.renderer = generatedAgentgatewayRenderer(t)
+	if err := controller.Reconcile(namespacedNameOf(gateway)); err != nil {
+		t.Fatal(err)
+	}
+	var generated corev1.ConfigMap
+	if err := json.Unmarshal(rig.patcher.find("configmaps").data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(generated.Data[agentgatewayConfigKey]), &config); err != nil {
+		t.Fatal(err)
+	}
+	listener := config["binds"].([]any)[1].(map[string]any)["listeners"].([]any)[0].(map[string]any)
+	porter := listener["policies"].(map[string]any)["extProc"].(map[string]any)
+	if porter["host"] != "127.0.0.1:9002" || porter["failureMode"] != "failClosed" {
+		t.Fatalf("identity must be resolved locally before EPE: %v", porter)
+	}
+	attributes := porter["requestAttributes"].(map[string]any)
+	if attributes["agentio.identity.mode"] != `"http"` ||
+		attributes[model.AttributePeerCertificate] != `has(source.certificate) ? source.certificate : ""` {
+		t.Fatalf("Porter must receive the authenticated connection certificate: %v", attributes)
+	}
+	route := listener["routes"].([]any)[0].(map[string]any)
+	epe := route["policies"].(map[string]any)["extProc"].(map[string]any)
+	if epe["requestAttributes"].(map[string]any)[model.AttributeWorkloadUID] != "extproc.agentio.workload.uid" {
+		t.Fatalf("EPE must use Porter's metadata: %v", epe)
+	}
+	var deployment appsv1.Deployment
+	if err := json.Unmarshal(rig.patcher.find("deployments").data, &deployment); err != nil {
+		t.Fatal(err)
+	}
+	if len(deployment.Spec.Template.Spec.InitContainers) != 1 ||
+		deployment.Spec.Template.Spec.InitContainers[0].Name != "agentio-porter" ||
+		deployment.Spec.Template.Annotations["gateway.agentio.kruise.io/config-hash"] != "generated-v1.7.0-identity" {
+		t.Fatalf("identity mode must deploy Porter and change the rollout marker: %+v", deployment.Spec.Template)
+	}
+	if deployment.Spec.Template.Spec.Containers[0].Image != "example.com/agentgateway:tested" {
+		t.Fatal("identity mode changed the official proxy image setting")
 	}
 }
 

@@ -36,6 +36,21 @@ const agentgatewayOriginalTarget = `(string(destination.address).contains(":") ?
 
 const agentgatewaySourceAddress = `(string(source.address).contains(":") ? "[" + string(source.address) + "]" : string(source.address)) + ":" + string(source.port)`
 
+var agentgatewayWorkloadAttributes = map[string]string{
+	model.AttributeWorkloadUID:       "extproc.agentio.workload.uid",
+	model.AttributeWorkloadName:      "extproc.agentio.workload.name",
+	model.AttributeWorkloadNamespace: "extproc.agentio.workload.namespace",
+}
+
+func agentgatewayWorkloadIdentity(provider *configv1.ExtProcProvider) bool {
+	for _, attribute := range provider.GetRequest().GetAttributes() {
+		if _, found := agentgatewayWorkloadAttributes[attribute]; found {
+			return true
+		}
+	}
+	return false
+}
+
 // Keep the intercepted port even when Host contains a different explicit port.
 const agentgatewayHostTarget = `(request.host.startsWith("[") ? request.host.split("]")[0] + "]" : request.host.split(":")[0]) + ":" + string(destination.port)`
 
@@ -84,6 +99,12 @@ func agentgatewayEgressConfig(
 	}
 	if len(providers) > 2 {
 		return "", fmt.Errorf("agentgateway supports at most one additionalExtProc after the primary processor")
+	}
+	if len(providers) > 1 &&
+		(agentgatewayWorkloadIdentity(providers[0]) || agentgatewayWorkloadIdentity(providers[1])) {
+		return "", fmt.Errorf(
+			"agentgateway workload identity uses the first processor phase; additionalExtProcs are unavailable",
+		)
 	}
 	if len(gateway.GetTlsTermination().GetIncludeHosts()) > 0 && !inputs.MITM {
 		return "", fmt.Errorf(
@@ -206,6 +227,27 @@ func agentgatewayHTTPListener(
 	}
 	processor := primary
 	policies := map[string]any{}
+	if agentgatewayWorkloadIdentity(gateway.GetExtProc()) {
+		// Resolve authenticated connection identity before the HTTP policy processor runs.
+		policies["extProc"] = map[string]any{
+			"host":        "127.0.0.1:9002",
+			"failureMode": "failClosed",
+			"requestAttributes": map[string]string{
+				"agentio.identity.mode":        `"http"`,
+				model.AttributePeerCertificate: `has(source.certificate) ? source.certificate : ""`,
+				model.AttributePeerIP:          "string(source.rawAddress)",
+				model.AttributePeerPrincipal:   `has(source.spiffeId) ? source.spiffeId : ""`,
+			},
+			"processingOptions": map[string]any{
+				"requestHeaderMode":   "send",
+				"responseHeaderMode":  "skip",
+				"requestBodyMode":     "none",
+				"responseBodyMode":    "none",
+				"requestTrailerMode":  "skip",
+				"responseTrailerMode": "skip",
+			},
+		}
+	}
 	if len(providers) == 2 {
 		processor, err = agentgatewayExtProc(providers[1])
 		if err != nil {
@@ -563,6 +605,9 @@ func agentgatewayExtProc(provider *configv1.ExtProcProvider) (map[string]any, er
 		"destination.address": "string(destination.address)",
 		"destination.port":    "destination.port",
 	}
+	if agentgatewayWorkloadIdentity(provider) {
+		maps.Copy(attributes, agentgatewayWorkloadAttributes)
+	}
 	for _, attribute := range provider.GetRequest().GetAttributes() {
 		expression, err := agentgatewayExtProcAttribute(attribute, false)
 		if err != nil {
@@ -614,6 +659,9 @@ func agentgatewayExtProc(provider *configv1.ExtProcProvider) (map[string]any, er
 }
 
 func agentgatewayExtProcAttribute(attribute string, response bool) (string, error) {
+	if expression, found := agentgatewayWorkloadAttributes[attribute]; found && !response {
+		return expression, nil
+	}
 	switch attribute {
 	case "source.address":
 		return agentgatewaySourceAddress, nil

@@ -269,7 +269,7 @@ func TestAgentgatewayChartValues(t *testing.T) {
 	if gw["agentgateway"].(map[string]any)["ca"].(map[string]any)["enabled"] != true {
 		t.Fatal("agentgateway must obtain its own workload certificate")
 	}
-	if _, found := gw["porter"]; found {
-		t.Fatal("native gateways do not use the Envoy Porter sidecar")
+	if gw["porter"].(map[string]any)["image"].(map[string]any)["digest"] == "" {
+		t.Fatal("identity-enabled native gateways need the tested Porter image")
 	}
 }
