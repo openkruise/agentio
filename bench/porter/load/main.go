@@ -166,6 +166,10 @@ func trafficReferences(i int) []string {
 func workloadResource(i, revision int) model.Resource {
 	src := source(i)
 	refs := trafficReferences(i)
+	references := make([]*ext.PolicyResourceReference, 0, len(refs))
+	for _, name := range refs {
+		references = append(references, &ext.PolicyResourceReference{Name: name})
+	}
 	w := &workload.Workload{
 		Uid:            uid(i),
 		Name:           fmt.Sprintf("workload-%05d-r%d", i, revision),
@@ -183,7 +187,7 @@ func workloadResource(i, revision int) model.Resource {
 			{Name: "sni-traffic-policy", Config: sniPolicy(ext.SniAction_SNI_ACTION_TLS_TERMINATION)},
 			{
 				Name:   "traffic-policy-reference",
-				Config: anyOf(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: refs}),
+				Config: anyOf(&ext.PolicyReference{TypeUrl: model.TrafficPolicyType, Resources: references}),
 			},
 			{
 				Name:   "security-profile-reference",

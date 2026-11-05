@@ -333,7 +333,7 @@ func TestSandboxTrafficPolicyTracksPeerUpdates(t *testing.T) {
 	}
 	awaitAddress(1)
 	refs, _ := securityReferencesAt(t, fixture.compiler, sandbox.SourceKey())
-	if refs == nil || len(refs.ResourceNames) != 0 {
+	if refs == nil || len(refs.Resources) != 0 {
 		t.Fatal("traffic-only Sandbox acquired a SecurityProfile reference")
 	}
 	if len(currentSnapshot(t, fixture.compiler).List(model.TrafficPolicyType)) != 0 {

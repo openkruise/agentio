@@ -21,6 +21,7 @@
 package extensionsv1
 
 import (
+	any1 "github.com/golang/protobuf/ptypes/any"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -87,6 +88,69 @@ func (SniAction) EnumDescriptor() ([]byte, []int) {
 	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{0}
 }
 
+// PolicyResourceReference identifies one policy and its reference-specific metadata.
+type PolicyResourceReference struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// UID is the source object's identity. Consumers currently resolve by name.
+	Uid string `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	// Typed, policy-specific metadata; policy bodies are distributed separately.
+	Extensions    []*any1.Any `protobuf:"bytes,3,rep,name=extensions,proto3" json:"extensions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyResourceReference) Reset() {
+	*x = PolicyResourceReference{}
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyResourceReference) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyResourceReference) ProtoMessage() {}
+
+func (x *PolicyResourceReference) ProtoReflect() protoreflect.Message {
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyResourceReference.ProtoReflect.Descriptor instead.
+func (*PolicyResourceReference) Descriptor() ([]byte, []int) {
+	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PolicyResourceReference) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PolicyResourceReference) GetUid() string {
+	if x != nil {
+		return x.Uid
+	}
+	return ""
+}
+
+func (x *PolicyResourceReference) GetExtensions() []*any1.Any {
+	if x != nil {
+		return x.Extensions
+	}
+	return nil
+}
+
 // PolicyReference carries ordered bindings for one policy type on a Workload
 // or Sandbox. The enclosing resource supplies the target identity.
 type PolicyReference struct {
@@ -98,14 +162,14 @@ type PolicyReference struct {
 	// Ordered according to the source policy API. The data plane evaluates the
 	// referenced resources in this order and does not apply its own tie-breaks.
 	// An empty list means no policies apply; an unresolved reference does not.
-	ResourceNames []string `protobuf:"bytes,2,rep,name=resource_names,json=resourceNames,proto3" json:"resource_names,omitempty"`
+	Resources     []*PolicyResourceReference `protobuf:"bytes,2,rep,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyReference) Reset() {
 	*x = PolicyReference{}
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[0]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -117,7 +181,7 @@ func (x *PolicyReference) String() string {
 func (*PolicyReference) ProtoMessage() {}
 
 func (x *PolicyReference) ProtoReflect() protoreflect.Message {
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[0]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -130,7 +194,7 @@ func (x *PolicyReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyReference.ProtoReflect.Descriptor instead.
 func (*PolicyReference) Descriptor() ([]byte, []int) {
-	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{0}
+	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PolicyReference) GetTypeUrl() string {
@@ -140,9 +204,9 @@ func (x *PolicyReference) GetTypeUrl() string {
 	return ""
 }
 
-func (x *PolicyReference) GetResourceNames() []string {
+func (x *PolicyReference) GetResources() []*PolicyResourceReference {
 	if x != nil {
-		return x.ResourceNames
+		return x.Resources
 	}
 	return nil
 }
@@ -157,7 +221,7 @@ type SniTrafficPolicy struct {
 
 func (x *SniTrafficPolicy) Reset() {
 	*x = SniTrafficPolicy{}
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[1]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -169,7 +233,7 @@ func (x *SniTrafficPolicy) String() string {
 func (*SniTrafficPolicy) ProtoMessage() {}
 
 func (x *SniTrafficPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[1]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -182,7 +246,7 @@ func (x *SniTrafficPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SniTrafficPolicy.ProtoReflect.Descriptor instead.
 func (*SniTrafficPolicy) Descriptor() ([]byte, []int) {
-	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{1}
+	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SniTrafficPolicy) GetRules() []*SniRule {
@@ -202,7 +266,7 @@ type SniRule struct {
 
 func (x *SniRule) Reset() {
 	*x = SniRule{}
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[2]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -214,7 +278,7 @@ func (x *SniRule) String() string {
 func (*SniRule) ProtoMessage() {}
 
 func (x *SniRule) ProtoReflect() protoreflect.Message {
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[2]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -227,7 +291,7 @@ func (x *SniRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SniRule.ProtoReflect.Descriptor instead.
 func (*SniRule) Descriptor() ([]byte, []int) {
-	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{2}
+	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SniRule) GetMatch() *SniMatch {
@@ -258,7 +322,7 @@ type SniMatch struct {
 
 func (x *SniMatch) Reset() {
 	*x = SniMatch{}
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[3]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -270,7 +334,7 @@ func (x *SniMatch) String() string {
 func (*SniMatch) ProtoMessage() {}
 
 func (x *SniMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[3]
+	mi := &file_api_extensions_v1_snipolicy_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -283,7 +347,7 @@ func (x *SniMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SniMatch.ProtoReflect.Descriptor instead.
 func (*SniMatch) Descriptor() ([]byte, []int) {
-	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{3}
+	return file_api_extensions_v1_snipolicy_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SniMatch) GetSni() []string {
@@ -304,10 +368,16 @@ var File_api_extensions_v1_snipolicy_proto protoreflect.FileDescriptor
 
 const file_api_extensions_v1_snipolicy_proto_rawDesc = "" +
 	"\n" +
-	"!api/extensions/v1/snipolicy.proto\x12\x1fkruise.networking.extensions.v1\"S\n" +
+	"!api/extensions/v1/snipolicy.proto\x12\x1fkruise.networking.extensions.v1\x1a\x19google/protobuf/any.proto\"u\n" +
+	"\x17PolicyResourceReference\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03uid\x18\x02 \x01(\tR\x03uid\x124\n" +
+	"\n" +
+	"extensions\x18\x03 \x03(\v2\x14.google.protobuf.AnyR\n" +
+	"extensions\"\x84\x01\n" +
 	"\x0fPolicyReference\x12\x19\n" +
-	"\btype_url\x18\x01 \x01(\tR\atypeUrl\x12%\n" +
-	"\x0eresource_names\x18\x02 \x03(\tR\rresourceNames\"R\n" +
+	"\btype_url\x18\x01 \x01(\tR\atypeUrl\x12V\n" +
+	"\tresources\x18\x02 \x03(\v28.kruise.networking.extensions.v1.PolicyResourceReferenceR\tresources\"R\n" +
 	"\x10SniTrafficPolicy\x12>\n" +
 	"\x05rules\x18\x01 \x03(\v2(.kruise.networking.extensions.v1.SniRuleR\x05rules\"\x8e\x01\n" +
 	"\aSniRule\x12?\n" +
@@ -335,23 +405,27 @@ func file_api_extensions_v1_snipolicy_proto_rawDescGZIP() []byte {
 }
 
 var file_api_extensions_v1_snipolicy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_api_extensions_v1_snipolicy_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_api_extensions_v1_snipolicy_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_api_extensions_v1_snipolicy_proto_goTypes = []any{
-	(SniAction)(0),           // 0: kruise.networking.extensions.v1.SniAction
-	(*PolicyReference)(nil),  // 1: kruise.networking.extensions.v1.PolicyReference
-	(*SniTrafficPolicy)(nil), // 2: kruise.networking.extensions.v1.SniTrafficPolicy
-	(*SniRule)(nil),          // 3: kruise.networking.extensions.v1.SniRule
-	(*SniMatch)(nil),         // 4: kruise.networking.extensions.v1.SniMatch
+	(SniAction)(0),                  // 0: kruise.networking.extensions.v1.SniAction
+	(*PolicyResourceReference)(nil), // 1: kruise.networking.extensions.v1.PolicyResourceReference
+	(*PolicyReference)(nil),         // 2: kruise.networking.extensions.v1.PolicyReference
+	(*SniTrafficPolicy)(nil),        // 3: kruise.networking.extensions.v1.SniTrafficPolicy
+	(*SniRule)(nil),                 // 4: kruise.networking.extensions.v1.SniRule
+	(*SniMatch)(nil),                // 5: kruise.networking.extensions.v1.SniMatch
+	(*any1.Any)(nil),                // 6: google.protobuf.Any
 }
 var file_api_extensions_v1_snipolicy_proto_depIdxs = []int32{
-	3, // 0: kruise.networking.extensions.v1.SniTrafficPolicy.rules:type_name -> kruise.networking.extensions.v1.SniRule
-	4, // 1: kruise.networking.extensions.v1.SniRule.match:type_name -> kruise.networking.extensions.v1.SniMatch
-	0, // 2: kruise.networking.extensions.v1.SniRule.action:type_name -> kruise.networking.extensions.v1.SniAction
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	6, // 0: kruise.networking.extensions.v1.PolicyResourceReference.extensions:type_name -> google.protobuf.Any
+	1, // 1: kruise.networking.extensions.v1.PolicyReference.resources:type_name -> kruise.networking.extensions.v1.PolicyResourceReference
+	4, // 2: kruise.networking.extensions.v1.SniTrafficPolicy.rules:type_name -> kruise.networking.extensions.v1.SniRule
+	5, // 3: kruise.networking.extensions.v1.SniRule.match:type_name -> kruise.networking.extensions.v1.SniMatch
+	0, // 4: kruise.networking.extensions.v1.SniRule.action:type_name -> kruise.networking.extensions.v1.SniAction
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_api_extensions_v1_snipolicy_proto_init() }
@@ -365,7 +439,7 @@ func file_api_extensions_v1_snipolicy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_extensions_v1_snipolicy_proto_rawDesc), len(file_api_extensions_v1_snipolicy_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

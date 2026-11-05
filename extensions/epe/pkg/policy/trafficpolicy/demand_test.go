@@ -96,15 +96,15 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 					{
 						Name: "traffic-policy-reference",
 						Config: pack(&ext.PolicyReference{
-							TypeUrl:       model.TrafficPolicyType,
-							ResourceNames: []string{policy},
+							TypeUrl:   model.TrafficPolicyType,
+							Resources: []*ext.PolicyResourceReference{{Name: policy}},
 						})},
 					{
 						Name: "security-profile-reference",
 						Config: pack(
 							&ext.PolicyReference{
-								TypeUrl:       model.SecurityProfileType,
-								ResourceNames: []string{"global/" + policy},
+								TypeUrl:   model.SecurityProfileType,
+								Resources: []*ext.PolicyResourceReference{{Name: "global/" + policy}},
 							},
 						),
 					},

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/istio/pkg/test"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
@@ -73,12 +74,12 @@ func TestBuildWDSAddressPublishesDiscoveryOnlyWorkload(t *testing.T) {
 	}
 	refs := new(extensionsv1.PolicyReference)
 	if !compatibilityExtension(t, wireWorkload, "traffic-policy-reference", refs) ||
-		refs.TypeUrl != model.TrafficPolicyType || len(refs.ResourceNames) != 0 {
+		refs.TypeUrl != model.TrafficPolicyType || len(refs.Resources) != 0 {
 		t.Fatalf("native empty policy binding = %v", refs)
 	}
 	refs = new(extensionsv1.PolicyReference)
 	if !compatibilityExtension(t, wireWorkload, "security-profile-reference", refs) ||
-		refs.TypeUrl != model.SecurityProfileType || len(refs.ResourceNames) != 0 {
+		refs.TypeUrl != model.SecurityProfileType || len(refs.Resources) != 0 {
 		t.Fatalf("native empty SecurityProfile binding = %v", refs)
 	}
 	if resource.Facts.Workload == nil {
@@ -476,5 +477,59 @@ func TestWorkloadInstanceAliasSurvivesNameReuse(t *testing.T) {
 				t.Fatalf("missing instance alias: %v", resource.Aliases)
 			}
 		}
+	}
+}
+
+func policyReferenceNames(resources []*extensionsv1.PolicyResourceReference) []string {
+	var names []string
+	for _, resource := range resources {
+		names = append(names, resource.GetName())
+	}
+	return names
+}
+
+func TestWDSCarriesStructuredPolicyReferences(t *testing.T) {
+	for _, typeURL := range []string{model.TrafficPolicyType, model.SecurityProfileType} {
+		t.Run(typeURL, func(t *testing.T) {
+			references := []*extensionsv1.PolicyResourceReference{
+				{
+					Name:       "first",
+					Uid:        "source-1",
+					Extensions: []*anypb.Any{{TypeUrl: "test.example/Metadata", Value: []byte("metadata")}},
+				},
+				{Name: "second", Uid: "source-2"},
+			}
+			input := wdsProjection{Workload: projectionTestWorkload()}
+			if typeURL == model.TrafficPolicyType {
+				input.TrafficPolicyReferences = references
+			} else {
+				input.SecurityProfileReferences = references
+			}
+			resource, err := buildWDSAddress(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			address := &workloadv1.Address{}
+			if err := resource.Value.UnmarshalTo(address); err != nil {
+				t.Fatal(err)
+			}
+			for _, extension := range address.GetWorkload().Extensions {
+				if !extension.Config.MessageIs(&extensionsv1.PolicyReference{}) {
+					continue
+				}
+				got := &extensionsv1.PolicyReference{}
+				if err := extension.Config.UnmarshalTo(got); err != nil {
+					t.Fatal(err)
+				}
+				if got.TypeUrl != typeURL {
+					continue
+				}
+				if !proto.Equal(got, &extensionsv1.PolicyReference{TypeUrl: typeURL, Resources: references}) {
+					t.Fatalf("policy reference changed during encoding: %v", got)
+				}
+				return
+			}
+			t.Fatal("policy reference missing")
+		})
 	}
 }

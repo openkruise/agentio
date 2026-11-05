@@ -146,7 +146,10 @@ func TestCompilerOptionalSandboxInputs(t *testing.T) {
 				refs := new(extensionsv1.PolicyReference)
 				if !compatibilityExtension(t, wire, "traffic-policy-reference", refs) ||
 					refs.TypeUrl != model.TrafficPolicyType ||
-					!reflect.DeepEqual(refs.ResourceNames, []string{"namespaces/demo/trafficPolicies/allow"}) {
+					!reflect.DeepEqual(
+						policyReferenceNames(refs.Resources),
+						[]string{"namespaces/demo/trafficPolicies/allow"},
+					) {
 					t.Fatalf("native Workload references = %v", refs)
 				}
 				if len(wire.AuthorizationPolicies) != 1 || len(snapshot.List(model.WorkloadAuthorizationType)) != 1 {
@@ -351,7 +354,7 @@ func TestWorkloadOwnsOrderedTrafficPolicyBindings(t *testing.T) {
 		refs := new(extensionsv1.PolicyReference)
 		return binding != nil && manifest != nil && workload != nil &&
 			compatibilityExtension(t, workload, "traffic-policy-reference", refs) &&
-			refs.TypeUrl == model.TrafficPolicyType && reflect.DeepEqual(refs.ResourceNames, want) &&
+			refs.TypeUrl == model.TrafficPolicyType && reflect.DeepEqual(policyReferenceNames(refs.Resources), want) &&
 			reflect.DeepEqual(binding.PolicyNames(model.PolicyKindTrafficPolicy), want)
 	}, "Workload owns ordered global, namespace and selector policies")
 }
@@ -377,7 +380,7 @@ func TestWorkloadTrafficPolicyBindingUpdates(t *testing.T) {
 			workload, _ := compatibilityWorkload(t, currentSnapshot(t, fixture.compiler), worker.UID)
 			refs := new(extensionsv1.PolicyReference)
 			return workload != nil && compatibilityExtension(t, workload, "traffic-policy-reference", refs) &&
-				reflect.DeepEqual(refs.ResourceNames, want)
+				reflect.DeepEqual(policyReferenceNames(refs.Resources), want)
 		}, "native Workload references converge")
 	}
 	check([]string{"trafficPolicies/global", "namespaces/demo/trafficPolicies/selected"})

@@ -224,13 +224,19 @@ fn traffic_references(values: &[Any]) -> Result<Option<Vec<String>>> {
             bail!("duplicate TrafficPolicy binding");
         }
         if reference
-            .resource_names
+            .resources
             .iter()
-            .any(|name| name.is_empty() || name == "*")
+            .any(|resource| resource.name.is_empty() || resource.name == "*")
         {
             bail!("invalid TrafficPolicy reference");
         }
-        names = Some(reference.resource_names);
+        names = Some(
+            reference
+                .resources
+                .into_iter()
+                .map(|resource| resource.name)
+                .collect(),
+        );
     }
     Ok(names)
 }
@@ -238,7 +244,7 @@ fn traffic_references(values: &[Any]) -> Result<Option<Vec<String>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::kruise::networking::extensions::v1::SniMatch;
+    use crate::wire::kruise::networking::extensions::v1::{PolicyResourceReference, SniMatch};
 
     #[test]
     fn sni_projection_preserves_action_order_and_ports() {
@@ -305,7 +311,17 @@ mod tests {
             type_url: "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference".into(),
             value: PolicyReference {
                 type_url: TRAFFIC_POLICY.into(),
-                resource_names: names.iter().map(|name| (*name).into()).collect(),
+                resources: names
+                    .iter()
+                    .map(|name| PolicyResourceReference {
+                        name: (*name).into(),
+                        uid: format!("source-{name}"),
+                        extensions: vec![Any {
+                            type_url: "test.example/Metadata".into(),
+                            value: b"metadata".to_vec(),
+                        }],
+                    })
+                    .collect(),
             }
             .encode_to_vec(),
         }
@@ -326,7 +342,10 @@ mod tests {
         let mut other = binding(&["unused"]);
         other.value = PolicyReference {
             type_url: "another.policy.Type".into(),
-            resource_names: vec!["unused".into()],
+            resources: vec![PolicyResourceReference {
+                name: "unused".into(),
+                ..Default::default()
+            }],
         }
         .encode_to_vec();
         assert_eq!(traffic_references(&[other]).unwrap(), None);

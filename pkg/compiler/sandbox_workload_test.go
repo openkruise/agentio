@@ -219,7 +219,7 @@ func TestMultipleSandboxesShareWorkloadWithoutProjection(t *testing.T) {
 		refs := new(extensionsv1.PolicyReference)
 		sni := new(extensionsv1.SniTrafficPolicy)
 		return compatibilityExtension(t, w, "traffic-policy-reference", refs) &&
-			len(refs.ResourceNames) == 0 && len(f.compiler.Failures()) == 0 &&
+			len(refs.Resources) == 0 && len(f.compiler.Failures()) == 0 &&
 			compatibilityExtension(t, w, "sni-traffic-policy", sni) &&
 			len(sni.Rules) == 1 && slices.Equal(sni.Rules[0].GetMatch().GetSni(), []string{"a.example"})
 	}, "single remaining Sandbox projects SNI without changing native Workload bindings")

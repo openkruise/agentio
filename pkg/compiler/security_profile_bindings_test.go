@@ -165,7 +165,7 @@ func TestSecurityProfileBindingsLifecycle(t *testing.T) {
 		testutil.Eventually(t, func() bool {
 			refs, current := securityReferencesAt(t, fixture.compiler, key)
 			hash = current
-			return refs != nil && slices.Equal(refs.ResourceNames, want)
+			return refs != nil && slices.Equal(policyReferenceNames(refs.Resources), want)
 		}, "Workload SecurityProfile references")
 		return hash
 	}
@@ -228,7 +228,12 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	fixture := newIncrementalFixture(t)
 	workload := testWorkload("demo", "client", "10.1.0.1")
 	fixture.workloads.ConditionalUpdateObject(workload)
-	sandbox := model.Sandbox{UID: "kruise:one", Namespace: "demo", Attester: &model.Attester{WorkloadUID: workload.UID}}
+	sandbox := model.Sandbox{
+		UID:            "kruise:one",
+		Namespace:      "demo",
+		SourceIdentity: model.SourceIdentity{UID: "sandbox-source"},
+		Attester:       &model.Attester{WorkloadUID: workload.UID},
+	}
 	sibling := model.Sandbox{UID: "kruise:two", Namespace: "demo", Attester: &model.Attester{WorkloadUID: workload.UID}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	fixture.sandboxes.ConditionalUpdateObject(sibling)
@@ -241,7 +246,8 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	key := model.ResourceKey{TypeURL: model.SandboxType, Name: sandbox.UID}
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, fixture.compiler, key)
-		return refs != nil && slices.Equal(refs.ResourceNames, []string{profileName})
+		return refs != nil && len(refs.Resources) == 1 &&
+			refs.Resources[0].Name == profileName && refs.Resources[0].Uid == "sandbox-source"
 	}, "Sandbox binds owned profile without SNI rules")
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(
@@ -249,7 +255,7 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 			fixture.compiler,
 			model.ResourceKey{TypeURL: model.SandboxType, Name: sibling.UID},
 		)
-		return refs != nil && len(refs.ResourceNames) == 0
+		return refs != nil && len(refs.Resources) == 0
 	}, "sibling does not inherit dedicated profile")
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(
@@ -257,7 +263,7 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 			fixture.compiler,
 			model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID},
 		)
-		return refs != nil && slices.Equal(refs.ResourceNames, []string{shared.ResourceName()})
+		return refs != nil && slices.Equal(policyReferenceNames(refs.Resources), []string{shared.ResourceName()})
 	}, "host carries only shared bindings")
 	sandbox.Attester = &model.Attester{WorkloadUID: "new-host"}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
@@ -265,14 +271,14 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 		return manifestAt(t, fixture.compiler, sandbox.UID).GetAttester().GetWorkloadUid() == "new-host"
 	}, "Sandbox migration")
 	refs, _ := securityReferencesAt(t, fixture.compiler, key)
-	if refs == nil || !slices.Equal(refs.ResourceNames, []string{profileName}) {
+	if refs == nil || !slices.Equal(policyReferenceNames(refs.Resources), []string{profileName}) {
 		t.Fatalf("migration lost owned reference: %v", refs)
 	}
 	sandbox.Policies = nil
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, fixture.compiler, key)
-		return refs != nil && len(refs.ResourceNames) == 0
+		return refs != nil && len(refs.Resources) == 0
 	}, "owned profile deletion publishes an explicit empty binding")
 	fixture.sandboxes.DeleteObject(sandbox.UID)
 	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil },
@@ -288,7 +294,7 @@ func TestSecurityProfileBindingsPublishEmptyReferences(t *testing.T) {
 	for _, key := range []model.ResourceKey{{TypeURL: model.AddressType, Name: workload.UID}, {TypeURL: model.SandboxType, Name: "kruise:one"}} {
 		testutil.Eventually(t, func() bool {
 			refs, hash := securityReferencesAt(t, fixture.compiler, key)
-			return hash != "" && refs != nil && len(refs.ResourceNames) == 0
+			return hash != "" && refs != nil && len(refs.Resources) == 0
 		}, "explicit empty SecurityProfile binding")
 	}
 }
@@ -351,7 +357,7 @@ func TestSecurityProfileBindingDrivesSNIProjection(t *testing.T) {
 			refs := &extensionsv1.PolicyReference{}
 			foundRefs := compatibilityExtension(t, address.GetWorkload(), "security-profile-reference", refs)
 			return slices.Equal(gotHosts, hosts) && foundRefs &&
-				refs.TypeUrl == model.SecurityProfileType && slices.Equal(refs.ResourceNames, names)
+				refs.TypeUrl == model.SecurityProfileType && slices.Equal(policyReferenceNames(refs.Resources), names)
 		}, "one ordered binding drives references and SNI")
 	}
 	// Unlike the old SNI binding, specificity does not outrank the EPE name tie-break.
