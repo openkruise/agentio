@@ -56,6 +56,7 @@ func TestHTTPCalloutTransportE2E(t *testing.T) {
 	entered := make(chan string, 128)
 	release := make(chan struct{})
 	handler := &fixture.Handler{}
+	// Immediate replies exercise concurrent HTTP/2 stream completion and reservation.
 	endpoint := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		mu.Lock()
@@ -74,8 +75,6 @@ func TestHTTPCalloutTransportE2E(t *testing.T) {
 			case <-r.Context().Done():
 				return
 			}
-		} else {
-			time.Sleep(5 * time.Millisecond)
 		}
 		if r.URL.Path == "/http1" && r.ProtoMajor != 1 {
 			t.Errorf("new config used %s", r.Proto)

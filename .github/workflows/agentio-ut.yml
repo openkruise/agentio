@@ -71,6 +71,10 @@ jobs:
         run: make build
       - name: Run unit tests
         run: make test
+      - name: Test HTTP callout transport with the container Go toolchain
+        env:
+          GOTOOLCHAIN: go1.27.3 # Match extensions/epe/docker/Dockerfile.
+        run: go test -race -count=30 -timeout=2m ./extensions/epe/pkg/extensionprovider -run '^TestHTTPCalloutTransportE2E$'
       - name: Run linters and check new Go style findings
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
