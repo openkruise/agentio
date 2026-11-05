@@ -528,7 +528,7 @@ data:
 			harness.RetryAssertion(t, 2*time.Minute, 5*time.Second, func() error {
 				stdout, stderr, err := curlThroughProxy(connectProxyHost, tc.scheme, tc.proxyPort)
 				if err != nil {
-					return fmt.Errorf("curl through %s failed: %v; stdout=%q stderr=%q", tc.name, err, stdout, stderr)
+					return fmt.Errorf("curl through %s failed: %w; stdout=%q stderr=%q", tc.name, err, stdout, stderr)
 				}
 				if codes := strings.TrimSpace(stdout); codes != "200:200" {
 					return fmt.Errorf(

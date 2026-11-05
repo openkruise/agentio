@@ -23,10 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/openkruise/agentio/test/e2e"
 	"github.com/openkruise/agentio/test/e2e/components/echo"
 	"github.com/openkruise/agentio/test/e2e/retry"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type configDumpFunc func(context.Context) (string, error)
