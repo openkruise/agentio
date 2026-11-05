@@ -50,6 +50,7 @@ spec:
             - -epe-config-primary={{ include "epe.fullname" . }}-config-primary
             - -namespace={{ .Release.Namespace }}
             - -secret-watch-scope={{ .Values.epe.secretWatchScope }}
+            - --profile-deletion-grace-period={{ .Values.epe.profileDeletionGracePeriod }}
             - --xds-address={{ include "gateway.xdsAddress" . }}
             - --xds-cluster-id={{ .Values.global.clusterId }}
             - --xds-cache-idle-ttl={{ .Values.epe.xdsCache.idleTTL }}

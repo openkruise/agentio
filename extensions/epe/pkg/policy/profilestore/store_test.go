@@ -490,7 +490,7 @@ func TestProfileSet_NilIsNoop(t *testing.T) {
 // TestApplyBatch_AddUpdateDelete exercises the krt-driven write path directly
 // with pre-compiled profiles, without a kube fixture.
 func TestApplyBatch_AddUpdateDelete(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	add := newTestProfile("p", "default", map[string]string{"app": "x"})
 	compiledAdd, err := securityprofile.NewProfile(add, &add.Spec)
@@ -540,7 +540,7 @@ func TestApplyBatch_AddUpdateDelete(t *testing.T) {
 }
 
 func TestApplyBatch_InvalidUpdateRetainsLastKnownGood(t *testing.T) {
-	s := NewStore()
+	s := NewStore(0)
 
 	good := newTestProfile("p", "default", map[string]string{"app": "x"})
 	compiled, err := securityprofile.NewProfile(good, &good.Spec)

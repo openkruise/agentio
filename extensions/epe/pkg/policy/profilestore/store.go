@@ -26,6 +26,7 @@ import (
 	"maps"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
@@ -162,6 +163,11 @@ func (set installedSet) remove(k profileKey) bool {
 
 func (set installedSet) len() int { return len(set.selector) + len(set.sandbox) }
 
+type retiredProfile struct {
+	profile *securityprofile.Profile
+	expires time.Time
+}
+
 // profileSnapshot is an immutable point-in-time view of all profiles.
 // It is replaced atomically on every write operation (copy-on-write).
 //
@@ -181,6 +187,7 @@ type profileSnapshot struct {
 	installed     installedSet
 	selectorIndex map[string]profileIndex
 	references    map[string]*securityprofile.Profile
+	retired       map[string]retiredProfile
 }
 
 func newEmptySnapshot() *profileSnapshot {
@@ -191,18 +198,22 @@ func newEmptySnapshot() *profileSnapshot {
 }
 
 // NewStore creates a new in-memory configuration store. Wire it to a
-// compiled-profile collection with RegisterCollection.
-func NewStore() *store {
-	s := &store{degraded: newDegradedSets()}
+// compiled-profile collection with RegisterCollection. A positive deletion grace
+// retains deleted administrator profiles for explicit WDS references only.
+//
+//nolint:revive // Keep collection registration outside the read-only Store interface.
+func NewStore(deletionGracePeriod time.Duration) *store {
+	s := &store{degraded: newDegradedSets(), deletionGracePeriod: deletionGracePeriod}
 	s.snapshot.Store(newEmptySnapshot())
 	return s
 }
 
 type store struct {
-	snapshot atomic.Pointer[profileSnapshot]
-	sandbox  func(context.Context, subject.Subject) (sandboxSource, bool, error)
-	mu       sync.Mutex // protects publication and pending requests
-	pending  map[model.ResourceKey]*pendingProfile
+	deletionGracePeriod time.Duration
+	snapshot            atomic.Pointer[profileSnapshot]
+	sandbox             func(context.Context, subject.Subject) (sandboxSource, bool, error)
+	mu                  sync.Mutex // protects publication and pending requests
+	pending             map[model.ResourceKey]*pendingProfile
 	// degraded is write-path state, guarded by mu: which sources are currently
 	// stale, unenforced, or serving unresolved inputs. The gauges publish counts
 	// from it, so the metric surface stays three series per gauge no matter how
@@ -258,6 +269,8 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 		}
 	}()
 	installed := old.installed.clone()
+	retired := old.retired
+	retiredCopied := false
 	// Only selector profiles feed the label index, so a batch that touched
 	// nothing but per-Sandbox profiles can carry the previous index forward
 	// instead of rebuilding an identical one. Sandbox churn is the
@@ -270,6 +283,20 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 			key := keyFor(ev.Latest().Meta)
 			// A deleted source leaves no degraded state behind.
 			s.degraded.removed(key)
+			previous, wasInstalled := installed.get(key)
+			if wasInstalled && key.match == securityprofile.MatchSelector && s.deletionGracePeriod > 0 {
+				name := (model.SecurityProfile{Name: key.name, Namespace: key.namespace, Global: key.namespace == ""}).ResourceName()
+				expires := time.Now().Add(s.deletionGracePeriod)
+				if !retiredCopied {
+					retired = maps.Clone(retired)
+					retiredCopied = true
+				}
+				if retired == nil {
+					retired = make(map[string]retiredProfile)
+				}
+				retired[name] = retiredProfile{profile: previous, expires: expires}
+				time.AfterFunc(s.deletionGracePeriod, func() { s.expireRetiredProfile(name, expires) })
+			}
 			if installed.remove(key) {
 				selectorsChanged = selectorsChanged || key.match == securityprofile.MatchSelector
 			}
@@ -277,6 +304,16 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 		}
 		sp := ev.New
 		key := keyFor(sp.Meta)
+		if key.match == securityprofile.MatchSelector {
+			name := (model.SecurityProfile{Name: key.name, Namespace: key.namespace, Global: key.namespace == ""}).ResourceName()
+			if _, exists := retired[name]; exists {
+				if !retiredCopied {
+					retired = maps.Clone(retired)
+					retiredCopied = true
+				}
+				delete(retired, name)
+			}
+		}
 		if previous, ok := installed.get(key); ok && key.match == securityprofile.MatchSandbox &&
 			(previous.Meta.SourceIdentity != sp.Meta.SourceIdentity || previous.Meta.SandboxUID != sp.Meta.SandboxUID) {
 			installed.remove(key)
@@ -317,11 +354,29 @@ func (s *store) applyBatch(events []krt.Event[securityprofile.Profile]) {
 		selectorsChanged = selectorsChanged || key.match == securityprofile.MatchSelector
 	}
 
+	var next *profileSnapshot
 	if selectorsChanged {
-		s.snapshot.Store(buildSnapshot(installed))
+		next = buildSnapshot(installed)
+	} else {
+		next = reuseSnapshot(old, installed)
+	}
+	next.retired = retired
+	s.snapshot.Store(next)
+}
+
+// expireRetiredProfile releases only this deletion's body; a later recreation or
+// deletion of the same name owns a different deadline.
+func (s *store) expireRetiredProfile(name string, expires time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.snapshot.Load()
+	if entry, ok := old.retired[name]; !ok || entry.expires != expires {
 		return
 	}
-	s.snapshot.Store(reuseSnapshot(old, installed))
+	next := reuseSnapshot(old, old.installed)
+	next.retired = maps.Clone(old.retired)
+	delete(next.retired, name)
+	s.snapshot.Store(next)
 }
 
 // --- Read path (lock-free) ---
@@ -402,6 +457,11 @@ func boundProfilesFor(snap *profileSnapshot, workload subject.Workload) ([]*secu
 		seen[name] = true
 		profile := snap.references[name]
 		if profile == nil {
+			if retired, ok := snap.retired[name]; ok && time.Now().Before(retired.expires) {
+				profile = retired.profile
+			}
+		}
+		if profile == nil {
 			return nil, fmt.Errorf("referenced SecurityProfile %q is unavailable", name)
 		}
 		matched = append(matched, profile)
@@ -454,7 +514,12 @@ func appendSandboxProfile(
 // snapshot is made of: a field added there must be handled here too, and a
 // compiler error is easier to notice than a silently zero field.
 func reuseSnapshot(old *profileSnapshot, installed installedSet) *profileSnapshot {
-	return &profileSnapshot{installed: installed, selectorIndex: old.selectorIndex, references: old.references}
+	return &profileSnapshot{
+		installed:     installed,
+		selectorIndex: old.selectorIndex,
+		references:    old.references,
+		retired:       old.retired,
+	}
 }
 
 // buildSnapshot takes ownership of installed and derives the label index from

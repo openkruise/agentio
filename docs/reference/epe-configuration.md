@@ -218,6 +218,7 @@ EPE uses its deployment namespace as the system namespace. EPEConfig and the def
 | `--enable-pprof` | `false` | Starts Go pprof on `--pprof-addr`. |
 | `--pprof-addr` | `:6060` | pprof listener address when enabled. |
 | `--observe-responses` | `false` | Requests response headers so audit can record upstream status. |
+| `--profile-deletion-grace-period` | `60s` | Retain deleted SecurityProfile/GlobalSecurityProfile bodies for stale explicit WDS references; `0` disables, negative values fail startup. Sandbox and identity deletion remain immediate. |
 | `--plugin-budget` | `4.5s` | Per-evaluation-phase limit; `0` disables it. Keep it below the external-processing message timeout. |
 | `--kubeconfig` | empty | Kubeconfig path; empty selects in-cluster configuration. |
 | `--v` | `0` | Log verbosity: 0 (info), 1 (debug), 2 (trace), unless `--zap-log-level` is supplied. |
@@ -225,6 +226,8 @@ EPE uses its deployment namespace as the system namespace. EPEConfig and the def
 | `--audit-webhook-buffer-size` | `8192` | Audit-webhook queue capacity; full queues drop events. |
 | `--audit-webhook-workers` | `96` | Audit-webhook worker count. |
 | `--audit-webhook-insecure-skip-verify` | `false` | Skips TLS certificate verification for every HTTPS audit webhook when explicitly enabled. |
+
+Set `epe.profileDeletionGracePeriod` in Helm values to configure `--profile-deletion-grace-period`. The deletion grace period starts when EPE observes the administrator profile deletion; requests do not extend it. Deleted profiles immediately leave selector matching and admin listings, but old WDS bindings may continue evaluating the retained rules until the binding is withdrawn or the grace expires. Expired or unknown references fail closed with `503 epe_policy_unavailable`. Retention is in memory and is lost on EPE restart. This permits deleted allow or deny rules to remain effective for up to the configured grace period; it is not an immediate policy revocation mechanism.
 
 The binary also accepts controller-runtime Zap flags, including `--zap-log-level` and `--zap-stacktrace-level`. The metrics and health listeners bind all interfaces because they are constructed from their port numbers. The chart exposes both through its headless Service. The admin listener is loopback-only by default and is not in that Service. pprof binds all interfaces by default when enabled; only enable it with an intentionally restricted bind address and network exposure.
 
