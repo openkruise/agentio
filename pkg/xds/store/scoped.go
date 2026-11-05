@@ -16,6 +16,7 @@ package store
 
 import (
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -25,11 +26,12 @@ import (
 )
 
 type addressScopeIndex struct {
-	once                sync.Once
-	addressesByWorkload map[string][]Candidate
-	addressesByService  map[string][]Candidate
-	addressesByGateway  map[string][]Candidate
-	unscopedAddresses   []Candidate
+	once                 sync.Once
+	addressesByWorkload  map[string][]Candidate
+	addressesByService   map[string][]Candidate
+	addressesByGateway   map[string][]Candidate
+	unscopedAddresses    []Candidate
+	workloadsByCandidate map[model.ResourceKey][]map[string]sets.Set[WorkloadIdentity]
 }
 
 // Ordinary streams skip this cost; dedicated streams share one immutable index.
@@ -45,7 +47,7 @@ func (u Update) indexAddressScopes() *addressScopeIndex {
 				continue
 			}
 			workloads, services, gateways := sets.New[string](), sets.New[string](), sets.New[string]()
-			for _, identity := range candidate.Identities {
+			for identityIndex, identity := range candidate.Identities {
 				if facts := identity.Facts.Workload; facts != nil {
 					workloads.Insert(facts.WorkloadUID)
 				}
@@ -55,12 +57,37 @@ func (u Update) indexAddressScopes() *addressScopeIndex {
 				if owner := identity.Facts.GatewayOwner; owner != "" {
 					gateways.Insert(owner)
 				}
+				var byUID map[string]sets.Set[WorkloadIdentity]
+				if len(identity.Workloads) > 1 {
+					byUID = make(map[string]sets.Set[WorkloadIdentity])
+				}
 				for workload := range identity.Workloads {
 					workloads.Insert(workload.UID)
+					if byUID != nil {
+						if byUID[workload.UID] == nil {
+							byUID[workload.UID] = sets.New[WorkloadIdentity]()
+						}
+						byUID[workload.UID].Insert(workload)
+					}
+				}
+				if byUID != nil {
+					if index.workloadsByCandidate == nil {
+						index.workloadsByCandidate = make(map[model.ResourceKey][]map[string]sets.Set[WorkloadIdentity])
+					}
+					if index.workloadsByCandidate[candidate.Key] == nil {
+						index.workloadsByCandidate[candidate.Key] = make(
+							[]map[string]sets.Set[WorkloadIdentity],
+							len(candidate.Identities),
+						)
+					}
+					index.workloadsByCandidate[candidate.Key][identityIndex] = byUID
 				}
 			}
 			for uid := range workloads {
 				index.addressesByWorkload[uid] = append(index.addressesByWorkload[uid], candidate)
+			}
+			if candidate.DependencyOnly {
+				continue
 			}
 			for key := range services {
 				index.addressesByService[key] = append(index.addressesByService[key], candidate)
@@ -76,6 +103,21 @@ func (u Update) indexAddressScopes() *addressScopeIndex {
 // ForWorkload preserves current dependencies and old identities needed for withdrawals.
 // The resource generator still enforces source identity, principal and visibility.
 func (u Update) ForWorkload(uid string, snapshot model.ResourceSet) Update {
+	if len(u.candidates[model.SandboxType]) != 0 {
+		// Dedicated Sandbox generation reselects its indexed scope, including pending names.
+		if len(u.candidates) == 1 {
+			u.candidates = nil
+		} else {
+			u.candidates = maps.Clone(u.candidates)
+			delete(u.candidates, model.SandboxType)
+		}
+		if !u.FullFor(model.SandboxType) {
+			types := sets.NewWithLength[string](len(u.fullTypes) + 1)
+			types.Merge(u.fullTypes)
+			types.Insert(model.SandboxType)
+			u.full, u.fullTypes = true, types
+		}
+	}
 	if len(u.candidates[model.AddressType]) == 0 || u.FullFor(model.AddressType) {
 		return u
 	}
@@ -106,18 +148,56 @@ func (u Update) ForWorkload(uid string, snapshot model.ResourceSet) Update {
 			}
 		}
 	}
+	// An Address-only notice also affects its Workload projection.
+	if len(selected) == 0 && len(u.affectedTypes) == 2 {
+		return Update{version: u.version, full: u.full, fullTypes: u.fullTypes}
+	}
 	u.candidates = maps.Clone(u.candidates)
 	u.candidates[model.AddressType] = make([]Candidate, 0, len(selected))
 	for _, candidate := range selected {
-		u.candidates[model.AddressType] = append(u.candidates[model.AddressType], candidate)
+		u.candidates[model.AddressType] = append(u.candidates[model.AddressType], index.scopeEvidence(candidate, uid))
 	}
 	sort.Slice(u.candidates[model.AddressType], func(i, j int) bool {
 		return u.candidates[model.AddressType][i].Key.Name < u.candidates[model.AddressType][j].Key.Name
 	})
+	if len(selected) == 0 {
+		u.affectedTypes = u.affectedTypes.Copy()
+		u.affectedTypes.Delete(model.AddressType)
+		u.affectedTypes.Delete(model.WorkloadType)
+	}
 	// Queued scoped notices must not retain the original cluster-wide indexes.
 	u.addressScopes = nil
 	if len(selected) != 0 {
 		u.addressScopes = &addressScopeIndex{}
 	}
 	return u
+}
+
+// Only this Pod's historical scope can justify a withdrawal on its stream.
+func (index *addressScopeIndex) scopeEvidence(candidate Candidate, uid string) Candidate {
+	copied := false
+	for i, identity := range candidate.Identities {
+		if len(identity.Workloads) == 0 {
+			continue
+		}
+		var scoped sets.Set[WorkloadIdentity]
+		if len(identity.Workloads) == 1 {
+			for workload := range identity.Workloads {
+				if workload.UID == uid {
+					scoped = identity.Workloads
+				}
+			}
+		} else {
+			scoped = index.workloadsByCandidate[candidate.Key][i][uid]
+		}
+		if len(scoped) == len(identity.Workloads) {
+			continue
+		}
+		if !copied {
+			candidate.Identities = slices.Clone(candidate.Identities)
+			copied = true
+		}
+		candidate.Identities[i].Workloads = scoped
+	}
+	return candidate
 }

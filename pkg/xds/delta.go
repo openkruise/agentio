@@ -85,6 +85,10 @@ func (s *Server) handleRequest(
 	// Subscription changes are applied before nonce checks: a stale nonce must
 	// not drop a subscription carried in the same request.
 	changed := applySubscription(watch, request)
+	if changed && typeURL == model.SandboxType && scope.Class == model.ClientDedicatedZTunnel {
+		// Register named demand before observing the source so deletion cannot strand it.
+		subscription.Watch(typeURL, watch.names.UnsortedList()...)
+	}
 
 	matched := watch.recordAcknowledgement(request)
 	if nonce := request.GetResponseNonce(); nonce != "" && !matched {

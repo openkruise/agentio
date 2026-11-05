@@ -28,6 +28,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -35,6 +36,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -92,7 +94,15 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 		}
 		headers.Set("authorization", "Bearer "+token)
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(transport)}
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(transport),
+		// Match ztunnel so silent transport failures also trigger scenario reconnects.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	}
 	if cfg.DialContext != nil {
 		opts = append(opts, grpc.WithContextDialer(cfg.DialContext))
 	}

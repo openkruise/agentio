@@ -102,6 +102,51 @@ func TestWorkloadAddressNoticeRetainsDependenciesAndWithdrawals(t *testing.T) {
 	}
 }
 
+func TestEmptyWorkloadAddressNoticePreservesOtherUpdates(t *testing.T) {
+	address := model.ResourceKey{TypeURL: model.AddressType, Name: "other"}
+	for _, extraType := range []string{"", model.SecretType, model.SandboxType} {
+		for _, fullSecret := range []bool{false, true} {
+			candidates := map[model.ResourceKey]Candidate{address: {
+				Key: address,
+				Identities: []Identity{{
+					Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{WorkloadUID: "other"}},
+				}},
+			}}
+			extra := model.ResourceKey{TypeURL: extraType, Name: "extra"}
+			if extraType != "" {
+				candidates[extra] = Candidate{Key: extra}
+			}
+			original := indexedUpdate("version", candidates)
+			if fullSecret {
+				original = Merge(original, Update{
+					version:   "version",
+					full:      true,
+					fullTypes: sets.New(model.SecretType),
+				})
+			}
+			scoped := original.ForWorkload("own", model.ResourceSet{})
+			if scoped.Version() != original.Version() || scoped.addressScopes != nil ||
+				scoped.Affects(model.AddressType) || scoped.Affects(model.WorkloadType) ||
+				len(scoped.Candidates(model.AddressType)) != 0 {
+				t.Fatalf("empty Address scope retained unrelated work or lost its version: %+v", scoped)
+			}
+			if scoped.FullFor(model.SecretType) != fullSecret ||
+				scoped.FullFor(model.SandboxType) != (extraType == model.SandboxType) {
+				t.Fatal("changed another type's refresh scope")
+			}
+			if extraType == model.SecretType {
+				if got := scoped.Candidates(extraType); len(got) != 1 || got[0].Key != extra {
+					t.Fatal("lost the mixed Secret candidate")
+				}
+			}
+			if len(original.Candidates(model.AddressType)) != 1 || !original.Affects(model.AddressType) ||
+				original.FullFor(model.SandboxType) || extraType != "" && len(original.Candidates(extraType)) != 1 {
+				t.Fatal("modified the shared notice")
+			}
+		}
+	}
+}
+
 func TestWorkloadAddressIndexIsLazyAndShared(t *testing.T) {
 	candidates := map[model.ResourceKey]Candidate{}
 	for i := range 16 {

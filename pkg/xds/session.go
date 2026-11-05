@@ -116,7 +116,12 @@ func (d *deltaSession) enqueueUpdate(update xdsstore.Update) {
 	if d.scope.Class == model.ClientDedicatedZTunnel {
 		update = update.ForWorkload(d.scope.WorkloadUID, d.server.resources.Snapshot())
 	}
-	d.server.pushScheduler.Enqueue(d.connection, update)
+	for typeURL, watch := range d.watches {
+		if watch.started && update.Affects(typeURL) {
+			d.server.pushScheduler.Enqueue(d.connection, update)
+			return
+		}
+	}
 }
 
 // Poll before background work so ACKs and subscription changes keep moving.

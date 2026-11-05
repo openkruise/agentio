@@ -97,7 +97,7 @@ func TestSandboxNotificationsFollowOwnership(t *testing.T) {
 		})
 	}
 	store.NotifyKeys([]model.ResourceKey{a.Key})
-	check("a", "b", "unrelated", "gateway", "shared")
+	check("gateway", "shared")
 	store.NotifyType(model.SandboxType)
 	check("a", "b", "unrelated", "gateway", "shared")
 }
@@ -171,4 +171,89 @@ func BenchmarkSandboxNotificationFanout(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestPublishedSourceDeletionKeepsOwnerAndNamedDemand(t *testing.T) {
+	a := sandboxNoticeResource(t, "sandbox", "a", "v1")
+	store := New(newSnapshot(t))
+	if _, err := store.Apply([]model.ResourceChange{{Key: a.Key, New: &a}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	owner := store.Subscribe(t.Context(), model.ClientScope{Class: model.ClientDedicatedZTunnel, WorkloadUID: "a"})
+	named := store.Subscribe(ctx, model.ClientScope{Class: model.ClientDedicatedZTunnel, WorkloadUID: "b"})
+	unrelated := store.Subscribe(t.Context(), model.ClientScope{Class: model.ClientDedicatedZTunnel, WorkloadUID: "c"})
+	gateway := store.Subscribe(t.Context(), model.ClientScope{Class: model.ClientEgressGateway})
+	owner.Watch(model.SandboxType)
+	named.Watch(model.SandboxType, "sandbox")
+	unrelated.Watch(model.SandboxType)
+	gateway.Watch(model.SandboxType)
+	check := func(wantNamed bool) {
+		t.Helper()
+		store.NotifyKeys([]model.ResourceKey{a.Key})
+		for _, tc := range []struct {
+			sub  Subscription
+			want bool
+		}{{owner, true}, {named, wantNamed}, {unrelated, false}, {gateway, true}} {
+			select {
+			case <-tc.sub.Updates():
+				if !tc.want {
+					t.Error("unrelated subscriber notified")
+				}
+			default:
+				if tc.want {
+					t.Error("source deletion notification lost")
+				}
+			}
+		}
+	}
+	check(true)
+	if _, err := store.Apply([]model.ResourceChange{{Key: a.Key, Old: &a}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []Subscription{owner, named, gateway} {
+		select {
+		case <-sub.Updates():
+		default:
+			t.Fatal("published change notification lost")
+		}
+	}
+	store.NotifyKeys([]model.ResourceKey{a.Key})
+	select {
+	case <-named.Updates():
+	default:
+		t.Fatal("unpublished named deletion lost")
+	}
+	select {
+	case <-gateway.Updates():
+	default:
+		t.Fatal("unpublished gateway deletion lost")
+	}
+	for _, sub := range []Subscription{owner, unrelated} {
+		select {
+		case <-sub.Updates():
+			t.Fatal("unpublished deletion woke unrelated wildcard")
+		default:
+		}
+	}
+	if _, err := store.Apply([]model.ResourceChange{{Key: a.Key, New: &a}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []Subscription{owner, named, gateway} {
+		select {
+		case <-sub.Updates():
+		default:
+			t.Fatal("published change notification lost")
+		}
+	}
+	named.Watch(model.SandboxType)
+	check(false)
+	named.Watch(model.SandboxType, "sandbox")
+	cancel()
+	testutil.Eventually(t, func() bool {
+		store.mu.RLock()
+		defer store.mu.RUnlock()
+		return len(store.sandboxSubscribersByName) == 0
+	}, "named index released")
+	check(false)
 }

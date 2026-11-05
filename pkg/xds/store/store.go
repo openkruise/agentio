@@ -42,6 +42,7 @@ type Store struct {
 	// subscribersByType indexes subscribers by watched type.
 	subscribersByType            map[string]map[uint64]*subscriber
 	sandboxSubscribersByWorkload map[string]map[uint64]*subscriber
+	sandboxSubscribersByName     map[string]map[uint64]*subscriber
 	nextID                       uint64
 	nextMailboxID                uint64
 }
@@ -53,6 +54,7 @@ func New(initial model.ResourceSet) *Store {
 		subscribers:                  make(map[uint64]*subscriber),
 		subscribersByType:            make(map[string]map[uint64]*subscriber),
 		sandboxSubscribersByWorkload: make(map[string]map[uint64]*subscriber),
+		sandboxSubscribersByName:     make(map[string]map[uint64]*subscriber),
 	}
 }
 
@@ -280,11 +282,15 @@ func (s *Store) NotifyKeys(keys []model.ResourceKey) {
 	if len(keys) == 0 {
 		return
 	}
+	s.mu.Lock()
 	candidates := make(map[model.ResourceKey]Candidate, len(keys))
 	for _, key := range keys {
-		candidates[key] = Candidate{Key: key}
+		if resource, found := s.current.Get(key); found {
+			addCandidate(candidates, resource, nil)
+		} else {
+			candidates[key] = Candidate{Key: key}
+		}
 	}
-	s.mu.Lock()
 	s.notifyLocked(indexedUpdate(s.current.Version(), candidates))
 	s.mu.Unlock()
 }

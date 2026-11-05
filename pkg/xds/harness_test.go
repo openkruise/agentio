@@ -181,7 +181,7 @@ func (f *fakeResourceStore) Subscribe(ctx context.Context, _ model.ClientScope) 
 	return subscription
 }
 
-func (f *fakeResourceSubscription) Watch(typeURL string) {
+func (f *fakeResourceSubscription) Watch(typeURL string, _ ...string) {
 	f.store.mu.Lock()
 	f.types.Insert(typeURL)
 	f.store.mu.Unlock()

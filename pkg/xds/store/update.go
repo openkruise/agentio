@@ -57,6 +57,8 @@ func workloadIdentity(workload *model.WorkloadResourceFacts) WorkloadIdentity {
 type Candidate struct {
 	Key        model.ResourceKey
 	Identities []Identity
+	// DependencyOnly scopes an unchanged dependency to the Workloads that pulled it in.
+	DependencyOnly bool
 }
 
 // Update is an immutable invalidation notice, not a delta to replay. Publications
@@ -136,7 +138,12 @@ func addCandidate(
 	resource model.Resource,
 	workload *model.WorkloadResourceFacts,
 ) {
-	candidate := index[resource.Key]
+	candidate, found := index[resource.Key]
+	if !found {
+		candidate.DependencyOnly = workload != nil
+	} else if workload == nil {
+		candidate.DependencyOnly = false
+	}
 	candidate.Key = resource.Key
 	identity := Identity{Name: resource.XDSName, Facts: resource.Facts}
 	if workload != nil {
@@ -231,6 +238,7 @@ func mergeCandidates(older, newer []Candidate) ([]Candidate, bool) {
 			newer = newer[1:]
 		default:
 			candidate := older[0]
+			candidate.DependencyOnly = candidate.DependencyOnly && newer[0].DependencyOnly
 			copied := false
 			for _, incoming := range newer[0].Identities {
 				match := -1
@@ -280,6 +288,9 @@ func candidateUnionSize(older, newer []Candidate) (int, bool) {
 			j++
 		default:
 			count--
+			if older[i].DependencyOnly && !newer[j].DependencyOnly {
+				unchanged = false
+			}
 			for _, incoming := range newer[j].Identities {
 				found := false
 				for _, existing := range older[i].Identities {
