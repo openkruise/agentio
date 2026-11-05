@@ -31,24 +31,28 @@ import (
 // workloadPolicies is computed once per Workload and shared by all ADS clients.
 // Legacy inline SNI is appended after shared policy selection.
 type workloadPolicies struct {
-	WorkloadUID          string
-	TrafficPolicyNames   []string
-	SecurityProfileNames []string
-	AuthorizationNames   []string
-	SNIPolicy            *extensionsv1.SniTrafficPolicy
-	EgressPolicies       *extensionsv1.EgressPolicies
-	GatewayReferences    []string
+	WorkloadUID               string
+	TrafficPolicyReferences   []*extensionsv1.PolicyResourceReference
+	SecurityProfileReferences []*extensionsv1.PolicyResourceReference
+	AuthorizationNames        []string
+	SNIPolicy                 *extensionsv1.SniTrafficPolicy
+	EgressPolicies            *extensionsv1.EgressPolicies
+	GatewayReferences         []string
 }
 
 func (p workloadPolicies) ResourceName() string { return p.WorkloadUID }
 
 func (p workloadPolicies) Equals(other workloadPolicies) bool {
 	return p.WorkloadUID == other.WorkloadUID &&
-		slices.Equal(p.TrafficPolicyNames, other.TrafficPolicyNames) &&
-		slices.Equal(p.SecurityProfileNames, other.SecurityProfileNames) &&
+		slices.EqualFunc(p.TrafficPolicyReferences, other.TrafficPolicyReferences, equalPolicyReference) &&
+		slices.EqualFunc(p.SecurityProfileReferences, other.SecurityProfileReferences, equalPolicyReference) &&
 		slices.Equal(p.AuthorizationNames, other.AuthorizationNames) &&
 		slices.Equal(p.GatewayReferences, other.GatewayReferences) &&
 		proto.Equal(p.SNIPolicy, other.SNIPolicy) && proto.Equal(p.EgressPolicies, other.EgressPolicies)
+}
+
+func equalPolicyReference(a, b *extensionsv1.PolicyResourceReference) bool {
+	return proto.Equal(a, b)
 }
 
 func newWorkloadPolicies(
@@ -102,25 +106,29 @@ func compileWorkloadPolicies(
 	if bindings == nil {
 		return result, nil
 	}
-	result.SecurityProfileNames = append([]string(nil), bindings.PolicyNames(model.PolicyKindSecurityProfile)...)
 	var policyErr error
 	// Preserve the complete ordered binding, including global and namespace
 	// policies. A temporarily missing body must not silently remove its reference.
-	result.TrafficPolicyNames = append([]string(nil), bindings.PolicyNames(model.PolicyKindTrafficPolicy)...)
-	for _, name := range result.TrafficPolicyNames {
+	for _, name := range bindings.PolicyNames(model.PolicyKindTrafficPolicy) {
+		reference := &extensionsv1.PolicyResourceReference{Name: name}
+		result.TrafficPolicyReferences = append(result.TrafficPolicyReferences, reference)
 		compiled := krt.FetchOne(ctx, policies.trafficPolicies, krt.FilterKey(name))
 		if compiled == nil {
 			policyErr = errors.Join(policyErr, fmt.Errorf("TrafficPolicy %q is unavailable", name))
 			continue
 		}
+		reference.Uid = compiled.Attachment.UID
 		result.addAuthorizationReferences(compiled)
 	}
-	for _, name := range result.SecurityProfileNames {
+	for _, name := range bindings.PolicyNames(model.PolicyKindSecurityProfile) {
+		reference := &extensionsv1.PolicyResourceReference{Name: name}
+		result.SecurityProfileReferences = append(result.SecurityProfileReferences, reference)
 		compiled := krt.FetchOne(ctx, policies.securityProfiles, krt.FilterKey(name))
 		if compiled == nil {
 			policyErr = errors.Join(policyErr, fmt.Errorf("SecurityProfile %q is unavailable", name))
 			continue
 		}
+		reference.Uid = compiled.Attachment.UID
 		result.appendSNI(compiled.SNIPolicy)
 	}
 	if names := bindings.PolicyNames(model.PolicyKindEgressPolicy); len(names) > 0 {

@@ -147,7 +147,8 @@ func TestRecreatedSecurityProfileWithdrawsPreviousBinding(t *testing.T) {
 	waitSynced(t, f.compiler)
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
-		return len(refs.GetResourceNames()) == 1 && refs.ResourceNames[0] == profile.ResourceName()
+		return len(refs.GetResources()) == 1 && refs.Resources[0].Name == profile.ResourceName() &&
+			refs.Resources[0].Uid == "old"
 	}, "initial SecurityProfile binding")
 	profile.UID = "replacement"
 	priority := int32(-1)
@@ -155,13 +156,14 @@ func TestRecreatedSecurityProfileWithdrawsPreviousBinding(t *testing.T) {
 	f.securityProfiles.UpdateObject(profile)
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
-		return refs != nil && len(refs.ResourceNames) == 0
+		return refs != nil && len(refs.Resources) == 0
 	}, "invalid replacement withdraws previous profile binding")
 	profile.Spec.Priority = nil
 	f.securityProfiles.UpdateObject(profile)
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(t, f.compiler, key)
-		return len(refs.GetResourceNames()) == 1 && refs.ResourceNames[0] == profile.ResourceName()
+		return len(refs.GetResources()) == 1 && refs.Resources[0].Name == profile.ResourceName() &&
+			refs.Resources[0].Uid == "replacement"
 	}, "recovered replacement restores profile binding")
 }
 

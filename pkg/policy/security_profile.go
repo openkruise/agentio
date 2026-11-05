@@ -86,6 +86,7 @@ func SecurityProfileAttachment(profile model.SecurityProfile) (*PolicyAttachment
 	attachment, err := NewPolicyAttachment(PolicyAttachment{
 		Kind:            PolicyKindSecurityProfile,
 		Name:            profile.ResourceName(),
+		UID:             profile.UID,
 		Target:          target,
 		Priority:        priority,
 		CreationTime:    profile.CreationTime,

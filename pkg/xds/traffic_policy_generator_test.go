@@ -58,7 +58,9 @@ func workloadWithTrafficRefs(t testing.TB, workload model.Resource, names ...str
 	if err := workload.Value.UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
-	reference, err := anypb.New(&extensionsv1.PolicyReference{TypeUrl: model.TrafficPolicyType, ResourceNames: names})
+	reference, err := anypb.New(
+		&extensionsv1.PolicyReference{TypeUrl: model.TrafficPolicyType, Resources: policyResources(names...)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,4 +293,12 @@ func TestNativeGatewayNamedTrafficPolicySubscriptions(t *testing.T) {
 	if err := server.finish(t, stream, done); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func policyResources(names ...string) []*extensionsv1.PolicyResourceReference {
+	resources := make([]*extensionsv1.PolicyResourceReference, 0, len(names))
+	for _, name := range names {
+		resources = append(resources, &extensionsv1.PolicyResourceReference{Name: name})
+	}
+	return resources
 }

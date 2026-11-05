@@ -46,8 +46,9 @@ func BenchmarkWorkloadPolicyProjection(b *testing.B) {
 				}}
 			}
 			compiled := policy.CompiledTrafficPolicy{CompiledPolicy: policy.CompiledPolicy[*securityv1.TrafficPolicy]{
-				Name:   "trafficPolicies/shared",
-				Policy: &securityv1.TrafficPolicy{Egress: &securityv1.TrafficPolicy_RuleSet{Rules: rules}},
+				Name:       "trafficPolicies/shared",
+				Attachment: &policy.PolicyAttachment{Name: "trafficPolicies/shared"},
+				Policy:     &securityv1.TrafficPolicy{Egress: &securityv1.TrafficPolicy_RuleSet{Rules: rules}},
 			}}
 			var err error
 			compiled.AsAuthorization, err = policy.TrafficPolicyAsAuthorizations(compiled, model.TrafficPolicy{
