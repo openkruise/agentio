@@ -100,6 +100,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_KRT_DEBOUNCE_MAX</code> | Duration | <code>1s</code> | Maximum wait for policy event distribution during continuous policy updates. |
 | <code>AGENTIO_KUBERNETES_API_BURST</code> | Integer | <code>160</code> | Client-side Kubernetes API request burst. Must be positive. |
 | <code>AGENTIO_KUBERNETES_API_QPS</code> | Floating-point | <code>80</code> | Client-side Kubernetes API requests per second. Must be finite and positive. |
+| <code>AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE</code> | String | <code>tokenreview</code> | Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings. |
 | <code>AGENTIO_LOG_FORMAT</code> | String | <code>text</code> | agentiod log encoding: text or json. |
 | <code>AGENTIO_LOG_LEVEL</code> | String | <code>info</code> | Minimum agentiod log level: debug, info, warn, error, or none. |
 | <code>AGENTIO_MAX_REQUESTS_PER_SECOND</code> | Floating-point | <code>0</code> | Maximum new xDS streams accepted per second across the process; does not throttle ACKs or server pushes. Zero automatically selects min(250 &#42; effective CPU budget, 1000); see AGENTIO&#95;XDS&#95;CPU&#95;BUDGET. |
@@ -171,6 +172,25 @@ agentiod:
 ```
 
 Longer send and ACK budgets retain slow clients and their response slots for longer; size them together with concurrency and memory limits.
+
+## Kubernetes workload authentication
+
+`AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE` selects the built-in authenticator for Kubernetes workloads at startup. The default, `tokenreview`, preserves Kubernetes TokenReview authentication and its existing successful-result cache. To enable local verification:
+
+```yaml
+agentiod:
+  kubernetesWorkloadAuthMode: local
+```
+
+The OpenKruise sandbox-manager integration exposes the same setting at `agentio.agentiod.kubernetesWorkloadAuthMode`. Changing modes requires restarting agentiod; clients continue to send their existing projected ServiceAccount tokens.
+
+In `local` mode, agentiod reads issuer discovery and `/openid/v1/jwks` using its authenticated Kubernetes client. The issuer is taken from that trusted discovery response, never from a client-supplied token. Public signing keys are cached for five minutes. A failed signature can trigger a key refresh, with refresh attempts limited to once every five seconds per replica. Refresh requests are serialized and use a five-second request timeout. After the key cache expires, failure to fetch keys rejects authentication. Discovery or initial key-loading failure prevents startup; authentication failures never fall back to TokenReview.
+
+Local authentication checks the signature, issuer, audience, expiry, and applicable `nbf`/`iat` claims, then checks Pod and ServiceAccount names, UIDs, association, and deletion state against shared informer collections. Completed or failed Pods are rejected. Initial Pod and ServiceAccount synchronization is required before authentication succeeds and before the server becomes ready. This applies to xDS, certificate issuance, and authenticated debug requests. Unbound or legacy ServiceAccount tokens that work with TokenReview are not accepted in local mode.
+
+Resource validity follows the existing informer's eventual-consistency behavior: deletion reaches authentication after the watch update is processed. A disconnected watch does not clear its cached resources, and initial synchronization is not a continuous freshness guarantee. Local mode therefore does not promise immediate revocation during watch interruptions. Authentication checks occur at connection or request admission; changing modes or deleting a Pod does not itself revoke an already issued certificate or immediately close an established stream.
+
+Local verification removes per-authentication TokenReview calls. Initial discovery, signing-key refreshes, informer list/watch traffic, and kubelet token issuance and rotation still use the Kubernetes API server. Existing TokenReview cache hits can be faster than re-verifying a JWT locally.
 
 ## Shared Secret informer
 

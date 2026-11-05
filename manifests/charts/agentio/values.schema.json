@@ -32,6 +32,10 @@
     "agentiod": {
       "type": "object",
       "properties": {
+        "kubernetesWorkloadAuthMode": {
+          "type": "string",
+          "enum": ["tokenreview", "local"]
+        },
         "replicaCount": {
           "type": "integer",
           "minimum": 1

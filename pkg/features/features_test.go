@@ -95,6 +95,13 @@ func TestValidateDomains(t *testing.T) {
 			wantErr: "token audience is required",
 		},
 		{
+			name: "Kubernetes workload authentication mode",
+			mutate: func(t *testing.T) {
+				test.SetForTest(t, &KubernetesWorkloadAuthMode, "unsupported")
+			},
+			wantErr: "unsupported Kubernetes workload authentication mode",
+		},
+		{
 			name: "gateway deployer",
 			mutate: func(t *testing.T) {
 				test.SetForTest(t, &EnableGatewayDeployer, true)
@@ -119,6 +126,14 @@ func TestValidateAllowsDisabledMaxServerConnectionAge(t *testing.T) {
 	test.SetForTest(t, &MaxServerConnectionAge, time.Duration(0))
 	if err := Validate(); err != nil {
 		t.Fatalf("Validate() rejected disabled max server connection age: %v", err)
+	}
+}
+
+func TestValidateAllowsLocalJWTAuthentication(t *testing.T) {
+	setValidFeatures(t)
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "local")
+	if err := Validate(); err != nil {
+		t.Fatalf("Validate() rejected local JWT authentication: %v", err)
 	}
 }
 
@@ -235,6 +250,7 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &WorkloadCertLifetime, 2*time.Hour)
 	test.SetForTest(t, &WorkloadCertRenewBefore, time.Hour)
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "tokenreview")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
 }
