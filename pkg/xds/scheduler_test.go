@@ -314,7 +314,7 @@ func TestSlowClientBurstConvergesFromFirstUnsentToFinalPublication(t *testing.T)
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: "workload-a",
 				NodeName:    "node-a",
-				Principal:   serviceAccountPrincipal("demo", "default"),
+				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			}},
 		)
 		if err != nil {

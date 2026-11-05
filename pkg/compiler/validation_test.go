@@ -64,15 +64,15 @@ func TestValidateDiscoveredWorkload(t *testing.T) {
 			wantErr: true,
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			workload := valid
-			if test.mutate != nil {
-				test.mutate(&workload)
+			if tc.mutate != nil {
+				tc.mutate(&workload)
 			}
 			err := validateDiscoveredWorkload(workload)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("validateDiscoveredWorkload() error = %v, wantErr %t", err, test.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateDiscoveredWorkload() error = %v, wantErr %t", err, tc.wantErr)
 			}
 		})
 	}
@@ -82,6 +82,6 @@ func validationTestWorkload(uid, sandboxUID string) model.Workload {
 	return model.Workload{
 		UID:       uid,
 		Namespace: "demo",
-		Principal: mustTestPrincipal("cluster.local", "ns/"+("demo")+"/sa/"+("client")),
+		Principal: model.MustServiceAccountPrincipal("demo", "client"),
 	}
 }

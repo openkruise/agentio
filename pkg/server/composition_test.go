@@ -166,7 +166,7 @@ func testSourceCollections(stop <-chan struct{}) SourceCollections {
 			[]model.Workload{{
 				UID:       "cluster//Pod/default/pod-1",
 				Namespace: "default",
-				Principal: mustTestPrincipal("cluster.local", "ns/"+("default")+"/sa/"+("default")),
+				Principal: model.MustServiceAccountPrincipal("default", "default"),
 			}}, options...),
 		Services: krt.NewStaticCollection[model.Service](nil,
 			[]model.Service{{Name: "default-service", Namespace: "default"}}, options...),

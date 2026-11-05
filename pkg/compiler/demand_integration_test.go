@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/registry"
@@ -91,7 +92,7 @@ func TestDemandCompletion(t *testing.T) {
 				WorkloadUID: "gateway",
 				GatewayKey:  "demo/gateway",
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: "gateway"},
-				Principal:   mustTestPrincipal("cluster.local", "ns/demo/sa/gateway"),
+				Principal:   model.MustPrincipal("cluster.local", "ns/demo/sa/gateway"),
 			}
 			observed := make(chan struct{}, 1)
 			source := observedSourceReader{SourceReader: sourceRegistry, observed: observed}
@@ -198,11 +199,11 @@ func TestDemandCompletion(t *testing.T) {
 				t.Fatalf("demand returned before publication: %v, %v", resource.Facts.SourceIdentity, found)
 			}
 			f.sandboxes.DeleteObject(sandbox.UID)
-			eventually(t, func() bool {
+			testutil.Eventually(t, func() bool {
 				_, ok := store.Snapshot().Get(key)
 				return !ok
 			}, "source deletion reaches publication")
-			eventually(
+			testutil.Eventually(
 				t,
 				func() bool { return client.Snapshot().Resources[model.SandboxType][sandbox.UID] == nil },
 				"source deletion reaches client",

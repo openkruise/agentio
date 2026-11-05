@@ -68,7 +68,7 @@ func storeBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource)
 			WorkloadUID: name,
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 			NodeName:    fmt.Sprintf("node-%03d", index%100),
-			Principal:   mustTestPrincipal("cluster.local", "ns/"+("demo")+"/sa/"+("default")),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		}}
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: name},

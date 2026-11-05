@@ -17,12 +17,14 @@ package ca
 import (
 	"fmt"
 	"testing"
+
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestSelfRequestWithoutSourceDoesNotRequireTargetAuthorization(t *testing.T) {
 	caller := peerIdentity("demo", "app")
 	caller.Kubernetes.WorkloadName, caller.Kubernetes.WorkloadUID = "", ""
-	want := serviceAccountPrincipal("demo", "app")
+	want := model.MustServiceAccountPrincipal("demo", "app")
 	authorizer := &fakeDelegatedIdentityAuthorizer{err: fmt.Errorf("instance authorization must not run")}
 	authority := certificateAuthority(t, caller, authorizer)
 	response, err := authority.CreateCertificate(t.Context(), requestWithCSR(t, want.String()))

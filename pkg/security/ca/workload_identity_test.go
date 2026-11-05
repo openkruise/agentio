@@ -41,7 +41,7 @@ import (
 var testWorkloadIdentityOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57874, 5, 1}
 
 func TestCertificateSignsAuthorizedSourceOnly(t *testing.T) {
-	principal := serviceAccountPrincipal("demo", "shared")
+	principal := model.MustServiceAccountPrincipal("demo", "shared")
 	request := requestWithCSR(t, principal.String())
 	csr, err := parseCertificateRequest(request)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestSelfRequestSourceBinding(t *testing.T) {
 				authorizer.err = errors.New("Pod binding no longer valid")
 			}
 			authority := certificateAuthority(t, caller, authorizer)
-			principal := serviceAccountPrincipal("demo", "app")
+			principal := model.MustServiceAccountPrincipal("demo", "app")
 			response, err := authority.CreateCertificate(t.Context(), requestWithCSR(t, principal.String()))
 			wantSource := tc.bound
 			wantCalls := 0

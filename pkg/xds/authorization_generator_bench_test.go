@@ -43,7 +43,7 @@ func BenchmarkAuthorizationGeneratorIncremental(b *testing.B) {
 				WorkloadUID:       uid,
 				Source:            model.SourceRef{Registry: "kubernetes/test", Key: uid},
 				NodeName:          node,
-				Principal:         serviceAccountPrincipal("demo", "default"),
+				Principal:         model.MustServiceAccountPrincipal("demo", "default"),
 				AuthorizationRefs: policies,
 			}},
 		)
@@ -107,7 +107,7 @@ func BenchmarkAuthorizationGeneratorIncremental(b *testing.B) {
 
 	dedicated := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-000",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-000"},
 	}

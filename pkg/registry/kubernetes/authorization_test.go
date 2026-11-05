@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
 
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/registry"
@@ -52,7 +53,7 @@ func TestCertificateSourceDistinguishesPodsSharingPrincipal(t *testing.T) {
 	}
 	r := newTestRegistry(t, t.Context(), []runtime.Object{a, b, remote, node}, nil)
 	authorizer := r.DelegatedIdentityAuthorizer()
-	principal := mustTestPrincipal("cluster.local", "ns/demo/sa/shared")
+	principal := model.MustServiceAccountPrincipal("demo", "shared")
 	for _, tc := range []struct {
 		name   string
 		caller *corev1.Pod
@@ -140,13 +141,13 @@ func TestDelegatedAuthorizationPreservesIdentityRules(t *testing.T) {
 		{
 			name: "target namespace mismatch",
 			mutate: func(_ *model.PeerIdentity, requested *model.Principal, _, _ *corev1.Pod) {
-				*requested = mustTestPrincipal("cluster.local", "ns/other/sa/app")
+				*requested = model.MustServiceAccountPrincipal("other", "app")
 			},
 		},
 		{
 			name: "target service account mismatch",
 			mutate: func(_ *model.PeerIdentity, requested *model.Principal, _, _ *corev1.Pod) {
-				*requested = mustTestPrincipal("cluster.local", "ns/demo/sa/other")
+				*requested = model.MustServiceAccountPrincipal("demo", "other")
 			},
 		},
 		{
@@ -181,8 +182,8 @@ func TestDelegatedAuthorizationPreservesIdentityRules(t *testing.T) {
 			},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			ztunnel := delegationPod("agentio-system", "ztunnel-abc", "ztunnel", "node-a")
 			target := delegationPod("demo", "workload", "app", "node-a")
@@ -196,9 +197,9 @@ func TestDelegatedAuthorizationPreservesIdentityRules(t *testing.T) {
 					ServiceAccount: "ztunnel",
 				},
 			}
-			requested := mustTestPrincipal("cluster.local", "ns/demo/sa/app")
-			if test.mutate != nil {
-				test.mutate(&caller, &requested, ztunnel, target)
+			requested := model.MustServiceAccountPrincipal("demo", "app")
+			if tc.mutate != nil {
+				tc.mutate(&caller, &requested, ztunnel, target)
 			}
 			r := newTestRegistry(t, ctx, []runtime.Object{ztunnel, target}, nil)
 
@@ -208,10 +209,10 @@ func TestDelegatedAuthorizationPreservesIdentityRules(t *testing.T) {
 				caller,
 				attestation.CertificateTarget{Principal: requested},
 			)
-			if test.allow && err != nil {
+			if tc.allow && err != nil {
 				t.Fatalf("Authorize denied valid delegation: %v", err)
 			}
-			if !test.allow && err == nil {
+			if !tc.allow && err == nil {
 				t.Fatal("Authorize allowed invalid delegation")
 			}
 		})
@@ -235,7 +236,7 @@ func TestGatewayCertificateAuthorizationUsesEffectiveConfiguration(t *testing.T)
 		GatewayKey:  "agentio-system/egress",
 		WorkloadUID: "test//Pod/agentio-system/gateway",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: string(member.UID)},
-		Principal:   mustTestPrincipal("cluster.local", "ns/agentio-system/sa/egress"),
+		Principal:   model.MustServiceAccountPrincipal("agentio-system", "egress"),
 	}
 
 	if err := authorizer.Authorize(scope); err != nil {
@@ -276,7 +277,7 @@ func TestGatewayCertificateAuthorizationUsesProvidedConfigurationSource(t *testi
 		GatewayKey:  "agentio-system/external-egress",
 		WorkloadUID: "test//Pod/agentio-system/gateway",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: string(member.UID)},
-		Principal:   mustTestPrincipal("cluster.local", "ns/"+("agentio-system")+"/sa/"+("external-egress")),
+		Principal:   model.MustServiceAccountPrincipal("agentio-system", "external-egress"),
 	}
 
 	if err := authorizer.Authorize(scope); err != nil {
@@ -315,7 +316,7 @@ func TestGatewayCertificateAuthorizationRequiresMatchingServiceAccount(t *testin
 				GatewayKey:  "system/egress",
 				WorkloadUID: "test//Pod/system/gateway",
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: "gateway-pod"},
-				Principal:   mustTestPrincipal("cluster.local", tc.principal),
+				Principal:   model.MustPrincipal("cluster.local", tc.principal),
 			}
 			if err := authorizer.Authorize(scope); (err == nil) != tc.allow {
 				t.Fatalf("Authorize() = %v, want allow=%v", err, tc.allow)
@@ -352,7 +353,7 @@ func TestCertificateRolesUseRegistryMembership(t *testing.T) {
 	resolve := func(p *corev1.Pod) attestation.WorkloadIdentity {
 		t.Helper()
 		result, err := auth.Authorize(t.Context(), gatewayTestPeer(p), attestation.CertificateTarget{
-			Principal: mustTestPrincipal("cluster.local", "ns/"+p.Namespace+"/sa/"+p.Spec.ServiceAccountName),
+			Principal: model.MustServiceAccountPrincipal(p.Namespace, p.Spec.ServiceAccountName),
 			Workload:  &attestation.WorkloadReference{Namespace: p.Namespace, Name: p.Name},
 		})
 		if err != nil {
@@ -366,7 +367,7 @@ func TestCertificateRolesUseRegistryMembership(t *testing.T) {
 	if role := resolve(lookalike).Role; role != "" {
 		t.Fatalf("labels granted role = %q", role)
 	}
-	eventually(
+	testutil.Eventually(
 		t,
 		func() bool { return resolve(gateway).Role == attestation.RoleEgressGateway },
 		"registered gateway role",
@@ -405,7 +406,7 @@ func TestKruiseAttesterRoleWithoutSandboxBinding(t *testing.T) {
 			)
 			identity, err := r.DelegatedIdentityAuthorizer().
 				Authorize(t.Context(), gatewayTestPeer(pod), attestation.CertificateTarget{
-					Principal: mustTestPrincipal("cluster.local", "ns/demo/sa/shared"),
+					Principal: model.MustServiceAccountPrincipal("demo", "shared"),
 					Workload:  &attestation.WorkloadReference{Namespace: pod.Namespace, Name: pod.Name},
 				})
 			if err != nil || identity.Role != tc.want {

@@ -41,7 +41,7 @@ func TestWorkloadVisibilityFollowsScopedWorkloads(t *testing.T) {
 	dedicated := newAddressSelection(
 		model.ClientScope{
 			Class:       model.ClientDedicatedZTunnel,
-			Principal:   serviceAccountPrincipal("demo", "default"),
+			Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			WorkloadUID: "uid-a",
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 		},
@@ -83,7 +83,7 @@ func TestWildcardWDSIncrementalDiffsPublicationTransitionClosure(t *testing.T) {
 	after := selectionSnapshot(t, []model.Resource{attached, service, gateway})
 	scope := model.ClientScope{
 		Class:       model.ClientDedicatedZTunnel,
-		Principal:   serviceAccountPrincipal("demo", "default"),
+		Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 		WorkloadUID: "uid-a",
 		Source:      model.SourceRef{Registry: "kubernetes/test", Key: "uid-a"},
 	}
