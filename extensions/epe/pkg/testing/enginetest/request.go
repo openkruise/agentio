@@ -18,10 +18,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 
+	"github.com/dunglas/httpsfv"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	structpb "google.golang.org/protobuf/types/known/structpb"
@@ -106,8 +106,14 @@ func (b *RequestBuilder) SandboxToken(requestID, accessToken, clientID string) *
 
 // SandboxMetadata sets the identity fields carried by current ztunnels.
 func (b *RequestBuilder) SandboxMetadata(accessToken, clientID string) *RequestBuilder {
-	b.sandboxMetadata = "agent-identity.access-token=" + url.PathEscape(accessToken) +
-		",agent-identity.sandbox-client-id=" + url.PathEscape(clientID)
+	dictionary := httpsfv.NewDictionary()
+	dictionary.Add("agent-identity.access-token", httpsfv.NewItem(accessToken))
+	dictionary.Add("agent-identity.sandbox-client-id", httpsfv.NewItem(clientID))
+	var err error
+	b.sandboxMetadata, err = httpsfv.Marshal(dictionary)
+	if err != nil {
+		panic("invalid Structured Fields sandbox metadata")
+	}
 	return b
 }
 

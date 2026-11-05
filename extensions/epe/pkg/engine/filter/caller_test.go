@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -130,18 +131,33 @@ func TestParseSandboxMetadataToken(t *testing.T) {
 		want *SandboxToken
 	}{
 		{
-			name: "ztunnel encoding",
-			raw:  "agent-identity.access-token=a%2Cb%3Bc%25%20d=+/%22%5C%0D%0A%E4%B8%AD,agent-identity.sandbox-client-id=client+/=,runtime.name=test%2Cruntime",
-			want: &SandboxToken{AccessToken: "a,b;c% d=+/\"\\\r\n中", SandboxClientID: "client+/="},
+			name: "ztunnel Structured Fields encoding",
+			raw:  `agent-identity.access-token="a,b;c% d=+/\"\\", agent-identity.sandbox-client-id="client+/=", runtime.name="test,runtime"`,
+			want: &SandboxToken{AccessToken: "a,b;c% d=+/\"\\", SandboxClientID: "client+/="},
+		},
+		{
+			name: "percent sequences remain literal and unknown values and parameters are ignored",
+			raw:  `agent-identity.access-token="a%2Cb%ZZ";version=@0, runtime.count=42, agent-identity.sandbox-client-id="client"`,
+			want: &SandboxToken{AccessToken: "a%2Cb%ZZ", SandboxClientID: "client"},
+		},
+		{
+			name: "duplicate Dictionary keys use the last value",
+			raw:  `agent-identity.access-token="first", agent-identity.access-token="last", agent-identity.sandbox-client-id="client"`,
+			want: &SandboxToken{AccessToken: "last", SandboxClientID: "client"},
 		},
 		{name: "empty"},
-		{name: "missing identity", raw: "runtime.name=test"},
-		{name: "missing client", raw: "agent-identity.access-token=token"},
-		{name: "missing token", raw: "agent-identity.sandbox-client-id=client"},
-		{name: "empty token", raw: "agent-identity.access-token=,agent-identity.sandbox-client-id=client"},
-		{name: "malformed entry", raw: "token,agent-identity.sandbox-client-id=client"},
-		{name: "invalid escape", raw: "agent-identity.access-token=token%ZZ,agent-identity.sandbox-client-id=client"},
-		{name: "duplicate identity", raw: "agent-identity.access-token=a,agent-identity.access-token=b,agent-identity.sandbox-client-id=client"},
+		{name: "missing identity", raw: `runtime.name="test"`},
+		{name: "missing client", raw: `agent-identity.access-token="token"`},
+		{name: "missing token", raw: `agent-identity.sandbox-client-id="client"`},
+		{name: "empty token", raw: `agent-identity.access-token="", agent-identity.sandbox-client-id="client"`},
+		{name: "wrong type", raw: `agent-identity.access-token=token, agent-identity.sandbox-client-id="client"`},
+		{name: "inner list", raw: `agent-identity.access-token=("token"), agent-identity.sandbox-client-id="client"`},
+		{name: "malformed entry", raw: `token, agent-identity.sandbox-client-id="client"`},
+		{name: "invalid escape", raw: `agent-identity.access-token="token\n", agent-identity.sandbox-client-id="client"`},
+		{name: "legacy KV is not accepted", raw: "agent-identity.access-token=token,agent-identity.sandbox-client-id=client"},
+		{name: "JSON is not accepted", raw: `{"agent-identity.access-token":"token","agent-identity.sandbox-client-id":"client"}`},
+		{name: "non ASCII", raw: `agent-identity.access-token="中", agent-identity.sandbox-client-id="client"`},
+		{name: "oversized", raw: strings.Repeat("x", 8193)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			token := NewSandboxMetadataToken(tc.raw)
