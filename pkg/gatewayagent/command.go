@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -145,11 +144,6 @@ func writeJSON(w io.Writer, value any) error {
 }
 
 func effectiveConfig(c Config) map[string]any {
-	// Custom metadata may carry credentials; never include its values in diagnostics.
-	metadata := maps.Clone(c.Metadata)
-	for k := range metadata {
-		metadata[k] = "<redacted>"
-	}
 	advanced := c.AdvancedOptions
 	for target, source := range map[*map[string]string]map[string]string{&advanced.XDSHeaders: c.XDSHeaders, &advanced.CAHeaders: c.CAHeaders} {
 		values := map[string]string{}
@@ -184,7 +178,7 @@ func effectiveConfig(c Config) map[string]any {
 			EnvoyLogLevel:               c.LogLevel,
 			EnvoyComponentLogLevel:      c.ComponentLogLevel,
 			LogAsJSON:                   c.LogAsJSON,
-			Metadata:                    metadata,
+			Metadata:                    c.Metadata,
 		},
 	}
 }
