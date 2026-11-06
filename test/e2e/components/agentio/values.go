@@ -86,7 +86,7 @@ func chartValues(config Config) ([]byte, error) {
 			},
 		},
 		"egressGateway": map[string]any{
-			"mode":                "static",
+			"enabled":             true,
 			"nameOverride":        "egress-gateway",
 			"image":               gatewayImage,
 			"replicaCount":        1,
@@ -126,18 +126,13 @@ func chartValues(config Config) ([]byte, error) {
 		values["cni"] = map[string]any{"image": cniImage}
 	}
 	if config.GatewayDataplane == "agentgateway" {
+		values["agentiod"].(map[string]any)["gatewayDeployer"] = map[string]any{"enabled": true}
 		values["egressGateway"] = map[string]any{
-			"mode":       "gatewayAPI",
-			"porter":     map[string]any{"image": porterImage},
-			"gatewayAPI": map[string]any{"create": false},
+			"enabled": false,
+			"porter":  map[string]any{"image": porterImage},
 			"agentgateway": map[string]any{
-				"image":        config.GatewayImage,
-				"ca":           map[string]any{"enabled": true},
-				"replicaCount": 1,
-				"resources": map[string]any{
-					"requests": map[string]any{"cpu": "100m", "memory": "128Mi"},
-					"limits":   map[string]any{"cpu": "1", "memory": "512Mi"},
-				},
+				"image": config.GatewayImage,
+				"ca":    map[string]any{"enabled": true},
 			},
 		}
 	}

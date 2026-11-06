@@ -88,10 +88,7 @@ spec:
       topologySpreadConstraints: {{ toJson . }}
       {{- end }}
       {{- with .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-      {{- range . }}
-      - name: {{ . | quote }}
-      {{- end }}
+      imagePullSecrets: {{ toJson . }}
       {{- end }}
       securityContext:
         runAsNonRoot: true

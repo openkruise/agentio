@@ -2,21 +2,20 @@
 
 Use this integration when OpenKruise Agents creates a workload as a `Sandbox`. A Sandbox is an OpenKruise Sandbox workload, the unit of identity and policy in Agentio. Agentio watches the Sandbox and its controller-owned Pod, derives a stable Sandbox identity, and attaches Agentio policy to that identity.
 
-This integration changes the workload source; it is not a third Agentio data-plane profile. Install Agentio with either the ambient or sidecar profile required by your runtime distribution.
+This guide uses Agentio embedded in sandbox-manager, with traffic-proxy injection owned by sandbox-controller. It is an alternative to the standalone sidecar/ambient installation.
 
 ## Before you begin
 
 You need:
 
-- Agentio installed by following [Getting started](../getting-started.md);
 - OpenKruise Agents and the `sandboxes.agents.kruise.io` CRD installed;
-- a runtime integration that enrolls the Sandbox Pod in the selected Agentio data plane.
+- Helm and `kubectl` configured for the cluster;
+- the sandbox-manager and sandbox-controller charts with the Agentio integration bundle.
 
-Verify the API and control plane:
+Verify the API:
 
 ```console
 $ kubectl get crd sandboxes.agents.kruise.io
-$ kubectl rollout status deployment/agentiod --namespace agentio-system --timeout=5m
 ```
 
 ## Install the chart integration
@@ -30,6 +29,29 @@ the controller supplies the `traffic-proxy` runtime injection configuration.
 For this installation, configure bootstrap addresses, the token audience, and the
 workload CA bundle consistently in both releases. The default workload bundle is
 `agentio-ca-root-cert`, and the token audience is `agentio-ca`.
+
+Enable `agentio.sandbox.enabled: true` in both releases. In the manager's existing values file, enable Agentio, a static gateway and managed EPE:
+
+```yaml
+agentio:
+  enabled: true
+  sandbox:
+    enabled: true
+  global:
+    namespace: sandbox-system
+  egressGateway:
+    enabled: true
+  epe:
+    mode: managed
+```
+
+Keep the rest of the manager settings in that file. Upgrade the existing sandbox-manager release with it; do not install a standalone Agentio release for this path. Verify the default control-plane namespace:
+
+```console
+$ kubectl rollout status deployment/agentiod --namespace sandbox-system --timeout=5m
+$ kubectl rollout status deployment/agentio-egress --namespace sandbox-system --timeout=5m
+$ kubectl rollout status deployment/agentio-epe --namespace sandbox-system --timeout=5m
+```
 
 ## Understand the identity boundary
 
@@ -87,18 +109,56 @@ $ AGENTIO_WORKLOAD_POD=$(kubectl get pod --namespace "$AGENTIO_DEMO_NAMESPACE" -
 $ test -n "$AGENTIO_WORKLOAD_POD"
 ```
 
-Follow [Route traffic through an egress gateway](../tasks/route-traffic-through-egress-gateway.md), then [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md). Policy selectors use the Sandbox's effective labels; protected internal labels from an unrelated Pod are not allowed to replace Sandbox-owned identity.
+The integrated manager generates a catch-all route through its static gateway. Verify a real request from the Sandbox:
+
+```console
+$ kubectl exec "$AGENTIO_WORKLOAD_POD" \
+    --namespace "$AGENTIO_DEMO_NAMESPACE" \
+    --container "$AGENTIO_WORKLOAD_CONTAINER" -- \
+    curl --fail --silent --show-error --head http://www.example.com
+```
+
+To route only the demo destination, set this in the manager's existing values file. It replaces the generated catch-all route:
+
+```yaml
+agentio:
+  agentiod:
+    config:
+      values:
+        egressPolicies:
+        - namespaces: [agentio-agents-demo]
+          matchHosts: [www.example.com]
+          policy: GATEWAY
+          gateway:
+            service: agentio-egress.sandbox-system.svc.cluster.local
+        - namespaces: [agentio-agents-demo]
+          policy: PASSTHROUGH
+```
+
+Use your actual manager release, release namespace and integrated chart path. For example, for a release named `sandbox-manager` installed in `sandbox-system`:
+
+```bash
+helm upgrade sandbox-manager \
+  "$CHARTS_REPO/versions/kruise-agents-sandbox-manager/next" \
+  --namespace sandbox-system --values values-manager.yaml --wait
+kubectl get configmap agentio-config agentio-config-primary \
+  --namespace sandbox-system --ignore-not-found --output yaml
+```
+
+Adjust the gateway address if you customized its name, Agentio namespace or cluster domain. An existing primary ConfigMap still takes precedence over the Helm-managed base.
+
+Continue with [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md). For request policy, managed EPE is already enabled above; use [Apply a minimal profile](../getting-started/epe.md#apply-a-minimal-profile) and its request verification. Skip the standalone Helm enable/disable commands on that page. Policy selectors use the Sandbox's effective labels; protected internal labels from an unrelated Pod cannot replace Sandbox-owned identity.
 
 ## Clean up
 
-Complete the cleanup sections in the shared tasks, then delete the Sandbox and namespace:
+Delete sample TrafficPolicy/SecurityProfile resources using their task cleanup commands, then delete the Sandbox and namespace:
 
 ```console
 $ kubectl delete sandbox agentio-sample --namespace agentio-agents-demo
 $ kubectl delete namespace agentio-agents-demo
 ```
 
-Do not remove the shared OpenKruise Agents installation or runtime configuration as part of this sample cleanup.
+Restore any demo route changes in the manager's values file and upgrade that same release. Keep the shared gateway and EPE enabled if other Sandboxes use them. Do not run the standalone Agentio Helm cleanup commands for this installation.
 
 ## See also
 

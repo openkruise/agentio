@@ -27,7 +27,7 @@ agentiod:
     values:
       egressPolicies: [{policy: PASSTHROUGH}]
 egressGateway:
-  mode: static
+  enabled: true
   fullnameOverride: egress-gateway
   replicaCount: 2
   autoscaling: {enabled: false}

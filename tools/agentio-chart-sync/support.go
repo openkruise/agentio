@@ -126,7 +126,7 @@ func addIntegrationEgressDefault(templates string) error {
 }
 
 const integrationEgressDefault = `{{/* BEGIN INTEGRATION EGRESS DEFAULT */}}
-{{- if and (eq .Values.agentio.egressGateway.mode "static") (not (hasKey (.Values.agentio.agentiod.config.values | default dict) "egressPolicies")) -}}
+{{- if and .Values.agentio.egressGateway.enabled (not (hasKey (.Values.agentio.agentiod.config.values | default dict) "egressPolicies")) -}}
 {{- $service := printf "%s.%s.svc.%s" (include "agentio.gateway.fullname" .) (include "agentio.namespace" .) .Values.agentio.global.clusterDomain -}}
 {{- $_ := set $defaults "egressPolicies" (list (dict "policy" "GATEWAY" "gateway" (dict "service" $service))) -}}
 {{- end -}}

@@ -15,6 +15,7 @@
 package charts_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,42 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/config"
 )
+
+func TestStaticGatewayServiceAccountIdentity(t *testing.T) {
+	for _, create := range []string{"true", "false"} {
+		t.Run("create="+create, func(t *testing.T) {
+			manifest := renderAgentio(t, "--set",
+				"egressGateway.enabled=true,egressGateway.fullnameOverride=custom-egress",
+				"--set", "egressGateway.serviceAccount.name=custom-egress,egressGateway.serviceAccount.create="+create,
+			)
+			requireContains(t, manifest, "serviceAccountName: custom-egress")
+			created := slices.Contains(objectNamesByKind(t, manifest, "ServiceAccount"), "custom-egress")
+			if created != (create == "true") {
+				t.Fatalf("ServiceAccount created=%t, create=%s", created, create)
+			}
+			for document := range strings.SplitSeq(manifest, "\n---") {
+				var cm corev1.ConfigMap
+				if err := yaml.Unmarshal([]byte(document), &cm); err != nil {
+					t.Fatal(err)
+				}
+				if cm.Kind != "ConfigMap" || cm.Name != "agentio-config" {
+					continue
+				}
+				decoded, err := config.Apply(cm.Data["config"], &configv1.AgentioConfig{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				gateways := decoded.GetEgressGateways()
+				if len(gateways) != 1 || gateways[0].GetName() != "custom-egress" ||
+					gateways[0].GetNamespace() != "agentio-system" {
+					t.Fatalf("gateway registration does not match the Pod account: %v", gateways)
+				}
+				return
+			}
+			t.Fatal("missing Agentio configuration")
+		})
+	}
+}
 
 func TestExtProcServiceReferenceRendering(t *testing.T) {
 	for _, tc := range []struct {

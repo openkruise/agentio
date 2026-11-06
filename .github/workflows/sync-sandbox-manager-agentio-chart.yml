@@ -90,7 +90,7 @@ jobs:
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
             --pattern "agentio-${VERSION}-bom.json" --dir "$RUNNER_TEMP/released-agentio"
           bom="$RUNNER_TEMP/released-agentio/agentio-${VERSION}-bom.json"
-          jq -e --arg version "$VERSION" '.version == $version and (.images | length == 6)' "$bom" >/dev/null
+          jq -e --arg version "$VERSION" '.version == $version and (.images | keys == ["agentiod", "cni", "epe", "gateway", "porter", "proxyInit", "ztunnel"])' "$bom" >/dev/null
           jq -er '.images[]' "$bom" > "$RUNNER_TEMP/released-agentio/images"
           while IFS= read -r source; do
             if [[ ! "$source" =~ ^docker\.io/openkruise/[a-z0-9-]+@sha256:[0-9a-f]{64}$ ]]; then

@@ -56,18 +56,18 @@ agentio:
     namespace: sandbox-system
     createNamespace: true
   egressGateway:
-    mode: static
+    enabled: true
   epe:
     mode: managed
     credentialProvider:
       url: https://credentials.example.com
 ```
 
-When Agentio is enabled, the gateway defaults to `static` and EPE to `managed`. A catch-all egress policy routes outbound traffic to the integrated gateway. Explicit `agentio.agentiod.config.values.egressPolicies` replace that default (including an empty list); custom gateway names, namespaces, and cluster domains are reflected in the generated Service address. Setting the gateway mode to `disabled` suppresses the generated gateway route. Existing `agentio-config-primary` routing overrides still take precedence. The Agentio namespace defaults to `sandbox-system`, independently of the manager's Helm release namespace. The chart creates and retains that namespace unless `agentio.global.createNamespace` is false or it is already the release namespace. The four policy CRDs always render, even when `agentio.enabled` is false, and carry `helm.sh/resource-policy: keep` to preserve policies on uninstall.
+When Agentio is enabled, the Helm-managed gateway is enabled by default and EPE defaults to `managed`. A catch-all egress policy routes outbound traffic to the integrated gateway. Explicit `agentio.agentiod.config.values.egressPolicies` replace that default (including an empty list); custom gateway names, namespaces, and cluster domains are reflected in the generated Service address. Setting `agentio.egressGateway.enabled: false` suppresses the generated gateway route. Existing `agentio-config-primary` routing overrides still take precedence. The Agentio namespace defaults to `sandbox-system`, independently of the manager's Helm release namespace. The chart creates and retains that namespace unless `agentio.global.createNamespace` is false or it is already the release namespace. The four policy CRDs always render, even when `agentio.enabled` is false, and carry `helm.sh/resource-policy: keep` to preserve policies on uninstall.
 
-The manager bundle omits the standalone `profile`, CNI, node ztunnel, admission webhook, and application client-trust injection settings. Sandbox injection is owned by sandbox-controller. The manager does not provide an injector ConfigMap, injector values, or gateway injection template files. Admission injection, application client-trust injection, and the gateway deployer are disabled by default. The Kruise integration does not include agentgateway templates or settings.
+The manager bundle omits the standalone `profile`, CNI, node ztunnel, admission webhook, and application client-trust injection settings. Sandbox injection is owned by sandbox-controller. The manager does not provide an injector ConfigMap, injector values, or gateway injection template files. Admission injection, application client-trust injection, and the gateway deployer are disabled by default. The Kruise integration does not include agentgateway templates or settings. Keep manager deployment and routing settings in its values file under `agentio.*`; use the manager release for upgrades. The standalone tasks' `helm upgrade agentio -n agentio-system` commands target a different installation.
 
-Static gateway mode works without injector configuration. Explicitly selecting `gatewayAPI` enables Agentiod's gateway deployer and requires an externally managed gateway template ConfigMap; this bundle does not install one. Its default name is `agentio-sidecar-injector`; an existing ConfigMap with another name can be selected through `agentio.agentiod.env.AGENTIO_INJECTOR_CONFIGMAP_NAME`.
+Static gateway mode works without injector configuration. Setting `agentio.agentiod.gatewayDeployer.enabled: true` enables Agentiod's gateway deployer and requires an externally managed gateway template ConfigMap; this bundle does not install one. Its default name is `agentio-sidecar-injector`; an existing ConfigMap with another name can be selected through `agentio.agentiod.env.AGENTIO_INJECTOR_CONFIGMAP_NAME`.
 
 Configure the sandbox-controller release separately when changing bootstrap settings in the manager:
 
@@ -101,14 +101,14 @@ The generated manager configuration follows master's values API. Update existing
 | `agentio.agentiod.replicas` | `agentio.agentiod.replicaCount` |
 | `agentio.epe.enabled: true` | `agentio.epe.mode: managed` |
 | `agentio.epe.replicas` | `agentio.epe.replicaCount` |
-| `agentio.egressGateway.gateways: [{name: my-egress}]` | `agentio.egressGateway.mode: static` and `fullnameOverride: my-egress` |
+| `agentio.egressGateway.gateways: [{name: my-egress}]` | `agentio.egressGateway.enabled: true` and `fullnameOverride: my-egress` |
 | `agentio.egressGateway.replicas` | `agentio.egressGateway.replicaCount` |
 | Component `image.hub` and `image.name` | `image.repository`, with `image.tag` or `image.digest` |
 | `agentio.global.meshInternalTrafficPolicy` | `agentio.agentiod.meshInternalTrafficPolicy` |
 | `agentio.agentioConfig` | `agentio.agentiod.config.values` |
 | `agentio.sniTrafficPolicy.enabled` | `agentio.agentiod.enableSNITrafficPolicy` |
 
-Master renders one static gateway per release. For multiple controller-managed gateways, select `gatewayAPI` and manage the Gateway resources separately. The mesh-internal traffic policy now defaults to `PEER_AWARE`; set `agentio.agentiod.meshInternalTrafficPolicy: PASSTHROUGH` explicitly if the installation still needs the release-0.1 default.
+Master renders one static gateway per release. For multiple controller-managed gateways, enable `agentio.agentiod.gatewayDeployer.enabled` and manage the Gateway resources separately. The mesh-internal traffic policy now defaults to `PEER_AWARE`; set `agentio.agentiod.meshInternalTrafficPolicy: PASSTHROUGH` explicitly if the installation still needs the release-0.1 default.
 
 The control-plane image is `agentiod` and its configuration uses `AGENTIO_*` environment variables. Legacy pilot environment overrides and `meshConfig` settings require migration to master's supported Agentio configuration; they are not translated automatically. Use the generated values and [chart guide](README.md) for the complete available configuration.
 
@@ -116,6 +116,6 @@ The workload trust bundle is now `agentio-ca-root-cert`, separate from the contr
 
 ## Release and downstream synchronization
 
-`tools/prepare-release-chart.sh` pins the standalone chart's images first, then rebuilds and verifies the embedded integrations. Both controller images retain the exact ztunnel and proxy-init digests used by the standalone sidecar injector. The release workflow packages this prepared chart without rebuilding it and publishes matching version tags for all six images, including external dependencies. The standalone chart remains digest-pinned; downstream `apply` converts its image defaults to the fixed release tag. For older releases, run `agentio-dependency-tags` first if dependency version tags are missing.
+`tools/prepare-release-chart.sh` pins the standalone chart's images first, then rebuilds and verifies the embedded integrations. Both controller images retain the exact ztunnel and proxy-init digests used by the standalone sidecar injector. The release workflow packages this prepared chart without rebuilding it and publishes matching version tags for all seven images, including external dependencies. The standalone chart remains digest-pinned; downstream `apply` converts its image defaults to the fixed release tag. For older releases, run `agentio-dependency-tags` first if dependency version tags are missing.
 
 The `sync-sandbox-manager-agentio-chart` workflow can be dispatched with a published chart version. It pulls the OCI chart, checks that all version tags match the published BOM digests, verifies and applies its bundled integration, lints and renders the downstream charts, and opens a pull request in `openkruise/charts`. It requires the existing release environment's `AGENTIO_SYNC_APP_CLIENT_ID` variable and `AGENTIO_SYNC_APP_PRIVATE_KEY` secret. The corresponding GitHub App must be installed for `openkruise/charts` with Contents and Pull requests write access. A 404 while looking up the repository installation means this access is missing or the configured App is incorrect; rerunning the workflow alone cannot resolve it.

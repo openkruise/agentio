@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 kind load docker-image --name "$cluster" "$gateway_image" "$porter_image"
 helm template porter-shutdown manifests/charts/agentio --namespace porter-shutdown \
-  --set egressGateway.mode=static --show-only templates/gateway/deployment.yaml \
+  --set egressGateway.enabled=true --show-only templates/gateway/deployment.yaml \
   > "$artifacts/deployment.yaml"
 arch=$(docker exec "$node" uname -m)
 case "$arch" in

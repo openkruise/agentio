@@ -82,10 +82,12 @@ func TestPolicyDebounceDoesNotDelayIdentityAndNetworking(t *testing.T) {
 	}
 
 	client.Run(ctx.Done())
-	// Establish the empty policy subscription before creating the Sandbox, so
-	// this exercises update distribution rather than initial snapshot replay.
+	// Sync both sources before creating the Sandbox: the fake tracker cannot
+	// replay an event sent between the Sandbox informer's initial list and watch.
 	if err := wait.PollUntilContextTimeout(ctx, time.Millisecond, 3*time.Second, true,
-		func(context.Context) (bool, error) { return registry.SecurityProfiles.HasSynced(), nil }); err != nil {
+		func(context.Context) (bool, error) {
+			return registry.SecurityProfiles.HasSynced() && registry.Sandboxes.HasSynced(), nil
+		}); err != nil {
 		t.Fatal(err)
 	}
 	policyEvents := make(chan struct{}, 1)

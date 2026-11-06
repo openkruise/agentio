@@ -51,6 +51,7 @@ var workloadCAKeys = casecret.Keys{Certificate: caCertKey, PrivateKey: caKeyKey,
 
 type AuthorityOptions struct {
 	TrustDomain   string
+	ClusterDomain string
 	Namespace     string
 	SecretName    string
 	ConfigMapName string
@@ -101,6 +102,9 @@ func applyAuthorityDefaults(options *AuthorityOptions) {
 	}
 	if options.ServiceName == "" {
 		options.ServiceName = "agentiod"
+	}
+	if options.ClusterDomain == "" {
+		options.ClusterDomain = "cluster.local"
 	}
 	if options.LeafLifetime <= 0 {
 		options.LeafLifetime = 24 * time.Hour
@@ -159,7 +163,7 @@ func LoadOrCreateAuthority(
 		options.ServiceName,
 		options.ServiceName + "." + options.Namespace,
 		options.ServiceName + "." + options.Namespace + ".svc",
-		options.ServiceName + "." + options.Namespace + ".svc.cluster.local",
+		options.ServiceName + "." + options.Namespace + ".svc." + options.ClusterDomain,
 		"localhost",
 	}
 	authority.serverNames = serverNames

@@ -223,8 +223,7 @@ jobs:
           helm template agentio "$CHART_DIR" --set profile=ambient >"$render_dir/ambient.yaml"
           helm template agentio "$CHART_DIR" --set profile=sidecar >"$render_dir/sidecar.yaml"
           helm template agentio "$CHART_DIR" \
-            --set egressGateway.mode=gatewayAPI \
-            --set egressGateway.gatewayAPI.create=true \
+            --set agentiod.gatewayDeployer.enabled=true \
             --set epe.mode=managed >"$render_dir/gateway-epe.yaml"
           for image in \
             "$AGENTIOD_IMAGE" "$EPE_IMAGE" "$PORTER_IMAGE" "$ZTUNNEL_IMAGE" \

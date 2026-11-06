@@ -79,9 +79,9 @@ sed -i.bak \
 		-e "/^egressGateway:/,/^epe:/ s|^    repository:.*$|    repository: \"${gateway_repository}\"|" \
 		-e "/^egressGateway:/,/^epe:/ s/^    tag: .*$/    tag: \"\"/" \
 		-e "/^egressGateway:/,/^epe:/ s|^    digest:.*$|    digest: \"${gateway_digest}\"|" \
-		-e "/^  porter:/,/^  agentgateway:/ s|^      repository:.*$|      repository: \"${porter_repository}\"|" \
-		-e "/^  porter:/,/^  agentgateway:/ s/^      tag: .*$/      tag: \"\"/" \
-		-e "/^  porter:/,/^  agentgateway:/ s|^      digest:.*$|      digest: \"${porter_digest}\"|" \
+		-e "/^  porter:/,/^  [^[:space:]]/ s|^      repository:.*$|      repository: \"${porter_repository}\"|" \
+		-e "/^  porter:/,/^  [^[:space:]]/ s/^      tag: .*$/      tag: \"\"/" \
+		-e "/^  porter:/,/^  [^[:space:]]/ s|^      digest:.*$|      digest: \"${porter_digest}\"|" \
 		-e "/^epe:/,$ s|^    repository:.*$|    repository: \"${epe_repository}\"|" \
 		-e "/^epe:/,$ s/^    tag: .*$/    tag: \"\"/" \
 		-e "/^epe:/,$ s|^    digest:.*$|    digest: \"${epe_digest}\"|" \

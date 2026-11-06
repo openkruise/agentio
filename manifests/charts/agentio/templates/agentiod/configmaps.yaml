@@ -2,7 +2,7 @@
 {{- if eq .Values.epe.mode "managed" -}}
 {{- $_ := set $defaults "trustedEPEIdentities" (list (printf "spiffe://%s/ns/%s/sa/%s" .Values.global.trustDomain .Release.Namespace (include "epe.serviceAccountName" .))) -}}
 {{- end -}}
-{{- if eq .Values.egressGateway.mode "static" -}}
+{{- if .Values.egressGateway.enabled -}}
 {{- $gateway := dict "name" (include "gateway.fullname" .) "namespace" .Release.Namespace -}}
 {{- $_ := set $defaults "egressGateways" (list $gateway) -}}
 {{- end -}}

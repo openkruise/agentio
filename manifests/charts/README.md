@@ -1,6 +1,6 @@
 # Agentio Helm chart
 
-Agentio is installed as one Helm release. The `profile` value selects the data plane, while egress gateway and EPE use explicit modes.
+Agentio is installed as one Helm release. The `profile` value selects the data plane, with independent Helm-managed gateway and Gateway controller switches; EPE uses an explicit mode.
 
 **Sidecar mode is the default and recommended deployment mode. Ambient mode is in Alpha and does not yet have full feature parity with sidecar mode.** Keep the selected profile in your values file:
 
@@ -11,16 +11,45 @@ sandbox:
   enabled: false # ordinary Workloads by default; true requires sidecar
 
 egressGateway:
-  mode: disabled # disabled | static | gatewayAPI
+  enabled: false # Helm-managed Envoy gateway
+
+agentiod:
+  gatewayDeployer:
+    enabled: false # Users create Gateway objects separately
 
 epe:
   mode: disabled # disabled | managed | external
 ```
 
+## Choose the installation and configuration entry point
+
+For a standalone installation, start with sidecar mode and keep deployment settings in one values file. Enable a static gateway when egress routing is needed, then managed EPE when request policy is needed. Use that same file for upgrades:
+
+```bash
+cp manifests/charts/examples/complete-values.yaml values-prod.yaml
+helm upgrade --install agentio manifests/charts/agentio \
+  -n agentio-system --create-namespace \
+  -f values-prod.yaml --atomic --wait
+```
+
+For the embedded OpenKruise installation, start with [OpenKruise chart integration](OPENKRUISE.md) instead. Agentio belongs to the sandbox-manager release, uses the `agentio.*` values prefix, and defaults to the `sandbox-system` namespace. Sandbox-controller owns traffic-proxy injection in a separate release.
+
+| What to configure | Entry point | How changes take effect |
+| --- | --- | --- |
+| Components, images, resources and scheduling | Helm `profile`, `sandbox`, `global`, `agentiod`, `cni`, `ztunnel`, `egressGateway`, `epe` | Helm upgrade; Pod template changes roll out managed workloads. Existing injected Pods need recreation. |
+| Egress routes, gateway policy and external processors | `agentiod.config.values` | Helm writes the base ConfigMap; Agentiod watches and distributes valid changes. |
+| Operations-owned Agentio policy overrides | `agentio-config-primary` ConfigMap | Watched; overrides the Helm-managed base. Use only when another owner needs an override. |
+| EPE extension providers | `epe.config` | Helm writes EPE's base ConfigMap; EPE watches it and its externally managed primary overlay. |
+| Gateway agent process settings | Shared `egressGateway.agentConfig`; per-Gateway agent-config annotation | Both Envoy deployment paths use these defaults; annotations override them. See [Gateway agent configuration](../../docs/reference/gateway-agent-configuration.md). |
+| Envoy patches and telemetry | `agentiod.config.sources` | Separate watched Kubernetes document stream; see [Envoy patches](../../docs/reference/envoy-patches.md). |
+| Advanced process options | Component `env` maps | Pod rollout. Prefer named Helm settings when available; explicit env entries override generated entries. |
+
+The policy layers have different merge rules: Helm deep-merges `agentiod.config.values` over generated maps; the runtime primary ConfigMap replaces supplied messages and lists. EPE merges providers by name. See [Agentio configuration](../../docs/reference/agentio-configuration.md#configuration-sources-and-precedence) and [EPE configuration](../../docs/reference/epe-configuration.md) before adding an overlay.
+
 ## Prerequisites
 
 - Kubernetes and Helm 3.6 or later (Helm 4 is supported).
-- Install the [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api) before selecting `egressGateway.mode=gatewayAPI`.
+- Install the [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api) before selecting `agentiod.gatewayDeployer.enabled=true`.
 - Install the [Kruise Agents API](https://github.com/openkruise/agents-api) `sandboxes.agents.kruise.io` CRD before using Sandbox-backed policy.
 
 The chart installs the four Agentio policy CRDs. Helm retains resources from the chart's `crds/` directory when the release is uninstalled.
@@ -114,11 +143,11 @@ kubectl rollout restart deployment -n demo
 
 ## Egress gateway
 
-The default mode is disabled. Static mode renders one gateway workload in the same release:
+`egressGateway.enabled` defaults to `false`. Enabling it lets Helm own one static Envoy gateway workload in this release:
 
 ```yaml
 egressGateway:
-  mode: static
+  enabled: true
   replicaCount: 2
 ```
 
@@ -128,22 +157,95 @@ helm upgrade --install agentio manifests/charts/agentio \
   -f values-prod.yaml --atomic --wait
 ```
 
-Gateway API mode enables the `agentiod` Gateway Deployer. It can either watch Gateway objects managed elsewhere or create one Gateway from chart values:
+`agentiod.gatewayDeployer.enabled` independently enables the Gateway controller:
 
 ```yaml
-egressGateway:
-  mode: gatewayAPI
-  gatewayAPI:
-    create: true
-    name: agentio-egress
-    gatewayClassName: agentio-egress
-    listeners:
-      - name: mesh
-        port: 15008
-        protocol: HBONE
+agentiod:
+  gatewayDeployer:
+    enabled: true
 ```
 
-This mode requires the external Gateway API CRDs. The controller creates and accepts the built-in `agentio-egress` GatewayClass.
+Install the external Gateway API CRDs, then create Gateways separately using
+[the standalone example](examples/egress-gateway.yaml):
+
+```bash
+kubectl apply -f manifests/charts/examples/egress-gateway.yaml
+kubectl wait -n agentio-system gateway/agentio-api-egress \
+  --for=condition=Programmed --timeout=2m
+```
+
+The controller creates the built-in GatewayClasses and each Gateway's workloads.
+The chart does not create or delete user Gateways or routes. Keep them in your
+application chart or GitOps repository. To use a different namespace, edit the
+example's namespace before applying it. Creating the Gateway alone does not
+configure application traffic to use it; follow [egress routing](../../docs/tasks/route-traffic-through-egress-gateway.md).
+
+### Gateway setting scope
+
+Both switches can be enabled together. Use different names for Helm-managed and
+controller-created gateways in the same namespace.
+
+| Entry | Owns |
+| --- | --- |
+| `egressGateway.image`, `.resources`, `.agentConfig`, `.terminationGracePeriodSeconds` and scheduling fields | Shared defaults for Helm-managed and Gateway API Envoy gateways |
+| `egressGateway.porter` | Shared Porter image/cache/resources for both Envoy paths and identity-enabled native gateways |
+| `egressGateway.agentgateway` | Native image and CA bootstrap |
+| `egressGateway.enabled` | Whether Helm creates its own gateway workload; common defaults remain effective when false |
+| `egressGateway` name, replicas, Service/ServiceAccount, token audience, RBAC, HPA/PDB, NetworkPolicy, env, Pod metadata and statistics CLI fields | Helm-managed gateway only |
+| `agentiod.gatewayDeployer` | Controller enablement and leader lease only |
+| User GatewayClass defaults and Gateway parametersRef | Dynamic workload customizations applied after shared defaults |
+| User Gateway agent-config annotation | Per-Gateway override of shared Envoy agent settings |
+| `global.imagePullSecrets` | Pull secrets for both paths; the Secrets must exist in each workload namespace |
+
+Configure a Gateway API Envoy gateway through the same entry point, while leaving
+Helm-managed deployment disabled:
+
+```yaml
+agentiod:
+  gatewayDeployer:
+    enabled: true
+egressGateway:
+  enabled: false
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+  nodeSelector:
+    pool: gateways
+```
+
+The common Envoy defaults apply to both deployment paths. Use [resource patches](../../docs/tasks/customize-gateway-resources.md)
+for differences between dynamic gateways or GatewayClass defaults. Envoy defaults
+request `500m` CPU and `512Mi` memory with no limits. Native main-container
+defaults request `100m` and `128Mi`, with limits of `2` CPU and `1Gi`, independent
+of Envoy settings. Both initially use a 30-second shutdown budget. Manage Gateway
+API NetworkPolicies separately. Generated token audiences follow
+`agentiod.tokenAudience`. Native file configuration comes from `parametersRef`.
+
+CA ConfigMap mounts follow `agentiod.ca.configMapName`, falling back to `global.caCertConfigMap`. The trusted node account follows the deployed ztunnel ServiceAccount unless `agentiod.trustedNodeServiceAccount` is explicitly set.
+
+Static gateway identity uses its ServiceAccount name. To reuse an existing
+account, set `egressGateway.serviceAccount.create: false` and set
+`egressGateway.fullnameOverride` to that account's name. An explicit
+`egressGateway.serviceAccount.name` must match the gateway name; mismatches are
+rejected before installation.
+
+### Migrate existing gateway values
+
+| Previous field | New field or owner |
+| --- | --- |
+| `egressGateway.mode: static` | `egressGateway.enabled: true` |
+| `egressGateway.mode: gatewayAPI` or `gatewayAPI.enabled` | `agentiod.gatewayDeployer.enabled: true` |
+| `egressGateway.mode: disabled` | Leave both switches `false` |
+| `egressGateway.gatewayAPI.*` or `gatewayAPI.gateway.*` | User-owned Gateway YAML |
+| Gateway API backend settings under `gatewayAPI` or `agentiod.gatewayDeployer` | Shared `egressGateway.image`, `.porter`, `.agentgateway` |
+| Gateway API Envoy resources/scheduling/shutdown defaults | Shared `egressGateway` fields; GatewayClass or per-Gateway patches for differences |
+| Gateway API Envoy agent defaults | Shared `egressGateway.agentConfig`; per-Gateway annotation for overrides |
+
+Helm-managed gateway fields retain their location. Upgrade with `--reset-values
+-f updated-values.yaml` so removed fields are not retained. If an old release
+owns a Gateway, the upgrade removes that chart-owned object and may interrupt
+traffic: export it first and reapply it separately after the upgrade, during a
+maintenance window. Subsequent upgrades do not manage that user-owned Gateway.
+Agentio and EPE configuration sources and base/primary merge rules are unchanged.
 
 ## EPE
 

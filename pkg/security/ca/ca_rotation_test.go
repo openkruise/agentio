@@ -98,6 +98,34 @@ func TestLoadOrCreateAuthorityBootstrapsMissingSecret(t *testing.T) {
 	}
 }
 
+func TestAuthorityServingCertificateUsesClusterDomain(t *testing.T) {
+	for _, domain := range []string{"", "corp.local"} {
+		t.Run(domain, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			client := kube.NewFakeClient(newWorkloadCASecret(t, "agentio-system", "agentio-ca-secret", 24*time.Hour))
+			go client.Run(ctx.Done())
+			authority, err := LoadOrCreateAuthority(ctx, client, staticAuthenticator{}, AuthorityOptions{
+				TrustDomain:   "cluster.local",
+				ClusterDomain: domain,
+				Namespace:     "agentio-system",
+				ServiceName:   "custom-agentiod",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if domain == "" {
+				domain = "cluster.local"
+			}
+			for _, host := range []string{"custom-agentiod", "custom-agentiod.agentio-system.svc", "custom-agentiod.agentio-system.svc." + domain} {
+				if err := authority.serverCert.Leaf.VerifyHostname(host); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadOrCreateAuthorityRejectsInvalidTrustBundle(t *testing.T) {
 	const namespace = "agentio-system"
 	for _, tc := range []struct {

@@ -1,4 +1,4 @@
-{{- if eq .Values.egressGateway.mode "static" }}
+{{- if .Values.egressGateway.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -187,7 +187,7 @@ spec:
                   path: agentio-token
         - name: agentiod-ca-cert
           configMap:
-            name: {{ .Values.global.caCertConfigMap }}
+            name: {{ include "agentiod.caConfigMapName" . }}
       {{- with .Values.egressGateway.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

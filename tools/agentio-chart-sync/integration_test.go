@@ -46,15 +46,24 @@ func managerChart(t *testing.T, source string) string {
 
 func TestManagerMasterModesAndConfiguration(t *testing.T) {
 	target := managerChart(t, repositoryAgentioChart(t))
-	for _, gateway := range []string{"disabled", "static", "gatewayAPI"} {
+	for _, gateway := range []string{"disabled", "static", "gatewayAPI", "both"} {
 		for _, epe := range []string{"disabled", "managed", "external"} {
 			t.Run(gateway+"/"+epe, func(t *testing.T) {
 				values := map[string]any{"agentio": map[string]any{
-					"enabled":       true,
-					"global":        map[string]any{"namespace": "custom-agentio", "clusterDomain": "cluster.example"},
-					"agentiod":      map[string]any{"logging": map[string]any{"format": "json"}, "config": map[string]any{"values": map[string]any{"sandboxIgnoredLabels": []string{"custom-label"}}}},
-					"egressGateway": map[string]any{"mode": gateway, "gatewayAPI": map[string]any{"create": true}},
-					"epe":           map[string]any{"mode": epe, "external": map[string]any{"address": "epe.external", "port": 9443}},
+					"enabled": true,
+					"global":  map[string]any{"namespace": "custom-agentio", "clusterDomain": "cluster.example"},
+					"agentiod": map[string]any{
+						"logging":         map[string]any{"format": "json"},
+						"gatewayDeployer": map[string]any{"enabled": gateway == "gatewayAPI" || gateway == "both"},
+						"config": map[string]any{
+							"values": map[string]any{"sandboxIgnoredLabels": []string{"custom-label"}},
+						},
+					},
+					"egressGateway": map[string]any{"enabled": gateway == "static" || gateway == "both"},
+					"epe": map[string]any{
+						"mode":     epe,
+						"external": map[string]any{"address": "epe.external", "port": 9443},
+					},
 				}}
 				rendered := renderChart(t, target, values)
 				all := ""
@@ -89,7 +98,7 @@ func TestManagerMasterModesAndConfiguration(t *testing.T) {
 					}
 				}
 				wantDeployments := 1
-				if gateway == "static" {
+				if gateway == "static" || gateway == "both" {
 					wantDeployments++
 				}
 				if epe == "managed" {
@@ -98,7 +107,7 @@ func TestManagerMasterModesAndConfiguration(t *testing.T) {
 				if deployments != wantDeployments {
 					t.Fatalf("deployments = %d, want %d", deployments, wantDeployments)
 				}
-				if (gateways == 1) != (gateway == "gatewayAPI") {
+				if gateways != 0 {
 					t.Fatalf("gateways = %d for mode %s", gateways, gateway)
 				}
 				for _, want := range []string{"--namespace=custom-agentio", "--domain=cluster.example", "custom-label", "AGENTIO_LOG_FORMAT", "AGENTIO_ENABLE_SIDECAR_INJECTOR"} {
@@ -287,7 +296,17 @@ func TestReleasePackageContainsPinnedIntegrationBundle(t *testing.T) {
 	if err := Export(filepath.Join(bundle, "sandbox-manager"), manager); err != nil {
 		t.Fatal(err)
 	}
-	rendered := renderChart(t, manager, map[string]any{"agentio": map[string]any{"enabled": true, "egressGateway": map[string]any{"mode": "static"}, "epe": map[string]any{"mode": "managed"}}})
+	rendered := renderChart(
+		t,
+		manager,
+		map[string]any{
+			"agentio": map[string]any{
+				"enabled":       true,
+				"egressGateway": map[string]any{"enabled": true},
+				"epe":           map[string]any{"mode": "managed"},
+			},
+		},
+	)
 	all := ""
 	for _, content := range rendered {
 		all += content

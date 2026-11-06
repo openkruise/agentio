@@ -32,7 +32,7 @@ func TestPolicyControlPlane(t *testing.T) {
 				"--set", "agentiod.policyPool.enabled=true,agentiod.policyPool.replicaCount=3",
 				"--set", "agentiod.policyPool.resources.requests.cpu=2,agentiod.resources.limits.cpu=4",
 				"--set", "agentiod.networkPolicy.enabled=true,agentiod.autoscaling.enabled=true",
-				"--set", "egressGateway.mode=static,epe.mode=managed,epe.tls.enabled=true")
+				"--set", "egressGateway.enabled=true,epe.mode=managed,epe.tls.enabled=true")
 			deployments := map[string]appsv1.Deployment{}
 			services := map[string]corev1.Service{}
 			for document := range strings.SplitSeq(manifest, "\n---") {

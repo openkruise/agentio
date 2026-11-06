@@ -1107,7 +1107,7 @@ func TestExportedPolicyControlPlane(t *testing.T) {
 		"enabled":       true,
 		"global":        map[string]any{"namespace": "policy-system"},
 		"agentiod":      map[string]any{"policyPool": map[string]any{"enabled": true, "replicaCount": 3}},
-		"egressGateway": map[string]any{"mode": "static"},
+		"egressGateway": map[string]any{"enabled": true},
 		"epe":           map[string]any{"mode": "managed"},
 	}})
 	var all string

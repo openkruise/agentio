@@ -45,7 +45,7 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 			t,
 			bundle,
 			path,
-			strings.NewReplacer("sandbox-system", "agentio-system", "mode: static", "mode: disabled", "mode: managed", "mode: disabled").
+			strings.NewReplacer("sandbox-system", "agentio-system", "egressGateway:\n    enabled: true", "egressGateway:\n    enabled: false", "mode: managed", "mode: disabled").
 				Replace(readTestFile(t, bundle, path)),
 		)
 	}
@@ -136,7 +136,7 @@ func TestApplyReleasedBundlePreservesChartImageRegistry(t *testing.T) {
 					"global":        map[string]any{"registry": tc.globalRegistry},
 					"agentiod":      map[string]any{"image": imageValues},
 					"epe":           map[string]any{"mode": "managed", "image": imageValues},
-					"egressGateway": map[string]any{"mode": "static", "image": imageValues, "porter": map[string]any{"image": imageValues}},
+					"egressGateway": map[string]any{"enabled": true, "image": imageValues, "porter": map[string]any{"image": imageValues}},
 				},
 			}
 			controllerValues := map[string]any{
@@ -215,7 +215,7 @@ func testIntegrationEgressDefaults(t *testing.T, chart string) {
 		{name: "custom gateway address", agentio: map[string]any{"global": map[string]any{"namespace": "custom", "clusterDomain": "example.internal"}, "egressGateway": map[string]any{"fullnameOverride": "my-egress"}}, policy: "GATEWAY", service: "my-egress.custom.svc.example.internal"},
 		{name: "explicit passthrough", agentio: map[string]any{"agentiod": map[string]any{"config": map[string]any{"values": map[string]any{"egressPolicies": []any{map[string]any{"policy": "PASSTHROUGH"}}}}}}, policy: "PASSTHROUGH"},
 		{name: "explicit empty routes", agentio: map[string]any{"agentiod": map[string]any{"config": map[string]any{"values": map[string]any{"egressPolicies": []any{}}}}}},
-		{name: "gateway and EPE disabled", agentio: map[string]any{"egressGateway": map[string]any{"mode": "disabled"}, "epe": map[string]any{"mode": "disabled"}}},
+		{name: "gateway and EPE disabled", agentio: map[string]any{"egressGateway": map[string]any{"enabled": false}, "epe": map[string]any{"mode": "disabled"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.agentio == nil {

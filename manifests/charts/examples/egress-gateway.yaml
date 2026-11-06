@@ -1,0 +1,13 @@
+# Apply separately after enabling agentiod.gatewayDeployer.enabled and installing
+# Gateway API CRDs. Keep this Gateway in your application configuration.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentio-api-egress
+  namespace: agentio-system
+spec:
+  gatewayClassName: agentio-egress
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE

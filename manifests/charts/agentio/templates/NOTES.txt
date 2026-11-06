@@ -13,9 +13,10 @@ Enable per-Pod ztunnel injection:
   kubectl rollout restart deployment -n <namespace>
 {{- end }}
 
-{{- if eq .Values.egressGateway.mode "gatewayAPI" }}
-Gateway API mode is enabled. Ensure the Kubernetes Gateway API CRDs are installed.
-{{- else if eq .Values.egressGateway.mode "static" }}
+{{- if .Values.agentiod.gatewayDeployer.enabled }}
+Gateway controller is enabled. Apply your Gateway objects separately after installing the Gateway API CRDs.
+{{- end }}
+{{- if .Values.egressGateway.enabled }}
 Static egress gateway {{ include "gateway.fullname" . }} is enabled.
 {{- end }}
 

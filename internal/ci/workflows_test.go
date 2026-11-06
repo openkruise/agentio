@@ -149,6 +149,43 @@ esac
 	}
 }
 
+func TestDownstreamSyncAcceptsReleasedBOM(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
+	}
+	dir := t.TempDir()
+	release := workflowStep(t, loadWorkflow(t, "agentio-release.yml"), "create-release", "Write released BOM")
+	cmd := exec.Command("bash", "-eu", "-c", stringValue(t, release, "run"))
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "VERSION=0.2.0", "GITHUB_SHA=test")
+	for key := range mapValue(t, release, "env") {
+		if strings.HasSuffix(key, "_IMAGE") {
+			cmd.Env = append(cmd.Env, key+"=docker.io/openkruise/test@sha256:test")
+		}
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("write release BOM: %v\n%s", err, output)
+	}
+	sync := workflowStep(
+		t,
+		loadWorkflow(t, "sync-sandbox-manager-agentio-chart.yml"),
+		"sync",
+		"Verify release image tags against the published BOM",
+	)
+	for line := range strings.SplitSeq(stringValue(t, sync, "run"), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "jq -e --arg version") {
+			continue
+		}
+		cmd := exec.Command("bash", "-eu", "-c", line)
+		cmd.Env = append(os.Environ(), "VERSION=0.2.0", "bom="+filepath.Join(dir, "agentio-0.2.0-bom.json"))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("sync rejected release BOM: %v\n%s", err, output)
+		}
+		return
+	}
+	t.Fatal("missing downstream BOM validation")
+}
+
 func TestProductE2EUsesGeneratedCoveragePlan(t *testing.T) {
 	workflow := loadWorkflow(t, "agentio-e2e.yml")
 	jobs := workflowJobs(t, workflow)
