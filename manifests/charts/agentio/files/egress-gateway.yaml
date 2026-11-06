@@ -252,6 +252,8 @@ spec:
           - --xds-cache-idle-ttl={{ valueOrDefault $porterCache.idleTTL "10m" }}
           - --xds-cache-max-entries={{ valueOrDefault $porterCache.maxEntries 0 }}
         env:
+          - name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY
+            value: "{{ .Values.agentio.env.AGENTIO_ENABLE_SNI_TRAFFIC_POLICY | default false }}"
           - name: POD_NAME
             valueFrom: {fieldRef: {fieldPath: metadata.name}}
           - name: POD_NAMESPACE

@@ -43,9 +43,13 @@ pub(super) fn parse<'a>(
     })
 }
 
-pub(super) fn encode(resolved: Resolved, protocol: &str) -> extproc::ProcessingResponse {
+pub(super) fn encode(
+    resolved: Resolved,
+    protocol: &str,
+    enable_sni_traffic_policy: bool,
+) -> extproc::ProcessingResponse {
     let mut metadata = identity_metadata(resolved.workload.as_ref(), resolved.instance);
-    if protocol == "tcp" {
+    if enable_sni_traffic_policy && protocol == "tcp" {
         let mut rules = Vec::new();
         if let Some(sandbox) = &resolved.sandbox {
             let View::Sandbox(sandbox) = sandbox.as_ref() else {

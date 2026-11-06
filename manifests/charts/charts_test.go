@@ -337,6 +337,36 @@ func TestCNIAndZtunnelOverrides(t *testing.T) {
 	)
 }
 
+func TestStaticPorterSNIPolicyFlag(t *testing.T) {
+	for _, value := range []string{"default", "false", "true"} {
+		t.Run(value, func(t *testing.T) {
+			args := []string{"--set", "egressGateway.mode=static", "--show-only", "templates/gateway/deployment.yaml"}
+			want := "false"
+			if value != "default" {
+				args = append(args, "--set", "agentiod.enableSNITrafficPolicy="+value)
+				want = value
+			}
+			var deployment appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(renderAgentio(t, args...)), &deployment); err != nil {
+				t.Fatal(err)
+			}
+			for _, container := range deployment.Spec.Template.Spec.InitContainers {
+				if container.Name == "agentio-porter" {
+					for _, env := range container.Env {
+						if env.Name == "AGENTIO_ENABLE_SNI_TRAFFIC_POLICY" {
+							if env.Value != want {
+								t.Fatalf("Porter SNI flag = %q, want %q", env.Value, want)
+							}
+							return
+						}
+					}
+				}
+			}
+			t.Fatal("Porter SNI flag is missing")
+		})
+	}
+}
+
 func TestStaticEgressGateway(t *testing.T) {
 	manifest := renderAgentio(t, "--set", "egressGateway.mode=static")
 	if got, want := objectNamesByKind(

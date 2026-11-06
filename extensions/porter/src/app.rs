@@ -38,6 +38,7 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
         metrics_address = %config.metrics_address,
         worker_threads = config.worker_threads,
         enable_traffic_policy = config.enable_traffic_policy,
+        enable_sni_traffic_policy = config.enable_sni_traffic_policy,
         request_timeout_seconds = config.request_timeout.as_secs_f64(),
         cache_idle_ttl_seconds = config.cache.idle_ttl.as_secs_f64(),
         cache_max_entries = config.cache.max_entries,
@@ -51,6 +52,7 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
         cluster_id: config.cluster_id,
         timeout: config.request_timeout,
         enable_traffic_policy: config.enable_traffic_policy,
+        enable_sni_traffic_policy: config.enable_sni_traffic_policy,
     };
     let stop = CancellationToken::new();
     let (health, service) = tonic_health::server::health_reporter();

@@ -11,7 +11,10 @@ use crate::{
         },
         extproc,
         istio::workload::{Extension, Workload},
-        kruise::networking::extensions::v1::{PolicyReference, PolicyResourceReference},
+        kruise::networking::extensions::v1::{
+            PolicyReference, PolicyResourceReference, SniAction, SniMatch, SniRule,
+            SniTrafficPolicy,
+        },
     },
 };
 use prost::Message;
@@ -98,6 +101,7 @@ fn processor() -> Processor {
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
         enable_traffic_policy: true,
+        enable_sni_traffic_policy: true,
     }
 }
 
@@ -146,6 +150,72 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
         response.response,
         Some(extproc::processing_response::Response::RequestHeaders(_))
     )
+}
+
+#[tokio::test]
+async fn disabled_sni_policy_omits_only_sni_metadata_and_preserves_identity_checks() {
+    for udp in [false, true] {
+        let mut p = processor();
+        let sni = any(
+            "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy",
+            SniTrafficPolicy {
+                rules: vec![SniRule {
+                    r#match: Some(SniMatch {
+                        sni: vec!["*.example.com".into()],
+                        ports: vec![],
+                    }),
+                    action: SniAction::TlsTermination as i32,
+                }],
+            },
+        );
+        let mut body = Workload::decode(workload(Some(&[])).value.as_slice()).unwrap();
+        body.extensions.push(Extension {
+            name: "sni".into(),
+            config: Some(sni.clone()),
+        });
+        seed(
+            &p.client,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            any(view::WORKLOAD, body),
+        );
+        let mut sandbox = Sandbox {
+            uid: "sandbox".into(),
+            attester: Some(Attester {
+                workload_uid: UID.into(),
+            }),
+            extensions: vec![sni],
+            ..Default::default()
+        };
+        seed(
+            &p.client,
+            ResourceKind::Sandbox,
+            "sandbox",
+            any(view::SANDBOX, sandbox.clone()),
+        );
+
+        let mut enabled = p.handle(request("sandbox", udp)).await.unwrap();
+        p.enable_sni_traffic_policy = false;
+        let disabled = p.handle(request("sandbox", udp)).await.unwrap();
+        let metadata = enabled.dynamic_metadata.as_mut().unwrap();
+        let Some(prost_types::value::Kind::StructValue(agentio)) =
+            &mut metadata.fields.get_mut("agentio").unwrap().kind
+        else {
+            panic!("expected Agentio metadata");
+        };
+        assert_eq!(agentio.fields.remove("sni").is_some(), !udp);
+        assert_eq!(disabled, enabled);
+        assert!(allowed(disabled));
+
+        sandbox.attester.as_mut().unwrap().workload_uid = "another-workload".into();
+        seed(
+            &p.client,
+            ResourceKind::Sandbox,
+            "sandbox",
+            any(view::SANDBOX, sandbox),
+        );
+        assert!(!allowed(p.handle(request("sandbox", udp)).await.unwrap()));
+    }
 }
 
 fn http_request(address: &str, port: f64) -> extproc::ProcessingRequest {

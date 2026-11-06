@@ -17,6 +17,7 @@ package gatewaydeployer
 import (
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -308,14 +309,7 @@ func TestRenderIgnoresProxyImageAnnotation(t *testing.T) {
 	}
 }
 
-func TestRenderIncludesPorterWhenSNIEnabled(t *testing.T) {
-	overlay := mergeMaps(parityValuesOverlay(), map[string]any{
-		"agentio": map[string]any{"env": map[string]any{
-			"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY": true,
-		}},
-	})
-	merged := testValues(t, overlay)
-	rend := testRenderer(t, merged)
+func TestRenderPassesSNIPolicyFlagToPorter(t *testing.T) {
 	gw := gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: "demo", UID: "uid-egress"},
 		Spec: gatewayv1.GatewaySpec{
@@ -326,18 +320,29 @@ func TestRenderIncludesPorterWhenSNIEnabled(t *testing.T) {
 		},
 	}
 	input := buildTemplateInput(gw, builtinClasses["agentio-egress"], "test-cluster", parityKubeVersion, "")
-	docs, err := rend.Render("egress-gateway", input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Join(docs, "\n---\n")
-	for _, want := range []string{
-		"name: agentio-porter",
-		"--grpc-port=9002",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("rendered gateway does not include Porter; want %q in:\n%s", want, got)
-		}
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			overlay := mergeMaps(parityValuesOverlay(), map[string]any{
+				"agentio": map[string]any{"env": map[string]any{
+					"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY": enabled,
+				}},
+			})
+			rend := testRenderer(t, testValues(t, overlay))
+			docs, err := rend.Render("egress-gateway", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(docs, "\n---\n")
+			for _, want := range []string{
+				"name: agentio-porter",
+				"--grpc-port=9002",
+				"- name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY\n            value: " + strconv.Quote(strconv.FormatBool(enabled)),
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("rendered Porter is missing %q in:\n%s", want, got)
+				}
+			}
+		})
 	}
 }
 
