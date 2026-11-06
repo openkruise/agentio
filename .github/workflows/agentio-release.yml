@@ -244,7 +244,7 @@ jobs:
           retention-days: 3
 
   product-e2e:
-    needs: [validate-release, release-unit, build-candidates, prepare-chart]
+    needs: [validate-release, build-candidates, prepare-chart]
     uses: ./.github/workflows/agentio-e2e.yml
     with:
       agentiod_image: ${{ needs.build-candidates.outputs.agentiod_image }}
@@ -259,7 +259,7 @@ jobs:
       chart_artifact: agentio-release-chart-candidate
 
   epe-e2e:
-    needs: [validate-release, release-unit, build-candidates, prepare-chart]
+    needs: [validate-release, build-candidates, prepare-chart]
     uses: ./.github/workflows/agentio-e2e.yml
     with:
       epe_only: true
@@ -404,7 +404,7 @@ jobs:
         run: helm push "$RUNNER_TEMP/chart-pkg/agentio-${VERSION}.tgz" "oci://docker.io/openkruise"
 
   promote-latest:
-    needs: [publish-chart, build-candidates]
+    needs: [publish-chart, validate-release, build-candidates]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: release
@@ -424,13 +424,14 @@ jobs:
           EPE_IMAGE: ${{ needs.build-candidates.outputs.epe_image }}
           PORTER_IMAGE: ${{ needs.build-candidates.outputs.porter_image }}
           ZTUNNEL_IMAGE: ${{ needs.build-candidates.outputs.ztunnel_image }}
+          GATEWAY_IMAGE: ${{ needs.validate-release.outputs.gateway_image || needs.build-candidates.outputs.gateway_agent_image }}
         run: |
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "${VERSION} is a prerelease; latest will not be updated."
             exit 0
           fi
           echo "$HUB_TOKEN" | crane auth login docker.io -u "$HUB_USERNAME" --password-stdin
-          for source in "$AGENTIOD_IMAGE" "$EPE_IMAGE" "$PORTER_IMAGE" "$ZTUNNEL_IMAGE" "${{ needs.build-candidates.outputs.gateway_agent_image }}"; do
+          for source in "$AGENTIOD_IMAGE" "$EPE_IMAGE" "$PORTER_IMAGE" "$ZTUNNEL_IMAGE" "$GATEWAY_IMAGE"; do
             repository="${source%@*}"
             expected="${source##*@}"
             crane tag "$source" latest
