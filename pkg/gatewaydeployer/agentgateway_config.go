@@ -37,7 +37,7 @@ const agentgatewayOriginalTarget = `(string(destination.address).contains(":") ?
 const agentgatewaySourceAddress = `(string(source.address).contains(":") ? "[" + string(source.address) + "]" : string(source.address)) + ":" + string(source.port)`
 
 var agentgatewayWorkloadAttributes = map[string]string{
-	model.AttributeWorkloadUID:       "extproc.agentio.workload.uid",
+	model.AttributeWorkloadUID:       "extproc.agentio.workload.resource_name",
 	model.AttributeWorkloadName:      "extproc.agentio.workload.name",
 	model.AttributeWorkloadNamespace: "extproc.agentio.workload.namespace",
 }

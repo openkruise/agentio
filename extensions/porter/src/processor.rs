@@ -114,19 +114,15 @@ fn identity_metadata(workload: &View, instance: Option<String>) -> BTreeMap<Stri
     let View::Workload(workload) = workload else {
         unreachable!("typed Workload watch")
     };
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        "workload".into(),
-        view::object([
-            ("uid".into(), view::string(&workload.uid)),
-            ("name".into(), view::string(&workload.name)),
-            ("namespace".into(), view::string(&workload.namespace)),
-        ]),
-    );
+    let mut fields = BTreeMap::from([
+        ("resource_name".into(), view::string(&workload.uid)),
+        ("name".into(), view::string(&workload.name)),
+        ("namespace".into(), view::string(&workload.namespace)),
+    ]);
     if let Some(instance) = instance {
-        metadata.insert("workload_instance".into(), view::string(instance));
+        fields.insert("uid".into(), view::string(instance));
     }
-    metadata
+    BTreeMap::from([("workload".into(), view::object(fields))])
 }
 
 fn allowed(metadata: BTreeMap<String, Value>) -> extproc::ProcessingResponse {

@@ -102,7 +102,7 @@ extProc:
 	}
 	route := listener["routes"].([]any)[0].(map[string]any)
 	epe := route["policies"].(map[string]any)["extProc"].(map[string]any)
-	if epe["requestAttributes"].(map[string]any)[model.AttributeWorkloadUID] != "extproc.agentio.workload.uid" {
+	if epe["requestAttributes"].(map[string]any)[model.AttributeWorkloadUID] != "extproc.agentio.workload.resource_name" {
 		t.Fatalf("EPE must use Porter's metadata: %v", epe)
 	}
 	var deployment appsv1.Deployment

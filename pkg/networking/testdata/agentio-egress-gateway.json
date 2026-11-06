@@ -998,7 +998,7 @@
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%DYNAMIC_METADATA(agentio:workload:uid)%"
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload:resource_name)%"
                               },
                               "omitEmptyValues": true
                             },
@@ -1010,7 +1010,19 @@
                             "factoryKey": "envoy.hashable_string",
                             "formatString": {
                               "textFormatSource": {
-                                "inlineString": "%DYNAMIC_METADATA(agentio:workload_instance)%"
+                                "inlineString": "%DYNAMIC_METADATA(agentio:workload:uid)%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "sharedWithUpstream": "ONCE",
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "agentio.sandbox.id",
+                            "factoryKey": "envoy.hashable_string",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%DYNAMIC_METADATA(agentio:sandbox:id)%"
                               },
                               "omitEmptyValues": true
                             },

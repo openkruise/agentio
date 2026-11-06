@@ -72,7 +72,7 @@ pub fn certificate_instance(encoded: &str) -> Result<Option<String>, Error> {
                 return Err(Error::MissingIdentityFields);
             }
             return Ok(Some(format!(
-                "workload-instance/{}/{}",
+                "workload/{}/{}",
                 identity.registry,
                 percent_encoding::utf8_percent_encode(&identity.uid, INSTANCE_UID_ESCAPE)
             )));
@@ -113,11 +113,11 @@ mod tests {
         for (claim, expected) in [
             (
                 r#"{"registry":"kubernetes/demo","uid":"pod-123"}"#,
-                "workload-instance/kubernetes/demo/pod-123",
+                "workload/kubernetes/demo/pod-123",
             ),
             (
                 r#"{"registry":"runtime","uid":"a/b% c-._~"}"#,
-                "workload-instance/runtime/a%2Fb%25%20c-._~",
+                "workload/runtime/a%2Fb%25%20c-._~",
             ),
         ] {
             assert_eq!(
@@ -133,7 +133,7 @@ mod tests {
             r#"{"registry":"运行时","uid":"sandbox+42:/","role":"sandbox-attester","future":true}"#
                 .as_bytes(),
         ));
-        let expected = Some("workload-instance/运行时/sandbox%2B42%3A%2F".to_string());
+        let expected = Some("workload/运行时/sandbox%2B42%3A%2F".to_string());
         assert_eq!(certificate_instance(&pem).unwrap(), expected);
         let encoded =
             percent_encoding::utf8_percent_encode(&pem, percent_encoding::NON_ALPHANUMERIC)

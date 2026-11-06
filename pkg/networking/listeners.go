@@ -692,7 +692,7 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 	}{
 		{"name", model.FilterStateWorkloadName},
 		{"namespace", model.FilterStateWorkloadNamespace},
-		{"uid", model.FilterStateWorkloadUID},
+		{"resource_name", model.FilterStateWorkloadUID},
 	} {
 		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
 			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},
@@ -711,7 +711,8 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 		metadata string
 		factory  string
 	}{
-		{"agentio.workload.instance", "workload_instance", "envoy.hashable_string"},
+		{"agentio.workload.instance", "workload:uid", "envoy.hashable_string"},
+		{model.FilterStateSandboxID, "sandbox:id", "envoy.hashable_string"},
 	} {
 		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
 			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: field.key},

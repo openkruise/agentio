@@ -107,5 +107,5 @@ func (s SourceRef) String() string {
 
 // WorkloadAlias addresses a workload by immutable registry instance identity.
 func (s SourceRef) WorkloadAlias() string {
-	return "workload-instance/" + s.Registry + "/" + strings.ReplaceAll(url.QueryEscape(s.Key), "+", "%20")
+	return "workload/" + s.Registry + "/" + strings.ReplaceAll(url.QueryEscape(s.Key), "+", "%20")
 }

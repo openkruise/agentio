@@ -204,6 +204,11 @@ async fn disabled_sni_policy_omits_only_sni_metadata_and_preserves_identity_chec
             panic!("expected Agentio metadata");
         };
         assert_eq!(agentio.fields.remove("sni").is_some(), !udp);
+        assert_eq!(
+            agentio.fields["sandbox"],
+            view::object([("id".into(), view::string("sandbox"))])
+        );
+        assert!(!agentio.fields.contains_key("sandbox_id"));
         assert_eq!(disabled, enabled);
         assert!(allowed(disabled));
 
@@ -280,7 +285,10 @@ async fn agentgateway_resolves_identity_without_sni_or_connect_metrics() {
     else {
         panic!("expected resolved Workload");
     };
-    assert_eq!(identity.fields["uid"], view::string(UID));
+    assert_eq!(identity.fields["resource_name"], view::string(UID));
+    assert!(!identity.fields.contains_key("uid"));
+    assert!(!agentio.fields.contains_key("workload_instance"));
+    assert!(!agentio.fields.contains_key("sandbox"));
     assert_eq!(identity.fields["name"], view::string("source"));
     assert!(!agentio.fields.contains_key("sni"));
     let metrics = p.client.metrics.encode().unwrap();
