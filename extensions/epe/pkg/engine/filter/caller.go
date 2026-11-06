@@ -18,8 +18,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/netip"
-	"net/url"
-	"strings"
+
+	"github.com/dunglas/httpsfv"
 
 	log "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -64,7 +64,7 @@ func NewSandboxToken(raw string) *SandboxToken {
 	return &SandboxToken{raw: raw}
 }
 
-// NewSandboxMetadataToken retains the percent-encoded identity metadata without decoding it.
+// NewSandboxMetadataToken retains the Structured Fields Dictionary without decoding it.
 func NewSandboxMetadataToken(raw string) *SandboxToken {
 	if raw == "" {
 		return nil
@@ -86,27 +86,24 @@ func (t *SandboxToken) Parse(ctx context.Context) *SandboxToken {
 	t.raw = ""
 	if t.metadata {
 		t.metadata = false
-		for entry := range strings.SplitSeq(raw, ",") {
-			key, value, ok := strings.Cut(entry, "=")
-			if !ok {
-				t.invalid = true
-				break
+		if len(raw) > 8192 {
+			t.invalid = true
+		} else if dictionary, err := httpsfv.UnmarshalDictionary([]string{raw}); err != nil {
+			t.invalid = true
+		} else {
+			for key, field := range map[string]*string{
+				"agent-identity.access-token":      &t.AccessToken,
+				"agent-identity.sandbox-client-id": &t.SandboxClientID,
+			} {
+				member, _ := dictionary.Get(key)
+				item, ok := member.(httpsfv.Item)
+				value, isString := item.Value.(string)
+				if !ok || !isString || value == "" {
+					t.invalid = true
+					break
+				}
+				*field = value
 			}
-			var field *string
-			switch key {
-			case "agent-identity.access-token":
-				field = &t.AccessToken
-			case "agent-identity.sandbox-client-id":
-				field = &t.SandboxClientID
-			default:
-				continue
-			}
-			decoded, err := url.PathUnescape(value) // '+' is literal in metadata, not a query-space escape.
-			if err != nil || decoded == "" || *field != "" {
-				t.invalid = true
-				break
-			}
-			*field = decoded
 		}
 		if t.invalid || t.AccessToken == "" || t.SandboxClientID == "" {
 			t.invalid = true

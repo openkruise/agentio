@@ -265,17 +265,21 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 		t.Fatalf("status annotation has legacy revision field %v", revision)
 	}
 
-	// The caBundle patcher kept the webhook configuration in sync with the
-	// workload root.
-	current, err := coreClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, webhookConfigName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, wh := range current.Webhooks {
-		if string(wh.ClientConfig.CABundle) != string(authority.RootPEM()) {
-			t.Fatalf("caBundle = %q, want the authority root", wh.ClientConfig.CABundle)
+	// The caBundle patcher reconciles independently of template readiness.
+	testutil.Eventually(t, func() bool {
+		current, err := coreClient.AdmissionregistrationV1().
+			MutatingWebhookConfigurations().
+			Get(ctx, webhookConfigName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
+		for _, wh := range current.Webhooks {
+			if string(wh.ClientConfig.CABundle) != string(authority.RootPEM()) {
+				return false
+			}
+		}
+		return true
+	}, "webhook caBundle to match the authority root")
 }
 
 func indentTemplate(s, prefix string) string {

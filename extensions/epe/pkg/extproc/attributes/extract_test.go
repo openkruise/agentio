@@ -61,7 +61,7 @@ func TestExtractSandboxMetadataPrecedence(t *testing.T) {
 	}{
 		{
 			name:     "current identity overrides legacy token",
-			metadata: "agent-identity.access-token=new+/=,agent-identity.sandbox-client-id=new-client",
+			metadata: `agent-identity.access-token="new+/=", agent-identity.sandbox-client-id="new-client"`,
 			want:     &filter.SandboxToken{AccessToken: "new+/=", SandboxClientID: "new-client"},
 		},
 		{name: "empty metadata does not fall back"},
