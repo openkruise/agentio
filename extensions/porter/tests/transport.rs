@@ -17,7 +17,12 @@ use agentio_porter::{
 };
 use futures_util::Stream;
 use prost::Message;
-use std::{collections::VecDeque, pin::Pin, time::Duration};
+use std::{
+    collections::VecDeque,
+    io::{Read, Seek},
+    pin::Pin,
+    time::Duration,
+};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
@@ -29,7 +34,7 @@ use tonic::{
 #[derive(Clone)]
 struct Ads {
     seen: mpsc::UnboundedSender<ads::DeltaDiscoveryRequest>,
-    disconnect: broadcast::Sender<()>,
+    disconnect: broadcast::Sender<Option<Status>>,
     handshake: Option<watch::Receiver<bool>>,
     delayed_rejections: Option<(mpsc::UnboundedSender<tokio::time::Instant>, Duration)>,
 }
@@ -77,7 +82,10 @@ impl AggregatedDiscoveryService for Ads {
                     message
                 } else {
                     let message = tokio::select! {
-                        _ = disconnect.recv() => Err(Status::unavailable("test disconnect")),
+                        closed = disconnect.recv() => match closed.unwrap() {
+                            Some(error) => Err(error),
+                            None => Ok(None),
+                        },
                         message = input.message() => message,
                     }?;
                     let Some(message) = message else { break; };
@@ -149,6 +157,14 @@ async fn ready(r: &mut watch::Receiver<bool>, value: bool) {
 
 #[tokio::test]
 async fn tls_auth_initial_handshake_eviction_and_token_reload() {
+    let mut logs = tempfile::tempfile().unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::default())
+        .event_format(agentio_porter::logging::JsonFormat)
+        .with_writer(logs.try_clone().unwrap())
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let root = dir.path().join("root.pem");
@@ -256,7 +272,9 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
     invalid.abort();
     assert!(invalid.await.unwrap_err().is_cancelled());
     tokio::fs::write(&token, "bad-token").await.unwrap();
-    disconnect.send(()).unwrap();
+    disconnect
+        .send(Some(Status::unavailable("test disconnect")))
+        .unwrap();
     ready(&mut health, false).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!*health.borrow());
@@ -266,10 +284,34 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
         .await
         .unwrap();
     assert!(c.metrics.reconnects.get() >= 1);
+    let retries = c.metrics.reconnects.get();
+    disconnect.send(None).unwrap();
+    ready(&mut health, false).await;
+    ready(&mut health, true).await;
+    c.demand(ResourceKind::Workload, "alias", None)
+        .await
+        .unwrap();
+    assert!(c.metrics.reconnects.get() > retries);
     stop.cancel();
     client.await.unwrap();
     expiry.await.unwrap();
     server.await.unwrap().unwrap();
+    logs.rewind().unwrap();
+    let mut output = String::new();
+    logs.read_to_string(&mut output).unwrap();
+    let events: Vec<serde_json::Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| event["level"] == "debug"
+        && event["message"] == "ADS stream closed"
+        && event.get("error").is_none()));
+    assert!(
+        events.iter().any(|event| event["level"] == "warn"
+            && event["message"] == "ADS disconnected"
+            && event["error"].as_str().unwrap().contains("invalid token")),
+        "{output}"
+    );
 }
 
 #[tokio::test]
@@ -327,7 +369,9 @@ async fn reconnect_keeps_grace_cache_during_rpc_handshake_without_replaying_it()
             .unwrap();
         gate.send_replace(false);
         tokio::fs::write(&token, "bad-token").await.unwrap();
-        disconnect.send(()).unwrap();
+        disconnect
+            .send(Some(Status::unavailable("test disconnect")))
+            .unwrap();
         ready(&mut health, false).await;
         while requests.try_recv().is_ok() {}
         // At least one authenticated RPC attempt has failed before the next
@@ -457,7 +501,9 @@ async fn slow_failed_reconnects_do_not_reset_backoff_using_cached_sync_state() {
             .await
             .unwrap();
         tokio::fs::write(&token, "bad-token").await.unwrap();
-        disconnect.send(()).unwrap();
+        disconnect
+            .send(Some(Status::unavailable("test disconnect")))
+            .unwrap();
         ready(&mut health, false).await;
         let first = attempts.recv().await.unwrap();
         let second = attempts.recv().await.unwrap();

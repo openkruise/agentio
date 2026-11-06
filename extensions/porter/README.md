@@ -65,7 +65,7 @@ Copy the same benchmark source into a checkout without Porter TrafficPolicy auth
 
 `discovery.rs` owns demand subscriptions and cache state; `discovery/transport.rs` owns ADS connections, TLS/token loading and reconnects. `ResourceKind` identifies Workload, Sandbox and TrafficPolicy resources while the state remains array-backed. Discovery uses the resolver's request deadline to classify canceled wait metrics.
 
-Lifecycle and ADS connection events use structured tracing fields. Each ADS attempt has an `xds` span with its connection ID and address. Retry/NACK/forced-shutdown events are warnings, service failures are errors, and request rejection reasons are debug events. Certificate contents and tokens are never logged. The existing `AGENTIO_LOG_LEVEL` and `AGENTIO_LOG_FORMAT=text|json` settings remain the configuration interface.
+Lifecycle and ADS connection events use structured tracing fields. Each ADS attempt has an `xds` span with its connection ID and address. Like gateway-agent, normal ADS EOF, cancellation and explicit `NO_ERROR` shutdowns are DEBUG; unexpected disconnects, NACKs and forced shutdowns are WARN. Abnormal GOAWAY reasons take precedence over accompanying EOF or transport-close text. An unclassified `BrokenPipe` or ADS deadline remains WARN. This classification only changes logging; reconnect, backoff, readiness and cache grace behavior are unchanged. Service failures are errors, and request rejection reasons are debug events. Certificate contents and tokens are never logged. The existing `AGENTIO_LOG_LEVEL` and `AGENTIO_LOG_FORMAT=text|json` settings remain the configuration interface.
 
 Logging writes synchronously to stderr. Text output contains no ANSI color or style escape sequences. Policy decisions are emitted at INFO for audit collection; a slow log sink can apply backpressure to request processing.
 
@@ -101,7 +101,7 @@ Policy decisions retain `workload`, `sandbox_id`, `destination`, `protocol`, `st
 {"time":"2026-10-20T10:20:30.123456Z","level":"info","scope":"agentio_porter::policy","event":"traffic_policy_decision","workload":"cluster1//Pod/demo/client","sandbox_id":"","destination":"203.0.113.10:443","protocol":"tcp","stage":"workload","policy":"namespaces/demo/trafficPolicies/allow-egress","rule_index":0,"action":"allow","reason":"rule_match","message":"request target policy evaluated"}
 ```
 
-Operational events retain their descriptive `message` and diagnostic fields. Lifecycle events are INFO, retry/NACK events WARN, service failures ERROR, and detailed cache/processing diagnostics DEBUG. No duration or request ID is added to policy decisions: latency is available in metrics, and an Envoy correlation ID requires a verified propagation path. Certificate contents and tokens must never be logged.
+Operational events retain their descriptive `message` and diagnostic fields. Lifecycle events are INFO, expected ADS closures DEBUG, unexpected reconnect/NACK events WARN, service failures ERROR, and detailed cache/processing diagnostics DEBUG. No duration or request ID is added to policy decisions: latency is available in metrics, and an Envoy correlation ID requires a verified propagation path. Certificate contents and tokens must never be logged.
 
 ### Operational events and error handling
 

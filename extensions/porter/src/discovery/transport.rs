@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
-use tracing::{Instrument, info, info_span, warn};
+use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::{
     metrics::ResourceType,
@@ -30,6 +30,43 @@ pub struct TransportConfig {
     pub root_path: String,
     pub token_path: String,
     pub node: Node,
+}
+
+// Match gateway-agent's logging policy without changing reconnect behavior.
+fn expected_ads_closure(error: &anyhow::Error) -> bool {
+    let Some(status) = error.downcast_ref::<tonic::Status>() else {
+        return false;
+    };
+    if status.code() == tonic::Code::Cancelled {
+        return true;
+    }
+    let message = status.message();
+    // An abnormal GOAWAY takes precedence over an accompanying EOF or close.
+    if let Some((_, goaway)) = message.split_once("received prior goaway: code: ") {
+        return goaway.split(',').next() == Some("NO_ERROR");
+    }
+    let h2_message = message
+        .strip_prefix("h2 protocol error: ")
+        .unwrap_or(message);
+    if let Some(reason) = h2_message
+        .strip_prefix("connection error received: ")
+        .or_else(|| h2_message.strip_prefix("stream error received: "))
+        .or_else(|| h2_message.strip_prefix("protocol error: "))
+    {
+        return reason.split(" (").next() == Some("not a result of an error");
+    }
+    if status.code() == tonic::Code::Unavailable
+        && [
+            "client disconnected",
+            "error reading from server: EOF",
+            "transport is closing",
+        ]
+        .iter()
+        .any(|closed| message.contains(closed))
+    {
+        return true;
+    }
+    message.contains("stream terminated by RST_STREAM with error code: NO_ERROR")
 }
 
 impl Client {
@@ -123,7 +160,7 @@ impl Client {
             self.state.lock().unwrap().types[kind.index()].ack = Some((response.nonce, error));
             self.wake.notify_one();
         }
-        bail!("ADS stream closed")
+        Ok(())
     }
 
     pub async fn run(self: Arc<Self>, transport: TransportConfig, stop: CancellationToken) {
@@ -152,13 +189,24 @@ impl Client {
             if received && started.elapsed() > Duration::from_secs(1) {
                 delay = INITIAL_BACKOFF;
             }
-            if let Err(error) = result {
-                warn!(
+            match result {
+                Ok(()) => debug!(
+                    parent: &span,
+                    retry_ms = delay.as_millis() as u64,
+                    "ADS stream closed"
+                ),
+                Err(error) if expected_ads_closure(&error) => debug!(
+                    parent: &span,
+                    error = %format_args!("{error:#}"),
+                    retry_ms = delay.as_millis() as u64,
+                    "ADS stream closed"
+                ),
+                Err(error) => warn!(
                     parent: &span,
                     error = %format_args!("{error:#}"),
                     retry_ms = delay.as_millis() as u64,
                     "ADS disconnected"
-                );
+                ),
             }
             let jitter =
                 Duration::from_secs_f64(delay.as_secs_f64() * rand::random_range(0.0..0.2));
@@ -169,5 +217,84 @@ impl Client {
             delay = (delay * 2).min(MAX_BACKOFF);
         }
         self.reset();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::{Code, Status};
+
+    #[test]
+    fn closure_classification_matches_gateway_agent() {
+        for (code, message, expected) in [
+            (Code::Cancelled, "closed", true),
+            (
+                Code::Unavailable,
+                "received prior goaway: code: NO_ERROR",
+                true,
+            ),
+            (
+                Code::Unavailable,
+                "error reading from server: EOF, received prior goaway: code: NO_ERROR, debug data: max_age",
+                true,
+            ),
+            (Code::Unavailable, "error reading from server: EOF", true),
+            (Code::Unavailable, "transport is closing", true),
+            (Code::Unavailable, "client disconnected", true),
+            (
+                Code::Internal,
+                "stream terminated by RST_STREAM with error code: NO_ERROR",
+                true,
+            ),
+            (
+                Code::Internal,
+                "h2 protocol error: stream error received: not a result of an error",
+                true,
+            ),
+            (
+                Code::Internal,
+                "h2 protocol error: connection error received: not a result of an error (b\"max_age\")",
+                true,
+            ),
+            (Code::Unavailable, "connection refused", false),
+            (Code::Unavailable, "connection reset by peer", false),
+            (
+                Code::Unavailable,
+                "error reading from server: EOF, received prior goaway: code: ENHANCE_YOUR_CALM, debug data: too_many_pings",
+                false,
+            ),
+            (
+                Code::Unavailable,
+                "transport is closing, received prior goaway: code: INTERNAL_ERROR",
+                false,
+            ),
+            (
+                Code::Internal,
+                "h2 protocol error: connection error received: internal error (b\"transport is closing\")",
+                false,
+            ),
+            (Code::Internal, "transport is closing", false),
+            (Code::DeadlineExceeded, "context deadline exceeded", false),
+            (
+                Code::Unknown,
+                "h2 protocol error: error reading a body from connection: stream closed because of a broken pipe",
+                false,
+            ),
+            (
+                Code::Unknown,
+                "protocol error: missing grpc-status trailer",
+                false,
+            ),
+        ] {
+            let error =
+                anyhow::Error::new(Status::new(code, message)).context("receive ADS response");
+            assert_eq!(
+                expected_ads_closure(&error),
+                expected,
+                "{code:?}: {message}"
+            );
+        }
+        assert!(!expected_ads_closure(&anyhow::anyhow!("read ADS token")));
     }
 }
