@@ -292,6 +292,11 @@ This setting also applies to Gateway API `parametersRef` configuration. It does
 not change the outer HTTP/2 CONNECT tunnel or TLS passthrough traffic. Preserve
 other gateway entries and settings when updating the `egressGateways` list.
 
+Envoy gateways preserve an upstream `Server` response header and do not add one
+when it is absent. The router also suppresses its generated `x-envoy-*` headers,
+including `x-envoy-upstream-service-time`. Headers supplied by upstream services
+or external processors are passed through.
+
 The protocol names used in access-log expressions and CEL filters are listed in
 [Gateway protocol names](../design/gateway-protocol-names.md).
 

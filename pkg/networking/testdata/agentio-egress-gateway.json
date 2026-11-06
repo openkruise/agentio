@@ -1123,7 +1123,8 @@
                     {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
-                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+                        "suppressEnvoyHeaders": true
                       }
                     }
                   ],
@@ -1136,6 +1137,7 @@
                     }
                   },
                   "serverName": "agentio-envoy",
+                  "serverHeaderTransformation": "PASS_THROUGH",
                   "streamIdleTimeout": "0s",
                   "useRemoteAddress": false,
                   "upgradeConfigs": [
@@ -1386,7 +1388,8 @@
                     {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
-                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+                        "suppressEnvoyHeaders": true
                       }
                     }
                   ],
@@ -1397,6 +1400,7 @@
                     "allowConnect": true
                   },
                   "serverName": "agentio-envoy",
+                  "serverHeaderTransformation": "PASS_THROUGH",
                   "streamIdleTimeout": "180s",
                   "useRemoteAddress": false,
                   "proxy100Continue": true,
@@ -2297,7 +2301,8 @@
                     {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
-                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+                        "suppressEnvoyHeaders": true
                       }
                     }
                   ],
@@ -2308,6 +2313,7 @@
                     "allowConnect": true
                   },
                   "serverName": "agentio-envoy",
+                  "serverHeaderTransformation": "PASS_THROUGH",
                   "schemeHeaderTransformation": {
                     "schemeToOverwrite": "https"
                   },

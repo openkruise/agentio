@@ -37,6 +37,7 @@ import (
 	setstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
+	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
@@ -912,6 +913,33 @@ func displayGatewayResourceKey(key string) string {
 func TestLegacyGatewayGraphParity(t *testing.T) {
 	got := normalizeGatewayResources(buildGatewayGraph(t, true))
 	want := readNormalizedGatewayGolden(t, "testdata/agentio-supported-gateway.json")
+	// Generated proxy headers are now suppressed in both gateway modes.
+	for _, resource := range want {
+		listener, ok := resource.(*listenerv3.Listener)
+		if !ok {
+			continue
+		}
+		for _, chain := range listener.GetFilterChains() {
+			for _, filter := range chain.GetFilters() {
+				if filter.GetName() != "envoy.filters.network.http_connection_manager" {
+					continue
+				}
+				manager := &hcmv3.HttpConnectionManager{}
+				if err := filter.GetTypedConfig().UnmarshalTo(manager); err != nil {
+					t.Fatal(err)
+				}
+				manager.ServerHeaderTransformation = hcmv3.HttpConnectionManager_PASS_THROUGH
+				for _, httpFilter := range manager.HttpFilters {
+					if httpFilter.Name == "envoy.filters.http.router" {
+						httpFilter.ConfigType = &hcmv3.HttpFilter_TypedConfig{
+							TypedConfig: mustPack(&routerv3.Router{SuppressEnvoyHeaders: true}),
+						}
+					}
+				}
+				filter.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: mustPack(manager)}
+			}
+		}
+	}
 	// Envoy 1.40+ scopes upstream sessions by SNI; the frozen oracle disabled caching.
 	for _, name := range []string{TLSConnectOriginate, TLSProxyOriginate} {
 		cluster := want[gatewayResourceKey(model.ClusterType, name)].(*clusterv3.Cluster)
