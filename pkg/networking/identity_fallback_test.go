@@ -125,7 +125,10 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				if len(restored.OnRequestHeaders) != 5 {
 					t.Fatalf("identity state=%v", restored)
 				}
-				for i, field := range []struct{ key, metadata string }{
+				for i, field := range []struct {
+					key      string
+					metadata string
+				}{
 					{"name", "name"},
 					{"namespace", "namespace"},
 					{"uid", "resource_name"},
@@ -145,7 +148,10 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				}
 				sandbox := restored.OnRequestHeaders[4]
 				if sandbox.GetObjectKey() != model.FilterStateSandboxID ||
-					sandbox.GetFormatString().GetTextFormatSource().GetInlineString() != "%DYNAMIC_METADATA(agentio:sandbox:id)%" ||
+					sandbox.GetFormatString().
+						GetTextFormatSource().
+						GetInlineString() !=
+						"%DYNAMIC_METADATA(agentio:sandbox:id)%" ||
 					sandbox.GetFactoryKey() != "envoy.hashable_string" ||
 					sandbox.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE ||
 					!sandbox.GetSkipIfEmpty() || sandbox.GetReadOnly() {
