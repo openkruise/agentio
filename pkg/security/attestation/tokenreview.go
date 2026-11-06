@@ -122,18 +122,11 @@ func (a *TokenReviewer) remember(token string, caller model.PeerIdentity, now ti
 	key := cacheKey(token)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.cache) >= tokenReviewCacheEntries {
-		// Drop expired entries, then an arbitrary one, to stay bounded.
-		for candidate, entry := range a.cache {
-			if !entry.expires.After(now) {
-				delete(a.cache, candidate)
-			}
-		}
+	if _, exists := a.cache[key]; !exists && len(a.cache) >= tokenReviewCacheEntries {
+		// Lookup enforces expiry; insertion only needs to free one bounded slot.
 		for candidate := range a.cache {
-			if len(a.cache) < tokenReviewCacheEntries {
-				break
-			}
 			delete(a.cache, candidate)
+			break
 		}
 	}
 	a.cache[key] = tokenReviewEntry{caller: caller, expires: expires}

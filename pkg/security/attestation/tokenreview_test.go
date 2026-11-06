@@ -487,3 +487,20 @@ func TestAuthenticateDoesNotCacheWithoutFutureExpiry(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenReviewRefreshAtCapacityPreservesOtherEntries(t *testing.T) {
+	reviewer := &TokenReviewer{ttl: time.Minute, cache: make(map[string]tokenReviewEntry)}
+	now := time.Now()
+	token := expiringToken("refresh", now.Add(time.Hour))
+	reviewer.remember(token, model.PeerIdentity{}, now)
+	for i := range tokenReviewCacheEntries - 1 {
+		reviewer.remember(expiringToken(fmt.Sprint(i), now.Add(time.Hour)), model.PeerIdentity{}, now)
+	}
+	reviewer.remember(token, model.PeerIdentity{AttestedBy: model.AttestationKubernetes}, now)
+	if len(reviewer.cache) != tokenReviewCacheEntries {
+		t.Fatalf("refresh evicted another credential: size %d", len(reviewer.cache))
+	}
+	if _, found := reviewer.cached(token, now.Add(time.Minute)); found {
+		t.Fatal("expired credential was reused")
+	}
+}
