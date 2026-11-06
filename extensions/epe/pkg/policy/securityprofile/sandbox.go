@@ -70,6 +70,9 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 	if len(specRules) == 0 {
 		return nil, fmt.Errorf("%s annotation contains no rules", AnnotationSecurityRules)
 	}
+	spec := &v1alpha1.SecurityProfileSpec{Rules: specRules}
+	// Preserve the original plaintext values for inspection before template escaping.
+	specRules = spec.DeepCopy().Rules
 	for i := range specRules {
 		escapeSandboxHeaderValues(specRules[i].Actions.HeaderManipulation)
 	}
@@ -89,6 +92,7 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 			Match:             MatchSandbox,
 		},
 		Selector: labels.Nothing(),
+		Spec:     spec,
 		Rules:    rules,
 	}, nil
 }
