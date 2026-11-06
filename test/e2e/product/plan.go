@@ -145,6 +145,10 @@ func suiteGroups(suite Suite, inventory []string, selection Selection, filter *r
 			if dataplane != "envoy" {
 				id = dataplane + "-" + id
 			}
+			// Keep the two sidecar auto shards on independent clusters.
+			if id == "sidecar-auto" && (suite.Name == "securitypolicy" || suite.Name == "clienttrust") {
+				id += "-security"
+			}
 			groups = append(groups, Group{
 				ID: id, Profile: profile, Backend: backend, GatewayDataplane: dataplane, Cluster: "agentio-" + id + "-e2e",
 				Fixtures:    append([]string{}, suite.Fixtures...),

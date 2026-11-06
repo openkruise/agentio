@@ -76,18 +76,69 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build agentiod candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: agentio-e2e.local/agentiod:${{ github.sha }}
+          cache-from: type=gha,scope=presubmit-agentiod-amd64
+          cache-to: type=gha,scope=presubmit-agentiod-amd64,mode=max
+      - name: Build agentio-epe candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: extensions/epe/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: agentio-e2e.local/agentio-epe:${{ github.sha }}
+          cache-from: type=gha,scope=presubmit-agentio-epe-amd64
+          cache-to: type=gha,scope=presubmit-agentio-epe-amd64,mode=max
+      - name: Build agentio-porter candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: extensions/porter/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: agentio-e2e.local/agentio-porter:${{ github.sha }}
+          cache-from: type=gha,scope=presubmit-agentio-porter-amd64
+          cache-to: type=gha,scope=presubmit-agentio-porter-amd64,mode=max
+      - name: Build agentio-gateway candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: docker/Dockerfile.gateway
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: agentio-e2e.local/agentio-gateway:${{ github.sha }}
+          cache-from: type=gha,scope=presubmit-agentio-gateway-amd64
+          cache-to: type=gha,scope=presubmit-agentio-gateway-amd64,mode=max
+      - name: Build ext-proc candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: test/fixtures/extproc/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: agentio-e2e.local/ext-proc:${{ github.sha }}
+          cache-from: type=gha,scope=presubmit-ext-proc-amd64
+          cache-to: type=gha,scope=presubmit-ext-proc-amd64,mode=max
       - name: Build repository-owned and test fixture candidates
         env:
           ZTUNNEL_SOURCE_SHA: ${{ needs.build-ztunnel.outputs.source_sha }}
         run: |
           tag="$GITHUB_SHA"
-          docker build --file Dockerfile --tag "agentio-e2e.local/agentiod:${tag}" .
-          docker build --file extensions/epe/docker/Dockerfile --tag "agentio-e2e.local/agentio-epe:${tag}" .
-          docker build --file extensions/porter/docker/Dockerfile --tag "agentio-e2e.local/agentio-porter:${tag}" .
           docker run --rm --read-only "agentio-e2e.local/agentio-porter:${tag}" --version
-          docker build --file docker/Dockerfile.gateway --tag "agentio-e2e.local/agentio-gateway:${tag}" .
           ./bin/test_network_limits.sh "agentio-e2e.local/agentio-gateway:${tag}"
-          docker build --file test/fixtures/extproc/Dockerfile --tag "agentio-e2e.local/ext-proc:${tag}" .
           docker build --file docker/Dockerfile.ztunnel \
             --build-arg TARGETARCH=amd64 \
             --build-arg "ZTUNNEL_VERSION=$ZTUNNEL_SOURCE_SHA" \

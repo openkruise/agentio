@@ -45,10 +45,11 @@ func TestRequiredCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]string{
-		"sidecar-auto":     {"trafficpolicy", "gateway", "securitypolicy", "epe", "clienttrust"},
-		"ambient-auto":     {"trafficpolicy", "gateway", "securitypolicy"},
-		"sidecar-iptables": {"trafficpolicy"},
-		"ambient-iptables": {"trafficpolicy"},
+		"sidecar-auto":          {"trafficpolicy", "gateway", "epe"},
+		"sidecar-auto-security": {"securitypolicy", "clienttrust"},
+		"ambient-auto":          {"trafficpolicy", "gateway", "securitypolicy"},
+		"sidecar-iptables":      {"trafficpolicy"},
+		"ambient-iptables":      {"trafficpolicy"},
 	}
 	if len(plan.Include) != len(want) {
 		t.Fatalf("groups=%d", len(plan.Include))
@@ -72,7 +73,7 @@ func TestRequiredCoverage(t *testing.T) {
 		if !reflect.DeepEqual(suites, want[group.ID]) {
 			t.Fatalf("%s: %v", group.ID, suites)
 		}
-		if slices.Contains(group.Fixtures, "clienttrust") != (group.ID == "sidecar-auto") {
+		if slices.Contains(group.Fixtures, "clienttrust") != (group.ID == "sidecar-auto-security") {
 			t.Fatal("clienttrust fixture scheduled unnecessarily")
 		}
 	}

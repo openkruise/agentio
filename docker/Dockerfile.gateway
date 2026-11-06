@@ -30,7 +30,8 @@ ARG AGENT_VERSION=dev
 ARG AGENT_REVISION=unknown
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X github.com/openkruise/agentio/pkg/gatewayagent.Version=${AGENT_VERSION} -X github.com/openkruise/agentio/pkg/gatewayagent.Revision=${AGENT_REVISION}" -o /out/gateway-agent ./cmd/gateway-agent
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X github.com/openkruise/agentio/pkg/gatewayagent.Version=${AGENT_VERSION} -X github.com/openkruise/agentio/pkg/gatewayagent.Revision=${AGENT_REVISION}" -o /out/gateway-agent ./cmd/gateway-agent
 FROM ${ENVOY_IMAGE} AS community
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \

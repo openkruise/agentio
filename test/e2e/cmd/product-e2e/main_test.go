@@ -54,7 +54,7 @@ func TestPlanCLIProducesMatrixAndArtifact(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Include) != 1 || len(plan.Include[0].Invocations) != 5 {
+	if len(plan.Include) != 1 || len(plan.Include[0].Invocations) != 3 {
 		t.Fatalf("plan=%+v", plan)
 	}
 	if _, err := os.Stat(path); err != nil {

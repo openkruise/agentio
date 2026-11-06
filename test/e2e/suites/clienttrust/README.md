@@ -26,7 +26,7 @@ go -C test/e2e run ./cmd/product-e2e run --suites clienttrust --timeout=20m
 
 When invoking `go test` directly, `-client-trust.image` overrides the environment variable. The suite accepts only
 immutable digest references and requires the sidecar profile. The CI product
-workflow builds the fixture and runs this suite only in `sidecar-auto`; ambient
+workflow builds the fixture and runs this suite only in `sidecar-auto-security`; ambient
 does not use this admission path. For optional backend verification, use
 `--suites clienttrust --profile sidecar --backend iptables --force`.
 
