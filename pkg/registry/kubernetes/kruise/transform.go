@@ -33,8 +33,8 @@ import (
 
 var log = agentlog.New("registry")
 
-// sandboxUID qualifies the delivery ID with the Kruise kind. Non-pooled
-// Sandboxes without a delivery label retain the namespace--name fallback.
+// sandboxUID qualifies the delivery ID with the Kruise kind. Sandboxes
+// without a delivery label retain the namespace--name fallback.
 func sandboxUID(sandbox *agentsv1alpha1.Sandbox) (string, bool) {
 	if sandbox == nil {
 		return "", false
@@ -43,13 +43,10 @@ func sandboxUID(sandbox *agentsv1alpha1.Sandbox) (string, bool) {
 }
 
 // SandboxUID reads the delivery identity from metadata, shared with EPE's
-// metadata-only source. A pooled Sandbox without a delivery label has no identity.
+// metadata-only source, falling back to namespace--name when the label is absent.
 func SandboxUID(sandbox metav1.Object) (string, bool) {
 	if sandboxID := sandbox.GetLabels()[agentsv1alpha1.LabelSandboxID]; sandboxID != "" {
 		return model.SandboxUID(model.SandboxKindKruise, sandboxID), true
-	}
-	if sandbox.GetLabels()[agentsv1alpha1.LabelSandboxPool] != "" {
-		return "", false
 	}
 	if sandbox.GetNamespace() == "" || sandbox.GetName() == "" {
 		return "", false

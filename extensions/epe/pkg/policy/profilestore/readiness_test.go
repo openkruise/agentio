@@ -65,13 +65,17 @@ func TestResolveProfilesSandboxWithDistinctWorkloadName(t *testing.T) {
 				Name:      "sandbox",
 				Namespace: "ns",
 				UID:       "source-uid",
+				Labels: map[string]string{
+					agentsv1alpha1.LabelSandboxPool:      "pool",
+					agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.True,
+				},
 				Annotations: map[string]string{
 					securityprofile.AnnotationSecurityRules: `[{"name":"deny","match":[{"domains":["*"]}],"actions":{"block":{}}}]`,
 				},
 			}}
 			uid := "kruise:ns--sandbox"
 			if labeled {
-				sandbox.Labels = map[string]string{agentsv1alpha1.LabelSandboxID: "delivery"}
+				sandbox.Labels[agentsv1alpha1.LabelSandboxID] = "delivery"
 				uid = "kruise:delivery"
 			}
 			if _, err := resource.CreateFake(sandbox, metav1.CreateOptions{}); err != nil {
