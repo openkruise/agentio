@@ -82,7 +82,11 @@ func TestGatewayLatestUsesTestedReleaseImage(t *testing.T) {
 	if got := mapValue(t, step, "env")["GATEWAY_IMAGE"]; got != selected {
 		t.Fatalf("latest gateway = %v, want the image used by E2E", got)
 	}
-	for _, tc := range []struct{ name, version, gateway string }{
+	for _, tc := range []struct {
+		name    string
+		version string
+		gateway string
+	}{
 		{"built candidate", "0.2.0", "registry.example/gateway@sha256:" + strings.Repeat("b", 64)},
 		{"gateway override", "0.2.0", "registry.example/custom-gateway@sha256:" + strings.Repeat("c", 64)},
 		{"prerelease", "0.2.0-rc.1", "registry.example/custom-gateway@sha256:" + strings.Repeat("c", 64)},
