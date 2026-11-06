@@ -34,6 +34,7 @@ pub struct Processor {
     pub cluster_id: String,
     pub timeout: Duration,
     pub enable_traffic_policy: bool,
+    pub enable_sni_traffic_policy: bool,
     pub gateway: Gateway,
 }
 
@@ -174,7 +175,11 @@ impl Processor {
         };
         let response = match resolver.resolve(&parsed.resolution).await {
             Ok(resolved) => Ok(match self.gateway {
-                Gateway::AgentioEgress => agentio_egress::encode(resolved, parsed.protocol),
+                Gateway::AgentioEgress => agentio_egress::encode(
+                    resolved,
+                    parsed.protocol,
+                    self.enable_sni_traffic_policy,
+                ),
                 Gateway::Agentgateway => agentgateway::encode(resolved),
             }),
             Err(ResolveError::Denied) => Ok(denied()),
@@ -317,6 +322,7 @@ mod tests {
                 cluster_id: "Kubernetes".into(),
                 timeout: Duration::from_secs(1),
                 enable_traffic_policy: true,
+                enable_sni_traffic_policy: true,
             };
             let mut headers = vec![
                 header(":authority", "192.0.2.1:443", b""),

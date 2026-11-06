@@ -26,6 +26,7 @@ pub struct Config {
     pub worker_threads: usize,
     pub logging: telemetry::Config,
     pub enable_traffic_policy: bool,
+    pub enable_sni_traffic_policy: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -106,6 +107,11 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         .transpose()
         .context("invalid ENABLE_TRAFFIC_POLICY: expected true or false")?
         .unwrap_or(false);
+    let enable_sni_traffic_policy = read_env("AGENTIO_ENABLE_SNI_TRAFFIC_POLICY")?
+        .map(|value| value.parse::<bool>())
+        .transpose()
+        .context("invalid AGENTIO_ENABLE_SNI_TRAFFIC_POLICY: expected true or false")?
+        .unwrap_or(false);
     let logging = telemetry::Config::new(
         read_env("AGENTIO_LOG_LEVEL")?.as_deref().unwrap_or("info"),
         read_env("AGENTIO_LOG_FORMAT")?.as_deref().unwrap_or("text"),
@@ -154,6 +160,7 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         worker_threads,
         logging,
         enable_traffic_policy,
+        enable_sni_traffic_policy,
     })
 }
 
@@ -233,6 +240,27 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.to_string().contains("ENABLE_TRAFFIC_POLICY"));
+    }
+
+    #[test]
+    fn sni_traffic_policy_uses_gateway_feature_flag() {
+        assert!(!config(&[], &[]).unwrap().enable_sni_traffic_policy);
+        for (value, expected) in [("false", false), ("true", true)] {
+            assert_eq!(
+                config(&[], &[("AGENTIO_ENABLE_SNI_TRAFFIC_POLICY", value)])
+                    .unwrap()
+                    .enable_sni_traffic_policy,
+                expected
+            );
+        }
+        let error = config(&[], &[("AGENTIO_ENABLE_SNI_TRAFFIC_POLICY", "invalid")])
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("AGENTIO_ENABLE_SNI_TRAFFIC_POLICY")
+        );
     }
 
     #[test]

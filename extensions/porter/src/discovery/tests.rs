@@ -67,6 +67,7 @@ async fn workload_and_sandbox_share_connect_deadline() {
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
         enable_traffic_policy: true,
+        enable_sni_traffic_policy: true,
     };
     let mut processing = Box::pin(processor.handle(request));
     assert!(futures_util::poll!(&mut processing).is_pending());
@@ -479,6 +480,7 @@ async fn matches_wire_contract_corpus() {
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_millis(100),
             enable_traffic_policy: true,
+            enable_sni_traffic_policy: true,
         };
         let request =
             extproc::ProcessingRequest::decode(STANDARD.decode(f.request).unwrap().as_slice())
