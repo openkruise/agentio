@@ -62,6 +62,82 @@ func TestReleasePromotesExactProductE2ECandidates(t *testing.T) {
 	}
 }
 
+func TestGatewayLatestUsesTestedReleaseImage(t *testing.T) {
+	workflow := loadWorkflow(t, "agentio-release.yml")
+	selected := "${{ needs.validate-release.outputs.gateway_image || needs.build-candidates.outputs.gateway_agent_image }}"
+	jobs := workflowJobs(t, workflow)
+	for _, job := range []string{"product-e2e", "epe-e2e"} {
+		if got := mapValue(t, workflowJob(t, jobs, job), "with")["gateway_image"]; got != selected {
+			t.Fatalf("%s gateway = %v, want selected release image", job, got)
+		}
+	}
+	step := workflowStep(t, workflow, "promote-latest", "Promote stable release to latest")
+	if got := mapValue(t, step, "env")["GATEWAY_IMAGE"]; got != selected {
+		t.Fatalf("latest gateway = %v, want the image used by E2E", got)
+	}
+	for _, tc := range []struct{ name, version, gateway string }{
+		{"built candidate", "0.2.0", "registry.example/gateway@sha256:" + strings.Repeat("b", 64)},
+		{"gateway override", "0.2.0", "registry.example/custom-gateway@sha256:" + strings.Repeat("c", 64)},
+		{"prerelease", "0.2.0-rc.1", "registry.example/custom-gateway@sha256:" + strings.Repeat("c", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "promoted")
+			writeTestFile(t, log, "", 0o600)
+			writeTestFile(t, filepath.Join(dir, "crane"), `#!/bin/bash
+set -euo pipefail
+case "$1" in
+  auth) cat >/dev/null ;;
+  tag) printf '%s\n' "$2" >> "$TEST_PROMOTIONS" ;;
+  digest)
+    if [[ "$2" == *gateway:latest ]]; then
+      printf '%s\n' "$TEST_GATEWAY_DIGEST"
+    else
+      printf '%s\n' "$TEST_DIGEST"
+    fi ;;
+  *) exit 1 ;;
+esac
+`, 0o700)
+			digest := "sha256:" + strings.Repeat("a", 64)
+			images := []string{
+				"registry.example/agentiod@" + digest, "registry.example/epe@" + digest,
+				"registry.example/porter@" + digest, "registry.example/ztunnel@" + digest,
+			}
+			_, gatewayDigest, _ := strings.Cut(tc.gateway, "@")
+			cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", stringValue(t, step, "run"))
+			cmd.Env = append(
+				os.Environ(),
+				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"VERSION="+tc.version,
+				"HUB_USERNAME=test",
+				"HUB_TOKEN=test",
+				"TEST_PROMOTIONS="+log,
+				"AGENTIOD_IMAGE="+images[0],
+				"EPE_IMAGE="+images[1],
+				"PORTER_IMAGE="+images[2],
+				"ZTUNNEL_IMAGE="+images[3],
+				"GATEWAY_IMAGE="+tc.gateway,
+				"TEST_DIGEST="+digest,
+				"TEST_GATEWAY_DIGEST="+gatewayDigest,
+			)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("promote latest: %v: %s", err, output)
+			}
+			promoted, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			if tc.version == "0.2.0" {
+				want = append(images, tc.gateway)
+			}
+			if strings.TrimSpace(string(promoted)) != strings.Join(want, "\n") {
+				t.Fatalf("promoted images = %s, want %v", promoted, want)
+			}
+		})
+	}
+}
+
 func TestProductE2EUsesGeneratedCoveragePlan(t *testing.T) {
 	workflow := loadWorkflow(t, "agentio-e2e.yml")
 	jobs := workflowJobs(t, workflow)
