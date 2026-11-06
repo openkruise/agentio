@@ -300,10 +300,11 @@ func newSandboxCollection(
 					)
 				}
 			} else {
-				obj = sandboxInf.Get(subject.Workload.Name, subject.Workload.Namespace)
-				if obj == nil {
+				cached := sandboxes.GetKey(subject.Workload.Namespace + "/" + subject.Workload.Name)
+				if cached == nil {
 					return sandboxSource{}, false, nil
 				}
+				obj = *cached
 			}
 			return sandboxSource{
 				name:     types.NamespacedName{Namespace: obj.Namespace, Name: obj.Name},
