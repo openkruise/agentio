@@ -24,6 +24,7 @@ pub(super) struct IdentityEvidence<'a> {
 pub(super) struct ResolveRequest<'a> {
     pub identity: IdentityEvidence<'a>,
     pub target: Option<Target>,
+    pub dns_candidates: Vec<String>,
 }
 
 pub(super) struct Resolved {
@@ -86,11 +87,16 @@ impl Resolver<'_> {
         &self,
         lookup: &str,
         instance: Option<&str>,
-        principal: &str,
-        sandbox_id: &str,
-        target: Option<Target>,
+        request: &ResolveRequest<'_>,
         request_deadline: tokio::time::Instant,
     ) -> Result<RequestSnapshot, ResolveError> {
+        let IdentityEvidence {
+            principal,
+            sandbox_id,
+            ..
+        } = request.identity;
+        let target = request.target;
+        let dns_candidates = &request.dns_candidates;
         let mut dependencies = self
             .client
             .dependencies(ResourceKind::TrafficPolicy, Some(request_deadline));
@@ -144,8 +150,9 @@ impl Resolver<'_> {
                         debug!(reason = "sandbox_id_mismatch", "request denied");
                         return Err(ResolveError::Denied);
                     }
-                    let evaluation = target
-                        .map(|target| traffic::evaluate(sandbox.traffic_policy.iter(), target));
+                    let evaluation = target.map(|target| {
+                        traffic::evaluate(sandbox.traffic_policy.iter(), target, dns_candidates)
+                    });
                     if let (Some(target), Some(evaluation)) = (target, &evaluation)
                         && !evaluation.allowed
                     {
@@ -199,6 +206,7 @@ impl Resolver<'_> {
                                 policy
                             }),
                             target,
+                            dns_candidates,
                         );
                         let policy = evaluation
                             .matched_rule
@@ -323,14 +331,7 @@ impl Resolver<'_> {
             sandbox_decision,
             workload_decision,
         } = self
-            .snapshot(
-                &lookup,
-                instance.as_deref(),
-                principal,
-                sandbox_id,
-                target,
-                request_deadline,
-            )
+            .snapshot(&lookup, instance.as_deref(), request, request_deadline)
             .await?;
         let View::Workload(source) = workload.as_ref() else {
             unreachable!("typed Workload watch")

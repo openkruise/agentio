@@ -6,7 +6,8 @@ use std::{sync::Arc, time::Instant};
 use tonic::Status;
 
 use super::{
-    ParsedRequest, ResolveRequest, Resolved, allowed, headers, identity, identity_metadata,
+    ParsedRequest, ResolveRequest, Resolved, allowed, attribute, headers, identity,
+    identity_metadata,
 };
 use crate::{
     metrics::{ConnectResult, Metrics, Protocol},
@@ -38,9 +39,37 @@ pub(super) fn parse<'a>(
         resolution: ResolveRequest {
             identity: identity(attributes),
             target,
+            dns_candidates: dns_candidates(attribute(
+                attributes,
+                "filter_state['agentio.destination.dns_candidates']",
+            )),
         },
         protocol: if udp { "udp" } else { "tcp" },
     })
+}
+
+// Only the mTLS HBONE listener captures this evidence; application headers are ignored.
+fn dns_candidates(raw: &str) -> Vec<String> {
+    if raw.len() > 8192 {
+        return Vec::new();
+    }
+    let Ok(list) = sfv::Parser::new(raw.as_bytes()).parse::<sfv::List>() else {
+        return Vec::new();
+    };
+    let mut names = Vec::with_capacity(list.len());
+    for member in list {
+        let sfv::ListEntry::Item(item) = member else {
+            return Vec::new();
+        };
+        let sfv::BareItem::String(name) = item.bare_item else {
+            return Vec::new();
+        };
+        if name.as_str().is_empty() {
+            return Vec::new();
+        }
+        names.push(name.to_string());
+    }
+    names
 }
 
 pub(super) fn encode(resolved: Resolved, protocol: &str) -> extproc::ProcessingResponse {
@@ -89,5 +118,28 @@ impl Drop for ConnectMeasurement {
                 protocol: self.protocol,
             })
             .observe(self.started.elapsed().as_secs_f64());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn structured_dns_candidates_reject_partial_and_invalid_lists() {
+        assert_eq!(
+            dns_candidates(r#""api.example.com", "cdn.example.com";seen=?1"#),
+            ["api.example.com", "cdn.example.com"]
+        );
+        for raw in [
+            "",
+            "api.example.com",
+            r#""api.example.com", 1"#,
+            r#"("api.example.com")"#,
+            r#""""#,
+            r#"["api.example.com"]"#,
+        ] {
+            assert!(dns_candidates(raw).is_empty(), "{raw}");
+        }
+        assert!(dns_candidates(&format!("\"{}\"", "a".repeat(8192))).is_empty());
     }
 }

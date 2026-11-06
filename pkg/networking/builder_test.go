@@ -1078,9 +1078,10 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		states = config.GetOnRequestHeaders()
 	}
 	for key, header := range map[string]string{
-		"agentio.sandbox.id":       "X-AGENTIO-SANDBOX-ID",
-		"sandbox.token":            "X-AGENTIO-SANDBOX-TOKEN",
-		"agentio.sandbox.metadata": "X-AGENTIO-SANDBOX-METADATA",
+		"agentio.sandbox.id":                      "X-AGENTIO-SANDBOX-ID",
+		"sandbox.token":                           "X-AGENTIO-SANDBOX-TOKEN",
+		"agentio.sandbox.metadata":                "X-AGENTIO-SANDBOX-METADATA",
+		model.FilterStateDestinationDNSCandidates: "X-AGENTIO-DESTINATION-DNS-CANDIDATES",
 	} {
 		index := slices.IndexFunc(
 			states,
@@ -1104,6 +1105,9 @@ func TestSandboxHeaderFilterState(t *testing.T) {
 		}
 		if key == "agentio.sandbox.metadata" && !state.GetSkipIfEmpty() {
 			t.Error("absent metadata must not mask a legacy sandbox token")
+		}
+		if key == model.FilterStateDestinationDNSCandidates && !state.GetSkipIfEmpty() {
+			t.Error("absent DNS candidates must leave filter state empty")
 		}
 	}
 }

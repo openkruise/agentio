@@ -32,7 +32,17 @@ import (
 // renamed, removed, or given pointer receivers.
 func TestScopeRendersTemplatePaths(t *testing.T) {
 	scope := inputs.NewScope(
-		inputs.RequestFrom(httpreq.HTTPRequest{Host: "api.example.com", Port: 443, Path: "/v1", Scheme: "https", Method: "GET", Query: map[string][]string{"q": {"1"}}, Headers: map[string]string{"x-id": "abc"}}),
+		inputs.RequestFrom(
+			httpreq.HTTPRequest{
+				Host:    "api.example.com",
+				Port:    443,
+				Path:    "/v1",
+				Scheme:  "https",
+				Method:  "GET",
+				Query:   map[string][]string{"q": {"1"}},
+				Headers: map[string]string{"x-id": "abc"},
+			},
+		),
 		inputs.Workload{Name: "p", Namespace: "ns", IP: "10.0.0.1", Labels: map[string]string{"app": "a"}},
 		inputs.Profile{Name: "sp", Namespace: "ns"},
 		inputs.Rule{Name: "r"},
@@ -142,6 +152,28 @@ func evalBoolOnScope(t *testing.T, scope *inputs.Scope, expr string) (bool, erro
 	return eval.EvalBool(prog, scope.Activation())
 }
 
+func TestDNSCandidatesInScope(t *testing.T) {
+	scope := inputs.NewScope(
+		inputs.RequestFrom(httpreq.HTTPRequest{DNSCandidates: []string{"api.example.com"}}),
+		inputs.Workload{},
+		inputs.Profile{},
+		inputs.Rule{},
+		nil,
+	)
+	got, err := evalBoolOnScope(t, scope, `"api.example.com" in request.dnsCandidates`)
+	if err != nil || !got {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+	tmpl, err := eval.CompileTemplate("dns", `{{ index .Request.DNSCandidates 0 }}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, scope); err != nil || out.String() != "api.example.com" {
+		t.Fatalf("output=%q err=%v", out.String(), err)
+	}
+}
+
 // evalBoolOnAuditScope mirrors evalBoolOnScope for the audit projection. The
 // helper of the same name in package audit is unexported and in a different
 // package, so the names do not collide.
@@ -212,7 +244,11 @@ func TestScopeInvariants(t *testing.T) {
 		{name: "I6 empty slice skipped", expr: `has(request.queryParams.empty)`, want: false},
 
 		// Scalars.
-		{name: "scalars", expr: `request.host == "api.example.com" && request.path == "/v1/chat" && request.method == "POST" && request.scheme == "https" && pod.name == "pn" && pod.namespace == "pns" && pod.ip == "1.2.3.4"`, want: true},
+		{
+			name: "scalars",
+			expr: `request.host == "api.example.com" && request.path == "/v1/chat" && request.method == "POST" && request.scheme == "https" && pod.name == "pn" && pod.namespace == "pns" && pod.ip == "1.2.3.4"`,
+			want: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,7 +278,12 @@ func TestScopeInvariants(t *testing.T) {
 // shared base and therefore nothing has to be deleted from it.
 func TestScopeHidesAuditResult(t *testing.T) {
 	const expr = `result == "blocked"`
-	if _, err := evalBoolOnScope(t, invariantScope(), expr); err == nil || !strings.Contains(err.Error(), "no such attribute") {
+	if _, err := evalBoolOnScope(
+		t,
+		invariantScope(),
+		expr,
+	); err == nil ||
+		!strings.Contains(err.Error(), "no such attribute") {
 		t.Fatalf("err = %v, want a no-such-attribute error", err)
 	}
 

@@ -34,7 +34,10 @@ type HTTPRequest struct {
 	// A zero value means it is unavailable. It is never taken from HTTP headers,
 	// and a CONNECT proxy's listener address is not a tunnel destination.
 	OriginalDestination netip.AddrPort
-	Path                string
+	// DNSCandidates are ztunnel-observed names for the original HBONE destination IP.
+	// They are candidate names, not an authenticated application Host or TLS SNI.
+	DNSCandidates []string
+	Path          string
 	// Query is the parsed query, convenient for matching. It is lossy:
 	// url.ParseQuery drops pairs it cannot parse (';' separators, invalid
 	// escapes) and normalizes percent-encoding, so anything that must agree

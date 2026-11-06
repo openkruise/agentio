@@ -62,6 +62,11 @@ $ kubectl exec "$AGENTIO_WORKLOAD_POD" \
 
 Every egress rule must declare `to`, and every ingress rule must declare `from`, including rules that only restrict ports or protocols. For an IPv4 rule covering all peers, use `cidr: 0.0.0.0/0`; use `::/0` for IPv6. Routing uses `GATEWAY` or `PASSTHROUGH`; express rejection with `action: reject`.
 
+Egress FQDN peers are published with both their names and resolved IPs. Compatible
+ztunnel and native Envoy gateways can also match names learned through the local
+DNS proxy; see [DNS candidates and FQDN traffic rules](../reference/dns-candidates.md)
+for opt-in configuration and deployment ordering.
+
 Create a `TrafficPolicy` in the workload namespace. The unquoted heredoc substitutes the selected app label into the manifest:
 
 ```console

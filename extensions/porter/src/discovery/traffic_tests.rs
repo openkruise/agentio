@@ -148,6 +148,77 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
     )
 }
 
+#[tokio::test]
+async fn native_dns_evidence_is_request_bound_and_invalid_lists_fall_back_to_ip() {
+    let p = processor();
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&["dns"])),
+    );
+    seed(
+        &p.client,
+        ResourceKind::TrafficPolicy,
+        "dns",
+        any(
+            view::TRAFFIC_POLICY,
+            TrafficPolicy {
+                egress: Some(proto::RuleSet {
+                    rules: vec![proto::Rule {
+                        action: proto::Action::Allow as i32,
+                        r#match: Some(proto::Match {
+                            destination_fqdns: vec!["api.example.com".into()],
+                            ..Default::default()
+                        }),
+                    }],
+                }),
+                ..Default::default()
+            },
+        ),
+    );
+    let mut forged = request("", false);
+    forged
+        .request_headers
+        .as_mut()
+        .unwrap()
+        .headers
+        .as_mut()
+        .unwrap()
+        .headers
+        .push(extproc::HeaderValue {
+            key: "x-agentio-destination-dns-candidates".into(),
+            value: "\"api.example.com\"".into(),
+            ..Default::default()
+        });
+    assert!(!allowed(p.handle(forged).await.unwrap()));
+    for (raw, expected) in [
+        ("\"api.example.com\"", true),
+        ("\"other.example\"", false),
+        ("\"api.example.com\", 7", false),
+    ] {
+        let mut req = request("", false);
+        req.attributes
+            .get_mut("envoy.filters.http.ext_proc")
+            .unwrap()
+            .fields
+            .insert(
+                "filter_state['agentio.destination.dns_candidates']".into(),
+                view::string(raw),
+            );
+        assert_eq!(allowed(p.handle(req).await.unwrap()), expected, "{raw}");
+    }
+    // A stream without evidence cannot borrow a previous request's candidates.
+    assert!(!allowed(p.handle(request("", false)).await.unwrap()));
+    seed(
+        &p.client,
+        ResourceKind::TrafficPolicy,
+        "dns",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    assert!(allowed(p.handle(request("", false)).await.unwrap()));
+}
+
 fn http_request(address: &str, port: f64) -> extproc::ProcessingRequest {
     let mut req = request("", false);
     let fields = &mut req
@@ -1198,8 +1269,8 @@ async fn hot_dependency_batch_preserves_order_metrics_ttl_and_invalidation() {
     let View::TrafficPolicy(second) = values[1].as_ref() else {
         panic!()
     };
-    assert!(!crate::traffic::evaluate([first], target).allowed);
-    assert!(crate::traffic::evaluate([second], target).allowed);
+    assert!(!crate::traffic::evaluate([first], target, &[]).allowed);
+    assert!(crate::traffic::evaluate([second], target, &[]).allowed);
     assert_eq!(
         c.metrics
             .cache_lookups
@@ -1499,7 +1570,8 @@ async fn captured_views_survive_policy_removal_and_cache_reset() {
     assert!(
         crate::traffic::evaluate(
             [policy],
-            crate::traffic::Target::parse("192.0.2.1:443", false).unwrap()
+            crate::traffic::Target::parse("192.0.2.1:443", false).unwrap(),
+            &[],
         )
         .allowed
     );

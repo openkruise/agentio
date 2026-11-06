@@ -53,7 +53,7 @@ func (c Config) Validate() error {
 // Evaluate traverses a validated snapshot in policy order and then rule order.
 // Global denies take precedence. Otherwise the first policy match decides.
 // No policies means allow; otherwise no match means deny.
-func (c Config) Evaluate(address netip.AddrPort) Decision {
+func (c Config) Evaluate(address netip.AddrPort, dnsCandidates ...string) Decision {
 	unmatched := Decision{Action: Deny, RuleIndex: -1}
 	if !address.IsValid() || address.Port() == 0 || address.Addr().Zone() != "" {
 		return unmatched
@@ -69,7 +69,7 @@ func (c Config) Evaluate(address netip.AddrPort) Decision {
 	}
 	for _, policy := range c.Policies {
 		for i, rule := range policy.Rules {
-			if rule.matches(ip, port) {
+			if rule.matches(ip, port, dnsCandidates) {
 				if rule.SourceIndex != nil {
 					i = *rule.SourceIndex
 				}

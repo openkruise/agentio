@@ -157,7 +157,15 @@ func compileNativeDirection(
 			result = &securityv1.TrafficPolicy_RuleSet{}
 		}
 		addresses := resolvePeers(ctx, peers, namespace, inputs)
-		if len(addresses) == 0 {
+		var fqdns []string
+		if !ingress {
+			for _, peer := range peers {
+				if peer.FQDN != "" {
+					fqdns = append(fqdns, strings.TrimSuffix(strings.ToLower(peer.FQDN), "."))
+				}
+			}
+		}
+		if len(addresses) == 0 && len(fqdns) == 0 {
 			continue
 		}
 		match := &securityv1.TrafficPolicy_Match{Ports: ports}
@@ -165,6 +173,7 @@ func compileNativeDirection(
 			match.SourceIps = nativeAddresses(addresses)
 		} else {
 			match.DestinationIps = nativeAddresses(addresses)
+			match.DestinationFqdns = fqdns
 		}
 		result.Rules = append(result.Rules, &securityv1.TrafficPolicy_Rule{
 			Action: action,

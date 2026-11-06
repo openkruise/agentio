@@ -194,13 +194,14 @@ func (s *Scope) buildBag() map[string]any {
 
 	return map[string]any{
 		"request": map[string]any{
-			"host":        s.request.Host,
-			"port":        int64(s.request.Port),
-			"path":        s.request.Path,
-			"method":      s.request.Method,
-			"scheme":      s.request.Scheme,
-			"headers":     orEmpty(s.request.headers),
-			"queryParams": queryParams,
+			"dnsCandidates": s.request.DNSCandidates,
+			"host":          s.request.Host,
+			"port":          int64(s.request.Port),
+			"path":          s.request.Path,
+			"method":        s.request.Method,
+			"scheme":        s.request.Scheme,
+			"headers":       orEmpty(s.request.headers),
+			"queryParams":   queryParams,
 		},
 		"pod": map[string]any{
 			"name":      s.workload.Name,

@@ -223,8 +223,14 @@ func TestTrafficPolicyEmptyPeerSemantics(t *testing.T) {
 					if (body != nil) != configured {
 						t.Fatalf("direction presence disagrees with Poseidon: %v", compiled.Policy)
 					}
-					if name == "unresolved-peer" && len(body.Rules) != 0 {
-						t.Fatal("unresolved peers must remain non-matching in both formats")
+					if name == "unresolved-peer" {
+						if ingress && len(body.Rules) != 0 {
+							t.Fatal("unresolved ingress must not match")
+						}
+						if !ingress &&
+							(len(body.Rules) != 1 || !slices.Equal(body.Rules[0].Match.DestinationFqdns, []string{"missing.example"}) || len(body.Rules[0].Match.DestinationIps) != 0) {
+							t.Fatalf("lost FQDN-only egress: %v", body)
+						}
 					}
 					if name == "explicit-all" && len(body.Rules) != 1 {
 						t.Fatal("explicit match-all peer lost its rule")
@@ -235,7 +241,7 @@ func TestTrafficPolicyEmptyPeerSemantics(t *testing.T) {
 	}
 }
 
-func TestNativeTrafficPolicyOmitsUnresolvedRuleWithoutLosingDirection(t *testing.T) {
+func TestNativeTrafficPolicyPreservesUnresolvedFQDN(t *testing.T) {
 	for _, action := range []string{"allow", "reject"} {
 		source := model.TrafficPolicy{
 			Name:      "p",
@@ -262,8 +268,12 @@ func TestNativeTrafficPolicyOmitsUnresolvedRuleWithoutLosingDirection(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if compiled.Policy.Egress == nil || len(compiled.Policy.Egress.Rules) != 0 || compiled.Policy.Ingress != nil {
-			t.Fatalf("empty resolution widened rule: %v", compiled.Policy)
+		if compiled.Policy.Egress == nil || len(compiled.Policy.Egress.Rules) != 1 || compiled.Policy.Ingress != nil {
+			t.Fatalf("lost unresolved FQDN: %v", compiled.Policy)
+		}
+		matched := compiled.Policy.Egress.Rules[0].Match
+		if len(matched.DestinationIps) != 0 || !slices.Equal(matched.DestinationFqdns, []string{"missing.example"}) {
+			t.Fatalf("unexpected match: %v", matched)
 		}
 	}
 }
@@ -376,6 +386,9 @@ func TestTrafficPolicyUsesSuccessfulDNSFamilyForAllowAndReject(t *testing.T) {
 				t.Fatalf("partial DNS unexpectedly removed or broadened rule: %v", compiled)
 			}
 			address := rules[0].Match.DestinationIps[0]
+			if !slices.Equal(rules[0].Match.DestinationFqdns, []string{"example.com"}) {
+				t.Fatalf("FQDN missing: %v", rules[0])
+			}
 			if !slices.Equal(address.Address, netip.MustParseAddr("192.0.2.7").AsSlice()) || address.Length != 32 {
 				t.Fatalf("unexpected destination: %v", address)
 			}

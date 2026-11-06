@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync/atomic"
 
 	log "sigs.k8s.io/controller-runtime/pkg/log"
@@ -70,9 +71,23 @@ func (c Config) Authorize(
 ) ([]netip.AddrPort, error) {
 	logger := log.FromContext(ctx).V(logging.DEBUG)
 	allowed := make([]netip.AddrPort, 0, len(candidates))
+	// DNS evidence describes the original HBONE destination, not a rewritten route.
+	original := stream.Request.OriginalDestination.Addr()
+	if strings.EqualFold(stream.Request.Method, "CONNECT") {
+		if ip, err := netip.ParseAddr(stream.Request.Host); err == nil {
+			original = ip
+		} else {
+			// Hostname authorities provide no original-IP binding for DNS evidence.
+			original = netip.Addr{}
+		}
+	}
 	var last Decision
 	for _, candidate := range candidates {
-		decision := c.Evaluate(candidate)
+		var names []string
+		if original.IsValid() && candidate.Addr().Unmap() == original.Unmap() {
+			names = stream.Request.DNSCandidates
+		}
+		decision := c.Evaluate(candidate, names...)
 		if logger.Enabled() {
 			logger.Info("egress destination evaluated",
 				"address", candidate.String(), "action", string(decision.Action),

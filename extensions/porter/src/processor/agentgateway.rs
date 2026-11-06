@@ -56,7 +56,11 @@ pub(super) fn parse<'a>(
         None
     };
     Ok(ParsedRequest {
-        resolution: ResolveRequest { identity, target },
+        resolution: ResolveRequest {
+            identity,
+            target,
+            dns_candidates: Vec::new(),
+        },
         protocol: "tcp",
     })
 }

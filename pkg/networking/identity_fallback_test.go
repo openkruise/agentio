@@ -156,6 +156,7 @@ func TestWorkloadStateTLSRelay(t *testing.T) {
 	}
 	for _, key := range []string{
 		model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
+		model.FilterStateDestinationDNSCandidates,
 		model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
 		model.FilterStateWorkloadUID,
 	} {

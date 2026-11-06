@@ -178,6 +178,7 @@ func RequestAfterMutations(
 	// A rewritten destination must not reuse the previous destination's IP.
 	if result.Host == request.Host && result.Port == request.Port {
 		result.OriginalDestination = request.OriginalDestination
+		result.DNSCandidates = request.DNSCandidates
 	}
 	return result
 }

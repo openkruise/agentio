@@ -17,7 +17,10 @@ package egressauthz
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Policy preserves one source policy's identity and ordered rules. Name is a
@@ -37,14 +40,15 @@ const (
 	Deny  Action = "Deny"
 )
 
-// Rule matches any CIDR AND any port range, then returns its Action.
-// CIDRs must be non-empty; use 0.0.0.0/0 and/or ::/0 to match all addresses.
+// Rule matches any CIDR or observed FQDN, AND any port range.
+// Use 0.0.0.0/0 and/or ::/0 to match all addresses.
 // Empty Ports matches every non-zero port.
 type Rule struct {
 	// SourceIndex preserves the xDS rule ordinal when non-TCP rules are omitted.
 	SourceIndex *int
 	Action      Action
 	CIDRs       []netip.Prefix
+	FQDNs       []string
 	Ports       []PortRange
 }
 
@@ -79,8 +83,13 @@ func (r Rule) validate() error {
 	if r.Action != Allow && r.Action != Deny {
 		return fmt.Errorf("invalid action: %q", r.Action)
 	}
-	if len(r.CIDRs) == 0 {
-		return fmt.Errorf("CIDRs are required")
+	if len(r.CIDRs) == 0 && len(r.FQDNs) == 0 {
+		return fmt.Errorf("CIDRs or FQDNs are required")
+	}
+	for _, name := range r.FQDNs {
+		if errors := validation.IsDNS1123Subdomain(name); len(errors) > 0 {
+			return fmt.Errorf("invalid destination FQDN %q: %s", name, strings.Join(errors, "; "))
+		}
 	}
 	for _, prefix := range r.CIDRs {
 		if !prefix.IsValid() || prefix.Addr().Is4In6() {
@@ -102,20 +111,23 @@ func (p PortRange) last() uint16 {
 	return p.End
 }
 
-func (r Rule) matches(ip netip.Addr, port uint16) bool {
+func (r Rule) matches(ip netip.Addr, port uint16, dnsCandidates []string) bool {
+	matched := slices.ContainsFunc(dnsCandidates, func(name string) bool {
+		return slices.Contains(r.FQDNs, strings.ToLower(strings.TrimSuffix(name, ".")))
+	})
 	for _, prefix := range r.CIDRs {
-		if !prefix.Contains(ip) {
-			continue
-		}
-		if len(r.Ports) == 0 {
+		matched = matched || prefix.Contains(ip)
+	}
+	if !matched {
+		return false
+	}
+	if len(r.Ports) == 0 {
+		return true
+	}
+	for _, ports := range r.Ports {
+		if port >= ports.Start && port <= ports.last() {
 			return true
 		}
-		for _, ports := range r.Ports {
-			if port >= ports.Start && port <= ports.last() {
-				return true
-			}
-		}
-		return false
 	}
 	return false
 }

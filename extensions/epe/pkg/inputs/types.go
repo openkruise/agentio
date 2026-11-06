@@ -45,13 +45,14 @@ func (p Workload) Label(key string) string {
 
 // Request exposes the matched HTTP request to templates and CEL.
 type Request struct {
-	Host    string
-	Port    int32
-	Path    string
-	Scheme  string
-	Method  string
-	Query   map[string][]string
-	headers map[string]string // lowercase keys (Envoy convention)
+	DNSCandidates []string
+	Host          string
+	Port          int32
+	Path          string
+	Scheme        string
+	Method        string
+	Query         map[string][]string
+	headers       map[string]string // lowercase keys (Envoy convention)
 }
 
 // RequestFrom projects the transport tuple into the expression-visible
@@ -61,13 +62,14 @@ type Request struct {
 // lowercase-keyed by httpreq's contract.
 func RequestFrom(r httpreq.HTTPRequest) Request {
 	return Request{
-		Host:    r.Host,
-		Port:    r.Port,
-		Path:    r.Path,
-		Scheme:  r.Scheme,
-		Method:  r.Method,
-		Query:   r.Query,
-		headers: r.Headers,
+		DNSCandidates: r.DNSCandidates,
+		Host:          r.Host,
+		Port:          r.Port,
+		Path:          r.Path,
+		Scheme:        r.Scheme,
+		Method:        r.Method,
+		Query:         r.Query,
+		headers:       r.Headers,
 	}
 }
 
