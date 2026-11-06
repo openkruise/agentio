@@ -244,7 +244,7 @@ jobs:
           retention-days: 3
 
   product-e2e:
-    needs: [validate-release, release-unit, build-candidates, prepare-chart]
+    needs: [validate-release, build-candidates, prepare-chart]
     uses: ./.github/workflows/agentio-e2e.yml
     with:
       agentiod_image: ${{ needs.build-candidates.outputs.agentiod_image }}
@@ -259,7 +259,7 @@ jobs:
       chart_artifact: agentio-release-chart-candidate
 
   epe-e2e:
-    needs: [validate-release, release-unit, build-candidates, prepare-chart]
+    needs: [validate-release, build-candidates, prepare-chart]
     uses: ./.github/workflows/agentio-e2e.yml
     with:
       epe_only: true

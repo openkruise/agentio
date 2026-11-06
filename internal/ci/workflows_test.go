@@ -49,8 +49,15 @@ func TestReleasePromotesExactProductE2ECandidates(t *testing.T) {
 		}
 	}
 
-	if needs := jobNeeds(t, jobs, "tag-agentio"); !slices.Contains(needs, "product-e2e") {
-		t.Errorf("tag-agentio needs %v, want product-e2e gate", needs)
+	for _, gate := range []string{"release-unit", "product-e2e", "epe-e2e"} {
+		if needs := jobNeeds(t, jobs, "tag-agentio"); !slices.Contains(needs, gate) {
+			t.Errorf("tag-agentio needs %v, want %s gate", needs, gate)
+		}
+	}
+	for _, job := range []string{"product-e2e", "epe-e2e"} {
+		if slices.Contains(jobNeeds(t, jobs, job), "release-unit") {
+			t.Errorf("%s must run in parallel with release-unit", job)
+		}
 	}
 	if needs := jobNeeds(
 		t,
