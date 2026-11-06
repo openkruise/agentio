@@ -24,6 +24,7 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	extensionmatchingv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
 	localratelimitv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
+	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -525,16 +526,27 @@ func TestGatewayListenersUseSupportedAgentioSemantics(t *testing.T) {
 
 	for _, name := range []string{MainInternal, MainForward} {
 		hcm := findHCM(t, listeners[name])
-		if hcm.GetServerName() != "agentio-envoy" || !hcm.Proxy_100Continue {
-			t.Errorf(
-				"listener %s HCM server_name/proxy_100_continue = %q/%v",
-				name,
-				hcm.GetServerName(),
-				hcm.Proxy_100Continue,
-			)
+		if !hcm.Proxy_100Continue {
+			t.Errorf("listener %s must proxy 100-continue responses", name)
 		}
 		if len(hcm.GetUpgradeConfigs()) != 1 || hcm.GetUpgradeConfigs()[0].GetUpgradeType() != "websocket" {
 			t.Errorf("listener %s HCM websocket upgrades = %+v", name, hcm.GetUpgradeConfigs())
+		}
+	}
+	for _, name := range []string{ConnectTerminate, MainInternal, MainForward} {
+		hcm := findHCM(t, listeners[name])
+		if hcm.GetServerName() != "" {
+			t.Errorf("listener %s must leave server_name unset", name)
+		}
+		if hcm.GetServerHeaderTransformation() != hcmv3.HttpConnectionManager_PASS_THROUGH {
+			t.Errorf("listener %s must preserve the upstream Server header without adding one", name)
+		}
+		router := &routerv3.Router{}
+		if err := hcm.HttpFilters[len(hcm.HttpFilters)-1].GetTypedConfig().UnmarshalTo(router); err != nil {
+			t.Fatal(err)
+		}
+		if !router.GetSuppressEnvoyHeaders() {
+			t.Errorf("listener %s router must suppress generated x-envoy headers", name)
 		}
 	}
 }

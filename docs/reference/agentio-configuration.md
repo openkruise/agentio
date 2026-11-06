@@ -273,9 +273,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 
 ### HTTP protocol
 
-Business HTTP listeners accept HTTP/1.0 by default, both for plaintext traffic
-and HTTP after TLS termination. Set `egressGateways[].http.acceptHttp10: false`
-to reject HTTP/1.0 on a particular gateway:
+Business HTTP listeners accept HTTP/1.0 by default, both for plaintext traffic and HTTP after TLS termination. Set `egressGateways[].http.acceptHttp10: false` to reject HTTP/1.0 on a particular gateway:
 
 ```yaml
 egressGateways:
@@ -285,15 +283,11 @@ egressGateways:
     acceptHttp10: false
 ```
 
-Omitting `http`, using `http: {}`, or setting `acceptHttp10: true` enables
-HTTP/1.0. Requests still require a valid authority, supplied by a `Host` header
-or extracted from an absolute request URL; no default host is configured.
-This setting also applies to Gateway API `parametersRef` configuration. It does
-not change the outer HTTP/2 CONNECT tunnel or TLS passthrough traffic. Preserve
-other gateway entries and settings when updating the `egressGateways` list.
+Omitting `http`, using `http: {}`, or setting `acceptHttp10: true` enables HTTP/1.0. Requests still require a valid authority, supplied by a `Host` header or extracted from an absolute request URL; no default host is configured. This setting also applies to Gateway API `parametersRef` configuration. It does not change the outer HTTP/2 CONNECT tunnel or TLS passthrough traffic. Preserve other gateway entries and settings when updating the `egressGateways` list.
 
-The protocol names used in access-log expressions and CEL filters are listed in
-[Gateway protocol names](../design/gateway-protocol-names.md).
+Envoy gateways preserve an upstream `Server` response header and do not add one when it is absent. The router also suppresses its generated `x-envoy-*` headers, including `x-envoy-upstream-service-time`. Headers supplied by upstream services or external processors are passed through.
+
+The protocol names used in access-log expressions and CEL filters are listed in [Gateway protocol names](../design/gateway-protocol-names.md).
 
 ### Access-log format
 
@@ -646,9 +640,7 @@ egressGateways:
 
 ## Gateway configuration migration
 
-The gateway configuration is grouped by protocol. The old fields are removed;
-update the complete gateway entries in both AgentioConfig sources and Gateway
-API `parametersRef` ConfigMaps:
+The gateway configuration is grouped by protocol. The old fields are removed; update the complete gateway entries in both AgentioConfig sources and Gateway API `parametersRef` ConfigMaps:
 
 | Removed path | New path |
 | --- | --- |
@@ -658,19 +650,9 @@ API `parametersRef` ConfigMaps:
 | `connectionPool.http.routeOverrides` | `http.routing.hostOverrides` |
 | `upstreamTls` | `tls.origination` |
 
-`tlsTermination` retains its location, fields, and behavior. The moved timeout,
-retry, and TLS settings retain their defaults and matching semantics. HTTP/1.0
-is now enabled by default; set `http.acceptHttp10: false` to disable it. Both
-values route HTTP/1.0 through the HTTP filter chain; disabling it rejects the
-request instead of forwarding it as opaque TCP.
+`tlsTermination` retains its location, fields, and behavior. The moved timeout, retry, and TLS settings retain their defaults and matching semantics. HTTP/1.0 is now enabled by default; set `http.acceptHttp10: false` to disable it. Both values route HTTP/1.0 through the HTTP filter chain; disabling it rejects the request instead of forwarding it as opaque TCP.
 
-Old paths are not aliases. AgentioConfig ignores them with a warning, so their
-settings do not take effect. Gateway API `parametersRef` payloads reject unknown
-fields, including these old paths. Migrate both sources when deploying the new
-control plane. Invalid updates retain the last effective configuration;
-retained configuration does not survive a process restart.
-External processor `clusterSettings` and EPE HTTP-callout `connectionPool`
-settings are separate APIs and are unchanged.
+Old paths are not aliases. AgentioConfig ignores them with a warning, so their settings do not take effect. Gateway API `parametersRef` payloads reject unknown fields, including these old paths. Migrate both sources when deploying the new control plane. Invalid updates retain the last effective configuration; retained configuration does not survive a process restart. External processor `clusterSettings` and EPE HTTP-callout `connectionPool` settings are separate APIs and are unchanged.
 
 ## Inspect configuration sources
 
