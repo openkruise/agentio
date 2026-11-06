@@ -228,7 +228,7 @@ func TestSandboxUIDHonorsDeliveryIdentity(t *testing.T) {
 			found: true,
 		},
 		{
-			name: "pooled sandbox requires delivery identity",
+			name: "pooled compatibility identity",
 			sandbox: &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
 				Namespace: "demo",
 				Name:      "sandbox",
@@ -236,6 +236,8 @@ func TestSandboxUIDHonorsDeliveryIdentity(t *testing.T) {
 					agentsv1alpha1.LabelSandboxPool: "pool",
 				},
 			}},
+			want:  "kruise:demo--sandbox",
+			found: true,
 		},
 		{
 			name: "nil",
@@ -248,6 +250,39 @@ func TestSandboxUIDHonorsDeliveryIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPooledSandboxLegacyIdentityRequiresClaim(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		options := []krt.CollectionOption{krt.WithStop(t.Context().Done())}
+		source := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "demo",
+			Name:      "sandbox",
+			UID:       "source",
+			Labels:    map[string]string{agentsv1alpha1.LabelSandboxPool: "pool"},
+		}}
+		objects := krt.NewMutableCollection(nil, []*agentsv1alpha1.Sandbox{source}, options...)
+		pods := krt.NewStaticCollection[*corev1.Pod](nil, nil, options...)
+		groups := newSandboxesByUID(objects.AsCollection()).AsCollection(options...)
+		sandboxes := newSandboxes(groups, pods, newPodsByUID(pods), "cluster", options...)
+		sources := newSandboxSources(objects.AsCollection())
+		key := model.ResourceKey{TypeURL: model.SandboxType, Name: "kruise:demo--sandbox"}
+		for _, claimed := range []bool{false, true, false} {
+			changed := source.DeepCopy()
+			if claimed {
+				changed.Labels[agentsv1alpha1.LabelSandboxIsClaimed] = agentsv1alpha1.True
+			}
+			objects.UpdateObject(changed)
+			synctest.Wait()
+			if got := sandboxes.GetKey(key.Name); (got != nil) != claimed {
+				t.Fatalf("claimed=%t: Sandbox = %+v", claimed, got)
+			}
+			identity, found := sources.Lookup(key)
+			if found != claimed || (found && identity.UID != "source") {
+				t.Fatalf("claimed=%t: source = %+v, %t", claimed, identity, found)
+			}
+		}
+	})
 }
 
 func TestKruiseSandboxProducesPodAttesterBinding(t *testing.T) {
