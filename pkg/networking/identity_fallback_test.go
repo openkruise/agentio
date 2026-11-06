@@ -122,20 +122,40 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				if err := hcm.HttpFilters[index].GetTypedConfig().UnmarshalTo(restored); err != nil {
 					t.Fatal(err)
 				}
-				if len(restored.OnRequestHeaders) != 4 {
+				if len(restored.OnRequestHeaders) != 5 {
 					t.Fatalf("identity state=%v", restored)
 				}
-				for i, field := range []string{"name", "namespace", "uid"} {
+				for i, field := range []struct {
+					key      string
+					metadata string
+				}{
+					{"name", "name"},
+					{"namespace", "namespace"},
+					{"uid", "resource_name"},
+					{"instance", "uid"},
+				} {
 					state := restored.OnRequestHeaders[i]
-					if state.GetObjectKey() != "agentio.workload."+field ||
+					if state.GetObjectKey() != "agentio.workload."+field.key ||
 						state.GetFactoryKey() != "envoy.hashable_string" ||
 						state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE ||
+						!state.GetSkipIfEmpty() ||
 						state.GetFormatString().
 							GetTextFormatSource().
 							GetInlineString() !=
-							"%DYNAMIC_METADATA(agentio:workload:"+field+")%" {
+							"%DYNAMIC_METADATA(agentio:workload:"+field.metadata+")%" {
 						t.Fatalf("identity must survive internal hops and isolate connection pools: %v", state)
 					}
+				}
+				sandbox := restored.OnRequestHeaders[4]
+				if sandbox.GetObjectKey() != model.FilterStateSandboxID ||
+					sandbox.GetFormatString().
+						GetTextFormatSource().
+						GetInlineString() !=
+						"%DYNAMIC_METADATA(agentio:sandbox:id)%" ||
+					sandbox.GetFactoryKey() != "envoy.hashable_string" ||
+					sandbox.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE ||
+					!sandbox.GetSkipIfEmpty() || sandbox.GetReadOnly() {
+					t.Fatalf("Sandbox identity must be published after Porter and before rate limiting: %v", sandbox)
 				}
 			})
 		}

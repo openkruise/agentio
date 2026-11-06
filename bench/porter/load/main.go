@@ -715,8 +715,9 @@ func call(
 		if !strings.HasPrefix(got, prefix) || (revision >= 0 && got != prefix+strconv.Itoa(revision)) {
 			return fmt.Errorf("wrong workload or stale revision %q for %d revision=%d", got, i, revision)
 		}
-		if mode != "ip" && m["workload_instance"].GetStringValue() != source(i).WorkloadAlias() {
-			return fmt.Errorf("wrong instance")
+		if mode != "ip" &&
+			m["workload"].GetStructValue().GetFields()["uid"].GetStringValue() != source(i).WorkloadAlias() {
+			return fmt.Errorf("wrong workload UID")
 		}
 		rules := m["sni"].GetStructValue().GetFields()["policy"].GetStructValue().GetFields()["rules"].GetListValue().
 			GetValues()

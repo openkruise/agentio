@@ -24,8 +24,8 @@ import (
 func TestReconnectVersionsExplicitDemandStillResends(t *testing.T) {
 	for _, typ := range []string{model.WorkloadType, model.SandboxType} {
 		t.Run(typ, func(t *testing.T) {
-			resource := addressResource(t, "canonical", "pod", "workload-instance/one", "/10.0.0.1")
-			names := []string{"canonical", "workload-instance/one", "/10.0.0.1"}
+			resource := addressResource(t, "canonical", "pod", "workload/one", "/10.0.0.1")
+			names := []string{"canonical", "workload/one", "/10.0.0.1"}
 			if typ == model.SandboxType {
 				resource = sandboxResource(t, "canonical")
 				names = names[:1]
@@ -76,8 +76,8 @@ func TestReconnectVersionsExplicitDemandStillResends(t *testing.T) {
 }
 
 func TestReconnectVersionsWildcardSkipsUnchangedButWidensScope(t *testing.T) {
-	a := addressResource(t, "a", "a", "workload-instance/a")
-	b := addressResource(t, "b", "b", "workload-instance/b")
+	a := addressResource(t, "a", "a", "workload/a")
+	b := addressResource(t, "b", "b", "workload/b")
 	server := newTestServer(t, gatewayScope(), []model.Resource{a, b}, nil)
 	stream := newFakeStream(t.Context(), 4)
 	subscription := server.resources.Subscribe(t.Context(), model.ClientScope{})
@@ -87,7 +87,7 @@ func TestReconnectVersionsWildcardSkipsUnchangedButWidensScope(t *testing.T) {
 		log,
 		map[string]*watchState{},
 		subscription,
-		nodeRequest(model.WorkloadType, "workload-instance/a"),
+		nodeRequest(model.WorkloadType, "workload/a"),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestReconnectVersionsWildcardSkipsUnchangedButWidensScope(t *testing.T) {
 }
 
 func TestReconnectCanonicalInterestDoesNotTrackNewAliasOwner(t *testing.T) {
-	for _, shared := range []string{"workload-instance/one", "/10.0.0.1"} {
+	for _, shared := range []string{"workload/one", "/10.0.0.1"} {
 		t.Run(shared, func(t *testing.T) {
 			a := addressResource(t, "a", "a", shared)
 			b := addressResource(t, "b", "b", shared)
@@ -174,8 +174,8 @@ func TestReconnectCanonicalInterestDoesNotTrackNewAliasOwner(t *testing.T) {
 }
 
 func TestReconnectVersionsReconcilesAliasRebindingAndRemoval(t *testing.T) {
-	old := addressResource(t, "old", "old", "workload-instance/one")
-	replacement := addressResource(t, "replacement", "replacement", "workload-instance/one")
+	old := addressResource(t, "old", "old", "workload/one")
+	replacement := addressResource(t, "replacement", "replacement", "workload/one")
 	server := newTestServer(t, gatewayScope(), []model.Resource{old}, nil)
 	stream := newFakeStream(t.Context(), 4)
 	subscription := server.resources.Subscribe(t.Context(), model.ClientScope{})
@@ -185,13 +185,13 @@ func TestReconnectVersionsReconcilesAliasRebindingAndRemoval(t *testing.T) {
 		log,
 		map[string]*watchState{},
 		subscription,
-		nodeRequest(model.WorkloadType, "workload-instance/one"),
+		nodeRequest(model.WorkloadType, "workload/one"),
 	); err != nil {
 		t.Fatal(err)
 	}
 	cached := stream.sent()[0].Resources[0]
 	server.resources.publish(selectionSnapshot(t, []model.Resource{replacement}))
-	req := nodeRequest(model.WorkloadType, "workload-instance/one")
+	req := nodeRequest(model.WorkloadType, "workload/one")
 	req.InitialResourceVersions = map[string]string{cached.Name: cached.Version}
 	if err := server.server.handleRequest(
 		stream,
