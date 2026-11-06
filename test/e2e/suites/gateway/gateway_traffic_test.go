@@ -136,7 +136,7 @@ data:
 		Port:     80,
 		Count:    1,
 		Headers:  map[string]string{"Host": net.JoinHostPort(host, "80")},
-		Check:    check.And(check.OK(), hostnameIs(dstPod), hasEnvoyResponseHeader()),
+		Check:    check.And(check.OK(), hostnameIs(dstPod), noEnvoyResponseHeader()),
 		Retry:    harness.FixedRetry(2*time.Minute, 5*time.Second),
 	})
 }
@@ -186,21 +186,24 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - gateway:
         service: egress-gateway.{{ .Namespace }}.svc.cluster.local
       policy: GATEWAY
 `)
 
-	harness.RunGatewayTraffic(t, src, dst, hasEnvoyResponseHeader(), check.NoError(), func(t *testing.T, id, authority string) { waitForGatewayAccessLog(t, environment, id, authority) })
+	harness.RunGatewayTraffic(
+		t,
+		src,
+		dst,
+		gatewayTraversal(true),
+		check.NoError(),
+		func(t *testing.T, id, authority string) { waitForGatewayAccessLog(t, environment, id, authority) },
+	)
 }
 
-// TestSandboxMatchPorts verifies that EgressPolicy.match_ports gates which
-// destination ports are routed through the egress gateway. Traffic to a
-// matched port should hit the envoy egress gateway (response carries
-// x-envoy-* headers like x-envoy-upstream-service-time added by envoy on
-// the way back); traffic to an unmatched port should bypass the gateway
-// and arrive without those headers.
+// TestSandboxMatchPorts verifies that only matched destination ports traverse
+// the gateway and carry the request marker added by the ext_proc fixture.
 func TestSandboxMatchPorts(t *testing.T) {
 	_, scope := rig.BeginScenario(t)
 	src := trafficFixture.Client
@@ -217,7 +220,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchPorts:
       - "80"
       gateway:
@@ -225,7 +228,7 @@ data:
       policy: GATEWAY
 `)
 
-	harness.RunGatewayMatchPorts(t, src, dst, hasEnvoyResponseHeader(), noEnvoyResponseHeader())
+	harness.RunGatewayMatchPorts(t, src, dst, gatewayTraversal(true), gatewayTraversal(false))
 }
 
 func hostnameIs(want string) echo.Checker {
@@ -237,14 +240,16 @@ func hostnameIs(want string) echo.Checker {
 	})
 }
 
-// noEnvoyResponseHeader asserts no x-envoy-* header is present in the
-// response -- i.e. the connection bypassed any envoy proxy on the egress path.
+// noEnvoyResponseHeader checks the gateway does not expose its generated headers.
 func noEnvoyResponseHeader() echo.Checker {
 	return check.Each(func(response echo.Response) error {
+		if response.ResponseHeaders.Get("Server") == "agentio-envoy" {
+			return fmt.Errorf("gateway server header must not be exposed")
+		}
 		for key := range response.ResponseHeaders {
 			if strings.HasPrefix(strings.ToLower(key), "x-envoy-") {
 				return fmt.Errorf(
-					"did not expect x-envoy-* response header (should bypass envoy gateway), got %s=%v",
+					"did not expect x-envoy-* response header, got %s=%v",
 					key,
 					response.ResponseHeaders.Values(key),
 				)
@@ -252,4 +257,24 @@ func noEnvoyResponseHeader() echo.Checker {
 		}
 		return nil
 	})
+}
+
+// The existing ext_proc fixture marks requests only when they traverse the gateway.
+const gatewayTraversalConfig = `    sandboxExtProc:
+      service: ext-proc.{{ .Namespace }}.svc.cluster.local
+      port: 9002
+      request:
+        headerMode: SEND
+      response:
+        headerMode: SKIP
+`
+
+func gatewayTraversal(want bool) echo.Checker {
+	return check.And(noEnvoyResponseHeader(), check.Each(func(response echo.Response) error {
+		got := response.RequestHeaders.Get("X-Hello-To-Ext-Proc")
+		if (got == "true") != want {
+			return fmt.Errorf("gateway traversal marker = %q, want gateway traversal %t", got, want)
+		}
+		return nil
+	}))
 }

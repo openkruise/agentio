@@ -18,7 +18,6 @@ package gateway
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +53,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - policy: GATEWAY
       gateway:
         service: egress-gateway.{{ .Namespace }}.svc.cluster.local
@@ -63,7 +62,7 @@ data:
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 			),
 		)
 	})
@@ -78,14 +77,14 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - policy: PASSTHROUGH
 `)
 
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 			),
 		)
 	})
@@ -101,7 +100,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchCidrs:
       - "{{ .DstCIDR }}"
       policy: GATEWAY
@@ -113,7 +112,7 @@ data:
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 			),
 		)
 	})
@@ -128,7 +127,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchPorts:
       - "80"
       policy: GATEWAY
@@ -141,14 +140,14 @@ data:
 			src.CallOrFail(
 				t,
 				withEgressPolicyRetry(
-					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 				),
 			)
 		})
 
 		t.Run("unmatched port passes through", func(t *testing.T) {
 			src.CallOrFail(t, withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "auto-http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "auto-http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 			))
 		})
 	})
@@ -164,7 +163,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "{{ .DstHost }}"
       policy: GATEWAY
@@ -176,7 +175,7 @@ data:
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 			),
 		)
 	})
@@ -191,7 +190,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "nonexistent.example.com"
       policy: GATEWAY
@@ -203,7 +202,7 @@ data:
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 			),
 		)
 	})
@@ -219,7 +218,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "{{ .DstHost }}"
       gateway:
@@ -230,7 +229,7 @@ data:
 
 		src.CallOrFail(t, withEgressPolicyRetry(dst.CallOptionsOrFail(t, "http").WithCheck(check.And(
 			check.OK(),
-			hasEnvoyResponseHeader(),
+			gatewayTraversal(true),
 		))))
 	})
 
@@ -244,7 +243,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "www.example.com"
       gateway:
@@ -273,7 +272,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "{{ .DstHost }}"
       matchPorts:
@@ -288,14 +287,14 @@ data:
 			src.CallOrFail(
 				t,
 				withEgressPolicyRetry(
-					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 				),
 			)
 		})
 
 		t.Run("matched host but unmatched port passes through", func(t *testing.T) {
 			src.CallOrFail(t, withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "auto-http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "auto-http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 			))
 		})
 	})
@@ -313,7 +312,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchHosts:
       - "this-domain-does-not-exist.invalid"
       policy: GATEWAY
@@ -325,7 +324,7 @@ data:
 			src.CallOrFail(
 				t,
 				withEgressPolicyRetry(
-					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 				),
 			)
 		},
@@ -342,7 +341,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - matchCidrs:
       - "{{ .DstCIDR }}"
       policy: PASSTHROUGH
@@ -355,13 +354,13 @@ data:
 			t,
 			withEgressPolicyRetry(
 				trafficFixture.AnotherServer.CallOptionsOrFail(t, "http").
-					WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+					WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 			),
 		)
 		src.CallOrFail(
 			t,
 			withEgressPolicyRetry(
-				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), noEnvoyResponseHeader())),
+				dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(false))),
 			),
 		)
 	})
@@ -377,7 +376,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - namespaces:
       - "{{ .SrcNamespace }}"
       policy: GATEWAY
@@ -390,7 +389,7 @@ data:
 			src.CallOrFail(
 				t,
 				withEgressPolicyRetry(
-					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 				),
 			)
 		})
@@ -421,7 +420,7 @@ metadata:
   name: `+harness.ConfigMapName+`
 data:
   config: |
-    egressPolicies:
+`+gatewayTraversalConfig+`    egressPolicies:
     - policy: GATEWAY
       gateway:
         service: egress-gateway.{{ .Namespace }}.svc.cluster.local
@@ -430,7 +429,7 @@ data:
 				t,
 				withEgressPolicyRetry(
 					echo.CallOptionsForAddress(echo.HTTP, dst.ServiceIPOrFail(t), 80).
-						WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+						WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 				),
 			)
 			e2econfig.New(scope).
@@ -465,7 +464,7 @@ spec:
 			trafficFixture.AnotherServer.CallOrFail(
 				t,
 				withEgressPolicyRetry(
-					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+					dst.CallOptionsOrFail(t, "http").WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 				),
 			)
 			if tc.allowedPort != "" {
@@ -473,7 +472,7 @@ spec:
 					t,
 					withEgressPolicyRetry(
 						dst.CallOptionsOrFail(t, tc.allowedPort).
-							WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+							WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 					),
 				)
 			} else if tc.name != "deny all" {
@@ -481,7 +480,7 @@ spec:
 					t,
 					withEgressPolicyRetry(
 						trafficFixture.AnotherServer.CallOptionsOrFail(t, "http").
-							WithCheck(check.And(check.OK(), hasEnvoyResponseHeader())),
+							WithCheck(check.And(check.OK(), gatewayTraversal(true))),
 					),
 				)
 			}
@@ -498,21 +497,4 @@ func withEgressPolicyRetry(options echo.CallOptions) echo.CallOptions {
 		Converge: 1,
 	}
 	return options
-}
-
-// hasEnvoyResponseHeader asserts at least one x-envoy-* header is present
-// in the response the client received — envoy injects headers like
-// x-envoy-upstream-service-time when it proxies the call back.
-func hasEnvoyResponseHeader() echo.Checker {
-	return check.Each(func(response echo.Response) error {
-		for key := range response.ResponseHeaders {
-			if strings.HasPrefix(strings.ToLower(key), "x-envoy-") {
-				return nil
-			}
-		}
-		return fmt.Errorf(
-			"expected an x-envoy-* response header (proxied via envoy gateway), got: %v",
-			response.ResponseHeaders,
-		)
-	})
 }

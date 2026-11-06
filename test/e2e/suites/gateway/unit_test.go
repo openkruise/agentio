@@ -18,6 +18,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,11 +33,57 @@ import (
 
 	"github.com/openkruise/agentio/test/e2e"
 	"github.com/openkruise/agentio/test/e2e/cluster"
+	"github.com/openkruise/agentio/test/e2e/components/echo"
 	"github.com/openkruise/agentio/test/e2e/components/namespace"
 	"github.com/openkruise/agentio/test/e2e/kube"
 
 	agentiocomponent "github.com/openkruise/agentio/test/e2e/components/agentio"
 )
+
+func TestGatewayTraversal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		marker  string
+		headers http.Header
+		gateway bool
+		wantErr bool
+	}{
+		{name: "gateway without generated headers", marker: "true", gateway: true},
+		{name: "passthrough without marker"},
+		{name: "gateway requires marker", gateway: true, wantErr: true},
+		{name: "passthrough rejects marker", marker: "true", wantErr: true},
+		{
+			name:    "gateway rejects generated header",
+			marker:  "true",
+			gateway: true,
+			wantErr: true,
+			headers: http.Header{"X-Envoy-Upstream-Service-Time": {"1"}},
+		},
+		{
+			name:    "gateway rejects generated server",
+			marker:  "true",
+			gateway: true,
+			wantErr: true,
+			headers: http.Header{"Server": {"agentio-envoy"}},
+		},
+		{
+			name:    "upstream and business headers preserved",
+			marker:  "true",
+			gateway: true,
+			headers: http.Header{"Server": {"upstream"}, "X-Chain-Response": {"second"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := echo.Result{Responses: []echo.Response{{
+				RequestHeaders:  http.Header{"X-Hello-To-Ext-Proc": {tc.marker}},
+				ResponseHeaders: tc.headers,
+			}}}
+			if err := gatewayTraversal(tc.gateway)(result, nil); (err != nil) != tc.wantErr {
+				t.Fatalf("gatewayTraversal(%t) = %v, want error %t", tc.gateway, err, tc.wantErr)
+			}
+		})
+	}
+}
 
 func TestSetupOrder(t *testing.T) {
 	digest := "registry.example/test@sha256:" + strings.Repeat("b", 64)
