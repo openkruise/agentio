@@ -123,11 +123,13 @@ func TestSandboxUIDLookupFromCache(t *testing.T) {
 		name      string
 		rules     string
 		duplicate bool
+		missing   bool
 		namespace string
 		wantError bool
 	}{
 		{name: "rules", namespace: "ns", rules: "pending"},
 		{name: "no rules", namespace: "ns"},
+		{name: "missing UID with same-name Sandbox", namespace: "ns", missing: true, wantError: true},
 		{name: "duplicate UID", namespace: "ns", rules: "pending", duplicate: true, wantError: true},
 		{name: "different namespace", namespace: "other", wantError: true},
 	} {
@@ -164,7 +166,14 @@ func TestSandboxUIDLookupFromCache(t *testing.T) {
 				Workload: subject.Workload{Name: "runtime", Namespace: "ns"},
 				Sandbox:  &subject.Sandbox{UID: "kruise:delivery"},
 			}
+			if tc.missing {
+				subj.Workload.Name = sandbox.Name
+				subj.Sandbox.UID = "kruise:missing"
+			}
 			source, found, err := profiles.sandbox(t.Context(), subj)
+			if actions := metadata.Actions(); len(actions) != 0 {
+				t.Fatalf("cached UID lookup called the API: %v", actions)
+			}
 			if tc.wantError {
 				if err == nil {
 					t.Fatal("invalid UID lookup accepted")
@@ -175,9 +184,6 @@ func TestSandboxUIDLookupFromCache(t *testing.T) {
 				source.identity.UID != "source-uid" ||
 				found != (tc.rules != "") {
 				t.Fatalf("UID lookup = %+v, %v, %v", source, found, err)
-			}
-			if actions := metadata.Actions(); len(actions) != 0 {
-				t.Fatalf("cached UID lookup called the API: %v", actions)
 			}
 		})
 	}
@@ -472,7 +478,10 @@ func TestSandboxCacheMissDoesNotQueryAPI(t *testing.T) {
 	test.SetForTest(t, &features.SandboxMode, true)
 	for _, crd := range []bool{false, true} {
 		t.Run(fmt.Sprintf("Sandbox CRD=%t", crd), func(t *testing.T) {
-			c := &profileTestClient{Client: kube.NewFakeClient(), sandboxCRD: crd}
+			c := &profileTestClient{
+				Client:     kube.NewFakeClient(newTestGlobalProfile("admin", nil)),
+				sandboxCRD: crd,
+			}
 			profiles := NewCollection(c, nil, nil, t.Context().Done())
 			s := NewStore(0)
 			reg := s.RegisterCollection(profiles)
@@ -480,11 +489,25 @@ func TestSandboxCacheMissDoesNotQueryAPI(t *testing.T) {
 			if !reg.WaitUntilSynced(t.Context().Done()) {
 				t.Fatal("initial sync failed")
 			}
+			testsupport.Eventually(t, 5*time.Second, func() error {
+				if len(s.List()) != 1 {
+					return fmt.Errorf("administrator profile is not installed")
+				}
+				return nil
+			})
 			metadata := c.Metadata().(*metadatafake.FakeMetadataClient)
 			metadata.ClearActions()
 			for range 10 {
-				subj := subject.Subject{Workload: subject.Workload{Name: "missing", Namespace: "ns"}}
-				if got, err := s.ResolveProfiles(t.Context(), subj); err != nil || len(got) != 0 {
+				subj := subject.Subject{Workload: subject.Workload{
+					Name:                      "missing",
+					Namespace:                 "ns",
+					SecurityProfileReferences: []string{"global/admin"},
+				}}
+				if got, err := s.ResolveProfiles(
+					t.Context(),
+					subj,
+				); err != nil || len(got) != 1 ||
+					got[0].Meta.Name != "admin" {
 					t.Fatalf("absent optional Sandbox = %v, %v", got, err)
 				}
 				subj.Sandbox = &subject.Sandbox{UID: "kruise:missing"}

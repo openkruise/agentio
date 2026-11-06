@@ -15,6 +15,7 @@ package securityprofile
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"testing"
 
@@ -27,6 +28,34 @@ import (
 
 // benchSink defeats dead-code elimination.
 var benchSink any
+
+func BenchmarkNewSandboxProfile(b *testing.B) {
+	for _, count := range []int{1, 16, 128} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			rules := make([]v1alpha1.SecurityRule, count)
+			for i := range rules {
+				rules[i] = matchAllRule("r" + strconv.Itoa(i))
+				rules[i].Actions.HeaderManipulation = &v1alpha1.HeaderManipulationAction{
+					Set: []v1alpha1.HeaderValue{{Name: "X-Trace", Value: "{{pod.name}}-literal"}},
+				}
+			}
+			raw, err := json.Marshal(rules)
+			if err != nil {
+				b.Fatal(err)
+			}
+			sandbox := sandboxWithRules("bench", "ns", string(raw))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				profile, err := NewSandboxProfile(sandbox)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink = profile
+			}
+		})
+	}
+}
 
 // benchStore returns a fixed profile slice, so these benchmarks measure the
 // binder and the resolver adapter without the store's label matching on the

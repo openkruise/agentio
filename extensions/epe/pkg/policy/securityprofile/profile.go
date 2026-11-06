@@ -388,8 +388,10 @@ type Profile struct {
 	Selector labels.Selector
 	Rules    []Rule         // parallel to the source Spec.Rules
 	Audits   []*audit.Audit // spec-level compiled audit entries
-	// Spec retains the immutable source spec for inspecting the installed version.
+	// Spec retains the immutable administrator profile spec for inspection.
 	Spec *v1alpha1.SecurityProfileSpec `json:"-"`
+	// RawSandboxRules shares the source annotation; only full debug views decode it.
+	RawSandboxRules string `json:"-"`
 	// Projections holds each rule's per-filter configuration, parallel to
 	// Rules, built once by Project when the collection item is compiled. It
 	// lives on the profile so the compiled objects a rule needs share the

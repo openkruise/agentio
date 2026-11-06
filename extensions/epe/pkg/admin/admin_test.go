@@ -432,6 +432,15 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	if got := spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != "{{pod.name}}" {
 		t.Fatalf("full mode changed the original plaintext header: %q", got)
 	}
+
+	sbx.ResourceVersion = "8"
+	sbx.Annotations[securityprofile.AnnotationSecurityRules] = "invalid"
+	store.SandboxProfileSet(sbx)
+	stale := httptest.NewRecorder()
+	h.ServeHTTP(stale, req)
+	if stale.Code != http.StatusOK || stale.Body.String() != rec.Body.String() {
+		t.Fatalf("full mode must retain the installed Sandbox version: %s", stale.Body.String())
+	}
 }
 
 func TestHandleProfilesFullUsesInstalledVersion(t *testing.T) {
