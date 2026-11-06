@@ -45,7 +45,6 @@ import (
 	"github.com/go-logr/logr"
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -230,13 +229,14 @@ func sandboxRegistration(client kube.Client) kube.InformerRegistration {
 // good version of that Sandbox UID's rules when one exists and installs nothing
 // otherwise. Requests wait for a usable first version, failing closed when
 // their request budget expires. An empty annotation remains a legitimate removal.
+// After initial sync, lookups use only the watched snapshot; an unknown explicit
+// Sandbox identity fails closed without reading the Kubernetes API.
 func newSandboxCollection(
 	client kube.Client,
 	regs []filter.Registration,
 	opts krt.OptionsBuilder,
 	log logr.Logger,
 ) *Collection {
-	sandboxResource := client.Metadata().Resource(sandboxGVR)
 	sandboxInf := kclient.NewDelayedInformerFor[*metav1.PartialObjectMetadata](client,
 		sandboxRegistration(client), kclient.Filter{})
 	sandboxInf.Start(opts.Stop())
@@ -280,24 +280,10 @@ func newSandboxCollection(
 		opts.WithName("CompiledSandboxProfiles")...)
 	return &Collection{
 		Source: registry.Source[securityprofile.Profile]{Collection: compiled, Registry: sources},
-		sandbox: func(ctx context.Context, subject subject.Subject) (sandboxSource, bool, error) {
+		sandbox: func(_ context.Context, subject subject.Subject) (sandboxSource, bool, error) {
 			var obj *metav1.PartialObjectMetadata
 			if subject.Sandbox != nil {
 				matches := byUID.Lookup(subject.Sandbox.UID)
-				if len(matches) == 0 {
-					// The UID need not encode a Kubernetes name, and may precede the watch event.
-					objects, err := sandboxResource.Namespace(subject.Workload.Namespace).
-						List(ctx, metav1.ListOptions{})
-					if err != nil {
-						return sandboxSource{}, false, err
-					}
-					for i := range objects.Items {
-						candidate := &objects.Items[i]
-						if uid, found := kruise.SandboxUID(candidate); found && uid == subject.Sandbox.UID {
-							matches = append(matches, candidate)
-						}
-					}
-				}
 				if len(matches) != 1 {
 					return sandboxSource{}, false, fmt.Errorf(
 						"sandbox %q has %d matching sources",
@@ -314,19 +300,11 @@ func newSandboxCollection(
 					)
 				}
 			} else {
-				obj = sandboxInf.Get(subject.Workload.Name, subject.Workload.Namespace)
-				if obj == nil {
-					// Local absence is not authoritative: the request may precede the watch event.
-					var err error
-					obj, err = sandboxResource.Namespace(subject.Workload.Namespace).
-						Get(ctx, subject.Workload.Name, metav1.GetOptions{})
-					if apierrors.IsNotFound(err) {
-						return sandboxSource{}, false, nil
-					}
-					if err != nil {
-						return sandboxSource{}, false, err
-					}
+				cached := sandboxes.GetKey(subject.Workload.Namespace + "/" + subject.Workload.Name)
+				if cached == nil {
+					return sandboxSource{}, false, nil
 				}
+				obj = *cached
 			}
 			return sandboxSource{
 				name:     types.NamespacedName{Namespace: obj.Namespace, Name: obj.Name},

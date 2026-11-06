@@ -17,23 +17,18 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	"go.uber.org/zap"
-
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	log "sigs.k8s.io/controller-runtime/pkg/log"
-
-	agentsclient "github.com/openkruise/agents-api/client/clientset/versioned"
+	"strings"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+	"go.uber.org/zap"
+
+	log "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 )
 
 // Options configures the admin HTTP handler.
@@ -42,9 +37,6 @@ type Options struct {
 	EnableDebug bool
 	// Store provides the compiled profile snapshot used for matching.
 	Store profilestore.Store
-	// Client is a typed clientset used to fetch full CR content in
-	// full mode. May be nil when EnableDebug is false.
-	Client agentsclient.Interface
 	// Credentials invalidates the same client used by the filter chain. Nil omits
 	// the cache endpoint; its registration is independent of EnableDebug.
 	Credentials CredentialInvalidator
@@ -55,7 +47,6 @@ type Options struct {
 // handler holds the dependencies shared by the admin endpoints.
 type handler struct {
 	store       profilestore.Store
-	client      agentsclient.Interface
 	enableDebug bool
 	logLevel    *zap.AtomicLevel
 	credentials CredentialInvalidator
@@ -66,7 +57,6 @@ type handler struct {
 func NewHandler(opts Options) http.Handler {
 	h := &handler{
 		store:       opts.Store,
-		client:      opts.Client,
 		enableDebug: opts.EnableDebug,
 		logLevel:    opts.LogLevel,
 		credentials: opts.Credentials,
@@ -134,8 +124,8 @@ func enabledText(enabled bool) string {
 	return "disabled (start with --enable-debug)"
 }
 
-// toView builds the default (identity-only) view of a compiled profile.
-func toView(p *securityprofile.Profile) ProfileView {
+// toView describes one installed profile, including its source spec in full mode.
+func toView(p *securityprofile.Profile, full bool) (ProfileView, error) {
 	kind := kindSecurityProfile
 	switch {
 	case p.Meta.Match == securityprofile.MatchSandbox:
@@ -143,59 +133,28 @@ func toView(p *securityprofile.Profile) ProfileView {
 	case p.Meta.Namespace == "":
 		kind = kindGlobalSecurityProfile
 	}
-	return ProfileView{
+	view := ProfileView{
 		Kind:      kind,
 		Namespace: p.Meta.Namespace,
 		Name:      p.Meta.Name,
 		Priority:  p.Meta.Priority,
 	}
-}
-
-// enrich fills the full-mode fields by fetching the live CR via the typed
-// clientset. On failure it records the error on the view without aborting
-// the response.
-func (h *handler) enrich(ctx context.Context, v *ProfileView) {
-	if h.client == nil {
-		v.Error = "full content unavailable: no clientset configured"
-		return
+	if full {
+		view.CreationTimestamp = &p.Meta.CreationTimestamp
+		view.Spec = p.Spec
+		if kind == kindSandbox {
+			view.Spec = &v1alpha1.SecurityProfileSpec{}
+			if err := json.NewDecoder(strings.NewReader(p.RawSandboxRules)).Decode(&view.Spec.Rules); err != nil {
+				return ProfileView{}, fmt.Errorf(
+					"decode installed Sandbox %s/%s rules: %w",
+					p.Meta.Namespace,
+					p.Meta.Name,
+					err,
+				)
+			}
+		}
 	}
-	switch v.Kind {
-	case kindGlobalSecurityProfile:
-		gsp, err := h.client.AgentsV1alpha1().GlobalSecurityProfiles().Get(ctx, v.Name, metav1.GetOptions{})
-		if err != nil {
-			v.Error = err.Error()
-			return
-		}
-		ct := gsp.CreationTimestamp
-		v.CreationTimestamp = &ct
-		v.Spec = &gsp.Spec
-	case kindSandbox:
-		sbx, err := h.client.AgentsV1alpha1().Sandboxes(v.Namespace).Get(ctx, v.Name, metav1.GetOptions{})
-		if err != nil {
-			v.Error = err.Error()
-			return
-		}
-		var rules []v1alpha1.SecurityRule
-		raw := sbx.Annotations[securityprofile.AnnotationSecurityRules]
-		if err := json.Unmarshal([]byte(raw), &rules); err != nil {
-			v.Error = fmt.Sprintf("decode %s annotation: %v", securityprofile.AnnotationSecurityRules, err)
-			return
-		}
-		ct := sbx.CreationTimestamp
-		v.CreationTimestamp = &ct
-		// A Sandbox's rules have no CRD object; present them through the shared
-		// spec shape with no selector (they match by identity only).
-		v.Spec = &v1alpha1.SecurityProfileSpec{Rules: rules}
-	default:
-		sp, err := h.client.AgentsV1alpha1().SecurityProfiles(v.Namespace).Get(ctx, v.Name, metav1.GetOptions{})
-		if err != nil {
-			v.Error = err.Error()
-			return
-		}
-		ct := sp.CreationTimestamp
-		v.CreationTimestamp = &ct
-		v.Spec = &sp.Spec
-	}
+	return view, nil
 }
 
 // writeJSON serializes v as JSON with the given status code.

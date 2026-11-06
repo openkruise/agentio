@@ -54,6 +54,9 @@ func TestNewSandboxProfile(t *testing.T) {
 	if p == nil {
 		t.Fatal("expected a profile")
 	}
+	if p.Spec != nil || p.RawSandboxRules != validInlineAnnotation {
+		t.Fatal("Sandbox source must retain only the original annotation for inspection")
+	}
 	if p.Meta.Name != "sbx-1" || p.Meta.Namespace != "sandboxes" || p.Meta.Version != "7" {
 		t.Errorf("meta = %+v, want sbx-1/sandboxes rv 7", p.Meta)
 	}

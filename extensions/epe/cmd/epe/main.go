@@ -242,7 +242,6 @@ func run() error {
 		return err
 	}
 	client = kube.EnableCrdWatcher(client, kube.CrdWatcherOptions{})
-	agentsCS := client.AgentsAPI()
 
 	group := &runnable.Group{}
 
@@ -381,13 +380,11 @@ func run() error {
 	}))
 
 	// Admin HTTP server. It is always on; the /debug endpoints are only
-	// wired when --enable-debug is set. The agents-api clientset serves full
-	// profile content in full mode.
+	// wired when --enable-debug is set. Full mode reads the installed profiles.
 	adminHandler := admin.NewHandler(admin.Options{
 		Credentials: providers,
 		EnableDebug: *enableDebug,
 		Store:       store,
-		Client:      agentsCS,
 		LogLevel:    &logLevel,
 	})
 	group.Add(runnable.HTTPServer("admin", adminHandler, *adminAddr))

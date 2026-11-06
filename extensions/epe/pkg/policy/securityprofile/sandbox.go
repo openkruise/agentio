@@ -88,8 +88,9 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 			Version:           sandbox.GetResourceVersion(),
 			Match:             MatchSandbox,
 		},
-		Selector: labels.Nothing(),
-		Rules:    rules,
+		Selector:        labels.Nothing(),
+		RawSandboxRules: raw,
+		Rules:           rules,
 	}, nil
 }
 

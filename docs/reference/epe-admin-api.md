@@ -144,14 +144,14 @@ The default response returns identity and ordering fields only:
 }
 ```
 
-`kind` is `SecurityProfile` or `GlobalSecurityProfile`; a global profile has an empty `namespace`. Add `full=true` to a GET or `"full": true` to a POST to fetch each current complete profile spec from the Kubernetes API and include `creationTimestamp` and `spec`:
+`kind` is `SecurityProfile` or `GlobalSecurityProfile`; a global profile has an empty `namespace`. Add `full=true` to a GET or `"full": true` to a POST to include `creationTimestamp` and the complete source `spec` of each locally installed profile. Full mode makes no Kubernetes API requests:
 
 ```console
 $ curl --fail --silent \
     'http://127.0.0.1:15000/debug/profiles?namespace=agent-demo&full=true'
 ```
 
-If EPE cannot fetch one profile's live content, the response remains `200 OK` and that profile carries an `error` field. The identity fields remain valid. Full mode can disclose policy templates, inline inputs, and other sensitive configuration; use it only from trusted operator workstations.
+The details describe the same version EPE is executing, including the last known-good version when a newer source fails compilation. Changes become visible after watch processing and successful installation. Full mode can disclose policy templates, inline inputs, and other sensitive configuration; use it only from trusted operator workstations.
 
 ## Errors and limits
 

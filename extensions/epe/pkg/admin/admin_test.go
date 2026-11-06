@@ -21,14 +21,11 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
-	agentsfake "github.com/openkruise/agents-api/client/clientset/versioned/fake"
 )
 
 func testSP(name, namespace string, priority int32, matchLabels map[string]string) *v1alpha1.SecurityProfile {
@@ -52,21 +49,17 @@ func testGSP(name string, priority int32, matchLabels map[string]string) *v1alph
 }
 
 // newTestHandler builds an admin handler backed by a store seeded with the
-// given profiles and a fake typed clientset containing the same objects.
+// given profiles.
 func newTestHandler(t *testing.T, enableDebug bool, sps []*v1alpha1.SecurityProfile, gsps []*v1alpha1.GlobalSecurityProfile) http.Handler {
 	t.Helper()
 	store := profilestore.MakeFakeStore()
-	objs := make([]runtime.Object, 0, len(sps)+len(gsps))
 	for _, sp := range sps {
 		store.ProfileSet(sp)
-		objs = append(objs, sp)
 	}
 	for _, gsp := range gsps {
 		store.GlobalProfileSet(gsp)
-		objs = append(objs, gsp)
 	}
-	client := agentsfake.NewSimpleClientset(objs...)
-	return NewHandler(Options{EnableDebug: enableDebug, Store: store, Client: client})
+	return NewHandler(Options{EnableDebug: enableDebug, Store: store})
 }
 
 func TestHandleProfiles_MatchMode(t *testing.T) {
@@ -324,7 +317,7 @@ func TestHandleProfiles_ListMode_POST(t *testing.T) {
 
 func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	const rules = `[{"name":"trace","match":[{"domains":["*"]}],` +
-		`"actions":{"headerManipulation":{"set":[{"name":"X-T","value":"v"}]}}}]`
+		`"actions":{"headerManipulation":{"set":[{"name":"X-T","value":"{{pod.name}}"}]}}}]`
 	sbx := &v1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "sbx-1",
@@ -337,16 +330,7 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	store := profilestore.MakeFakeStore()
 	store.ProfileSet(sp)
 	store.SandboxProfileSet(sbx)
-	client := agentsfake.NewSimpleClientset(sp)
-	// NewSimpleClientset seeds objects under a guessed plural ("sandboxs"),
-	// which does not match the typed client's "sandboxes"; seed the tracker
-	// with the explicit resource instead.
-	if err := client.Tracker().Create(
-		schema.GroupVersionResource{Group: "agents.kruise.io", Version: "v1alpha1", Resource: "sandboxes"},
-		sbx, sbx.Namespace); err != nil {
-		t.Fatalf("seed sandbox: %v", err)
-	}
-	h := NewHandler(Options{EnableDebug: true, Store: store, Client: client})
+	h := NewHandler(Options{EnableDebug: true, Store: store})
 
 	tests := []struct {
 		name       string
@@ -426,7 +410,7 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 		})
 	}
 
-	// Full mode decodes the annotation into the shared spec shape.
+	// Full mode returns the installed annotation's original rule chain.
 	req := httptest.NewRequest(http.MethodGet,
 		"/debug/profiles?namespace=sandboxes&workload_name=sbx-1&full=true", nil)
 	rec := httptest.NewRecorder()
@@ -438,12 +422,63 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Count != 1 || resp.Profiles[0].Error != "" {
+	if resp.Count != 1 {
 		t.Fatalf("full mode response = %s", rec.Body.String())
 	}
 	spec := resp.Profiles[0].Spec
 	if spec == nil || len(spec.Rules) != 1 || spec.Rules[0].Name != "trace" {
 		t.Fatalf("full mode spec = %+v, want the annotation's rule chain", spec)
+	}
+	if got := spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != "{{pod.name}}" {
+		t.Fatalf("full mode changed the original plaintext header: %q", got)
+	}
+
+	sbx.ResourceVersion = "8"
+	sbx.Annotations[securityprofile.AnnotationSecurityRules] = "invalid"
+	store.SandboxProfileSet(sbx)
+	stale := httptest.NewRecorder()
+	h.ServeHTTP(stale, req)
+	if stale.Code != http.StatusOK || stale.Body.String() != rec.Body.String() {
+		t.Fatalf("full mode must retain the installed Sandbox version: %s", stale.Body.String())
+	}
+}
+
+func TestHandleProfilesFullUsesInstalledVersion(t *testing.T) {
+	store := profilestore.MakeFakeStore()
+	profile := testSP("example", "ns", 7, nil)
+	profile.ResourceVersion = "1"
+	profile.CreationTimestamp = metav1.Unix(1_700_000_000, 0)
+	profile.Spec.Inputs = []v1alpha1.SecurityProfileInput{
+		{Name: "config", Inline: map[string]string{"env": "test"}},
+	}
+	store.ProfileSet(profile)
+	invalid := profile.DeepCopy()
+	invalid.ResourceVersion = "2"
+	invalid.Spec.Priority = ptr.To[int32](99)
+	invalid.Spec.Selector.MatchExpressions = []metav1.LabelSelectorRequirement{
+		{Key: "app", Operator: "invalid"},
+	}
+	store.ProfileSet(invalid)
+	h := NewHandler(Options{EnableDebug: true, Store: store})
+	for range 3 {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/profiles?full=true", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp ListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Count != 1 || resp.Profiles[0].Spec == nil {
+			t.Fatalf("missing installed profile spec: %s", rec.Body.String())
+		}
+		view := resp.Profiles[0]
+		if view.Priority != 7 || ptr.Deref(view.Spec.Priority, 0) != 7 ||
+			view.Spec.Inputs[0].Inline["env"] != "test" ||
+			!profile.CreationTimestamp.Equal(view.CreationTimestamp) {
+			t.Fatalf("full mode does not describe the installed version: %s", rec.Body.String())
+		}
 	}
 }
 

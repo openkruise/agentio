@@ -34,6 +34,7 @@ import (
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
+	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -116,23 +117,24 @@ func TestResolveProfilesSandboxWithDistinctWorkloadName(t *testing.T) {
 	}
 }
 
-func TestSandboxUIDLookupBeforeWatch(t *testing.T) {
+func TestSandboxUIDLookupFromCache(t *testing.T) {
 	test.SetForTest(t, &features.SandboxMode, true)
 	for _, tc := range []struct {
 		name      string
 		rules     string
 		duplicate bool
+		missing   bool
 		namespace string
 		wantError bool
 	}{
 		{name: "rules", namespace: "ns", rules: "pending"},
 		{name: "no rules", namespace: "ns"},
+		{name: "missing UID with same-name Sandbox", namespace: "ns", missing: true, wantError: true},
 		{name: "duplicate UID", namespace: "ns", rules: "pending", duplicate: true, wantError: true},
 		{name: "different namespace", namespace: "other", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// No Sandbox informer: UID lookup must discover the source through the API.
-			c := newProfileTestClient()
+			c := sandboxProfileTestClient{Client: kube.NewFakeClient()}
 			metadata := c.Metadata().(*metadatafake.FakeMetadataClient)
 			resource := metadata.Resource(sandboxGVR).Namespace(tc.namespace).(metadatafake.MetadataClient)
 			sandbox := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
@@ -153,11 +155,25 @@ func TestSandboxUIDLookupBeforeWatch(t *testing.T) {
 				}
 			}
 			profiles := NewCollection(c, nil, nil, t.Context().Done())
+			s := NewStore(0)
+			reg := s.RegisterCollection(profiles)
+			c.Run(t.Context().Done())
+			if !reg.WaitUntilSynced(t.Context().Done()) {
+				t.Fatal("initial sync failed")
+			}
+			metadata.ClearActions()
 			subj := subject.Subject{
 				Workload: subject.Workload{Name: "runtime", Namespace: "ns"},
 				Sandbox:  &subject.Sandbox{UID: "kruise:delivery"},
 			}
+			if tc.missing {
+				subj.Workload.Name = sandbox.Name
+				subj.Sandbox.UID = "kruise:missing"
+			}
 			source, found, err := profiles.sandbox(t.Context(), subj)
+			if actions := metadata.Actions(); len(actions) != 0 {
+				t.Fatalf("cached UID lookup called the API: %v", actions)
+			}
 			if tc.wantError {
 				if err == nil {
 					t.Fatal("invalid UID lookup accepted")
@@ -168,15 +184,6 @@ func TestSandboxUIDLookupBeforeWatch(t *testing.T) {
 				source.identity.UID != "source-uid" ||
 				found != (tc.rules != "") {
 				t.Fatalf("UID lookup = %+v, %v, %v", source, found, err)
-			}
-			boom := errors.New("API unavailable")
-			metadata.PrependReactor(
-				"list",
-				"sandboxes",
-				func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, boom },
-			)
-			if _, _, err := profiles.sandbox(t.Context(), subj); !errors.Is(err, boom) {
-				t.Fatalf("API failure = %v, want fail closed", err)
 			}
 		})
 	}
@@ -250,6 +257,17 @@ func TestSandboxFirstRequestWaitsForSource(t *testing.T) {
 				subj.Workload.Name = "different-runtime"
 				subj.Sandbox = &subject.Sandbox{UID: "kruise:ns--new-sandbox"}
 			}
+			// Observe the source event before checking the asynchronous compilation gate.
+			testsupport.Eventually(t, time.Second, func() error {
+				_, found, err := lookup(ctx, subj)
+				if err != nil {
+					return err
+				}
+				if !found {
+					return fmt.Errorf("Sandbox source event not observed")
+				}
+				return nil
+			})
 			go func() {
 				got, err := s.ResolveProfiles(ctx, subj)
 				result <- resolution{profiles: got, err: err}
@@ -456,62 +474,50 @@ func TestResolveProfilesWorkloadMetadata(t *testing.T) {
 	}
 }
 
-func TestSandboxLookupBeforeWatch(t *testing.T) {
+func TestSandboxCacheMissDoesNotQueryAPI(t *testing.T) {
 	test.SetForTest(t, &features.SandboxMode, true)
-	// This client's Sandbox CRD watcher is absent, so only GET can see the object.
-	c := newProfileTestClient()
-	profiles := NewCollection(c, nil, nil, t.Context().Done())
-	s := NewStore(0)
-	reg := s.RegisterCollection(profiles)
-	c.Run(t.Context().Done())
-	if !reg.WaitUntilSynced(t.Context().Done()) {
-		t.Fatal("initial sync failed")
-	}
-	subj := subject.Subject{Workload: subject.Workload{Name: "sbx-1", Namespace: "ns"}}
-	if got, err := s.ResolveProfiles(t.Context(), subj); err != nil || len(got) != 0 {
-		t.Fatalf("absent Sandbox = %v, %v", got, err)
-	}
-	if subj.Workload.Name != "sbx-1" || subj.Workload.Namespace != "ns" || subj.Sandbox != nil {
-		t.Fatalf("lookup changed caller identity: %+v", subj)
-	}
-	subj.Sandbox = &subject.Sandbox{UID: "kruise:ns--sbx-1"}
-	if _, err := s.ResolveProfiles(t.Context(), subj); err == nil {
-		t.Fatal("explicit missing Sandbox accepted as no policy")
-	}
-	subj.Sandbox = nil
-	sandbox := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
-		Name:        subj.Workload.Name,
-		Namespace:   subj.Workload.Namespace,
-		UID:         "uid-1",
-		Annotations: map[string]string{securityprofile.AnnotationSecurityRules: "pending"},
-	}}
-	metadata := c.Metadata().(*metadatafake.FakeMetadataClient)
-	resource := metadata.Resource(sandboxGVR).Namespace(subj.Workload.Namespace).(metadatafake.MetadataClient)
-	if _, err := resource.CreateFake(sandbox, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	// No negative cache: discover the newly created Sandbox and wait.
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if _, err := s.ResolveProfiles(ctx, subj); !errors.Is(err, context.Canceled) {
-		t.Fatalf("request before watch publication = %v, want canceled wait", err)
-	}
-	subj.Sandbox = &subject.Sandbox{UID: "kruise:ns--sbx-1"}
-	if _, err := s.ResolveProfiles(ctx, subj); !errors.Is(err, context.Canceled) {
-		t.Fatalf("matching explicit Sandbox = %v, want canceled wait", err)
-	}
-	subj.Sandbox = &subject.Sandbox{UID: "kruise:another-sandbox"}
-	if _, err := s.ResolveProfiles(t.Context(), subj); err == nil {
-		t.Fatal("mismatched Sandbox identity accepted")
-	}
-	subj.Sandbox = nil
-	boom := errors.New("API unavailable")
-	metadata.PrependReactor(
-		"get",
-		"sandboxes",
-		func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, boom },
-	)
-	if _, err := s.ResolveProfiles(t.Context(), subj); !errors.Is(err, boom) {
-		t.Fatalf("API failure = %v, want fail closed", err)
+	for _, crd := range []bool{false, true} {
+		t.Run(fmt.Sprintf("Sandbox CRD=%t", crd), func(t *testing.T) {
+			c := &profileTestClient{
+				Client:     kube.NewFakeClient(newTestGlobalProfile("admin", nil)),
+				sandboxCRD: crd,
+			}
+			profiles := NewCollection(c, nil, nil, t.Context().Done())
+			s := NewStore(0)
+			reg := s.RegisterCollection(profiles)
+			c.Run(t.Context().Done())
+			if !reg.WaitUntilSynced(t.Context().Done()) {
+				t.Fatal("initial sync failed")
+			}
+			testsupport.Eventually(t, 5*time.Second, func() error {
+				if len(s.List()) != 1 {
+					return fmt.Errorf("administrator profile is not installed")
+				}
+				return nil
+			})
+			metadata := c.Metadata().(*metadatafake.FakeMetadataClient)
+			metadata.ClearActions()
+			for range 10 {
+				subj := subject.Subject{Workload: subject.Workload{
+					Name:                      "missing",
+					Namespace:                 "ns",
+					SecurityProfileReferences: []string{"global/admin"},
+				}}
+				if got, err := s.ResolveProfiles(
+					t.Context(),
+					subj,
+				); err != nil || len(got) != 1 ||
+					got[0].Meta.Name != "admin" {
+					t.Fatalf("absent optional Sandbox = %v, %v", got, err)
+				}
+				subj.Sandbox = &subject.Sandbox{UID: "kruise:missing"}
+				if _, err := s.ResolveProfiles(t.Context(), subj); err == nil {
+					t.Fatal("explicit missing Sandbox accepted as no policy")
+				}
+			}
+			if actions := metadata.Actions(); len(actions) != 0 {
+				t.Fatalf("cache misses called the API: %v", actions)
+			}
+		})
 	}
 }

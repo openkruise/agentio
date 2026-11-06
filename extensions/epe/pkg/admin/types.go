@@ -40,9 +40,6 @@ type ProfileView struct {
 	// Full-mode-only fields.
 	CreationTimestamp *metav1.Time                  `json:"creationTimestamp,omitempty"`
 	Spec              *v1alpha1.SecurityProfileSpec `json:"spec,omitempty"`
-	// Error is set when full content could not be fetched for this profile;
-	// the identity fields remain valid.
-	Error string `json:"error,omitempty"`
 }
 
 // debugRequest is the input for the /debug/profiles endpoint when using POST.
@@ -56,8 +53,7 @@ type debugRequest struct {
 	// WorkloadName is the workload name. When set, match mode also includes the
 	// same-name Sandbox profile, which is keyed by exact identity.
 	WorkloadName string `json:"workload_name,omitempty"`
-	// Full requests the complete profile spec (fetched live from the
-	// apiserver via the typed clientset) in addition to the identity fields.
+	// Full includes the installed profile's source spec from the local snapshot.
 	// Defaults to false.
 	Full bool `json:"full,omitempty"`
 }
