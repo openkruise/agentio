@@ -375,12 +375,14 @@ func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpCo
 		}
 		filters = append(filters, filter)
 	}
-	filters = append(filters, httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{SuppressEnvoyHeaders: true})))
+	filters = append(
+		filters,
+		httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{SuppressEnvoyHeaders: true})),
+	)
 	hcm := &hcmv3.HttpConnectionManager{
 		StatPrefix:                   ConnectTerminate,
 		NormalizePath:                wrapperspb.Bool(true),
 		PathWithEscapedSlashesAction: hcmv3.HttpConnectionManager_KEEP_UNCHANGED,
-		ServerName:                   "agentio-envoy",
 		ServerHeaderTransformation:   hcmv3.HttpConnectionManager_PASS_THROUGH,
 		RouteSpecifier:               &hcmv3.HttpConnectionManager_Rds{Rds: rds(ConnectTerminate)},
 		UseRemoteAddress:             wrapperspb.Bool(false),
@@ -461,7 +463,10 @@ func (b *resourceBuilder) buildForwardHCM(
 		}
 		filters = append(filters, identity)
 	}
-	filters = append(filters, httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{SuppressEnvoyHeaders: true})))
+	filters = append(
+		filters,
+		httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{SuppressEnvoyHeaders: true})),
+	)
 	streamIdle := durationpb.New(30 * time.Minute)
 	if configured := config.gateway.GetHttp().GetStreamIdleTimeout(); configured != nil {
 		streamIdle = configured
@@ -473,7 +478,6 @@ func (b *resourceBuilder) buildForwardHCM(
 	hcm := &hcmv3.HttpConnectionManager{
 		StatPrefix:                   forwardHCMStatPrefix,
 		RouteSpecifier:               &hcmv3.HttpConnectionManager_Rds{Rds: rds(routeName)},
-		ServerName:                   "agentio-envoy",
 		ServerHeaderTransformation:   hcmv3.HttpConnectionManager_PASS_THROUGH,
 		Proxy_100Continue:            true,
 		NormalizePath:                wrapperspb.Bool(true),

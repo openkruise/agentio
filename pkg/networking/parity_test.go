@@ -462,8 +462,7 @@ func supportedListenerRouteParityView(t *testing.T, resources map[string]proto.M
 	for _, resource := range result {
 		switch value := resource.(type) {
 		case *listenerv3.Listener:
-			// The legacy snapshot predates the Agentio HTTP server name.
-			// listeners_test.go separately pins the current name.
+			// Older snapshots set a Server header value, which PASS_THROUGH no longer uses.
 			for _, chain := range value.GetFilterChains() {
 				for _, filter := range chain.GetFilters() {
 					if filter.GetName() != "envoy.filters.network.http_connection_manager" {
@@ -473,8 +472,8 @@ func supportedListenerRouteParityView(t *testing.T, resources map[string]proto.M
 					if err := filter.GetTypedConfig().UnmarshalTo(hcm); err != nil {
 						t.Fatalf("decode HCM for server name parity: %v", err)
 					}
-					if hcm.ServerName == "istio-envoy" {
-						hcm.ServerName = "agentio-envoy"
+					if hcm.ServerName == "istio-envoy" || hcm.ServerName == "agentio-envoy" {
+						hcm.ServerName = ""
 					}
 					// Explicit target forwarding postdates the legacy snapshot and is
 					// covered by TestEgressAuthorizationPinsDFPTarget.
@@ -928,6 +927,7 @@ func TestLegacyGatewayGraphParity(t *testing.T) {
 				if err := filter.GetTypedConfig().UnmarshalTo(manager); err != nil {
 					t.Fatal(err)
 				}
+				manager.ServerName = ""
 				manager.ServerHeaderTransformation = hcmv3.HttpConnectionManager_PASS_THROUGH
 				for _, httpFilter := range manager.HttpFilters {
 					if httpFilter.Name == "envoy.filters.http.router" {

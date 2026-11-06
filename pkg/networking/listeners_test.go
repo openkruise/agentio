@@ -526,13 +526,8 @@ func TestGatewayListenersUseSupportedAgentioSemantics(t *testing.T) {
 
 	for _, name := range []string{MainInternal, MainForward} {
 		hcm := findHCM(t, listeners[name])
-		if hcm.GetServerName() != "agentio-envoy" || !hcm.Proxy_100Continue {
-			t.Errorf(
-				"listener %s HCM server_name/proxy_100_continue = %q/%v",
-				name,
-				hcm.GetServerName(),
-				hcm.Proxy_100Continue,
-			)
+		if !hcm.Proxy_100Continue {
+			t.Errorf("listener %s must proxy 100-continue responses", name)
 		}
 		if len(hcm.GetUpgradeConfigs()) != 1 || hcm.GetUpgradeConfigs()[0].GetUpgradeType() != "websocket" {
 			t.Errorf("listener %s HCM websocket upgrades = %+v", name, hcm.GetUpgradeConfigs())
@@ -540,6 +535,9 @@ func TestGatewayListenersUseSupportedAgentioSemantics(t *testing.T) {
 	}
 	for _, name := range []string{ConnectTerminate, MainInternal, MainForward} {
 		hcm := findHCM(t, listeners[name])
+		if hcm.GetServerName() != "" {
+			t.Errorf("listener %s must leave server_name unset", name)
+		}
 		if hcm.GetServerHeaderTransformation() != hcmv3.HttpConnectionManager_PASS_THROUGH {
 			t.Errorf("listener %s must preserve the upstream Server header without adding one", name)
 		}
