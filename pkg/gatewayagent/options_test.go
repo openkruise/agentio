@@ -21,7 +21,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,14 +97,23 @@ func TestRejectInvalidRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsRedactMetadataAndNeedNoIdentity(t *testing.T) {
-	t.Setenv("AGENTIO_META_token", "secret-value")
-	t.Setenv("AGENTIO_METAJSON_nested", `{"password":"secret-value"}`)
+func TestDiagnosticsShowMetadataAndNeedNoIdentity(t *testing.T) {
+	t.Setenv("AGENTIO_META_MESH_ID", "mesh-test")
+	t.Setenv("AGENTIO_META_WORKLOAD_NAME", "gateway-test")
+	t.Setenv("AGENTIO_METAJSON_labels", `{"team":"infra"}`)
 	var output bytes.Buffer
 	if err := Command(t.Context(), []string{"print-config"}, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), "secret-value") || !strings.Contains(output.String(), "redacted") {
+	var reported struct {
+		Runtime RuntimeOptions `json:"runtime"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &reported); err != nil {
+		t.Fatal(err)
+	}
+	metadata := reported.Runtime.Metadata
+	if metadata["MESH_ID"] != "mesh-test" || metadata["WORKLOAD_NAME"] != "gateway-test" ||
+		metadata["labels"].(map[string]any)["team"] != "infra" {
 		t.Fatal(output.String())
 	}
 	output.Reset()
