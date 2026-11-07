@@ -96,10 +96,14 @@ func awaitResult(
 	assert.Equal(t, len(got.Conditions), 3)
 	programmed := got.Conditions[2]
 	assert.Equal(t, programmed.Type, "Programmed")
-	assert.Equal(t, programmed.Status, accepted)
-	if accepted == metav1.ConditionTrue {
+	if accepted == metav1.ConditionTrue && got.Source.Profile != nil {
+		assert.Equal(t, programmed.Status, metav1.ConditionUnknown)
+		assert.Equal(t, programmed.Reason, "NotChecked")
+	} else if accepted == metav1.ConditionTrue {
+		assert.Equal(t, programmed.Status, accepted)
 		assert.Equal(t, programmed.Reason, "Programmed")
 	} else {
+		assert.Equal(t, programmed.Status, accepted)
 		assert.Equal(t, programmed.Reason, got.Conditions[0].Reason)
 		assert.Equal(t, programmed.Message, got.Conditions[0].Message)
 	}
@@ -118,7 +122,9 @@ func TestSharedProfileValidation(t *testing.T) {
 	}{
 		{"empty", `{}`, true},
 		{"audit CEL uses inputs and result", `{"audit":[{"name":"log","when":"result == 'error' && inputs.config.enabled == 'true'","webhook":{"url":"http://audit"}}]}`, true},
-		{"audit CEL invalid", `{"audit":[{"name":"log","when":"unknownVariable","webhook":{"url":"http://audit"}}]}`, false},
+		{"audit CEL syntax invalid", `{"audit":[{"name":"log","when":"request.","webhook":{"url":"http://audit"}}]}`, false},
+		{"consumer CEL environment", `{"audit":[{"name":"log","when":"customFunction(customVariable)","webhook":{"url":"http://audit"}}]}`, true},
+		{"consumer template environment", `{"audit":[{"name":"log","webhook":{"url":"http://audit/{{ customFunction .ConsumerField }}"}}]}`, true},
 		{"audit JSON template invalid", `{"audit": [{"name": "log", "webhook": {"url": "http://audit", "request": {"body": {"json": {"nested": {"text": "{{"}}}}}}]}`, false},
 		{"regex invalid", `{"rules":[{"name":"r","match":[{"paths":[{"type":"Regex","value":"["}]}]}]}`, false},
 		{"negative priority", `{"priority":-1}`, false},

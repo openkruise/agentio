@@ -142,9 +142,7 @@ func setupAdmissionWebhooks(
 		injectionSynced = nodes.HasSynced
 	}
 	if options.ValidationWebhookConfigName != "" {
-		if err := validation.Register(webhookMux); err != nil {
-			return nil, err
-		}
+		validation.Register(webhookMux)
 		patcher, err := validation.NewCABundlePatcher(client, options.ValidationWebhookConfigName, authority.RootPEM)
 		if err != nil {
 			return nil, err

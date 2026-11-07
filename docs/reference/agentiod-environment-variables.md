@@ -296,8 +296,10 @@ ambient profiles.
 
 The webhook validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and
 GlobalTrafficPolicy on CREATE and UPDATE, including dry runs. SecurityProfile
-validation reuses the SNI, binding, matcher, audit and filter parsers used by policy
-status and EPE. TrafficPolicy validation checks selectors, priorities, actions,
+validation shares API static checks with policy status: selectors, priorities,
+TLS constraints, reference and field unions, regular expressions, and CEL and Go
+template syntax. It does not import EPE or check a consumer's expression variables,
+helper functions, filter payloads, or ability to load the policy. TrafficPolicy validation checks selectors, priorities, actions,
 protocols, port ranges and CIDRs without resolving live peers. CRD schema validation
 continues to enforce structural constraints. Missing external references are
 reported by policy status and do not prevent admission. Status updates and deletes

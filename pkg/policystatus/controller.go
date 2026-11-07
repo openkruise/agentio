@@ -16,7 +16,6 @@ package policystatus
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"os"
 	"time"
@@ -28,8 +27,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
-	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
@@ -46,28 +43,22 @@ type Controller struct {
 	registry         *kubernetesregistry.Registry
 	namespace        string
 	scopedSecrets    bool
-	filters          []filter.Registration
 	traffic          policy.TrafficPolicyInputs
 	secretsSynced    krt.Singleton[bool]
 	configMapsSynced krt.Singleton[bool]
 	results          krt.Collection[result]
 }
 
-// New reuses the registry's informers and the production policy compilers.
+// New reuses the registry's informers for API validation and reference checks.
 func New(client kube.Client, registry *kubernetesregistry.Registry, namespace string,
 	scopedSecrets bool, resolve policy.HostnameResolver, stop <-chan struct{},
 ) (*Controller, error) {
-	filters, err := wiring.BuildValidationFilters()
-	if err != nil {
-		return nil, fmt.Errorf("build policy validation parsers: %w", err)
-	}
 	opts := krt.NewOptionsBuilder(stop, "policy-status", nil)
 	c := &Controller{
 		client:        client,
 		registry:      registry,
 		namespace:     namespace,
 		scopedSecrets: scopedSecrets,
-		filters:       filters,
 	}
 	c.secretsSynced = cacheSynced(registry.Secrets, stop, opts.WithName("secrets-synced"))
 	c.configMapsSynced = cacheSynced(registry.ConfigMaps, stop, opts.WithName("configmaps-synced"))

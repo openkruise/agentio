@@ -37,6 +37,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/mcpacl"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/oauth2"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/tokentransform"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // RuleProjection is one rule's projected per-filter configuration. Cfgs and
@@ -206,7 +207,7 @@ func payloadsFor(rule *Rule) (map[string]json.RawMessage, error) {
 // cleared because presence of the key is what enables the filter. Both are
 // CRD compatibility concerns that must not travel into the filter.
 func tokenTransformPayload(a *v1alpha1.TokenTransformationAction) (json.RawMessage, error) {
-	ref, err := NormalizeCredentialRef(a.CredentialRef)
+	ref, err := policy.NormalizeCredentialRef(a.CredentialRef)
 	if err != nil {
 		return nil, err
 	}

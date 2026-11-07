@@ -26,7 +26,7 @@ import (
 func (c *Controller) compileProfile(s source) *compiledProfile {
 	err := c.validateProfile(s)
 	accepted := condition("Accepted", metav1.ConditionTrue, "Accepted",
-		"L7 rules, SNI projection and binding metadata compiled successfully", s.Metadata.Generation)
+		"SecurityProfile API static validation passed", s.Metadata.Generation)
 	if err != nil {
 		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, "InvalidConfiguration", err.Error()
 	}
@@ -41,7 +41,7 @@ func (c *Controller) validateProfile(s source) error {
 		Global:       s.Kind == "GlobalSecurityProfile",
 		CreationTime: s.Metadata.CreationTimestamp.Time,
 		Spec:         *s.Profile,
-	}, c.filters)
+	})
 }
 
 func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {
@@ -81,8 +81,9 @@ func (c *Controller) profileStatus(ctx krt.HandlerContext, p compiledProfile) *r
 	programmed.Type = "Programmed"
 	if p.Accepted.Status == metav1.ConditionTrue {
 		resolved = c.profileRefs(ctx, p.Source)
-		programmed.Reason = "Programmed"
-		programmed.Message = "Configuration compiled successfully and is eligible for data-plane distribution"
+		programmed.Status = metav1.ConditionUnknown
+		programmed.Reason = "NotChecked"
+		programmed.Message = "API static validation passed; data-plane implementation loading is not checked by agentiod"
 	}
 	return &result{Source: p.Source,
 		Conditions: []metav1.Condition{p.Accepted, resolved, programmed}}

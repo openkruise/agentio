@@ -24,17 +24,12 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // Register installs the /validate admission endpoint on the shared HTTPS mux.
-func Register(mux *http.ServeMux) error {
-	filters, err := wiring.BuildValidationFilters()
-	if err != nil {
-		return fmt.Errorf("build policy validation parsers: %w", err)
-	}
+func Register(mux *http.ServeMux) {
 	webhook := &admission.Webhook{
 		Handler: admission.HandlerFunc(func(_ context.Context, req admission.Request) admission.Response {
 			if req.Operation != admissionv1.Create && req.Operation != admissionv1.Update || req.SubResource != "" {
@@ -51,7 +46,7 @@ func Register(mux *http.ServeMux) error {
 					err = ValidateSecurityProfile(model.SecurityProfile{
 						Name: object.Name, Namespace: req.Namespace,
 						Global: req.Kind.Kind == "GlobalSecurityProfile", Spec: object.Spec,
-					}, filters)
+					})
 				}
 			case "TrafficPolicy", "GlobalTrafficPolicy":
 				var object agentsv1alpha1.TrafficPolicy
@@ -69,5 +64,4 @@ func Register(mux *http.ServeMux) error {
 	}
 	mux.Handle("/validate", webhook)
 	mux.Handle("/validate/", webhook)
-	return nil
 }

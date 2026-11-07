@@ -29,9 +29,7 @@ import (
 
 func TestAdmission(t *testing.T) {
 	mux := http.NewServeMux()
-	if err := Register(mux); err != nil {
-		t.Fatal(err)
-	}
+	Register(mux)
 	for _, tc := range []struct {
 		name, kind, spec, wantError string
 	}{
@@ -40,8 +38,10 @@ func TestAdmission(t *testing.T) {
 		{"negative priority", "SecurityProfile", `{"priority":-1}`, "negative"},
 		{"bad selector", "SecurityProfile", `{"selector":{"matchExpressions":[{"key":"app","operator":"Bad"}]}}`, "operator"},
 		{"regex", "SecurityProfile", `{"rules":[{"name":"r","match":[{"paths":[{"type":"Regex","value":"["}]}]}]}`, "error"},
-		{"audit CEL", "SecurityProfile", `{"audit":[{"name":"log","when":"unknownVariable","webhook":{"url":"http://audit"}}]}`, "unknownVariable"},
-		{"filter parser", "SecurityProfile", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"}}}}]}`, "L7"},
+		{"audit CEL syntax", "SecurityProfile", `{"audit":[{"name":"log","when":"request.","webhook":{"url":"http://audit"}}]}`, "CEL syntax"},
+		{"consumer CEL context", "SecurityProfile", `{"audit":[{"name":"log","when":"customFunction(customVariable)","webhook":{"url":"http://audit"}}]}`, ""},
+		{"callout API constraint", "SecurityProfile", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"}}}}]}`, "phase"},
+		{"consumer template context", "SecurityProfile", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"{{ customFunction .ConsumerField }}"}}}}]}`, ""},
 		{"unresolved reference allowed", "SecurityProfile", `{"inputs":[{"name":"config","configMap":{"name":"missing"}}]}`, ""},
 		{"global input namespace", "GlobalSecurityProfile", `{"inputs":[{"name":"config","configMap":{"name":"missing"}}]}`, "namespace"},
 		{"traffic", "TrafficPolicy", `{"egress":{"rules":[{"action":"allow","to":[{"cidr":"10.0.0.0/8"}]}]}}`, ""},
