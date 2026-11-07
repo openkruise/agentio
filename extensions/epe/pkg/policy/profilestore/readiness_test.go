@@ -198,6 +198,14 @@ func TestSandboxFirstRequestWaitsForSource(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			c := sandboxProfileTestClient{Client: kube.NewFakeClient()}
+			metadata := c.Metadata().(*metadatafake.FakeMetadataClient)
+			// The fake tracker cannot replay creates between the initial LIST and WATCH.
+			watcher, err := metadata.Tracker().Watch(sandboxGVR, metav1.NamespaceAll)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(watcher.Stop)
+			metadata.PrependWatchReactor("sandboxes", ktesting.DefaultWatchReactor(watcher, nil))
 			profiles := NewCollection(c, nil, nil, ctx.Done())
 			publish := make(chan struct{})
 			defer func() {
