@@ -49,11 +49,22 @@ func TestTrafficPolicyBodyUpdateDoesNotRecomputeWorkloadPolicies(t *testing.T) {
 		sources := krt.NewMutableCollection(nil, []model.TrafficPolicy{source}, builder.WithName("sources")...)
 		inputs := validCompilerInputs(stop)
 		inputs.SandboxMode = false
-		inputs.Workloads = krt.NewStaticCollection(nil, []model.Workload{client, other}, builder.WithName("workloads")...)
+		inputs.Workloads = krt.NewStaticCollection(
+			nil,
+			[]model.Workload{client, other},
+			builder.WithName("workloads")...,
+		)
 		inputs.TrafficPolicies = sources.AsCollection()
 		failures := newFailureRecorder()
 		configuration := newConfiguration(inputs, failures, builder.WithName)
-		policies := newPolicyCollections(inputs, configuration, newTrafficPolicyInputs(inputs), failures, builder.WithName, builder)
+		policies := newPolicyCollections(
+			inputs,
+			configuration,
+			newTrafficPolicyInputs(inputs),
+			failures,
+			builder.WithName,
+			builder,
+		)
 		workloads := newWorkloadPolicies(inputs, policies, nil, failures, builder.WithName)
 		if !workloads.WaitUntilSynced(stop) {
 			t.Fatal("Workload policies did not sync")
@@ -79,7 +90,8 @@ func TestTrafficPolicyBodyUpdateDoesNotRecomputeWorkloadPolicies(t *testing.T) {
 		sources.UpdateObject(source)
 		synctest.Wait()
 		matched := workloads.GetKey(client.UID)
-		if count() != recomputes+1 || matched == nil || len(matched.TrafficPolicyReferences) != 1 || matched.TrafficPolicyReferences[0].Uid != "new" {
+		if count() != recomputes+1 || matched == nil || len(matched.TrafficPolicyReferences) != 1 ||
+			matched.TrafficPolicyReferences[0].Uid != "new" {
 			t.Fatal("UID change did not update exactly the bound Workload")
 		}
 		if unrelated := workloads.GetKey(other.UID); unrelated == nil || len(unrelated.TrafficPolicyReferences) != 0 {
@@ -94,7 +106,8 @@ func TestTrafficPolicyBodyUpdateDoesNotRecomputeWorkloadPolicies(t *testing.T) {
 		sources.UpdateObject(source)
 		synctest.Wait()
 		matched = workloads.GetKey(client.UID)
-		if count() != recomputes+2 || matched == nil || !slices.Equal(matched.AuthorizationNames, []string{"demo/allow-egress", "demo/allow-ingress"}) {
+		if count() != recomputes+2 || matched == nil ||
+			!slices.Equal(matched.AuthorizationNames, []string{"demo/allow-egress", "demo/allow-ingress"}) {
 			t.Fatal("authorization reference change did not reach the bound Workload")
 		}
 		if got := failures.snapshot(); len(got) != 0 {

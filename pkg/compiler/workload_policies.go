@@ -72,16 +72,20 @@ func newTrafficWorkloadBindings(
 	policies krt.Collection[policy.CompiledTrafficPolicy],
 	options collectionOptions,
 ) krt.Collection[trafficWorkloadBinding] {
-	return krt.NewCollection(policies, func(_ krt.HandlerContext, compiled policy.CompiledTrafficPolicy) *trafficWorkloadBinding {
-		result := &trafficWorkloadBinding{Name: compiled.Name, UID: compiled.Attachment.UID}
-		// Global and namespace Authorizations apply through the data plane's scope handling.
-		for _, authorization := range compiled.AsAuthorization {
-			if authorization.Policy.Scope == securityv1.Scope_WORKLOAD_SELECTOR {
-				result.AuthorizationNames = append(result.AuthorizationNames, authorization.Name)
+	return krt.NewCollection(
+		policies,
+		func(_ krt.HandlerContext, compiled policy.CompiledTrafficPolicy) *trafficWorkloadBinding {
+			result := &trafficWorkloadBinding{Name: compiled.Name, UID: compiled.Attachment.UID}
+			// Global and namespace Authorizations apply through the data plane's scope handling.
+			for _, authorization := range compiled.AsAuthorization {
+				if authorization.Policy.Scope == securityv1.Scope_WORKLOAD_SELECTOR {
+					result.AuthorizationNames = append(result.AuthorizationNames, authorization.Name)
+				}
 			}
-		}
-		return result
-	}, options("traffic-workload-bindings")...)
+			return result
+		},
+		options("traffic-workload-bindings")...,
+	)
 }
 
 func newWorkloadPolicies(
