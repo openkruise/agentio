@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentio-istio-waypoint-parameters
+  namespace: agentio-istio-system
+data:
+  config: |
+    accessLogFormat:
+      json:
+        request_id: "%REQ(X-REQUEST-ID)%"
+        path: "%REQ(:PATH)%"
+        code: "%RESPONSE_CODE%"
+        details: "%RESPONSE_CODE_DETAILS%"
+        source: "%DOWNSTREAM_REMOTE_ADDRESS%"
+        peer_principal: "%FILTER_STATE(agentio.peer.principal:PLAIN)%"
+        workload_name: "%FILTER_STATE(agentio.workload.name:PLAIN)%"
+        workload_namespace: "%FILTER_STATE(agentio.workload.namespace:PLAIN)%"
+  deployment: |
+    spec:
+      template:
+        metadata:
+          labels:
+            istio.io/dataplane-mode: none
+          annotations:
+            sidecar.istio.io/inject: "false"
+        spec:
+          containers:
+          - name: agentio-proxy
+            env:
+            - name: CA_ADDR
+              value: istiod.istio-system.svc:15012
+            - name: AGENTIO_CA_SERVER_NAME
+              value: istiod.istio-system.svc
+            - name: AGENTIO_CA_ROOT_CA
+              value: /var/run/secrets/istio/root-cert.pem
+            - name: AGENTIO_ROOT_CA
+              value: /var/run/secrets/istio/root-cert.pem
+            - name: AGENTIO_XDS_ROOT_CA
+              value: /var/run/secrets/agentio/root-cert.pem
+            - name: AGENTIO_CA_TOKEN_FILE
+              value: /var/run/secrets/istio-token/istio-token
+            volumeMounts:
+            - name: istio-root
+              mountPath: /var/run/secrets/istio
+              readOnly: true
+            - name: istio-ca-token
+              mountPath: /var/run/secrets/istio-token
+              readOnly: true
+          initContainers:
+          - name: agentio-porter
+            env:
+            - name: ENABLE_TRAFFIC_POLICY
+              value: "true"
+          volumes:
+          - name: istio-root
+            configMap:
+              name: agentio-istio-root
+          - name: istio-ca-token
+            projected:
+              sources:
+              - serviceAccountToken:
+                  audience: istio-ca
+                  expirationSeconds: 3600
+                  path: istio-token
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentio-egress
+  namespace: agentio-istio-system
+  labels:
+    istio.io/waypoint-for: service
+  annotations:
+    networking.istio.io/address-type: Hostname
+spec:
+  gatewayClassName: agentio-egress
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: agentio-istio-waypoint-parameters
+  listeners:
+  - name: mesh
+    protocol: HBONE
+    port: 15008
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            kubernetes.io/metadata.name: agentio-istio-demo

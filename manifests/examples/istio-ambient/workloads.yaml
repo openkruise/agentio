@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: curl
+  namespace: agentio-istio-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: curl
+  namespace: agentio-istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: istio-demo-client
+  template:
+    metadata:
+      labels:
+        app: istio-demo-client
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: curl
+      containers:
+      - name: curl
+        image: docker.io/curlimages/curl:8.16.0
+        command: ["/bin/sleep", "infinity"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: origin
+  namespace: agentio-istio-demo
+data:
+  index.html: hello from origin
+  deny: this response should be blocked by EPE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: origin
+  namespace: agentio-istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: istio-demo-origin
+  template:
+    metadata:
+      labels:
+        app: istio-demo-origin
+        istio.io/dataplane-mode: none
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: origin
+        image: docker.io/library/python:3.13-alpine
+        command: ["python3", "-m", "http.server", "18082", "--bind", "0.0.0.0", "--directory", "/www"]
+        ports:
+        - name: http
+          containerPort: 18082
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+        volumeMounts:
+        - name: server
+          mountPath: /www
+          readOnly: true
+      volumes:
+      - name: server
+        configMap:
+          name: origin

@@ -1,0 +1,20 @@
+# Render only the control-plane templates listed in the integration guide.
+# A full ambient-profile install also deploys Agentio CNI and ztunnel.
+profile: ambient
+global:
+  clusterId: Kubernetes
+  trustDomain: cluster.local
+  clusterDomain: cluster.local
+agentiod:
+  podLabels:
+    istio.io/dataplane-mode: none
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
+egressGateway:
+  mode: gatewayAPI
+epe:
+  mode: managed
+  podLabels:
+    istio.io/dataplane-mode: none
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
