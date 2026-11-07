@@ -55,6 +55,35 @@ func equalPolicyReference(a, b *extensionsv1.PolicyResourceReference) bool {
 	return proto.Equal(a, b)
 }
 
+// trafficWorkloadBinding excludes rule bodies so their updates do not recompute Workloads.
+type trafficWorkloadBinding struct {
+	Name               string
+	UID                string
+	AuthorizationNames []string
+}
+
+func (p trafficWorkloadBinding) ResourceName() string { return p.Name }
+
+func (p trafficWorkloadBinding) Equals(other trafficWorkloadBinding) bool {
+	return p.Name == other.Name && p.UID == other.UID && slices.Equal(p.AuthorizationNames, other.AuthorizationNames)
+}
+
+func newTrafficWorkloadBindings(
+	policies krt.Collection[policy.CompiledTrafficPolicy],
+	options collectionOptions,
+) krt.Collection[trafficWorkloadBinding] {
+	return krt.NewCollection(policies, func(_ krt.HandlerContext, compiled policy.CompiledTrafficPolicy) *trafficWorkloadBinding {
+		result := &trafficWorkloadBinding{Name: compiled.Name, UID: compiled.Attachment.UID}
+		// Global and namespace Authorizations apply through the data plane's scope handling.
+		for _, authorization := range compiled.AsAuthorization {
+			if authorization.Policy.Scope == securityv1.Scope_WORKLOAD_SELECTOR {
+				result.AuthorizationNames = append(result.AuthorizationNames, authorization.Name)
+			}
+		}
+		return result
+	}, options("traffic-workload-bindings")...)
+}
+
 func newWorkloadPolicies(
 	inputs Inputs,
 	policies policyCollections,
@@ -112,13 +141,13 @@ func compileWorkloadPolicies(
 	for _, name := range bindings.PolicyNames(model.PolicyKindTrafficPolicy) {
 		reference := &extensionsv1.PolicyResourceReference{Name: name}
 		result.TrafficPolicyReferences = append(result.TrafficPolicyReferences, reference)
-		compiled := krt.FetchOne(ctx, policies.trafficPolicies, krt.FilterKey(name))
-		if compiled == nil {
+		binding := krt.FetchOne(ctx, policies.trafficBindings, krt.FilterKey(name))
+		if binding == nil {
 			policyErr = errors.Join(policyErr, fmt.Errorf("TrafficPolicy %q is unavailable", name))
 			continue
 		}
-		reference.Uid = compiled.Attachment.UID
-		result.addAuthorizationReferences(compiled)
+		reference.Uid = binding.UID
+		result.AuthorizationNames = append(result.AuthorizationNames, binding.AuthorizationNames...)
 	}
 	for _, name := range bindings.PolicyNames(model.PolicyKindSecurityProfile) {
 		reference := &extensionsv1.PolicyResourceReference{Name: name}
@@ -150,14 +179,4 @@ func (p *workloadPolicies) appendSNI(value *extensionsv1.SniTrafficPolicy) {
 		p.SNIPolicy = &extensionsv1.SniTrafficPolicy{}
 	}
 	p.SNIPolicy.Rules = append(p.SNIPolicy.Rules, value.Rules...)
-}
-
-// Global and namespace Authorizations apply through the existing data plane's
-// scope handling. Selector policies need explicit Workload references.
-func (p *workloadPolicies) addAuthorizationReferences(compiled *policy.CompiledTrafficPolicy) {
-	for _, authorization := range compiled.AsAuthorization {
-		if authorization.Policy.Scope == securityv1.Scope_WORKLOAD_SELECTOR {
-			p.AuthorizationNames = append(p.AuthorizationNames, authorization.Name)
-		}
-	}
 }

@@ -33,6 +33,9 @@ type policyCollections struct {
 	securityProfiles krt.Collection[policy.CompiledSecurityProfile]
 	egressPolicies   krt.Collection[policy.CompiledEgressPolicy]
 
+	// Workload references depend on identity and authorization names, not rule bodies.
+	trafficBindings krt.Collection[trafficWorkloadBinding]
+
 	// Shared policy selections keyed by Workload UID, without rule bodies.
 	policyBindings krt.Collection[policy.Bindings]
 }
@@ -142,6 +145,7 @@ func newPolicyCollections(
 	policyBindings := policy.NewWorkloadPolicyBindingsCollection(inputs.Workloads, attachments, builder)
 	return policyCollections{
 		trafficPolicies:  trafficPolicies,
+		trafficBindings:  newTrafficWorkloadBindings(trafficPolicies, options),
 		securityProfiles: securityProfiles,
 		egressPolicies:   egressPolicies,
 		policyBindings:   policyBindings,

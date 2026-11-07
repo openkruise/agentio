@@ -61,9 +61,15 @@ func BenchmarkWorkloadPolicyProjection(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			trafficBindings := newTrafficWorkloadBindings(
+				krt.NewStaticCollection(nil, []policy.CompiledTrafficPolicy{compiled}, opts...),
+				krt.NewOptionsBuilder(stop, "", nil).WithName,
+			)
+			if !trafficBindings.WaitUntilSynced(stop) {
+				b.Fatal("TrafficPolicy binding did not sync")
+			}
 			policies := policyCollections{
-				trafficPolicies:  krt.NewStaticCollection(nil, []policy.CompiledTrafficPolicy{compiled}, opts...),
-				securityProfiles: krt.NewStaticCollection[policy.CompiledSecurityProfile](nil, nil, opts...),
+				trafficBindings: trafficBindings,
 				policyBindings: krt.NewStaticCollection(nil, []policy.Bindings{
 					{
 						TargetUID: workload.UID,
