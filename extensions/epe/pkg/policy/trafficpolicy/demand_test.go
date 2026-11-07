@@ -16,9 +16,11 @@ package trafficpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,18 +32,21 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
+	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	sec "github.com/openkruise/agentio/api/security/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
+	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	xdsbackend "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/demandcache"
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	controlxds "github.com/openkruise/agentio/pkg/xds"
 	controlstore "github.com/openkruise/agentio/pkg/xds/store"
@@ -122,10 +127,28 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 			Rules: []*sec.TrafficPolicy_Rule{{Action: action, Match: &sec.TrafficPolicy_Match{}}},
 		}}, model.ResourceFacts{})
 	}
+	profileResource := func(name, rule string) model.Resource {
+		document := model.HTTPPolicy{
+			Rules: []agentsv1alpha1.SecurityRule{
+				{Name: rule, Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"*"}}}},
+			},
+		}
+		data, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resource(
+			model.SecurityProfileType,
+			"global/"+name,
+			&sec.SecurityProfile{Name: name, PolicyJson: data},
+			model.ResourceFacts{},
+		)
+	}
 	requestedWorkload := workloadResource(uid, "pod", "policy")
 	requestedPolicy := policyResource("policy", sec.TrafficPolicy_ALLOW)
 	initial, err := model.NewResourceSet([]model.Resource{
 		requestedWorkload, requestedPolicy,
+		profileResource("policy", "initial"), profileResource("unused", "unused"),
 		workloadResource("edge//Pod/ns/unused", "unused", "unused"),
 		policyResource("unused", sec.TrafficPolicy_ALLOW),
 	})
@@ -148,8 +171,10 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 			}, nil
 		},
 	}, publications, func() bool { return true }, 16, map[string]controlxds.ResourceGenerator{
-		model.WorkloadType:      controlxds.WorkloadGenerator{},
-		model.TrafficPolicyType: controlxds.TrafficPolicyGenerator{},
+		model.WorkloadType:        controlxds.WorkloadGenerator{},
+		model.TrafficPolicyType:   controlxds.TrafficPolicyGenerator{},
+		model.SecurityProfileType: controlxds.SecurityProfileGenerator{},
+		model.SandboxType:         controlxds.SandboxGenerator{},
 	}, 2, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +199,31 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 			t.Error(err)
 		}
 	})
-	client, err := xdsclient.New(conn, xdsclient.Config{Node: &core.Node{Id: "epe"}, Watches: xdsbackend.Watches()})
+	cms := krt.NewMutableCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(t.Context().Done()))
+	profileStore := profilestore.NewXDSStore()
+	profileSource := xdsbackend.NewProfileSource(profileStore.ObserveAdmission, t.Context().Done())
+	watches := append(xdsbackend.Watches(), profileSource.Watches(nil)...)
+	var rejected atomic.Bool
+	var sandboxRemovals atomic.Int64
+	for i := range watches {
+		if watches[i].TypeURL == model.SandboxType {
+			onDelete := watches[i].OnDelete
+			watches[i].OnDelete = func(name string) xdsclient.DeleteAction {
+				sandboxRemovals.Add(1)
+				return onDelete(name)
+			}
+		}
+		if watches[i].TypeURL == model.SecurityProfileType {
+			observe := watches[i].OnChange
+			watches[i].OnChange = func(name string, current *xdsclient.Resource, err error) {
+				observe(name, current, err)
+				if err != nil {
+					rejected.Store(true)
+				}
+			}
+		}
+	}
+	client, err := xdsclient.New(conn, xdsclient.Config{Node: &core.Node{Id: "epe"}, Watches: watches})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +240,9 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	profileCollection := profileSource.Collection(cms.AsCollection(), krt.WithStop(t.Context().Done()))
+	profileStore.RegisterCollection(profileCollection, native.AcquireProfileReferences)
+	t.Cleanup(profileCollection.Registry.RegisterDeletes(profileStore.NotifyKeys))
 	cacheDone := make(chan error, 1)
 	go func() { cacheDone <- native.Run(ctx) }()
 	t.Cleanup(func() {
@@ -228,13 +280,20 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 		len(snapshot.Resources[model.TrafficPolicyType]) != 0 {
 		t.Fatal("SecurityProfile lookup fetched unrelated Workloads or TrafficPolicies")
 	}
-	local := profilestore.MakeFakeStore()
-	for _, name := range []string{"policy", "unused"} {
-		local.GlobalProfileSet(&agentsv1alpha1.GlobalSecurityProfile{ObjectMeta: metav1.ObjectMeta{Name: name}})
-	}
-	profiles, err := local.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+	profiles, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
 	if err != nil || len(profiles) != 1 || profiles[0].Meta.Name != "policy" {
-		t.Fatalf("referenced local profile: %v %v", profiles, err)
+		t.Fatalf("referenced xDS profile: %v %v", profiles, err)
+	}
+	if capacity > 1 {
+		removals := sandboxRemovals.Load()
+		for range 3 {
+			if _, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sandboxRemovals.Load() != removals {
+			t.Fatal("missing same-name Sandbox was fetched again instead of staying cached")
+		}
 	}
 	target := netip.MustParseAddrPort("203.0.113.7:443")
 	checkAction := func(want egressauthz.Action) {
@@ -299,7 +358,11 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 		return
 	}
 	for typ, values := range client.Snapshot().Resources {
-		if len(values) != 1 {
+		want := 1
+		if typ == model.SandboxType {
+			want = 0
+		}
+		if len(values) != want {
 			t.Fatalf("%s cached %d resources, want just the requested one", typ, len(values))
 		}
 	}
@@ -308,6 +371,51 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 		if _, err := publications.Apply(changes); err != nil {
 			t.Fatal(err)
 		}
+	}
+	beforeInvalid := client.Snapshot().Resources[model.SecurityProfileType]["global/policy"]
+	metricValue := func(name string) float64 {
+		t.Helper()
+		families, err := metrics.Registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			for _, metric := range family.Metric {
+				for _, label := range metric.Label {
+					if label.GetName() == "scope" && label.GetValue() == "global" {
+						return metric.GetGauge().GetValue() + metric.GetCounter().GetValue()
+					}
+				}
+			}
+		}
+		return 0
+	}
+	beforeFailures := metricValue("epe_profile_compile_failures_total")
+	bad := resource(
+		model.SecurityProfileType,
+		"global/policy",
+		&sec.SecurityProfile{Name: "policy", PolicyJson: []byte(`{"unsupported":true}`)},
+		model.ResourceFacts{},
+	)
+	apply(model.ResourceChange{Key: bad.Key, New: &bad})
+	await(rejected.Load)
+	if metricValue("epe_profile_stale") != 1 || metricValue("epe_profile_compile_failures_total") != beforeFailures+1 {
+		t.Fatal("NACK did not report retained policy degradation")
+	}
+	if client.Snapshot().Resources[model.SecurityProfileType]["global/policy"] != beforeInvalid {
+		t.Fatal("invalid profile replaced the last accepted body")
+	}
+	replacement := profileResource("policy", "updated")
+	apply(model.ResourceChange{Key: replacement.Key, New: &replacement})
+	await(func() bool {
+		profiles, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+		return err == nil && len(profiles) == 1 && profiles[0].Rules[0].Name == "updated"
+	})
+	if metricValue("epe_profile_stale") != 0 {
+		t.Fatal("accepted update did not clear policy degradation")
 	}
 	denied := policyResource("policy", sec.TrafficPolicy_DENY)
 	apply(model.ResourceChange{Key: denied.Key, New: &denied})
@@ -354,8 +462,32 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profiles, err = local.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+	profiles, err = profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
 	if err != nil || len(profiles) != 1 || profiles[0].Meta.Name != "unused" {
 		t.Fatalf("updated SecurityProfile binding: %v %v", profiles, err)
+	}
+	sandbox := resource(model.SandboxType, "kruise:delivery", &sandboxv1.Sandbox{
+		Uid:      "kruise:delivery",
+		Attester: &sandboxv1.Sandbox_Attester{WorkloadUid: uid},
+		Extensions: []*anypb.Any{pack(&sec.SecurityProfile{
+			Name:       "pod",
+			Namespace:  "ns",
+			PolicyJson: []byte(`{}`),
+		})},
+	}, model.ResourceFacts{Sandbox: &model.SandboxResourceFacts{AttesterWorkloadUID: uid}})
+	sandbox, err = model.NewResource(sandbox.Key, sandbox.XDSName, sandbox.Value, []string{"ns/pod"}, sandbox.Facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(model.ResourceChange{Key: sandbox.Key, New: &sandbox})
+	await(func() bool {
+		profiles, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+		return err == nil && len(profiles) == 2 && profiles[1].Meta.SandboxUID == "kruise:delivery"
+	})
+	apply(model.ResourceChange{Key: sandbox.Key, Old: &sandbox})
+	await(func() bool { return client.Snapshot().Resources[model.SandboxType][sandbox.Key.Name] == nil })
+	profiles, err = profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+	if err != nil || len(profiles) != 1 {
+		t.Fatalf("deleted same-name Sandbox retained its policy: %v %v", profiles, err)
 	}
 }

@@ -45,7 +45,17 @@ func (g SandboxGenerator) Generate(ctx context.Context, request GenerationReques
 				delete(selected, name)
 			}
 		}
-		delta := diffSubscribed(request.Subscription, selected, request.SubscribedNames)
+		// Explicit alias demands must resend the canonical resource, not remove the alias.
+		subscribedNames := append([]string(nil), request.SubscribedNames...)
+		for i, name := range subscribedNames {
+			for _, resource := range request.Snapshot.Lookup(request.TypeURL, name) {
+				if _, found := selected[resource.XDSName]; found {
+					subscribedNames[i] = resource.XDSName
+					break
+				}
+			}
+		}
+		delta := diffSubscribed(request.Subscription, selected, subscribedNames)
 		deferUnpublishedRemovals(request, &delta, g.Source)
 		return delta, nil
 	}
@@ -75,7 +85,8 @@ func sandboxVisible(scope model.ClientScope, snapshot model.ResourceSet, uid str
 }
 
 func sandboxResourceVisible(scope model.ClientScope, snapshot model.ResourceSet, sandbox model.Resource) bool {
-	if scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress {
+	if scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress ||
+		scope.Class == model.ClientEPE {
 		return true
 	}
 	facts := sandbox.Facts.Sandbox
@@ -102,7 +113,8 @@ func selectSandboxResources(
 			result[r.XDSName] = r
 		}
 	}
-	if scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress {
+	if scope.Class == model.ClientEgressGateway || scope.Class == model.ClientAgentioEgress ||
+		scope.Class == model.ClientEPE {
 		if sub.Wildcard() {
 			for _, r := range snapshot.List(typeURL) {
 				add(r)

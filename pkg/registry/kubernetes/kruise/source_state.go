@@ -36,7 +36,10 @@ func newSandboxSources(
 		if !found {
 			return nil
 		}
-		return []model.ResourceKey{{TypeURL: model.SandboxType, Name: uid}}
+		return []model.ResourceKey{
+			{TypeURL: model.SandboxType, Name: uid},
+			{TypeURL: model.SandboxType, Name: sandbox.Namespace + "/" + sandbox.Name},
+		}
 	}
 	return registry.TrackSources(objects, "sandbox-source-keys", keys, identity)
 }

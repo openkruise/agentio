@@ -551,7 +551,11 @@ func TestSourceDeleteNotifications(t *testing.T) {
 				want := []model.ResourceKey{
 					{TypeURL: model.SandboxType, Name: "kruise:delivery"},
 				}
-				if len(keys) != len(want) || !slices.Contains(keys, want[0]) {
+				if action != "rename" {
+					want = append(want, model.ResourceKey{TypeURL: model.SandboxType, Name: "demo/sandbox"})
+				}
+				if len(keys) != len(want) || !slices.Contains(keys, want[0]) ||
+					len(want) > 1 && !slices.Contains(keys, want[1]) {
 					t.Fatalf("source invalidations = %v, want %v", keys, want)
 				}
 				if _, found := config.Lookup(keys[0]); found {
@@ -575,6 +579,12 @@ func TestSandboxSourceConflictAndInlineAbsence(t *testing.T) {
 	objects := krt.NewMutableCollection(nil, []*agentsv1alpha1.Sandbox{first, second}, krt.WithStop(t.Context().Done()))
 	sandboxes := newSandboxSources(objects.AsCollection())
 	key := model.ResourceKey{TypeURL: model.SandboxType, Name: "kruise:duplicate"}
+	if got, found := sandboxes.Lookup(
+		model.ResourceKey{TypeURL: model.SandboxType, Name: "demo/first"},
+	); !found ||
+		got.UID != "first" {
+		t.Fatalf("namespace/name source lookup: %v, %v", got, found)
+	}
 	if got, found := sandboxes.Lookup(key); !found || got != (model.SourceIdentity{}) {
 		t.Fatalf("ambiguous source must stay present without a selected identity: %v, %v", got, found)
 	}

@@ -366,3 +366,47 @@ func TestWatchTransforms(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectedSnapshotOwnershipAndList(t *testing.T) {
+	f := testSource()
+	f.snapshot.Resources[model.WorkloadType]["other"] = published(&workload.Workload{Uid: "other", Name: "before"})
+	s := New(f)
+	keys := []store.Key{
+		{Type: store.Workload, Name: "uid"},
+		{Type: store.Workload, Name: "other"},
+		{Type: store.Workload, Name: "uid"},
+	}
+	before := s.ReadKeys(keys)
+	view := before.Snapshots[store.Workload]
+	values, err := view.List()
+	if err != nil || len(values) != 2 || values[0].Key.Name != "other" || values[1].Key.Name != "uid" {
+		t.Fatalf("selected list: %v, %v", values, err)
+	}
+	old, err := view.Get("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := view.Get("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old != again {
+		t.Fatal("resource identity changed within one snapshot")
+	}
+	f.snapshot.Resources[model.WorkloadType]["other"] = published(&workload.Workload{Uid: "other", Name: "after"})
+	delete(f.snapshot.Resources[model.WorkloadType], "uid")
+	after := s.ReadKeys(keys)
+	updated, err := after.Snapshots[store.Workload].Get("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Value.(*workload.Workload).Name != "after" || old.Value.(*workload.Workload).Name != "before" {
+		t.Fatal("update mutated a selected publication")
+	}
+	if value, err := after.Snapshots[store.Workload].Get("uid"); value != nil || err != nil {
+		t.Fatal("deleted selected resource retained", value, err)
+	}
+	if value, err := view.Get("uid"); value == nil || err != nil {
+		t.Fatal("deletion mutated old publication", value, err)
+	}
+}

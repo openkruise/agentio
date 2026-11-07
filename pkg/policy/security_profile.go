@@ -16,6 +16,7 @@ package policy
 
 import (
 	"fmt"
+	"reflect"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +31,7 @@ type CompiledSecurityProfile struct {
 	Name       string
 	Attachment *PolicyAttachment
 	SNIPolicy  *extensionsv1.SniTrafficPolicy
+	Spec       agentsv1alpha1.SecurityProfileSpec
 }
 
 // ResourceName identifies the profile in the compiled collection.
@@ -37,7 +39,7 @@ func (p CompiledSecurityProfile) ResourceName() string { return p.Name }
 
 // Equals includes binding metadata and the optional SNI projection.
 func (p CompiledSecurityProfile) Equals(other CompiledSecurityProfile) bool {
-	if p.Name != other.Name || !proto.Equal(p.SNIPolicy, other.SNIPolicy) {
+	if p.Name != other.Name || !reflect.DeepEqual(p.Spec, other.Spec) || !proto.Equal(p.SNIPolicy, other.SNIPolicy) {
 		return false
 	}
 	if p.Attachment == nil || other.Attachment == nil {
@@ -64,6 +66,7 @@ func CompileSecurityProfile(profile model.SecurityProfile) (*CompiledSecurityPro
 		Name:       profile.ResourceName(),
 		Attachment: attachment,
 		SNIPolicy:  payload,
+		Spec:       profile.Spec,
 	}, nil
 }
 

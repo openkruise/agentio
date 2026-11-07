@@ -319,7 +319,7 @@ func TestSandboxLifecyclePreservesWorkloadPolicies(t *testing.T) {
 	)
 	testutil.Eventually(t, func() bool {
 		manifest := manifestAt(t, fixture.compiler, "actor")
-		return manifest != nil && manifest.TrafficPolicy == nil && len(manifest.Extensions) == 1
+		return manifest != nil && manifest.TrafficPolicy == nil && len(manifest.Extensions) == 0
 	}, "Sandbox only carries its own policies")
 	checkWorkloads()
 	fixture.sandboxes.DeleteObject("actor")

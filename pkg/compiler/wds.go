@@ -181,6 +181,15 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 		GatewayReferences: input.EgressGatewayKeys,
 	}}
 	facts.GatewayOwner = input.Workload.GatewayKey
+	if len(input.SecurityProfileReferences) > 0 {
+		facts.References = &model.ResourceReferences{}
+		for _, reference := range input.SecurityProfileReferences {
+			facts.References.Keys = append(
+				facts.References.Keys,
+				model.ResourceKey{TypeURL: model.SecurityProfileType, Name: reference.Name},
+			)
+		}
+	}
 	addressResource, err := model.NewResource(
 		model.ResourceKey{
 			TypeURL: model.AddressType,

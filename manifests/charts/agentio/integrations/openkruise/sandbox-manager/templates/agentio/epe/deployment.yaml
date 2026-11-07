@@ -52,6 +52,7 @@ spec:
             - -epe-config-primary={{ include "agentio.epe.fullname" . }}-config-primary
             - -namespace={{ (include "agentio.namespace" .) }}
             - -secret-watch-scope={{ .Values.agentio.epe.secretWatchScope }}
+            - --security-profile-source={{ .Values.agentio.epe.securityProfileSource }}
             - --profile-deletion-grace-period={{ .Values.agentio.epe.profileDeletionGracePeriod }}
             - --xds-address={{ include "agentio.gateway.xdsAddress" . }}
             - --xds-cluster-id={{ .Values.agentio.global.clusterId }}

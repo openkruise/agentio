@@ -67,6 +67,10 @@ type Watch struct {
 	// after validation, under the client lock; it must not call back into Client.
 	// Releasing an explicit name does not cancel a wildcard subscription.
 	OnDelete func(name string) DeleteAction
+	// OnChange observes accepted resources, transform failures (with the retained
+	// resource), and removals (nil resource and error), including lease eviction.
+	// Called under the client lock; it must not call back into Client.
+	OnChange func(name string, current *Resource, err error)
 }
 
 // Config defines the node identity and initial watches. Node must be non-nil;
@@ -279,6 +283,7 @@ func (c *Client) expireGraceLocked(st *typeState) {
 	for name, value := range st.resources {
 		if value.epoch != st.epoch {
 			st.removeResource(name)
+			st.changed(name, nil)
 		}
 	}
 	c.notifyLocked()
@@ -425,8 +430,13 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 		}
 		c.mu.Unlock()
 	}
-	values, err := transformResources(selected, st.watch)
+	values, failed, err := transformResources(selected, st.watch)
 	if err != nil {
+		c.mu.Lock()
+		if st.interested(failed.Name, failed.Aliases) {
+			st.changed(failed.Name, err)
+		}
+		c.mu.Unlock()
 		return err
 	}
 	c.mu.Lock()
@@ -445,7 +455,13 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 				}
 			}
 		}
+		previous := st.resources
 		st.resources = map[string]*Resource{}
+		if st.watch.OnChange != nil {
+			for name := range previous {
+				st.changed(name, nil)
+			}
+		}
 		st.removed = map[string]bool{}
 		st.aliases = map[string]string{}
 		st.sharedAliases = map[string]map[string]struct{}{}
@@ -465,14 +481,17 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 		// Interests can change while decoding. A newly acquired interest in
 		// an unselected resource will receive its own subscribe response.
 		if values[i] == nil {
+			st.changed(res.Name, nil)
 			continue
 		}
 		sub := st.names[res.Name]
 		if sub == nil && !st.interested(res.Name, res.Aliases) {
+			st.changed(res.Name, nil)
 			continue
 		}
 		values[i].epoch = st.epoch
 		st.resources[res.Name] = values[i]
+		st.changed(res.Name, nil)
 		st.addResourceAliases(res.Name, res.Aliases)
 		for _, alias := range res.Aliases {
 			touched[alias] = struct{}{}
@@ -488,6 +507,7 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 			touched[alias] = struct{}{}
 		}
 		st.removeResource(name)
+		st.changed(name, nil)
 	}
 	for alias := range touched {
 		if _, exists := st.aliases[alias]; !exists {

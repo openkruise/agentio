@@ -205,6 +205,7 @@ func newEmptySnapshot() *profileSnapshot {
 func NewStore(deletionGracePeriod time.Duration) *store {
 	s := &store{degraded: newDegradedSets(), deletionGracePeriod: deletionGracePeriod}
 	s.snapshot.Store(newEmptySnapshot())
+	s.degraded.publish()
 	return s
 }
 

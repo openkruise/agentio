@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"istio.io/istio/pkg/util/sets"
 
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/model"
@@ -59,6 +60,10 @@ func TestDemandSubscriptionPreservesOtherResources(t *testing.T) {
 				a = sandboxResource(t, "a")
 				b = sandboxResource(t, "b")
 				changed = sandboxResourceWithAttester(t, "a", "new-attester")
+				a.Aliases = []string{"alias-a"}
+				b.Aliases = []string{"alias-b"}
+				changed.Aliases = []string{"alias-a"}
+				demandName = func(name string) string { return "alias-" + name }
 			}
 			recorder := &demandRecordingGenerator{inner: testGenerators(nil)[typeURL]}
 			server := newTestServerWithGenerators(t, gatewayScope(), append(dependencies, a, b),
@@ -175,6 +180,31 @@ func TestDemandSubscriptionKeepsExpandedSelection(t *testing.T) {
 	}
 	if _, ok := demandSubscriptionView(snapshot, model.AddressType, []string{"a"}); ok {
 		t.Fatal("Address selection must retain its scope and Service expansion semantics")
+	}
+}
+
+func TestSandboxAliasUnsubscribeKeepsOtherInterest(t *testing.T) {
+	resource := sandboxResource(t, "sandbox")
+	resource.Aliases = []string{"alias"}
+	snapshot := selectionSnapshot(t, []model.Resource{resource})
+	for _, retained := range []string{resource.XDSName, "alias"} {
+		watch := &watchState{names: sets.New(retained), sent: map[string]string{resource.XDSName: "accepted"}}
+		unsubscribed := "alias"
+		if retained == "alias" {
+			unsubscribed = resource.XDSName
+		}
+		view, ok := demandReconciliationView(
+			snapshot,
+			model.SandboxType,
+			gatewayScope(),
+			watch,
+			nil,
+			[]string{unsubscribed},
+		)
+		if !ok || !slices.Equal(view.Names(), []string{resource.XDSName}) ||
+			watch.sent[resource.XDSName] != "accepted" {
+			t.Fatalf("unsubscribing %s lost retained %s: %+v, %+v", unsubscribed, retained, view, watch.sent)
+		}
 	}
 }
 

@@ -176,10 +176,12 @@ func (st *typeState) releaseResource(name string) {
 		for candidate := range st.sharedAliases[name] {
 			if !st.interested(candidate, st.resourceAliases[candidate]) {
 				st.removeResource(candidate)
+				st.changed(candidate, nil)
 			}
 		}
 	} else if !st.interested(canonical, st.resourceAliases[canonical]) {
 		st.removeResource(canonical)
+		st.changed(canonical, nil)
 	}
 }
 
@@ -215,6 +217,12 @@ func (st *typeState) removeResource(name string) {
 		} else if st.aliases[alias] == name {
 			delete(st.aliases, alias)
 		}
+	}
+}
+
+func (st *typeState) changed(name string, err error) {
+	if st.watch.OnChange != nil {
+		st.watch.OnChange(name, st.resources[name], err)
 	}
 }
 

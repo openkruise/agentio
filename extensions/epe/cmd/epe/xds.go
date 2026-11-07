@@ -24,21 +24,27 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
 
 var (
+	securityProfileSource = flag.String(
+		"security-profile-source",
+		"kubernetes",
+		"SecurityProfile and Sandbox policy source: kubernetes (informer cache) or xds (control plane)",
+	)
 	xdsCacheIdleTTL = flag.Duration(
 		"xds-cache-idle-ttl",
 		10*time.Minute,
-		"Idle lifetime of retained Workload and TrafficPolicy subscriptions; zero disables expiry",
+		"Idle lifetime of retained Workload, TrafficPolicy, SecurityProfile and Sandbox subscriptions; zero disables expiry",
 	)
 	xdsCacheMaxEntries = flag.Int(
 		"xds-cache-max-entries",
 		10000,
-		"Maximum retained Workload and TrafficPolicy subscriptions; active resolutions are pinned; zero disables capacity eviction",
+		"Maximum retained Workload, TrafficPolicy, SecurityProfile and Sandbox subscriptions; active resolutions are pinned; zero disables capacity eviction",
 	)
 	clusterDomain = flag.String(
 		"domain",
@@ -73,7 +79,10 @@ var (
 	)
 )
 
-func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
+func newEgressXDS(
+	regs []filter.Registration,
+	source *xdsstore.ProfileSource,
+) (*xdsclient.Client, *grpc.ClientConn, error) {
 	if *xdsAddress == "" {
 		return nil, nil, fmt.Errorf("--xds-address is required for Workload SecurityProfile bindings")
 	}
@@ -106,7 +115,7 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 		conn,
 		xdsclient.Config{
 			Node:              &core.Node{Id: id, Metadata: metadata},
-			Watches:           xdsstore.Watches(),
+			Watches:           epeWatches(*securityProfileSource, regs, source),
 			MetricsRegisterer: metrics.Registry,
 		},
 	)
@@ -117,4 +126,12 @@ func newEgressXDS() (*xdsclient.Client, *grpc.ClientConn, error) {
 		return nil, nil, err
 	}
 	return c, conn, nil
+}
+
+func epeWatches(mode string, regs []filter.Registration, source *xdsstore.ProfileSource) []xdsclient.Watch {
+	watches := xdsstore.Watches()
+	if mode == "xds" {
+		watches = append(watches, source.Watches(regs)...)
+	}
+	return watches
 }

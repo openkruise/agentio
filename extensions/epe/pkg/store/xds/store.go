@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,21 +77,43 @@ type Store struct {
 var _ store.Store = (*Store)(nil)
 
 // New wraps an xDS source; the caller owns its lifecycle.
-func New(source Source) *Store { return &Store{source: source} }
+func New(source Source) *Store {
+	return &Store{source: source}
+}
 
 type leaseSource struct{ client *xdsclient.Client }
 
 func (s leaseSource) Acquire(typ, name string) (demandcache.Lease[*xdsclient.Resource], error) {
-	return s.client.Acquire(typ, name)
+	lease, err := s.client.Acquire(typ, name)
+	if err != nil {
+		return nil, err
+	}
+	if typ == model.SandboxType {
+		return sandboxLease{lease}, nil
+	}
+	return lease, nil
 }
 
-// NewCached bounds the Workload and TrafficPolicy subscriptions in one cache.
+// A missing Sandbox is a cacheable lookup result; keep watching for its creation.
+type sandboxLease struct{ *xdsclient.Subscription }
+
+func (s sandboxLease) Demand(ctx context.Context) (*xdsclient.Resource, error) {
+	value, err := s.Subscription.Demand(ctx)
+	if errors.Is(err, xdsclient.ErrNotFound) {
+		return nil, nil
+	}
+	return value, err
+}
+
+// NewCached bounds all native resource subscriptions in one cache.
 func NewCached(source *xdsclient.Client, config demandcache.Config) (*Store, error) {
 	cache, err := demandcache.New(leaseSource{source}, config)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{source: source, cache: cache}, nil
+	s := New(source)
+	s.cache = cache
+	return s, nil
 }
 
 // Run owns cache expiration and releases subscriptions on shutdown.
@@ -99,7 +123,9 @@ func (s *Store) Run(ctx context.Context) error { return s.cache.Run(ctx) }
 func (s *Store) CacheEntries() int { return s.cache.Len() }
 
 // Types lists the native models served by this backend.
-func (s *Store) Types() []store.Type { return []store.Type{store.Workload, store.TrafficPolicy} }
+func (s *Store) Types() []store.Type {
+	return []store.Type{store.Workload, store.TrafficPolicy}
+}
 
 // Status observes synchronization and changes without copying or decoding resources.
 func (s *Store) Status() store.Status {
@@ -161,7 +187,14 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 		Status:    store.Status{Ready: true, Changed: snapshot.Changed},
 		Snapshots: map[store.Type]store.TypeSnapshot{},
 	}
-	for _, typ := range s.Types() {
+	types := s.Types()
+	for _, key := range keys {
+		if slices.Contains(types, key.Type) {
+			continue
+		}
+		types = append(types, key.Type)
+	}
+	for _, typ := range types {
 		wire := wireType(typ)
 		var resources []store.Resource
 		var err error
@@ -184,10 +217,31 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 				}
 			}
 		}
-		batch.Snapshots[typ] = store.NewDefaultSnapshot(resources, err)
+		slices.SortFunc(resources, func(a, b store.Resource) int { return strings.Compare(a.Key.Name, b.Key.Name) })
+		resources = slices.CompactFunc(resources, func(a, b store.Resource) bool { return a.Key == b.Key })
+		batch.Snapshots[typ] = &selectedSnapshot{resources: resources, err: err}
 	}
 	return batch
 }
+
+// Selected request sets are small; a slice avoids rebuilding a map and sorted
+// list for every lookup while retaining one immutable publication.
+type selectedSnapshot struct {
+	resources []store.Resource
+	err       error
+}
+
+func (s *selectedSnapshot) Get(name string) (*store.Resource, error) {
+	i, found := slices.BinarySearchFunc(s.resources, name, func(resource store.Resource, name string) int {
+		return strings.Compare(resource.Key.Name, name)
+	})
+	if found {
+		return &s.resources[i], nil
+	}
+	return nil, s.err
+}
+
+func (s *selectedSnapshot) List() ([]store.Resource, error) { return s.resources, s.err }
 
 func projectType(snapshot, prior xdsclient.Snapshot, typ store.Type, previous store.TypeSnapshot) store.TypeSnapshot {
 	wire := wireType(typ)
@@ -274,6 +328,10 @@ func wireType(typ store.Type) string {
 		return model.WorkloadType
 	case store.TrafficPolicy:
 		return model.TrafficPolicyType
+	case store.SecurityProfile:
+		return model.SecurityProfileType
+	case store.Sandbox:
+		return model.SandboxType
 	default:
 		return ""
 	}

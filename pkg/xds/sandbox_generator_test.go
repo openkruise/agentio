@@ -129,6 +129,49 @@ func TestSandboxNamedDeltaResubscribeAndDeletion(t *testing.T) {
 	}
 }
 
+func TestSandboxNamespaceNameDemand(t *testing.T) {
+	ctx := t.Context()
+	resource := sandboxResourceWithAttester(t, "kruise:delivery", "worker")
+	resource, err := model.NewResource(
+		resource.Key,
+		resource.XDSName,
+		resource.Value,
+		[]string{"ns/worker"},
+		resource.Facts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := gatewayScope()
+	scope.Class = model.ClientEPE
+	server := newTestServer(t, scope, []model.Resource{resource}, nil)
+	stream := newFakeStream(ctx, 8)
+	done := server.start(stream)
+	stream.send(nodeRequest(model.SandboxType, "ns/worker"))
+	first := stream.awaitResponses(t, model.SandboxType, 1)[0]
+	if len(first.Resources) != 1 || first.Resources[0].Name != "kruise:delivery" ||
+		!slices.Equal(first.Resources[0].Aliases, []string{"ns/worker"}) || len(first.RemovedResources) != 0 {
+		t.Fatalf("namespace/name lookup: %v", first)
+	}
+	stream.send(&discoveryv3.DeltaDiscoveryRequest{
+		TypeUrl:                model.SandboxType,
+		ResponseNonce:          first.Nonce,
+		ResourceNamesSubscribe: []string{"ns/worker"},
+	})
+	second := stream.awaitResponses(t, model.SandboxType, 2)[1]
+	if len(second.Resources) != 1 || len(second.RemovedResources) != 0 {
+		t.Fatalf("alias resubscribe: %v", second)
+	}
+	server.resources.publish(selectionSnapshot(t, nil))
+	third := stream.awaitResponses(t, model.SandboxType, 3)[2]
+	if !slices.Equal(third.RemovedResources, []string{"kruise:delivery"}) {
+		t.Fatalf("alias deletion: %v", third)
+	}
+	if err := server.finish(t, stream, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSandboxDynamicWorkerScopeAndPodReplacement(t *testing.T) {
 	a, b := sandboxResource(t, "a"), sandboxResource(t, "b")
 	empty := workerResource(t, "pod-1")

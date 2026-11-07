@@ -128,6 +128,7 @@ func newSandboxes(
 				Policies:       policies,
 				Attester:       attester,
 				UID:            group.Key,
+				Name:           sandbox.Name,
 				Namespace:      sandbox.Namespace,
 			}
 		}, options...)

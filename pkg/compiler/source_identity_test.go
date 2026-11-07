@@ -188,9 +188,9 @@ func TestSandboxInlineRemoval(t *testing.T) {
 	testutil.Eventually(t, func() bool {
 		resource, found := currentSnapshot(t, f.compiler).Get(sandbox.SourceKey())
 		return found && resource.Facts.SourceIdentity == sandbox.SourceIdentity &&
-			len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()) == 1
+			len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()) == 0
 	}, "inline removal publishes complete Sandbox")
-	if got := len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()); got != 1 {
+	if got := len(manifestAt(t, f.compiler, sandbox.UID).GetExtensions()); got != 0 {
 		t.Fatalf("stale inline SNI retained: %d extensions", got)
 	}
 }

@@ -21,6 +21,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
@@ -76,12 +77,21 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 		t.Helper()
 		testutil.Eventually(t, func() bool {
 			manifest := manifestAt(t, fixture.compiler, uid)
-			if manifest == nil || len(manifest.Extensions) != len(hosts)+1 {
+			if manifest == nil {
+				return false
+			}
+			var sniExtensions []*anypb.Any
+			for _, extension := range manifest.Extensions {
+				if extension.TypeUrl == model.SniTrafficPolicyType {
+					sniExtensions = append(sniExtensions, extension)
+				}
+			}
+			if len(sniExtensions) != len(hosts) {
 				return false
 			}
 			for i, want := range hosts {
 				payload := new(extensionsv1.SniTrafficPolicy)
-				if err := manifest.Extensions[i].UnmarshalTo(payload); err != nil {
+				if err := sniExtensions[i].UnmarshalTo(payload); err != nil {
 					t.Fatal(err)
 				}
 				var got []string
@@ -192,7 +202,7 @@ func TestMultiSandboxDeletionAndShrinkRetainNetworking(t *testing.T) {
 	waitSynced(t, fixture.compiler)
 	testutil.Eventually(t, func() bool {
 		ma, mb := manifestAt(t, fixture.compiler, a.UID), manifestAt(t, fixture.compiler, b.UID)
-		return ma != nil && mb != nil && mb.GetAttester().GetWorkloadUid() == worker.UID && len(mb.Extensions) == 1
+		return ma != nil && mb != nil && mb.GetAttester().GetWorkloadUid() == worker.UID && len(mb.Extensions) == 0
 	}, "both Sandboxes retain their Workload binding")
 	a.Attester = nil
 	fixture.sandboxes.ConditionalUpdateObject(a)
@@ -333,7 +343,7 @@ func TestSandboxTrafficPolicyTracksPeerUpdates(t *testing.T) {
 	}
 	awaitAddress(1)
 	refs, _ := securityReferencesAt(t, fixture.compiler, sandbox.SourceKey())
-	if refs == nil || len(refs.Resources) != 0 {
+	if refs != nil {
 		t.Fatal("traffic-only Sandbox acquired a SecurityProfile reference")
 	}
 	if len(currentSnapshot(t, fixture.compiler).List(model.TrafficPolicyType)) != 0 {

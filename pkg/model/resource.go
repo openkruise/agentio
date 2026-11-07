@@ -42,7 +42,7 @@ const (
 	WorkloadType               = "type.googleapis.com/istio.workload.Workload"
 	WorkloadAuthorizationType  = "type.googleapis.com/istio.security.Authorization"
 	SniTrafficPolicyType       = "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy"
-	// SecurityProfileType identifies binding references; profile bodies are not served through xDS.
+	// SecurityProfileType carries connection policies and the HTTP policy JSON view.
 	SecurityProfileType = "type.googleapis.com/agentio.security.SecurityProfile"
 )
 
