@@ -96,14 +96,10 @@ func awaitResult(
 	assert.Equal(t, len(got.Conditions), 3)
 	programmed := got.Conditions[2]
 	assert.Equal(t, programmed.Type, "Programmed")
-	if accepted == metav1.ConditionTrue && got.Source.Profile != nil {
-		assert.Equal(t, programmed.Status, metav1.ConditionUnknown)
-		assert.Equal(t, programmed.Reason, "NotChecked")
-	} else if accepted == metav1.ConditionTrue {
-		assert.Equal(t, programmed.Status, accepted)
+	assert.Equal(t, programmed.Status, accepted)
+	if accepted == metav1.ConditionTrue {
 		assert.Equal(t, programmed.Reason, "Programmed")
 	} else {
-		assert.Equal(t, programmed.Status, accepted)
 		assert.Equal(t, programmed.Reason, got.Conditions[0].Reason)
 		assert.Equal(t, programmed.Message, got.Conditions[0].Message)
 	}

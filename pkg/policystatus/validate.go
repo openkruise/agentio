@@ -81,9 +81,8 @@ func (c *Controller) profileStatus(ctx krt.HandlerContext, p compiledProfile) *r
 	programmed.Type = "Programmed"
 	if p.Accepted.Status == metav1.ConditionTrue {
 		resolved = c.profileRefs(ctx, p.Source)
-		programmed.Status = metav1.ConditionUnknown
-		programmed.Reason = "NotChecked"
-		programmed.Message = "API static validation passed; data-plane implementation loading is not checked by agentiod"
+		programmed.Reason = "Programmed"
+		programmed.Message = "Configuration compiled successfully and is eligible for data-plane distribution"
 	}
 	return &result{Source: p.Source,
 		Conditions: []metav1.Condition{p.Accepted, resolved, programmed}}

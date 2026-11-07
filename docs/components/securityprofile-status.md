@@ -6,11 +6,11 @@
 | --- | --- | --- | --- |
 | `Accepted` | SecurityProfile passed API static validation, or TrafficPolicy passed the native traffic compiler. | Validation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed validation is available yet. |
 | `ResolvedRefs` | All references checked by agentiod are resolved. | A referenced object is absent from a synchronized, in-scope cache. | A cache is not synchronized, a reference is outside the watch scope, DNS has no addresses yet, or validation failed before reference checks. |
-| `Programmed` | TrafficPolicy compiled successfully and is eligible for distribution. | API validation or native traffic compilation failed. | For a valid SecurityProfile, agentiod does not check implementation loading; `reason: NotChecked`. |
+| `Programmed` | SecurityProfile passed API static validation, or TrafficPolicy compiled successfully; the configuration is eligible for distribution. | API validation or native traffic compilation failed. | No completed validation is available yet. |
 
 A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also retain their existing `status.observedGeneration`; TrafficPolicies use the generation in each condition. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` changes only when the condition's True/False/Unknown value changes.
 
-For SecurityProfile and GlobalSecurityProfile, `Accepted=True` means API static validation passed, while `Programmed=Unknown` makes no claim about a consumer's compilation or loading result. Invalid API configuration produces `Accepted=False` and `Programmed=False`. For TrafficPolicy and GlobalTrafficPolicy, `Programmed` follows native compilation and does not wait for data-plane acknowledgements. Reference checks remain separate: missing references checked by agentiod affect `ResolvedRefs`, not `Programmed`.
+For all four policy kinds, `Programmed` follows `Accepted`: successful validation reports both as `True`, and invalid configuration reports both as `False`. It does not wait for data-plane acknowledgements or verify a consumer's compilation or loading result. Reference checks remain separate: missing references checked by agentiod affect `ResolvedRefs`, not `Programmed`.
 
 The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on all four policy kinds. Other controllers may own separate condition types, but must not compete for these types.
 
