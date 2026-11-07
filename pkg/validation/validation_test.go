@@ -23,8 +23,9 @@ import (
 
 func TestSecurityProfileStaticValidation(t *testing.T) {
 	for _, tc := range []struct {
-		name, spec string
-		valid      bool
+		name  string
+		spec  string
+		valid bool
 	}{
 		{"HTTP domain wildcard", `{"rules":[{"name":"r","match":[{"domains":["api*.example.com"],"schemes":["http"]}]}]}`, false},
 		{"HTTP port range", `{"rules":[{"name":"r","match":[{"domains":["example.com"],"schemes":["http"],"ports":[65536]}]}]}`, false},

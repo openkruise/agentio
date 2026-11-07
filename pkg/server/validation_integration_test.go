@@ -55,7 +55,8 @@ func TestValidationWithoutInjector(t *testing.T) {
 		t.Fatal(err)
 	}
 	serve, err := setupAdmissionWebhooks(ctx, client, authority, SidecarInjectorOptions{
-		Address: address, ValidationWebhookConfigName: "validator",
+		Address:                     address,
+		ValidationWebhookConfigName: "validator",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +75,11 @@ func TestValidationWithoutInjector(t *testing.T) {
 	review := &admissionv1.AdmissionReview{
 		TypeMeta: metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"},
 		Request: &admissionv1.AdmissionRequest{
-			UID: "ambient-validation", Operation: admissionv1.Create, Namespace: "demo",
-			Kind:   metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "TrafficPolicy"},
-			Object: runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"allow"},"spec":{"egress":{}}}`)},
+			UID:       "ambient-validation",
+			Operation: admissionv1.Create,
+			Namespace: "demo",
+			Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "TrafficPolicy"},
+			Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"allow"},"spec":{"egress":{}}}`)},
 		},
 	}
 	testutil.Eventually(t, func() bool {

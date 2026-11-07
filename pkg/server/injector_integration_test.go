@@ -209,9 +209,11 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	validationReview := &admissionv1.AdmissionReview{
 		TypeMeta: review.TypeMeta,
 		Request: &admissionv1.AdmissionRequest{
-			UID: "validation-test", Namespace: "demo", Operation: admissionv1.Create,
-			Kind:   metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "SecurityProfile"},
-			Object: runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"invalid"},"spec":{"priority":-1}}`)},
+			UID:       "validation-test",
+			Namespace: "demo",
+			Operation: admissionv1.Create,
+			Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "SecurityProfile"},
+			Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"invalid"},"spec":{"priority":-1}}`)},
 		},
 	}
 	validated, err := postReview(t, httpClient, fmt.Sprintf("https://%s/validate", address), validationReview)

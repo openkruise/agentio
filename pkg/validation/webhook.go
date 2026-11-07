@@ -44,8 +44,10 @@ func Register(mux *http.ServeMux) {
 				var object agentsv1alpha1.SecurityProfile
 				if err = json.Unmarshal(req.Object.Raw, &object); err == nil {
 					err = ValidateSecurityProfile(model.SecurityProfile{
-						Name: object.Name, Namespace: req.Namespace,
-						Global: req.Kind.Kind == "GlobalSecurityProfile", Spec: object.Spec,
+						Name:      object.Name,
+						Namespace: req.Namespace,
+						Global:    req.Kind.Kind == "GlobalSecurityProfile",
+						Spec:      object.Spec,
 					})
 				}
 			case "TrafficPolicy", "GlobalTrafficPolicy":

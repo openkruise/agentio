@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/openkruise/agentio/test/e2e"
 	agentiocomponent "github.com/openkruise/agentio/test/e2e/components/agentio"
 	"github.com/openkruise/agentio/test/e2e/components/echo"
@@ -32,7 +34,7 @@ import (
 
 // TestSandboxTrafficPolicyLifecycle covers policy lifecycle scenarios that go
 // beyond basic allow/deny enforcement: update propagation, deletion cleanup,
-// invalid CIDR resilience, empty selector, wildcard service, label-change
+// invalid CIDR admission, empty selector, wildcard service, label-change
 // reconciliation, and fail-closed handling of unresolvable FQDNs.
 func TestSandboxTrafficPolicyLifecycle(t *testing.T) {
 	rig.RequireLive(t)
@@ -159,10 +161,9 @@ spec:
 	})
 
 	rig.RunScenario(t, "invalid CIDR resilience", func(t *testing.T, scope *kube.ResourceScope) {
-		// Apply a policy with an invalid CIDR alongside a valid allow.
-		// The controller should handle the invalid CIDR gracefully
-		// (skip it or report status) and not crash.
-		e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
+		ctx, cancel := e2e.Context(t, 2*time.Minute)
+		defer cancel()
+		invalid := e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
 			"App": src.Name(),
 		}, `
 apiVersion: agents.kruise.io/v1alpha1
@@ -179,10 +180,13 @@ spec:
       - action: allow
         to:
           - cidr: "not-a-valid-cidr"
-`).ApplyOrFail(t, kube.CreateOnly)
+`)
+		if _, err := invalid.Apply(ctx, kube.CreateOnly); !apierrors.IsForbidden(err) ||
+			!strings.Contains(err.Error(), "invalid CIDR") {
+			t.Fatalf("create invalid CIDR policy: got %v, want admission rejection", err)
+		}
 
-		// Apply a new valid policy and use its successful propagation as the
-		// barrier proving the controller processed input after the invalid CIDR.
+		// A rejected policy must not prevent subsequent valid policy propagation.
 		e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
 			"App": src.Name(),
 			"Dst": serviceIPBlock,
@@ -469,32 +473,24 @@ spec:
 		src.CallOrFail(t, dst.CallOptionsOrFail(t, "http").WithCheck(check.Error()))
 	})
 
-	rig.RunScenario(t, "invalid CIDR alone fails closed", func(t *testing.T, scope *kube.ResourceScope) {
-		e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
-			"App": src.Name(),
-		}, `
-apiVersion: agents.kruise.io/v1alpha1
-kind: TrafficPolicy
-metadata:
-  name: tp-invalid-cidr-fail-closed
-spec:
-  priority: 100
-  selector:
-    matchLabels:
-      app: "{{ .App }}"
-  egress:
-    rules:
-      - action: allow
-        to:
-          - service:
-              namespace: kube-system
-              name: kube-dns
-      - action: allow
-        to:
-          - cidr: not-a-valid-cidr
-`).ApplyOrFail(t, kube.CreateOnly)
+	rig.RunScenario(t, "invalid CIDR update preserves existing policy", func(t *testing.T, scope *kube.ResourceScope) {
+		ctx, cancel := e2e.Context(t, 2*time.Minute)
+		defer cancel()
+		const name = "tp-invalid-cidr-update"
+		namespace := trafficFixture.Namespace.Name()
+		selector := map[string]string{"app": src.Name()}
+		valid := trafficPolicy(name, namespace, selector, "reject", dst.ServiceIPOrFail(t))
+		if _, err := scope.Apply(ctx, valid, kube.CreateOnly); err != nil {
+			t.Fatalf("create valid deny policy: %v", err)
+		}
+		waitForPolicyPresent(t, src, name)
+		src.CallOrFail(t, dst.CallOptionsOrFail(t, "http").WithCheck(check.Error()))
 
-		waitForPolicyPresent(t, src, "tp-invalid-cidr-fail-closed")
+		invalid := trafficPolicy(name, namespace, selector, "allow", "not-a-valid-cidr")
+		if _, err := scope.Apply(ctx, invalid, kube.ReconcileOwned); !apierrors.IsForbidden(err) ||
+			!strings.Contains(err.Error(), "invalid CIDR") {
+			t.Fatalf("update invalid CIDR policy: got %v, want admission rejection", err)
+		}
 		src.CallOrFail(t, dst.CallOptionsOrFail(t, "http").WithCheck(check.Error()))
 	})
 }

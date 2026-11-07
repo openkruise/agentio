@@ -31,7 +31,10 @@ func TestAdmission(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
 	for _, tc := range []struct {
-		name, kind, spec, wantError string
+		name      string
+		kind      string
+		spec      string
+		wantError string
 	}{
 		{"empty profile", "SecurityProfile", `{}`, ""},
 		{"global profile", "GlobalSecurityProfile", `{}`, ""},
