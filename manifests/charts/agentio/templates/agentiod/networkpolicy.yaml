@@ -16,9 +16,7 @@ spec:
     - ports:
         - port: 15012
         - port: 15014
-        {{- if eq .Values.profile "sidecar" }}
         - port: 15017
-        {{- end }}
 {{- end }}
 {{- end -}}
 {{ include "agentiod.networkpolicy" . }}

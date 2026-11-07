@@ -66,11 +66,9 @@ spec:
             - name: http-monitoring
               containerPort: 15014
               protocol: TCP
-            {{- if eq .Values.profile "sidecar" }}
             - name: https-webhook
               containerPort: 15017
               protocol: TCP
-            {{- end }}
           readinessProbe:
             httpGet:
               path: /ready
@@ -140,6 +138,8 @@ spec:
               value: {{ .Values.agentiod.injector.configMapName | quote }}
             - name: AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME
               value: {{ include "agentiod.webhookName" . | quote }}
+            - name: AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME
+              value: {{ printf "%s-validator-%s" (include "agentiod.fullname" .) .Release.Namespace | quote }}
             - name: AGENTIO_NATIVE_SIDECARS
               value: {{ .Values.agentiod.injector.nativeSidecars | quote }}
             - name: AGENTIO_ENABLE_GATEWAY_DEPLOYER

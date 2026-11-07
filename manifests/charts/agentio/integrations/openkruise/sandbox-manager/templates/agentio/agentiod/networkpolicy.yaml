@@ -17,7 +17,7 @@ spec:
     - ports:
         - port: 15012
         - port: 15014
-
+        - port: 15017
 {{- end }}
 {{- end -}}
 {{- if .Values.agentio.enabled }}

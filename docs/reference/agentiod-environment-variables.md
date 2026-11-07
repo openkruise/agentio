@@ -129,6 +129,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_TRUSTED_NODE_ACCOUNTS</code> | String | empty | If set, the list of service accounts that are allowed to use node authentication for CSRs. Node authentication allows an identity to create CSRs on behalf of other identities, but only if there is a pod running on the same node with that identity. This is intended for use with node proxies. |
 | <code>AGENTIO_TRUST_BUNDLE_CONFIGMAP_NAME</code> | String | <code>agentio-ca-root-cert</code> | Per-namespace ConfigMap distributing the workload trust bundle to proxies. |
 | <code>AGENTIO_TRUST_BUNDLE_LEASE_NAME</code> | String | <code>agentiod-trust-bundle-leader</code> | Lease electing the replica that distributes the trust bundle ConfigMap. |
+| <code>AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME</code> | String | empty | Serve /validate and synchronize the caBundle of this ValidatingWebhookConfiguration; empty disables validation admission. |
 | <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server&#39;s own certificate. |
 | <code>AGENTIO_WORKLOAD_CERT_RENEW_BEFORE</code> | Duration | <code>8h0m0s</code> | How long before expiry the xDS server re-issues its own certificate. |
 | <code>AGENTIO_XDS_ACK_TIMEOUT</code> | String | <code>5s</code> | Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive. |
@@ -284,6 +285,26 @@ $ curl --request PUT \
 `PUT /debug/logging` remains available and changes the `default` scope. The default scope covers standard-library, Kubernetes dependency, and other unscoped logs; it does not overwrite levels already assigned to registered components. At startup, `AGENTIO_LOG_LEVEL` initializes the default and every registered component to the same value.
 
 Loopback requests do not require credentials. Requests from any other address must pass the same TokenReview and root-namespace authorization as `/debug/configz`. A successful change returns HTTP 202 and affects existing loggers immediately. It is process-local and is not persisted: after an `agentiod` restart, `AGENTIO_LOG_LEVEL` supplies the level again.
+
+## Configuration validation
+
+`AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME` enables the `/validate` admission endpoint
+on the shared HTTPS port 15017 and keeps the named ValidatingWebhookConfiguration's
+CA bundle synchronized with the workload CA, including rotations. An empty value
+disables validation admission. The Helm chart sets this name in both sidecar and
+ambient profiles.
+
+The webhook validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and
+GlobalTrafficPolicy on CREATE and UPDATE, including dry runs. SecurityProfile
+validation shares API static checks with policy status: selectors, priorities,
+TLS constraints, reference and field unions, regular expressions, and CEL and Go
+template syntax. It does not import EPE or check a consumer's expression variables,
+helper functions, filter payloads, or ability to load the policy. TrafficPolicy validation checks selectors, priorities, actions,
+protocols, port ranges and CIDRs without resolving live peers. CRD schema validation
+continues to enforce structural constraints. Missing external references are
+reported by policy status and do not prevent admission. Status updates and deletes
+are excluded. The chart uses `failurePolicy: Fail`, so policy writes require an
+available agentiod webhook.
 
 ## See also
 

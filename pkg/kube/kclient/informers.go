@@ -143,6 +143,16 @@ func registrationFor[T controllers.ComparableObject](client kube.Client) kube.In
 			schema.GroupVersionResource{Group: admissionregistrationv1.GroupName, Version: "v1", Resource: "mutatingwebhookconfigurations"},
 			&admissionregistrationv1.MutatingWebhookConfiguration{}, client.Kube().AdmissionregistrationV1().MutatingWebhookConfigurations(),
 		)
+	case *admissionregistrationv1.ValidatingWebhookConfiguration:
+		return clusterRegistration[*admissionregistrationv1.ValidatingWebhookConfigurationList](
+			schema.GroupVersionResource{
+				Group:    admissionregistrationv1.GroupName,
+				Version:  "v1",
+				Resource: "validatingwebhookconfigurations",
+			},
+			&admissionregistrationv1.ValidatingWebhookConfiguration{},
+			client.Kube().AdmissionregistrationV1().ValidatingWebhookConfigurations(),
+		)
 	default:
 		panic(fmt.Sprintf("no informer registration for %T", ptr.Empty[T]()))
 	}

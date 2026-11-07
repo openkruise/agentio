@@ -28,11 +28,14 @@ import (
 	"github.com/openkruise/agentio/pkg/kube/kclient"
 	"github.com/openkruise/agentio/pkg/security/ca"
 	"github.com/openkruise/agentio/pkg/security/mitm"
+	"github.com/openkruise/agentio/pkg/validation"
 )
 
-// SidecarInjectorOptions carries the injector wiring configuration assembled at
+// SidecarInjectorOptions carries the admission wiring configuration assembled at
 // the server composition root so tests can build the same components directly.
 type SidecarInjectorOptions struct {
+	EnableInjection             bool
+	ValidationWebhookConfigName string
 	// EnableClientTrust gates client CA distribution and injection at startup.
 	// The injector's clientTrust.enabled setting must also be true.
 	EnableClientTrust bool
@@ -72,11 +75,11 @@ func (o SidecarInjectorOptions) defaults() SidecarInjectorOptions {
 	return o
 }
 
-// setupSidecarInjector wires the injection webhook, its ConfigMap watcher,
-// the caBundle patcher, and the HTTPS server. KRT handler and server lifetimes
+// setupAdmissionWebhooks wires validation, optional injection and their CA
+// bundle patchers on one HTTPS server. KRT handler and server lifetimes
 // are tied directly to ctx; the caller runs the returned serve function in its
 // own goroutine so serve errors reach the process error channel.
-func setupSidecarInjector(
+func setupAdmissionWebhooks(
 	ctx context.Context,
 	client kube.Client,
 	authority *ca.Authority,
@@ -84,53 +87,72 @@ func setupSidecarInjector(
 ) (func() error, error) {
 	options = options.defaults()
 	webhookMux := http.NewServeMux()
-	nodes := kclient.NewFiltered[*corev1.Node](client, kclient.Filter{})
-	injectionWebhook, err := inject.NewWebhook(inject.WebhookParameters{
-		EnableClientTrust: options.EnableClientTrust,
-		Nodes:             nodes,
-		KrtOptions:        krt.NewOptionsBuilder(ctx.Done(), "", nil),
-		NativeSidecarMode: inject.NativeSidecarMode(options.NativeSidecarMode),
-		Mux:               webhookMux,
-		DiscoveryAddress:  options.DiscoveryAddress,
-	})
-	if err != nil {
-		return nil, err
-	}
-	injectorWatcher, err := inject.NewWatcher(client, injectionWebhook, inject.WatcherOptions{
-		Namespace:             options.Namespace,
-		InjectorConfigMapName: options.ConfigMapName,
-	})
-	if err != nil {
-		return nil, err
-	}
-	go injectorWatcher.Run(ctx.Done())
-	if options.EnableClientTrust {
-		distributor, err := ca.NewClientTrustDistributor(client, ca.ClientTrustOptions{
-			Namespace:       options.Namespace,
-			PackagePath:     options.ClientTrustPackagePath,
-			Configuration:   injectionWebhook.ClientTrustConfiguration(),
-			MITMTrustBundle: options.MITMTrustBundle,
-			Secrets:         options.Secrets,
+	injectionSynced := func() bool { return true }
+	if options.EnableInjection {
+		nodes := kclient.NewFiltered[*corev1.Node](client, kclient.Filter{})
+		injectionWebhook, err := inject.NewWebhook(inject.WebhookParameters{
+			EnableClientTrust: options.EnableClientTrust,
+			Nodes:             nodes,
+			KrtOptions:        krt.NewOptionsBuilder(ctx.Done(), "", nil),
+			NativeSidecarMode: inject.NativeSidecarMode(options.NativeSidecarMode),
+			Mux:               webhookMux,
+			DiscoveryAddress:  options.DiscoveryAddress,
 		})
 		if err != nil {
 			return nil, err
 		}
-		go distributor.Run(ctx)
-	}
+		injectorWatcher, err := inject.NewWatcher(client, injectionWebhook, inject.WatcherOptions{
+			Namespace:             options.Namespace,
+			InjectorConfigMapName: options.ConfigMapName,
+		})
+		if err != nil {
+			return nil, err
+		}
+		go injectorWatcher.Run(ctx.Done())
+		if options.EnableClientTrust {
+			distributor, err := ca.NewClientTrustDistributor(client, ca.ClientTrustOptions{
+				Namespace:       options.Namespace,
+				PackagePath:     options.ClientTrustPackagePath,
+				Configuration:   injectionWebhook.ClientTrustConfiguration(),
+				MITMTrustBundle: options.MITMTrustBundle,
+				Secrets:         options.Secrets,
+			})
+			if err != nil {
+				return nil, err
+			}
+			go distributor.Run(ctx)
+		}
 
-	if options.WebhookConfigName != "" {
-		caBundlePatcher, err := inject.NewCABundlePatcher(client, options.WebhookConfigName, authority.RootPEM)
+		if options.WebhookConfigName != "" {
+			caBundlePatcher, err := inject.NewCABundlePatcher(client, options.WebhookConfigName, authority.RootPEM)
+			if err != nil {
+				return nil, err
+			}
+			rotationWatch := authority.TrustBundles().Register(func(krt.Event[ca.TrustBundle]) {
+				caBundlePatcher.Sync()
+			})
+			go func() {
+				<-ctx.Done()
+				rotationWatch.UnregisterHandler()
+			}()
+			go caBundlePatcher.Run(ctx.Done())
+		}
+
+		nodes.Start(ctx.Done())
+		injectionSynced = nodes.HasSynced
+	}
+	if options.ValidationWebhookConfigName != "" {
+		validation.Register(webhookMux)
+		patcher, err := validation.NewCABundlePatcher(client, options.ValidationWebhookConfigName, authority.RootPEM)
 		if err != nil {
 			return nil, err
 		}
-		rotationWatch := authority.TrustBundles().Register(func(krt.Event[ca.TrustBundle]) {
-			caBundlePatcher.Sync()
-		})
+		rotationWatch := authority.TrustBundles().Register(func(krt.Event[ca.TrustBundle]) { patcher.Sync() })
 		go func() {
 			<-ctx.Done()
 			rotationWatch.UnregisterHandler()
 		}()
-		go caBundlePatcher.Run(ctx.Done())
+		go patcher.Run(ctx.Done())
 	}
 
 	webhookTLS := authority.TLSConfig()
@@ -141,18 +163,15 @@ func setupSidecarInjector(
 		TLSConfig:         webhookTLS,
 		ReadHeaderTimeout: options.ReadHeaderTimeout,
 	}
-	nodes.Start(ctx.Done())
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = webhookServer.Shutdown(shutdownCtx)
+		shutdownHTTP(webhookServer, 5*time.Second)
 	}()
 	serve := func() error {
 		// Native-sidecar auto-detection reads the node cache; an empty
 		// unsynced cache would report support on clusters without it, so the
 		// listener waits for the initial node sync before accepting.
-		if !kube.WaitForCacheSync("injection node cache", ctx.Done(), nodes.HasSynced) {
+		if !kube.WaitForCacheSync("injection node cache", ctx.Done(), injectionSynced) {
 			return nil
 		}
 		if err := webhookServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {

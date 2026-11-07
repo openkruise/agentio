@@ -21,6 +21,7 @@ import (
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/credential"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // oauth2Payload projects the public operation union to the filter's neutral
@@ -35,7 +36,7 @@ func oauth2Payload(a *v1alpha1.TokenTransformationAction) (json.RawMessage, erro
 	if a.FailStrategy != "" && a.FailStrategy != v1alpha1.FailStrategyBlock {
 		return nil, fmt.Errorf("OAuth2 requires the Block failure strategy")
 	}
-	ref, err := NormalizeCredentialRef(a.CredentialRef)
+	ref, err := policy.NormalizeCredentialRef(a.CredentialRef)
 	if err != nil {
 		return nil, err
 	}

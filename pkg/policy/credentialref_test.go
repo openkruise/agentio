@@ -11,21 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package securityprofile
+package policy
 
 import (
 	"reflect"
 	"strings"
 	"testing"
 
-	"k8s.io/utils/ptr"
-
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
 
-// Normalization is what lets the tokentransform filter accept only the
-// typed union: every deprecated spelling must arrive here and leave as one
-// of the two typed branches, or fail.
+// Both control-plane reference checks and API consumers use the typed union.
 func TestNormalizeCredentialRef(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -72,11 +68,11 @@ func TestNormalizeCredentialRef(t *testing.T) {
 			name: "typed provider keeps its parameters",
 			ref: v1alpha1.CredentialRef{CredentialProvider: &v1alpha1.CredentialProviderRef{
 				Name:       "typed-provider",
-				Parameters: map[string]v1alpha1.ValueSource{"scope": {Value: ptr.To("readonly")}},
+				Parameters: map[string]v1alpha1.ValueSource{"scope": {Value: new("readonly")}},
 			}},
 			want: v1alpha1.CredentialRef{CredentialProvider: &v1alpha1.CredentialProviderRef{
 				Name:       "typed-provider",
-				Parameters: map[string]v1alpha1.ValueSource{"scope": {Value: ptr.To("readonly")}},
+				Parameters: map[string]v1alpha1.ValueSource{"scope": {Value: new("readonly")}},
 			}},
 		},
 		{
@@ -138,8 +134,7 @@ func TestNormalizeCredentialRef(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("NormalizeCredentialRef = %#v, want %#v", got, tc.want)
 			}
-			// The deprecated fields must be gone, not merely unread: the
-			// filter's schema has no place to put them.
+			// Normalized references contain only the typed union.
 			if got.Kind != "" || got.Name != "" || got.Namespace != "" {
 				t.Errorf("deprecated fields survived normalization: %#v", got)
 			}

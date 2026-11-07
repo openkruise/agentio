@@ -21,8 +21,8 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/pkg/krt"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // Keep the first definite failure ahead of an unknown; still inspect every
@@ -60,7 +60,7 @@ func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condit
 		if tt == nil || tt.Disabled {
 			continue
 		}
-		ref, err := securityprofile.NormalizeCredentialRef(tt.CredentialRef)
+		ref, err := policy.NormalizeCredentialRef(tt.CredentialRef)
 		if err != nil {
 			referenceProblem(&resolved, metav1.ConditionFalse, "InvalidReference", err.Error())
 			continue
@@ -78,7 +78,7 @@ func (c *Controller) secretRef(ctx krt.HandlerContext, s source, rule string,
 ) {
 	namespace := cmp.Or(ref.Namespace, s.Metadata.Namespace)
 	if namespace == "" {
-		// EPE resolves this namespace from the requesting Pod.
+		// The API resolves this namespace from the selected Pod.
 		return
 	}
 	if c.scopedSecrets && namespace != c.namespace {

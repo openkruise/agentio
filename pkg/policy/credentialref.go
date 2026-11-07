@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// credentialref.go is CRD compatibility, not policy. CredentialRef carries a
-// deprecated flat kind/name/namespace spelling alongside the typed
-// secret/credentialProvider union, and collapsing the two is the adapter's
-// job: the tokentransform filter's schema accepts only the typed form, so
-// this knowledge must not travel with the payload.
-package securityprofile
+package policy
 
 import (
 	"fmt"
@@ -37,7 +32,9 @@ func NormalizeCredentialRef(ref v1alpha1.CredentialRef) (v1alpha1.CredentialRef,
 	}
 	if hasSecret || hasProvider {
 		if ref.Kind != "" || ref.Name != "" || ref.Namespace != "" {
-			return v1alpha1.CredentialRef{}, fmt.Errorf("typed credentialRef must not be combined with deprecated fields")
+			return v1alpha1.CredentialRef{}, fmt.Errorf(
+				"typed credentialRef must not be combined with deprecated fields",
+			)
 		}
 		if hasSecret {
 			if ref.Secret.Name == "" {

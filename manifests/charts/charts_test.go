@@ -351,6 +351,31 @@ func TestSidecarProfile(t *testing.T) {
 	}
 }
 
+func TestPolicyValidationWebhook(t *testing.T) {
+	for _, profile := range []string{"sidecar", "ambient"} {
+		t.Run(profile, func(t *testing.T) {
+			manifest := renderAgentio(t, "--set", "profile="+profile, "--set", "agentiod.networkPolicy.enabled=true")
+			if got := objectNamesByKind(t, manifest, "ValidatingWebhookConfiguration"); len(got) != 1 {
+				t.Fatalf("validation webhooks = %v, want one", got)
+			}
+			requireContains(
+				t,
+				manifest,
+				"name: agentiod-validator-agentio-system",
+				"name: AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME\n              value: \"agentiod-validator-agentio-system\"",
+				"containerPort: 15017",
+				"- port: 15017",
+				"targetPort: https-webhook",
+				"resources: [\"validatingwebhookconfigurations\"]",
+				"operations: [CREATE, UPDATE]",
+				"path: /validate",
+				"sideEffects: None",
+				"resources: [securityprofiles, globalsecurityprofiles, trafficpolicies, globaltrafficpolicies]",
+			)
+		})
+	}
+}
+
 func TestCNIAndZtunnelOverrides(t *testing.T) {
 	manifest := renderAgentio(t,
 		"--set", "profile=ambient",

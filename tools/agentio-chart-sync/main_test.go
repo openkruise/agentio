@@ -433,7 +433,7 @@ func TestExportOmitsAmbientAndSidecarInjectionFromSandboxManager(t *testing.T) {
 	if strings.Contains(agentiod, ".Values.agentio.ambient") || strings.Contains(agentiod, ".Values.agentio.sidecarInjector") {
 		t.Fatalf("generated agentiod template still depends on removed values:\n%s", agentiod)
 	}
-	for _, unwanted := range []string{"AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME", "https-webhook", "15017"} {
+	for _, unwanted := range []string{"AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME"} {
 		if strings.Contains(agentiod, unwanted) {
 			t.Errorf("generated agentiod template retained sidecar injector setting %q", unwanted)
 		}

@@ -35,6 +35,9 @@ rules:
     resources: ["mutatingwebhookconfigurations"]
     verbs: ["get", "list", "watch", "update"]
   {{- end }}
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "update"]
   {{- if .Values.agentiod.gatewayDeployer.enabled }}
   - apiGroups: [""]
     resources: ["configmaps"]

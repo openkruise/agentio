@@ -127,6 +127,10 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	client := kube.NewFakeClient(
 		injectorConfigMap,
 		mutatingWebhook,
+		&admissionregistrationv1.ValidatingWebhookConfiguration{
+			ObjectMeta: metav1.ObjectMeta{Name: "validator"},
+			Webhooks:   []admissionregistrationv1.ValidatingWebhook{{Name: "validation.agentio.kruise.io"}},
+		},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "demo"}},
 	)
 	coreClient := client.Kube()
@@ -158,15 +162,17 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	secretInformer := kclient.NewFiltered[*corev1.Secret](client, kclient.Filter{Namespace: namespace})
 	secretCollection := krt.WrapClient(secretInformer, krt.WithStop(ctx.Done()))
 	secretInformer.Start(ctx.Done())
-	serve, err := setupSidecarInjector(ctx, client, authority, SidecarInjectorOptions{
-		EnableClientTrust: enableClientTrust,
-		Secrets:           secretCollection,
-		MITMTrustBundle:   krt.NewStatic(&mitm.TrustBundle{PEM: string(authority.RootPEM())}, true),
-		Address:           address,
-		Namespace:         namespace,
-		ConfigMapName:     configMapName,
-		WebhookConfigName: webhookConfigName,
-		NativeSidecarMode: "false",
+	serve, err := setupAdmissionWebhooks(ctx, client, authority, SidecarInjectorOptions{
+		EnableInjection:             true,
+		ValidationWebhookConfigName: "validator",
+		EnableClientTrust:           enableClientTrust,
+		Secrets:                     secretCollection,
+		MITMTrustBundle:             krt.NewStatic(&mitm.TrustBundle{PEM: string(authority.RootPEM())}, true),
+		Address:                     address,
+		Namespace:                   namespace,
+		ConfigMapName:               configMapName,
+		WebhookConfigName:           webhookConfigName,
+		NativeSidecarMode:           "false",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +206,29 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validationReview := &admissionv1.AdmissionReview{
+		TypeMeta: review.TypeMeta,
+		Request: &admissionv1.AdmissionRequest{
+			UID:       "validation-test",
+			Namespace: "demo",
+			Operation: admissionv1.Create,
+			Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "SecurityProfile"},
+			Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"invalid"},"spec":{"priority":-1}}`)},
+		},
+	}
+	validated, err := postReview(t, httpClient, fmt.Sprintf("https://%s/validate", address), validationReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated == nil || validated.Allowed || validated.UID != "validation-test" {
+		t.Fatalf("invalid profile admitted: %+v", validated)
+	}
+	testutil.Eventually(t, func() bool {
+		current, err := coreClient.AdmissionregistrationV1().
+			ValidatingWebhookConfigurations().
+			Get(ctx, "validator", metav1.GetOptions{})
+		return err == nil && bytes.Equal(current.Webhooks[0].ClientConfig.CABundle, authority.RootPEM())
+	}, "validation CA bundle to be patched")
 	if !response.Allowed || response.Patch == nil {
 		t.Fatalf("response = allowed=%v patch=%s, want allowed patch", response.Allowed, response.Patch)
 	}
@@ -225,7 +254,8 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 		}, func() string { return "enabled client trust distributor to publish its bundle" }())
 	} else {
 		for _, action := range coreClient.(*kubefake.Clientset).Actions() {
-			if action.GetResource().Resource == "namespaces" && (action.GetVerb() == "list" || action.GetVerb() == "watch") {
+			if action.GetResource().Resource == "namespaces" &&
+				(action.GetVerb() == "list" || action.GetVerb() == "watch") {
 				t.Fatalf("disabled distributor started a namespace informer: %v", action)
 			}
 		}
@@ -318,7 +348,12 @@ func buildReview(t *testing.T, namespace, name string) *admissionv1.AdmissionRev
 	}
 }
 
-func postReview(t *testing.T, client *http.Client, url string, review *admissionv1.AdmissionReview) (*admissionv1.AdmissionResponse, error) {
+func postReview(
+	t *testing.T,
+	client *http.Client,
+	url string,
+	review *admissionv1.AdmissionReview,
+) (*admissionv1.AdmissionResponse, error) {
 	t.Helper()
 	body, err := json.Marshal(review)
 	if err != nil {

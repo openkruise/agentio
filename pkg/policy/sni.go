@@ -49,7 +49,7 @@ func CompileSNIRules(rules []agentsv1alpha1.SecurityRule) (*extensionsv1.SniTraf
 			seen := sets.New[string]()
 			matched := &extensionsv1.SniMatch{}
 			for domainIndex, domain := range match.Domains {
-				normalized, err := normalizeSNI(domain)
+				normalized, err := NormalizeDomain(domain)
 				if err != nil {
 					return nil, fmt.Errorf("rules[%d].match[%d].domains[%d]: %w",
 						ruleIndex, matchIndex, domainIndex, err)
@@ -127,7 +127,8 @@ func mayMatchHTTPS(schemes []string) bool {
 	return false
 }
 
-func normalizeSNI(value string) (string, error) {
+// NormalizeDomain validates the API's domain/wildcard syntax and canonicalizes it.
+func NormalizeDomain(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSuffix(value, "."))
 	if normalized == "" || strings.HasSuffix(normalized, ".") {
 		return "", fmt.Errorf("invalid SNI value %q", value)

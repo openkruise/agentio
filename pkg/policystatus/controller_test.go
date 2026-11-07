@@ -118,7 +118,9 @@ func TestSharedProfileValidation(t *testing.T) {
 	}{
 		{"empty", `{}`, true},
 		{"audit CEL uses inputs and result", `{"audit":[{"name":"log","when":"result == 'error' && inputs.config.enabled == 'true'","webhook":{"url":"http://audit"}}]}`, true},
-		{"audit CEL invalid", `{"audit":[{"name":"log","when":"unknownVariable","webhook":{"url":"http://audit"}}]}`, false},
+		{"audit CEL syntax invalid", `{"audit":[{"name":"log","when":"request.","webhook":{"url":"http://audit"}}]}`, false},
+		{"consumer CEL environment", `{"audit":[{"name":"log","when":"customFunction(customVariable)","webhook":{"url":"http://audit"}}]}`, true},
+		{"consumer template environment", `{"audit":[{"name":"log","webhook":{"url":"http://audit/{{ customFunction .ConsumerField }}"}}]}`, true},
 		{"audit JSON template invalid", `{"audit": [{"name": "log", "webhook": {"url": "http://audit", "request": {"body": {"json": {"nested": {"text": "{{"}}}}}}]}`, false},
 		{"regex invalid", `{"rules":[{"name":"r","match":[{"paths":[{"type":"Regex","value":"["}]}]}]}`, false},
 		{"negative priority", `{"priority":-1}`, false},
