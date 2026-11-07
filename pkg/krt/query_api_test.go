@@ -69,7 +69,7 @@ func TestPartialFetchPreservesMembershipChanges(t *testing.T) {
 			}
 			ctx := &dependencyCaptureContext{}
 			PartialFetchComparable(ctx, f.source, func(o dependencyMatchObject) string { return o.Name }, options...)
-			f.state.update("consumer", ctx.dependencies)
+			f.state.update("consumer", ctx.dependencies, 0)
 			for _, tc := range []struct {
 				name string
 				old  string
@@ -98,7 +98,7 @@ func TestPartialFetchPreservesMembershipChanges(t *testing.T) {
 			}
 			// A full fetch of the same source must still invalidate when the projection is equal.
 			Fetch(ctx, f.source)
-			f.state.update("consumer", ctx.dependencies)
+			f.state.update("consumer", ctx.dependencies, 0)
 			event := Event[any]{
 				Old:   dependencyMatchValue("ns", "a", "selected"),
 				New:   dependencyMatchValue("ns", "a", "selected"),
@@ -169,6 +169,30 @@ func TestIndexQueryMethods(t *testing.T) {
 	assert.Equal(t, len(buckets.List()), 1)
 }
 
+func TestStringerIndexFetchTracksMembership(t *testing.T) {
+	stop := t.Context().Done()
+	source := NewMutableCollection(nil, []allocationItem{{Name: "a", Value: 1}}, WithStop(stop))
+	byValue := NewIndex(source.AsCollection(), "value", func(o allocationItem) []allocationIndexKey {
+		return []allocationIndexKey{allocationIndexKey(o.Value)}
+	})
+	selected := NewSingleton(func(ctx HandlerContext) *string {
+		items := Fetch(ctx, source.AsCollection(), FilterIndex(byValue, allocationIndexKey(1)))
+		result := ""
+		for _, item := range items {
+			result += item.Name
+		}
+		return &result
+	}, WithStop(stop))
+	assert.Equal(t, selected.AsCollection().WaitUntilSynced(stop), true)
+	assert.Equal(t, selected.Get(), new("a"))
+	source.UpdateObject(allocationItem{Name: "a", Value: 2})
+	assert.EventuallyEqual(t, selected.Get, new(""))
+	source.UpdateObject(allocationItem{Name: "b", Value: 1})
+	assert.EventuallyEqual(t, selected.Get, new("b"))
+	source.DeleteObject("b")
+	assert.EventuallyEqual(t, selected.Get, new(""))
+}
+
 func TestJoinFilteredKeepsFirstWinner(t *testing.T) {
 	opts := []CollectionOption{WithStop(t.Context().Done())}
 	first := NewStaticCollection(nil, []allocationItem{{Name: "same", Value: 1}}, opts...)
@@ -218,6 +242,7 @@ func TestDelayedCollectionQueries(t *testing.T) {
 	assert.Equal(t, result.AsCollection().WaitUntilSynced(stop), true)
 	assert.Equal(t, result.Get(), new(allocationItem{Name: "a", Value: 1}))
 	assert.Equal(t, index.Lookup("1"), []allocationItem{{Name: "a", Value: 1}})
+	assert.Equal(t, len(index.LookupFiltered("1", func(o allocationItem) bool { return o.Value == 2 })), 0)
 	inner.Set(new(allocationItem{Name: "a", Value: 2}))
 	assert.EventuallyEqual(t, result.Get, new(allocationItem{Name: "a", Value: 2}))
 	assert.Equal(t, len(index.Lookup("1")), 0)

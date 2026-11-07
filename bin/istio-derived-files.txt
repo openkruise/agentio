@@ -29,6 +29,8 @@ pkg/krt/assert_disable.go
 pkg/krt/assert_enable.go
 pkg/krt/assert_test.go
 pkg/krt/collection.go
+pkg/krt/collection_output_keys_test.go
+pkg/krt/collection_recompute_test.go
 pkg/krt/core.go
 pkg/krt/debug.go
 pkg/krt/debug_test.go
@@ -40,11 +42,14 @@ pkg/krt/filter.go
 pkg/krt/helpers.go
 pkg/krt/helpers_shared_test.go
 pkg/krt/index.go
+pkg/krt/index_filtered_test.go
 pkg/krt/index_test.go
 pkg/krt/informer.go
 pkg/krt/internal.go
 pkg/krt/join.go
 pkg/krt/map.go
+pkg/krt/map_shrink.go
+pkg/krt/map_shrink_test.go
 pkg/krt/map_test.go
 pkg/krt/mergejoin.go
 pkg/krt/nestedjoinmerge.go

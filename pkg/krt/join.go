@@ -41,7 +41,7 @@ type join[T any] struct {
 	// processedState tracks objects we've processed via handleSubCollectionEvents
 	// This ensures RegisterBatch only sends events for objects that have been fully processed,
 	// avoiding duplicates from in-flight sub-collection events
-	processedState map[string]*T
+	processedState shrinkingMap[string, *T]
 	eventHandlers  *handlerSet[T]
 
 	stop <-chan struct{}
@@ -56,6 +56,11 @@ func (j *join[T]) GetKey(k string) *T {
 	return nil
 }
 
+// ListFiltered returns objects accepted by filter. A nil filter returns all objects.
+//
+// The filter may be evaluated while a collection's read lock is held. It must not access or modify the
+// collection, its indexes, or its objects: attempting to acquire the read lock again can deadlock. Filters must be
+// short-lived and non-blocking, since they can delay collection updates.
 func (j *join[T]) ListFiltered(filter func(T) bool) []T {
 	var res []T
 	if j.uncheckedOverlap {
@@ -144,7 +149,7 @@ func (j *join[T]) RegisterBatch(f func(o []Event[T]), runExistingState bool) Han
 	// by handleSubCollectionEvents yet (they're in sub-collection state but event is in-flight)
 	var initialEvents []Event[T]
 	if runExistingState {
-		for _, obj := range j.processedState {
+		for _, obj := range j.processedState.data {
 			initialEvents = append(initialEvents, Event[T]{
 				New:   obj,
 				Event: controllers.EventAdd,
@@ -187,10 +192,10 @@ func (j *join[T]) handleSubCollectionEvents(events []Event[T], sourceCollectionI
 	for _, ev := range refreshedEvents {
 		key := GetKey(ev.Latest())
 		if ev.Event == controllers.EventDelete {
-			delete(j.processedState, key)
+			j.processedState.delete(key)
 		} else {
 			// For Add and Update, store the new object pointer (no copy)
-			j.processedState[key] = ev.New
+			j.processedState.set(key, ev.New)
 		}
 	}
 
@@ -327,11 +332,16 @@ type joinIndexer[T any] struct {
 }
 
 // nolint: unused // (not true)
-func (j joinIndexer[T]) Lookup(key string) []T {
+// LookupFiltered returns objects matching the key and filter. A nil filter returns all objects for the key.
+//
+// The filter may be evaluated while a collection's read lock is held. It must not access or modify the
+// collection, its indexes, or its objects: attempting to acquire the read lock again can deadlock. Filters must be
+// short-lived and non-blocking, since they can delay collection updates.
+func (j joinIndexer[T]) LookupFiltered(key string, filter func(T) bool) []T {
 	var res []T
 	first := true
 	for _, i := range j.indexers {
-		l := i.Lookup(key)
+		l := i.LookupFiltered(key, filter)
 		if len(l) > 0 && first {
 			// Optimization: re-use the first returned slice
 			res = l
@@ -423,7 +433,6 @@ func JoinCollection[T any](cs []Collection[T], opts ...CollectionOption) Collect
 
 	// Checked mode: set up centralized event handling with conflict resolution
 	j.eventHandlers = newHandlerSet[T]()
-	j.processedState = make(map[string]*T)
 
 	if o.debounceInterval > 0 {
 		j.eventHandlers.WithDebounce(o.debounceInterval, o.debounceMaxInterval, o.stop)

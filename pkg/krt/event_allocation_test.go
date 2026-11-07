@@ -61,7 +61,7 @@ func TestCollectionOutputMembershipChanges(t *testing.T) {
 			}
 		}
 		item := allocationItem{Name: "input"}
-		h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{New: &item, Event: controllers.EventUpdate}})
+		h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{New: &item, Event: controllers.EventUpdate}}, 0, 0)
 		if len(wantEvents) == 0 {
 			events.Empty()
 		} else {
@@ -80,7 +80,7 @@ func TestCollectionOutputMembershipChanges(t *testing.T) {
 		previous = next
 	}
 	item := allocationItem{Name: "input"}
-	h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{Old: &item, Event: controllers.EventDelete}})
+	h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{Old: &item, Event: controllers.EventDelete}}, 0, 0)
 	events.WaitOrdered("delete/0")
 	assert.Equal(t, len(collection.List()), 0)
 	assert.Equal(t, len(index.Lookup("1")), 0)
@@ -98,7 +98,7 @@ func TestCollectionBatchKeepsDiscardContext(t *testing.T) {
 	assert.EventuallyEqual(t, collection.HasSynced, true)
 	h := collection.internal().(*manyCollection[allocationItem, allocationItem])
 	initial := allocationItem{Name: "input", Value: 1}
-	h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{New: &initial, Event: controllers.EventAdd}})
+	h.handleChangedPrimaryInputEvents([]Event[allocationItem]{{New: &initial, Event: controllers.EventAdd}}, 0, 0)
 	events := assert.NewTracker[string](t)
 	collection.RegisterBatch(func(batch []Event[allocationItem]) {
 		for _, event := range batch {
@@ -110,7 +110,7 @@ func TestCollectionBatchKeepsDiscardContext(t *testing.T) {
 	h.handleChangedPrimaryInputEvents([]Event[allocationItem]{
 		{New: &discarded, Event: controllers.EventUpdate},
 		{New: &updated, Event: controllers.EventUpdate},
-	})
+	}, 0, 0)
 	events.WaitOrdered("update")
 	assert.Equal(t, collection.GetKey("input"), &updated)
 }
