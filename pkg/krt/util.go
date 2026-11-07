@@ -16,6 +16,9 @@
 package krt
 
 import (
+	"context"
+	"runtime/pprof"
+
 	"istio.io/istio/pkg/slices"
 )
 
@@ -39,4 +42,8 @@ func BatchedEventFilter[I, O any](cf func(a I) O, handler func(events []Event[I]
 		}
 		handler(ev)
 	}
+}
+
+func setProfilerLabels(name string) {
+	pprof.SetGoroutineLabels(pprof.WithLabels(context.Background(), pprof.Labels("krt_collection", name)))
 }

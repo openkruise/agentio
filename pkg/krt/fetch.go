@@ -99,7 +99,6 @@ func fetch[T any](ctx HandlerContext, cc Collection[T], allowMissingContext bool
 	d := &dependency{
 		id:             c.uid(),
 		collectionName: c.name(),
-		filter:         &filter{},
 	}
 	for _, o := range opts {
 		o(d)
@@ -126,35 +125,33 @@ func fetch[T any](ctx HandlerContext, cc Collection[T], allowMissingContext bool
 	// don't allocate a full-size intermediate list. Key and index filters use their more specific lookup paths below.
 	var list []T
 	var matches func(T) bool
-	if f := d.filter; f.selects != nil || f.selectsNonEmpty != nil || f.labels != nil || f.generic != nil {
-		matches = func(i T) bool { return f.Matches(c.augment(i), true) }
+	if x := d.filter.extra; d.filter.generic != nil || (x != nil && (x.selects != nil || x.selectsNonEmpty != nil || x.labels != nil)) {
+		matches = func(i T) bool { return d.filter.Matches(c.augment(i), true) }
 	}
-	prefiltered := false
 	if !d.filter.keys.IsNil() {
 		// If they fetch a set of keys, directly Get these. Usually this is a single resource.
 		list = make([]T, 0, d.filter.keys.Len())
 		for _, k := range d.filter.keys.List() {
-			if i := c.GetKey(k); i != nil {
+			if i := c.GetKey(k); i != nil && (matches == nil || matches(*i)) {
 				list = append(list, *i)
 			}
 		}
 	} else if d.filter.index != nil {
 		// Otherwise from an index; fetch from there. Often this is a list of a namespace
-		list = d.filter.index.list().([]T)
+		list = d.filter.index.lookup.list().([]T)
+		// Keep the Fetch predicate in this function so the compiler can inline it.
+		if matches != nil {
+			list = slices.FilterInPlace(list, matches)
+		}
 	} else {
 		// Otherwise get everything
 		list = c.ListFiltered(matches)
-		prefiltered = true
-	}
-	// Key and index constraints have already been applied to the list.
-	if !prefiltered && matches != nil {
-		list = slices.FilterInPlace(list, matches)
 	}
 	if log.DebugEnabled() {
 		log.Debug("fetch",
 			"parent", parent,
 			"fetch", c.name(),
-			"filter", d.filter,
+			"filter", &d.filter,
 			"size", len(list),
 		)
 	}

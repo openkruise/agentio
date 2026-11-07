@@ -306,8 +306,8 @@ type delayedIndex[T any] struct {
 	extract    func(T) []string
 }
 
-func (i delayedIndex[T]) Lookup(key string) []T {
+func (i delayedIndex[T]) LookupFiltered(key string, filter func(T) bool) []T {
 	return i.collection.ListFiltered(func(o T) bool {
-		return slices.Contains(i.extract(o), key)
+		return slices.Contains(i.extract(o), key) && (filter == nil || filter(o))
 	})
 }

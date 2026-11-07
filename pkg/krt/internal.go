@@ -122,7 +122,7 @@ type dependency struct {
 	id             collectionUID
 	collectionName string
 	// Filter over the collection
-	filter *filter
+	filter filter
 }
 
 type erasedEventHandler = func(o []Event[any])
@@ -141,10 +141,6 @@ func getLabels(a any) map[string]string {
 	al, ok := a.(Labeler)
 	if ok {
 		return al.GetLabels()
-	}
-	pal, ok := any(&a).(Labeler)
-	if ok {
-		return pal.GetLabels()
 	}
 	ak, ok := a.(metav1.Object)
 	if ok {

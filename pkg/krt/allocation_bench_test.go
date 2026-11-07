@@ -17,6 +17,7 @@ package krt
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"testing"
 
 	"github.com/openkruise/agentio/pkg/kube/controllers"
@@ -28,6 +29,10 @@ type allocationItem struct {
 }
 
 func (i allocationItem) ResourceName() string { return i.Name }
+
+type allocationIndexKey int
+
+func (k allocationIndexKey) String() string { return strconv.Itoa(int(k)) }
 
 func BenchmarkListenerAllocation(b *testing.B) {
 	stop := b.Context().Done()
@@ -45,6 +50,7 @@ func BenchmarkFetchAllocation(b *testing.B) {
 	}
 	source := NewStaticCollection(nil, values, WithStop(b.Context().Done()))
 	index := NewIndex(source, "all", func(allocationItem) []string { return []string{"all"} })
+	byValue := NewIndex(source, "value", func(i allocationItem) []allocationIndexKey { return []allocationIndexKey{allocationIndexKey(i.Value)} })
 	for _, tc := range []struct {
 		name    string
 		options []FetchOption
@@ -52,8 +58,41 @@ func BenchmarkFetchAllocation(b *testing.B) {
 		{name: "all"},
 		{name: "index", options: []FetchOption{FilterIndex(index, "all")}},
 		{name: "key", options: []FetchOption{FilterKey("0")}},
+		{name: "index-stringer", options: []FetchOption{FilterIndex(byValue, allocationIndexKey(0))}},
+		{name: "generic", options: []FetchOption{FilterGeneric(func(o any) bool { return o.(allocationItem).Value == 0 })}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				Fetch(TestingDummyContext{}, source, tc.options...)
+			}
+		})
+	}
+}
+
+func BenchmarkFetchPointerAllocation(b *testing.B) {
+	values := make([]*dependencyMatchObject, 128)
+	for i := range values {
+		values[i] = &dependencyMatchObject{
+			Name: fmt.Sprint(i), Namespace: "ns", Labels: map[string]string{"app": "selected"},
+		}
+	}
+	source := NewStaticCollection(nil, values, WithStop(b.Context().Done()))
+	index := NewIndex(source, "namespace", func(o *dependencyMatchObject) []string { return []string{o.Namespace} })
+	for _, tc := range []struct {
+		name    string
+		options []FetchOption
+		want    int
+	}{
+		{name: "all", want: 128},
+		{name: "key", options: []FetchOption{FilterKey("ns/0")}, want: 1},
+		{name: "index", options: []FetchOption{FilterIndex(index, "ns")}, want: 128},
+		{name: "label", options: []FetchOption{FilterLabel(map[string]string{"app": "selected"})}, want: 128},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			if got := len(Fetch(TestingDummyContext{}, source, tc.options...)); got != tc.want {
+				b.Fatalf("got %d objects, want %d", got, tc.want)
+			}
 			b.ReportAllocs()
 			for b.Loop() {
 				Fetch(TestingDummyContext{}, source, tc.options...)
@@ -83,14 +122,14 @@ func BenchmarkCollectionEventAllocation(b *testing.B) {
 				// No parent events are published; exercise the state transition synchronously.
 				item := allocationItem{Name: "input"}
 				events := []Event[allocationItem]{{New: &item, Event: controllers.EventUpdate}}
-				h.handleChangedPrimaryInputEvents(events)
+				h.handleChangedPrimaryInputEvents(events, 0, 0)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
 					if changed {
 						item.Value ^= 1
 					}
-					h.handleChangedPrimaryInputEvents(events)
+					h.handleChangedPrimaryInputEvents(events, 0, 0)
 				}
 			})
 		}

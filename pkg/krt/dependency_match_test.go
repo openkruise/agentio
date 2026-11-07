@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"testing"
 
-	"istio.io/istio/pkg/util/sets"
-
 	"github.com/openkruise/agentio/pkg/kube/controllers"
 )
 
@@ -67,8 +65,6 @@ func newDependencyMatchFixture(t testing.TB) *dependencyMatchFixture {
 			return []string{o.Name}
 		}),
 		state: dependencyState[string]{
-			objectDependencies:           map[Key[string]][]*dependency{},
-			indexedDependencies:          map[indexedDependency]sets.Set[Key[string]]{},
 			indexedDependenciesExtractor: map[extractorKey]objectKeyExtractor{},
 		},
 	}
@@ -81,7 +77,7 @@ func (f *dependencyMatchFixture) register(key string, queries ...[]FetchOption) 
 	for _, query := range queries {
 		Fetch(ctx, f.source, query...)
 	}
-	f.state.update(Key[string](key), ctx.dependencies)
+	f.state.update(Key[string](key), ctx.dependencies, 0)
 }
 
 func dependencyMatchValue(namespace, name, app string) *any {
