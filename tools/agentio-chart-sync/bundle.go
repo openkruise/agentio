@@ -834,7 +834,7 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, forbidden := range []string{".Values.profile", ".Values.cni", ".Values.ztunnel", "15017", "mutatingwebhookconfigurations", "$useTrustPackage"} {
+	for _, forbidden := range []string{".Values.profile", ".Values.cni", ".Values.ztunnel", "mutatingwebhookconfigurations", "$useTrustPackage"} {
 		if bytes.Contains(content, []byte(forbidden)) {
 			return nil, fmt.Errorf("sandbox-manager template %q retains unsupported capability %q", rel, forbidden)
 		}

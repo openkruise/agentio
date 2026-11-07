@@ -1,0 +1,26 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "agentiod.fullname" . }}-validator-{{ .Release.Namespace }}
+  labels:
+    {{- include "agentiod.labels" . | nindent 4 }}
+webhooks:
+  - name: validation.agentio.kruise.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    timeoutSeconds: 10
+    clientConfig:
+      caBundle: ""
+      service:
+        name: {{ include "agentiod.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 443
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [agents.kruise.io]
+        apiVersions: [v1alpha1]
+        resources: [securityprofiles, globalsecurityprofiles, trafficpolicies, globaltrafficpolicies]
+        scope: '*'

@@ -23,10 +23,8 @@ spec:
     - name: http-monitoring
       port: 15014
       targetPort: http-monitoring
-    {{- if eq .Values.profile "sidecar" }}
     - name: https-webhook
       port: 443
       targetPort: https-webhook
-    {{- end }}
 {{- end -}}
 {{ include "agentiod.service" . }}

@@ -15,14 +15,12 @@
 package policystatus
 
 import (
-	"fmt"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
+	"github.com/openkruise/agentio/pkg/validation"
 )
 
 func (c *Controller) compileProfile(s source) *compiledProfile {
@@ -37,24 +35,13 @@ func (c *Controller) compileProfile(s source) *compiledProfile {
 }
 
 func (c *Controller) validateProfile(s source) error {
-	_, err := policy.CompileSecurityProfile(model.SecurityProfile{
+	return validation.ValidateSecurityProfile(model.SecurityProfile{
 		Name:         s.Metadata.Name,
 		Namespace:    s.Metadata.Namespace,
 		Global:       s.Kind == "GlobalSecurityProfile",
 		CreationTime: s.Metadata.CreationTimestamp.Time,
 		Spec:         *s.Profile,
-	})
-	if err != nil {
-		return fmt.Errorf("SNI/binding: %w", err)
-	}
-	profile, err := securityprofile.NewProfile(&s.Metadata, s.Profile)
-	if err != nil {
-		return fmt.Errorf("L7: %w", err)
-	}
-	if err := profile.Project(c.filters); err != nil {
-		return fmt.Errorf("L7: %w", err)
-	}
-	return nil
+	}, c.filters)
 }
 
 func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {

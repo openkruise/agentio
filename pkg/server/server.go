@@ -431,16 +431,18 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	}
 	defer shutdownHTTP(healthServer, 5*time.Second)
 	var injectorServe func() error
-	if features.EnableSidecarInjector {
+	if features.EnableSidecarInjector || features.ValidationWebhookConfigName != "" {
 		injectorOptions := SidecarInjectorOptions{
-			EnableClientTrust:      features.EnableClientTrustDistributor,
-			Secrets:                registry.Secrets,
-			MITMTrustBundle:        domainSigner.TrustBundle,
-			ClientTrustPackagePath: features.ClientTrustPackagePath,
-			Namespace:              options.RootNamespace,
-			ConfigMapName:          features.InjectorConfigMapName,
-			WebhookConfigName:      features.InjectionWebhookConfigName,
-			NativeSidecarMode:      features.NativeSidecarMode,
+			EnableInjection:             features.EnableSidecarInjector,
+			ValidationWebhookConfigName: features.ValidationWebhookConfigName,
+			EnableClientTrust:           features.EnableClientTrustDistributor,
+			Secrets:                     registry.Secrets,
+			MITMTrustBundle:             domainSigner.TrustBundle,
+			ClientTrustPackagePath:      features.ClientTrustPackagePath,
+			Namespace:                   options.RootNamespace,
+			ConfigMapName:               features.InjectorConfigMapName,
+			WebhookConfigName:           features.InjectionWebhookConfigName,
+			NativeSidecarMode:           features.NativeSidecarMode,
 			DiscoveryAddress: fmt.Sprintf(
 				"%s.%s.svc.%s:15012",
 				features.ServiceName,
@@ -448,7 +450,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 				options.ClusterDomain,
 			),
 		}
-		serve, err := setupSidecarInjector(ctx, kubeClient, authority, injectorOptions)
+		serve, err := setupAdmissionWebhooks(ctx, kubeClient, authority, injectorOptions)
 		if err != nil {
 			return err
 		}
@@ -469,7 +471,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	if injectorServe != nil {
 		go func() {
 			if err := injectorServe(); err != nil {
-				errorsChannel <- fmt.Errorf("serve sidecar injection webhook: %w", err)
+				errorsChannel <- fmt.Errorf("serve admission webhooks: %w", err)
 			}
 		}()
 	}

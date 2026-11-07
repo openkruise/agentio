@@ -110,12 +110,12 @@ func TestManagerMasterModesAndConfiguration(t *testing.T) {
 				if gateways != 0 {
 					t.Fatalf("gateways = %d for mode %s", gateways, gateway)
 				}
-				for _, want := range []string{"--namespace=custom-agentio", "--domain=cluster.example", "custom-label", "AGENTIO_LOG_FORMAT", "AGENTIO_ENABLE_SIDECAR_INJECTOR"} {
+				for _, want := range []string{"--namespace=custom-agentio", "--domain=cluster.example", "custom-label", "AGENTIO_LOG_FORMAT", "AGENTIO_ENABLE_SIDECAR_INJECTOR", "ValidatingWebhookConfiguration", "path: /validate", "15017"} {
 					if !strings.Contains(all, want) {
 						t.Errorf("rendered manager missing %s", want)
 					}
 				}
-				for _, bad := range []string{"parent.invalid", "parent-epe", "agentgateway", "mutatingwebhookconfigurations", "15017", "AGENTIO_NATIVE_SIDECARS", "AGENTIO_INJECTOR_CONFIGMAP_NAME", "egress-gateway: |", "sidecar-injector"} {
+				for _, bad := range []string{"parent.invalid", "parent-epe", "agentgateway", "mutatingwebhookconfigurations", "AGENTIO_NATIVE_SIDECARS", "AGENTIO_INJECTOR_CONFIGMAP_NAME", "egress-gateway: |", "sidecar-injector"} {
 					if strings.Contains(all, bad) {
 						t.Errorf("rendered manager contains %s", bad)
 					}

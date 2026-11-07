@@ -66,7 +66,9 @@ spec:
             - name: http-monitoring
               containerPort: 15014
               protocol: TCP
-
+            - name: https-webhook
+              containerPort: 15017
+              protocol: TCP
           readinessProbe:
             httpGet:
               path: /ready
@@ -130,6 +132,8 @@ spec:
               value: {{ false | quote }}
             - name: AGENTIO_ENABLE_SIDECAR_INJECTOR
               value: {{ false | quote }}
+            - name: AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME
+              value: {{ printf "%s-validator-%s" (include "agentio.agentiod.fullname" .) (include "agentio.namespace" .) | quote }}
             - name: AGENTIO_ENABLE_GATEWAY_DEPLOYER
               value: {{ .Values.agentio.agentiod.gatewayDeployer.enabled | quote }}
             - name: AGENTIO_GATEWAY_LEASE_NAME

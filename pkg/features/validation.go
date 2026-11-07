@@ -14,6 +14,15 @@
 
 package features
 
+import "istio.io/istio/pkg/env"
+
+// ValidationWebhookConfigName enables admission and names its CA bundle target.
+var ValidationWebhookConfigName = env.Register(
+	"AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME",
+	"",
+	"Serve /validate and synchronize the caBundle of this ValidatingWebhookConfiguration; empty disables validation admission.",
+).Get()
+
 func Validate() error {
 	validators := [...]func() error{
 		validateXDS,
