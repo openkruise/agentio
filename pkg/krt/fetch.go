@@ -125,7 +125,8 @@ func fetch[T any](ctx HandlerContext, cc Collection[T], allowMissingContext bool
 	// don't allocate a full-size intermediate list. Key and index filters use their more specific lookup paths below.
 	var list []T
 	var matches func(T) bool
-	if x := d.filter.extra; d.filter.generic != nil || (x != nil && (x.selects != nil || x.selectsNonEmpty != nil || x.labels != nil)) {
+	if x := d.filter.extra; d.filter.generic != nil ||
+		(x != nil && (x.selects != nil || x.selectsNonEmpty != nil || x.labels != nil)) {
 		matches = func(i T) bool { return d.filter.Matches(c.augment(i), true) }
 	}
 	if !d.filter.keys.IsNil() {

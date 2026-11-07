@@ -15,7 +15,11 @@
 
 package krt
 
-import "istio.io/istio/pkg/util/sets"
+import (
+	"maps"
+
+	"istio.io/istio/pkg/util/sets"
+)
 
 // shrinkingMap releases capacity after a tenfold contraction of a large map.
 // Its zero value is ready to use. Callers provide synchronization and must use
@@ -46,9 +50,7 @@ func (m *shrinkingMap[K, V]) delete(key K) {
 		return
 	}
 	smaller := make(map[K]V, len(m.data))
-	for k, v := range m.data {
-		smaller[k] = v
-	}
+	maps.Copy(smaller, m.data)
 	m.data = smaller
 	m.peak = len(smaller)
 }

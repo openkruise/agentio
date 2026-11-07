@@ -171,7 +171,14 @@ func (i dependencyState[I]) changedInputKeys(sourceCollection collectionUID, eve
 								continue
 							}
 							dependencies := i.objectDependencies.data[iKey]
-							if changed := objectChanged(dependencies.dependencies, sourceCollection, ev, item, ekey, key); changed {
+							if changed := objectChanged(
+								dependencies.dependencies,
+								sourceCollection,
+								ev,
+								item,
+								ekey,
+								key,
+							); changed {
 								changedInputKeys.Insert(iKey)
 							}
 						}
@@ -185,7 +192,14 @@ func (i dependencyState[I]) changedInputKeys(sourceCollection collectionUID, eve
 					continue
 				}
 				for _, item := range ev.Items() {
-					if changed := objectChanged(dependencies.dependencies, sourceCollection, ev, item, extractorKey{}, ""); changed {
+					if changed := objectChanged(
+						dependencies.dependencies,
+						sourceCollection,
+						ev,
+						item,
+						extractorKey{},
+						"",
+					); changed {
 						changedInputKeys.Insert(iKey)
 						break
 					}
@@ -565,6 +579,8 @@ func (h *manyCollection[I, O]) onPrimaryInputEvent(items []Event[I], eventSeq ui
 
 // handleChangedPrimaryInputEvents takes a list of I's that changed and reruns the handler over them.
 // eventSeq is the stamp of the queued event that produced items, and recomputeSeq the stamp of this recomputation.
+//
+//nolint:gocyclo,funlen // Keep the existing hot path's transform and locked state-commit phases together.
 func (h *manyCollection[I, O]) handleChangedPrimaryInputEvents(items []Event[I], eventSeq, recomputeSeq uint64) {
 	var events []Event[O]
 	emit := func(key Key[O], event Event[O]) {
@@ -886,7 +902,11 @@ func (h *manyCollection[I, O]) runQueue() {
 
 // Handler is called when a dependency changes. We will take as inputs the item that changed.
 // Then we find all of our own values (I) that changed and onPrimaryInputEvent() them
-func (h *manyCollection[I, O]) onSecondaryDependencyEvent(sourceCollection collectionUID, events []Event[any], eventSeq uint64) {
+func (h *manyCollection[I, O]) onSecondaryDependencyEvent(
+	sourceCollection collectionUID,
+	events []Event[any],
+	eventSeq uint64,
+) {
 	// Stamp this recomputation before reading the latest inputs below.
 	recomputeSeq := h.seq.Add(1)
 	// A secondary dependency changed...
@@ -913,7 +933,7 @@ func (h *manyCollection[I, O]) onSecondaryDependencyEvent(sourceCollection colle
 				}
 				e := Event[I]{
 					Event: controllers.EventDelete,
-					Old:   ptr.Of(h.collectionState.inputs.data[i]),
+					Old:   new(h.collectionState.inputs.data[i]),
 				}
 				toRun = append(toRun, e)
 			}

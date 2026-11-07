@@ -50,7 +50,11 @@ func BenchmarkFetchAllocation(b *testing.B) {
 	}
 	source := NewStaticCollection(nil, values, WithStop(b.Context().Done()))
 	index := NewIndex(source, "all", func(allocationItem) []string { return []string{"all"} })
-	byValue := NewIndex(source, "value", func(i allocationItem) []allocationIndexKey { return []allocationIndexKey{allocationIndexKey(i.Value)} })
+	byValue := NewIndex(
+		source,
+		"value",
+		func(i allocationItem) []allocationIndexKey { return []allocationIndexKey{allocationIndexKey(i.Value)} },
+	)
 	for _, tc := range []struct {
 		name    string
 		options []FetchOption
@@ -74,7 +78,9 @@ func BenchmarkFetchPointerAllocation(b *testing.B) {
 	values := make([]*dependencyMatchObject, 128)
 	for i := range values {
 		values[i] = &dependencyMatchObject{
-			Name: fmt.Sprint(i), Namespace: "ns", Labels: map[string]string{"app": "selected"},
+			Name:      fmt.Sprint(i),
+			Namespace: "ns",
+			Labels:    map[string]string{"app": "selected"},
 		}
 	}
 	source := NewStaticCollection(nil, values, WithStop(b.Context().Done()))

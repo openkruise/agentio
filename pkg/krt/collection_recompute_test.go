@@ -20,9 +20,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/openkruise/agentio/pkg/kube/controllers"
 	"istio.io/istio/pkg/test"
 	"istio.io/istio/pkg/test/util/assert"
+
+	"github.com/openkruise/agentio/pkg/kube/controllers"
 )
 
 type routeCount struct {
@@ -67,7 +68,10 @@ func TestCollectionSkipsObservedEvents(t *testing.T) {
 	stop := test.NewStop(t)
 	opts := NewOptionsBuilder(stop, "test", GlobalDebugHandler)
 	routes := NewMutableCollection[dependencyMatchObject](nil, nil, opts.WithName("Routes")...)
-	gateways := NewStaticCollection(nil, []dependencyMatchObject{{Namespace: "ns", Name: "gw"}}, opts.WithName("Gateways")...)
+	gateways := NewStaticCollection(
+		nil,
+		[]dependencyMatchObject{{Namespace: "ns", Name: "gw"}},
+		opts.WithName("Gateways")...)
 
 	var runs atomic.Int32
 	blocked := make(chan struct{})
@@ -135,7 +139,9 @@ func TestCollectionRecomputesInputChangedDuringBatch(t *testing.T) {
 		other = "b"
 	}
 	stamped := h.seq.Load()
-	inputs.UpdateObject(namedValue{dependencyMatchObject: dependencyMatchObject{Namespace: "ns", Name: other}, Value: "new"})
+	inputs.UpdateObject(
+		namedValue{dependencyMatchObject: dependencyMatchObject{Namespace: "ns", Name: other}, Value: "new"},
+	)
 	assert.EventuallyEqual(t, h.seq.Load, stamped+1)
 	close(release)
 

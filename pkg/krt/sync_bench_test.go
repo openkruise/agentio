@@ -32,11 +32,19 @@ func BenchmarkKRTSyncSelectiveFetch(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			values := make([]*dependencyMatchObject, tc.size)
 			for i := range values {
-				values[i] = &dependencyMatchObject{Name: strconv.Itoa(i), Namespace: "ns-" + strconv.Itoa(i%tc.namespaces), Labels: map[string]string{"app": "other"}}
+				values[i] = &dependencyMatchObject{
+					Name:      strconv.Itoa(i),
+					Namespace: "ns-" + strconv.Itoa(i%tc.namespaces),
+					Labels:    map[string]string{"app": "other"},
+				}
 			}
 			values[0].Labels["app"] = "selected"
 			source := NewStaticCollection(nil, values, WithStop(b.Context().Done()))
-			index := NewIndex(source, "namespace", func(o *dependencyMatchObject) []string { return []string{o.Namespace} })
+			index := NewIndex(
+				source,
+				"namespace",
+				func(o *dependencyMatchObject) []string { return []string{o.Namespace} },
+			)
 			opts := []FetchOption{FilterIndex(index, "ns-0"), FilterLabel(map[string]string{"app": "selected"})}
 			b.ReportAllocs()
 			for b.Loop() {
@@ -73,13 +81,20 @@ func BenchmarkKRTSyncBurstRecompute(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		blocked, release, drained := make(chan struct{}), make(chan struct{}), make(chan struct{})
-		h.queue.Push(func() error { close(blocked); <-release; return nil })
+		h.queue.Push(func() error {
+			close(blocked)
+			<-release
+			return nil
+		})
 		<-blocked
 		// All 128 events describe state already visible before the queue resumes.
 		for range 128 {
 			h.enqueueSecondaryEvents(source.uid(), events)
 		}
-		h.queue.Push(func() error { close(drained); return nil })
+		h.queue.Push(func() error {
+			close(drained)
+			return nil
+		})
 		close(release)
 		<-drained
 		iterations++

@@ -90,7 +90,11 @@ func TestCollectionShrinkKeepsIndexHandles(t *testing.T) {
 	}
 	source := NewMutableCollection(nil, values, WithStop(stop))
 	sourceIndex := source.index("name", func(v allocationItem) []string { return []string{v.Name} })
-	derived := NewCollection(source.AsCollection(), func(_ HandlerContext, v allocationItem) *allocationItem { return &v }, WithStop(stop))
+	derived := NewCollection(
+		source.AsCollection(),
+		func(_ HandlerContext, v allocationItem) *allocationItem { return &v },
+		WithStop(stop),
+	)
 	derived.WaitUntilSynced(stop)
 	mc := derived.internal().(*manyCollection[allocationItem, allocationItem])
 	derivedIndex := mc.index("name", func(v allocationItem) []string { return []string{v.Name} })

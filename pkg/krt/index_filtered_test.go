@@ -22,7 +22,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/test/util/assert"
 
@@ -53,7 +52,10 @@ func TestLookupFiltered(t *testing.T) {
 		})
 	}
 	t.Run("mapped", func(t *testing.T) {
-		col := krt.MapCollection(static, func(n Named) SimplePod { return SimplePod{Named: n} }, opts.WithName("mapped")...)
+		col := krt.MapCollection(
+			static,
+			func(n Named) SimplePod { return SimplePod{Named: n} },
+			opts.WithName("mapped")...)
 		col.WaitUntilSynced(opts.Stop())
 		checkLookupFiltered(t, col, func(p SimplePod) string { return p.Namespace })
 	})
@@ -106,15 +108,19 @@ func TestIndexFetchFilteredUpdates(t *testing.T) {
 	pods := krt.NewMutableCollection[SimplePod](nil, []SimplePod{pod}, opts.WithName("pods")...)
 	idx := krt.NewIndex(pods.AsCollection(), "namespace", func(p SimplePod) []string { return []string{p.Namespace} })
 	result := krt.NewSingleton(func(ctx krt.HandlerContext) *string {
-		matches := idx.Fetch(ctx, "ns", krt.FilterGeneric(func(obj any) bool { return obj.(SimplePod).IP == "matched" }))
-		return ptr.Of(strconv.Itoa(len(matches)))
+		matches := idx.Fetch(
+			ctx,
+			"ns",
+			krt.FilterGeneric(func(obj any) bool { return obj.(SimplePod).IP == "matched" }),
+		)
+		return new(strconv.Itoa(len(matches)))
 	}, opts.WithName("result")...)
 	result.AsCollection().WaitUntilSynced(opts.Stop())
-	assert.Equal(t, result.Get(), ptr.Of("0"))
+	assert.Equal(t, result.Get(), new("0"))
 	pod.IP = "matched"
 	pods.UpdateObject(pod)
-	assert.EventuallyEqual(t, result.Get, ptr.Of("1"))
+	assert.EventuallyEqual(t, result.Get, new("1"))
 	pod.IP = "unmatched"
 	pods.UpdateObject(pod)
-	assert.EventuallyEqual(t, result.Get, ptr.Of("0"))
+	assert.EventuallyEqual(t, result.Get, new("0"))
 }
