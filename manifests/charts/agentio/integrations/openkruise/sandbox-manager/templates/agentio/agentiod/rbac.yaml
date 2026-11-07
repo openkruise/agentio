@@ -33,7 +33,7 @@ rules:
     resources: ["tokenreviews"]
     verbs: ["create"]
 
-  {{- if eq .Values.agentio.egressGateway.mode "gatewayAPI" }}
+  {{- if .Values.agentio.agentiod.gatewayDeployer.enabled }}
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["patch"]

@@ -133,7 +133,7 @@ spec:
                   path: root-cert.pem
           {{- else }}
           configMap:
-            name: {{ .Values.global.caCertConfigMap }}
+            name: {{ include "agentiod.caConfigMapName" . }}
           {{- end }}
         - name: cni-ztunnel-sock-dir
           hostPath:

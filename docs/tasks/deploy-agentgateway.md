@@ -6,19 +6,20 @@ The generated configuration uses the official agentgateway v1.7.0 image. It supp
 
 ## Enable the deployer
 
-Install Gateway API CRDs, then enable `egressGateway.mode: gatewayAPI` in the Agentio Helm release:
+Install Gateway API CRDs, then enable `agentiod.gatewayDeployer.enabled: true` in the Agentio Helm release:
 
 ```yaml
+agentiod:
+  gatewayDeployer:
+    enabled: true
 egressGateway:
-  mode: gatewayAPI
   agentgateway:
     image: cr.agentgateway.dev/agentgateway:v1.7.0
-    resources:
-      requests: {cpu: 100m, memory: 128Mi}
-      limits: {cpu: "2", memory: 1Gi}
 ```
 
-The image is an operator-controlled value; a Gateway annotation cannot override it. Scheduling can be configured with `egressGateway.agentgateway.nodeSelector`, `tolerations`, `affinity`, and `topologySpreadConstraints`.
+The image is operator-controlled; a Gateway annotation cannot override it.
+Configure resources and scheduling with GatewayClass defaults or the Gateway's
+parametersRef Deployment patch, using container name `agentgateway`.
 
 The Deployment template leaves `spec.replicas` unset. To create an HPA or PDB, add a `horizontalPodAutoscaler` or `podDisruptionBudget` resource patch; an empty `{}` patch enables the template defaults. See [Customize Gateway resources](customize-gateway-resources.md).
 
@@ -70,7 +71,7 @@ The Gateway listeners determine the Service ports; the ConfigMap determines what
 
 To configure an egress gateway, replace the example body with the HBONE/internal-listener configuration below and corresponding Gateway ports. The deployment controller does not automatically connect application or ztunnel traffic to this gateway.
 
-If Helm should also create the Gateway, set `egressGateway.gatewayAPI.create: true`, `gatewayClassName: agentio-agentgateway`, and `infrastructure.parametersRef` under `egressGateway.gatewayAPI`. The referenced ConfigMap remains operator-owned.
+Create the Gateway and its parametersRef ConfigMap separately from the Agentio installation. Keep both in your application chart or GitOps repository; the installation chart does not create them.
 
 ## Generate configuration from Agentio egress settings
 
@@ -174,8 +175,10 @@ The release also changes repeated-header CEL lookups to return lists and enables
 Enable native certificate bootstrap from `agentiod` for agentgateway deployments:
 
 ```yaml
+agentiod:
+  gatewayDeployer:
+    enabled: true
 egressGateway:
-  mode: gatewayAPI
   agentgateway:
     ca:
       enabled: true

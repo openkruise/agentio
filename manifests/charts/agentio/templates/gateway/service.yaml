@@ -1,4 +1,4 @@
-{{- if eq .Values.egressGateway.mode "static" }}
+{{- if .Values.egressGateway.enabled }}
 apiVersion: v1
 kind: Service
 metadata:

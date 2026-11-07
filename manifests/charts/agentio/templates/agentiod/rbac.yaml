@@ -35,7 +35,7 @@ rules:
     resources: ["mutatingwebhookconfigurations"]
     verbs: ["get", "list", "watch", "update"]
   {{- end }}
-  {{- if eq .Values.egressGateway.mode "gatewayAPI" }}
+  {{- if .Values.agentiod.gatewayDeployer.enabled }}
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["patch"]

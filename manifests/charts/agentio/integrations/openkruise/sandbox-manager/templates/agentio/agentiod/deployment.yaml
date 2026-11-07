@@ -131,7 +131,7 @@ spec:
             - name: AGENTIO_ENABLE_SIDECAR_INJECTOR
               value: {{ false | quote }}
             - name: AGENTIO_ENABLE_GATEWAY_DEPLOYER
-              value: {{ (eq .Values.agentio.egressGateway.mode "gatewayAPI") | quote }}
+              value: {{ .Values.agentio.agentiod.gatewayDeployer.enabled | quote }}
             - name: AGENTIO_GATEWAY_LEASE_NAME
               value: {{ .Values.agentio.agentiod.gatewayDeployer.leaseName | quote }}
             {{- range $name, $value := .Values.agentio.agentiod.env }}

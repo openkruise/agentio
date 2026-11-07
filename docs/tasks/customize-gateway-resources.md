@@ -1,6 +1,6 @@
 # Customize Gateway resources
 
-Use `Gateway.spec.infrastructure.parametersRef` to patch the Kubernetes resources that Agentio's gateway deployer generates. Enable `egressGateway.mode: gatewayAPI` and install the Gateway API CRDs first; see [Route traffic through an egress gateway](route-traffic-through-egress-gateway.md).
+Use `Gateway.spec.infrastructure.parametersRef` to patch the Kubernetes resources that Agentio's gateway deployer generates. Enable `agentiod.gatewayDeployer.enabled: true` and install the Gateway API CRDs first; see [Route traffic through an egress gateway](route-traffic-through-egress-gateway.md).
 
 ## Patch resource keys
 

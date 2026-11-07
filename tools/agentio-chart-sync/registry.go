@@ -68,7 +68,12 @@ func adaptImageRegistry(target string, controller bool, tag string) error {
 		return fmt.Errorf("chart values must be a mapping")
 	}
 	agentio := yamlMappingValue(document.Content[0], "agentio")
-	components := []string{"agentiod", "egressGateway", "egressGateway.porter", "epe"}
+	components := []string{
+		"agentiod",
+		"egressGateway",
+		"egressGateway.porter",
+		"epe",
+	}
 	begin, end := valuesBegin, valuesEnd
 	helperDir := filepath.Join(target, "templates", "agentio")
 	global := yamlMappingValue(agentio, "global")
@@ -265,6 +270,9 @@ Qualified repositories retain their host. Digests take precedence over tags. */}
 `
 
 func setIntegrationGatewayModes(root *yamlv3.Node) {
+	if enabled := yamlMappingValue(yamlMappingValue(root, "egressGateway"), "enabled"); enabled != nil {
+		enabled.Value = "true"
+	}
 	for component, value := range map[string]string{"egressGateway": "static", "epe": "managed"} {
 		if mode := yamlMappingValue(yamlMappingValue(root, component), "mode"); mode != nil {
 			mode.Value = value

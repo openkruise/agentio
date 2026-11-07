@@ -173,6 +173,38 @@ func TestAgentioControlPlaneContract(t *testing.T) {
 	)
 }
 
+func TestRelatedDeploymentValuesFollowOverrides(t *testing.T) {
+	for _, profile := range []string{"sidecar", "ambient"} {
+		t.Run(profile, func(t *testing.T) {
+			manifest := renderAgentio(t, "--set", "profile="+profile,
+				"--set", "agentiod.ca.configMapName=custom-ca",
+				"--set", "ztunnel.serviceAccount.name=custom-ztunnel",
+				"--set", "egressGateway.enabled=true")
+			for doc := range bytes.SplitSeq([]byte(manifest), []byte("\n---")) {
+				var workload struct {
+					Kind string
+					Spec struct{ Template corev1.PodTemplateSpec }
+				}
+				if err := yaml.Unmarshal(doc, &workload); err != nil {
+					t.Fatal(err)
+				}
+				if workload.Kind != "Deployment" && workload.Kind != "DaemonSet" {
+					continue
+				}
+				for _, volume := range workload.Spec.Template.Spec.Volumes {
+					if volume.Name == "agentiod-ca-cert" && volume.ConfigMap.Name != "custom-ca" {
+						t.Fatalf("CA mount did not follow override: %+v", volume)
+					}
+				}
+			}
+			requireContains(t, manifest, "name: AGENTIO_TRUSTED_NODE_ACCOUNTS\n              value: \"custom-ztunnel\"")
+		})
+	}
+	manifest := renderAgentio(t, "--set", "ztunnel.serviceAccount.name=custom-ztunnel",
+		"--set", "agentiod.trustedNodeServiceAccount=external-ztunnel")
+	requireContains(t, manifest, "name: AGENTIO_TRUSTED_NODE_ACCOUNTS\n              value: \"external-ztunnel\"")
+}
+
 func TestAgentiodLoggingConfiguration(t *testing.T) {
 	manifest := renderAgentio(t,
 		"--set", "agentiod.logging.level=debug",
@@ -340,7 +372,10 @@ func TestCNIAndZtunnelOverrides(t *testing.T) {
 func TestStaticPorterSNIPolicyFlag(t *testing.T) {
 	for _, value := range []string{"default", "false", "true"} {
 		t.Run(value, func(t *testing.T) {
-			args := []string{"--set", "egressGateway.mode=static", "--show-only", "templates/gateway/deployment.yaml"}
+			args := []string{
+				"--set", "egressGateway.enabled=true",
+				"--show-only", "templates/gateway/deployment.yaml",
+			}
 			want := "false"
 			if value != "default" {
 				args = append(args, "--set", "agentiod.enableSNITrafficPolicy="+value)
@@ -368,7 +403,7 @@ func TestStaticPorterSNIPolicyFlag(t *testing.T) {
 }
 
 func TestStaticEgressGateway(t *testing.T) {
-	manifest := renderAgentio(t, "--set", "egressGateway.mode=static")
+	manifest := renderAgentio(t, "--set", "egressGateway.enabled=true")
 	if got, want := objectNamesByKind(
 		t,
 		manifest,
@@ -403,7 +438,7 @@ func TestStaticGatewayCPULimit(t *testing.T) {
 	for _, override := range []string{"", "3"} {
 		t.Run("override="+override, func(t *testing.T) {
 			args := []string{"--show-only", "templates/gateway/deployment.yaml",
-				"--set", "egressGateway.mode=static", "--set", "egressGateway.resources.limits.cpu=2"}
+				"--set", "egressGateway.enabled=true", "--set", "egressGateway.resources.limits.cpu=2"}
 			want := corev1.EnvVar{
 				Name: "AGENTIO_CPU_LIMIT",
 				ValueFrom: &corev1.EnvVarSource{ResourceFieldRef: &corev1.ResourceFieldSelector{
@@ -442,58 +477,57 @@ func TestStaticGatewayCPULimit(t *testing.T) {
 
 func TestGatewayAPIEgressGateway(t *testing.T) {
 	manifest := renderAgentio(t,
-		"--set", "egressGateway.terminationGracePeriodSeconds=45",
-		"--set", "egressGateway.mode=gatewayAPI",
-		"--set", "egressGateway.gatewayAPI.create=true",
+		"--set", "agentiod.gatewayDeployer.enabled=true",
 		"--set-string", "egressGateway.image.repository=registry.example/agentio/proxyv2",
 		"--set-string", "egressGateway.image.tag=1.0.0",
 	)
-	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentiod"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Gateway API Deployments = %v, want %v", got, want)
+	if got := objectNamesByKind(t, manifest, "Deployment"); !reflect.DeepEqual(got, []string{"agentiod"}) {
+		t.Fatalf("chart must only deploy the control plane: %v", got)
 	}
-	if got, want := objectNamesByKind(
-		t,
-		manifest,
-		"Gateway",
-	), []string{
-		"agentio-egress",
-	}; !reflect.DeepEqual(
-		got,
-		want,
-	) {
-		t.Fatalf("Gateway API Gateways = %v, want %v", got, want)
+	if got := objectNamesByKind(t, manifest, "Gateway"); len(got) != 0 {
+		t.Fatalf("Gateway objects must be user-managed: %v", got)
 	}
 	requireContains(t, manifest,
-		"gatewayClassName: agentio-egress",
-		"terminationGracePeriodSeconds: 45",
-		"protocol: HBONE",
-		"name: AGENTIO_ENABLE_GATEWAY_DEPLOYER",
-		"value: \"true\"",
+		"name: AGENTIO_ENABLE_GATEWAY_DEPLOYER\n              value: \"true\"",
 		"egress-gateway: |",
 		`image: "registry.example/agentio/proxyv2:1.0.0"`,
 	)
 }
 
+func TestStaticAndGatewayAPIGatewaysCanCoexist(t *testing.T) {
+	manifest := renderAgentio(t, "--set",
+		"egressGateway.enabled=true,egressGateway.networkPolicy.enabled=true,agentiod.gatewayDeployer.enabled=true",
+	)
+	if got := objectNamesByKind(
+		t,
+		manifest,
+		"Deployment",
+	); !reflect.DeepEqual(
+		got,
+		[]string{"agentio-egress", "agentiod"},
+	) {
+		t.Fatalf("Helm must only own its gateway Deployment and control plane: %v", got)
+	}
+	if got := objectNamesByKind(t, manifest, "Gateway"); len(got) != 0 {
+		t.Fatalf("Gateway objects must be user-managed: %v", got)
+	}
+	requireContains(t, manifest, "name: AGENTIO_ENABLE_GATEWAY_DEPLOYER\n              value: \"true\"")
+}
+
 func TestAgentgatewayGatewayAPIConfiguration(t *testing.T) {
 	manifest := renderAgentio(t,
-		"--set", "egressGateway.mode=gatewayAPI",
-		"--set", "egressGateway.gatewayAPI.create=true",
-		"--set", "egressGateway.gatewayAPI.gatewayClassName=agentio-agentgateway",
-		"--set-string", "egressGateway.gatewayAPI.infrastructure.parametersRef.group=",
-		"--set", "egressGateway.gatewayAPI.infrastructure.parametersRef.kind=ConfigMap",
-		"--set", "egressGateway.gatewayAPI.infrastructure.parametersRef.name=agentgateway-config",
+		"--set", "agentiod.gatewayDeployer.enabled=true",
 		"--set", "egressGateway.agentgateway.image=registry.example/agentgateway:tested",
 	)
-	requireContains(t, manifest, "gatewayClassName: agentio-agentgateway", "agentgateway: |",
-		"image: registry.example/agentgateway:tested", "parametersRef:", "name: agentgateway-config")
-	if got, want := objectNamesByKind(t, manifest, "Deployment"), []string{"agentiod"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("chart must leave gateway deployment to controller: %v", got)
+	requireContains(t, manifest, "agentgateway: |", `image: "registry.example/agentgateway:tested"`)
+	if got := objectNamesByKind(t, manifest, "Gateway"); len(got) != 0 {
+		t.Fatalf("native Gateway objects must be user-managed: %v", got)
 	}
 }
 
 func TestAgentgatewayDefaultVersion(t *testing.T) {
 	manifest := renderAgentio(t,
-		"--set", "egressGateway.mode=gatewayAPI",
+		"--set", "agentiod.gatewayDeployer.enabled=true",
 		"--show-only", "templates/agentiod/injector.yaml",
 	)
 	requireContains(t, manifest, "cr.agentgateway.dev/agentgateway:v1.7.0")
@@ -664,7 +698,7 @@ func TestImmutableImageDigests(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
 	manifest := renderAgentio(t,
 		"--set", "profile=ambient",
-		"--set", "egressGateway.mode=static",
+		"--set", "egressGateway.enabled=true",
 		"--set", "epe.mode=managed",
 		"--set-string", "agentiod.image.repository=registry.example/agentiod",
 		"--set-string", "agentiod.image.digest="+digest,
@@ -731,8 +765,8 @@ func TestPrepareReleaseChartPinsAllReleaseImages(t *testing.T) {
 		return manifest
 	}
 	manifest := append(
-		render("--set", "profile=ambient", "--set", "egressGateway.mode=static", "--set", "epe.mode=managed"),
-		render("--set", "profile=sidecar")...,
+		render("--set", "profile=ambient", "--set", "egressGateway.enabled=true", "--set", "epe.mode=managed"),
+		render("--set", "profile=sidecar", "--set", "agentiod.gatewayDeployer.enabled=true")...,
 	)
 	for _, image := range []string{
 		`image: "` + agentiodImage + `"`,
@@ -749,6 +783,25 @@ func TestPrepareReleaseChartPinsAllReleaseImages(t *testing.T) {
 	}
 	if bytes.Contains(manifest, []byte(":latest")) {
 		t.Errorf("prepared release manifest contains a mutable latest image:\n%s", manifest)
+	}
+	valuesData, err := os.ReadFile(filepath.Join(chartDir, "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(valuesData, &values); err != nil {
+		t.Fatal(err)
+	}
+	gw := values["egressGateway"].(map[string]any)
+	for backend, want := range map[string]string{"envoy": gatewayImage, "porter": porterImage} {
+		component := gw
+		if backend == "porter" {
+			component = gw["porter"].(map[string]any)
+		}
+		image := component["image"].(map[string]any)
+		if got := image["repository"].(string) + "@" + image["digest"].(string); got != want {
+			t.Errorf("shared %s image = %s, want %s", backend, got, want)
+		}
 	}
 	chart, err := os.ReadFile(filepath.Join(chartDir, "Chart.yaml"))
 	if err != nil {
@@ -807,7 +860,7 @@ func TestExternalEPE(t *testing.T) {
 
 func TestStaticGatewayUsesConfiguredEPE(t *testing.T) {
 	manifest := renderAgentio(t,
-		"--set", "egressGateway.mode=static",
+		"--set", "egressGateway.enabled=true",
 		"--set", "epe.mode=external",
 		"--set", "epe.external.address=epe.example.internal",
 		"--set", "epe.external.port=9443",
@@ -837,19 +890,37 @@ func TestInvalidModesFailRendering(t *testing.T) {
 			args: []string{"--set-string", "egressGateway.agentgateway.ca.enabled=false"},
 		},
 		{name: "egress gateway", want: "/egressGateway/mode", args: []string{"--set", "egressGateway.mode=invalid"}},
+		{
+			name: "removed static mode field",
+			want: "/egressGateway/mode",
+			args: []string{"--set", "egressGateway.mode=static"},
+		},
+		{
+			name: "removed controller backend configuration",
+			want: "/agentiod/gatewayDeployer",
+			args: []string{"--set", "agentiod.gatewayDeployer.envoy.replicaCount=2"},
+		},
+		{
+			name: "native capacity requires resource patches",
+			want: "/egressGateway/agentgateway",
+			args: []string{"--set", "egressGateway.agentgateway.replicaCount=2"},
+		},
+		{
+			name: "static gateway account mismatch",
+			want: "egressGateway.serviceAccount.name must match the gateway name",
+			args: []string{"--set", "egressGateway.enabled=true,egressGateway.serviceAccount.name=custom-account"},
+		},
 		{name: "EPE", want: "/epe/mode", args: []string{"--set", "epe.mode=invalid"}},
 		{name: "external EPE address", want: "/epe/external/address", args: []string{"--set", "epe.mode=external"}},
 		{
-			name: "Gateway API class",
-			want: "egressGateway.gatewayAPI.gatewayClassName is required",
-			args: []string{
-				"--set",
-				"egressGateway.mode=gatewayAPI",
-				"--set",
-				"egressGateway.gatewayAPI.create=true",
-				"--set",
-				"egressGateway.gatewayAPI.gatewayClassName=",
-			},
+			name: "Gateway objects are user-managed",
+			want: "/agentiod/gatewayDeployer",
+			args: []string{"--set", "agentiod.gatewayDeployer.gateway.create=true"},
+		},
+		{
+			name: "removed Gateway API root",
+			want: "/gatewayAPI",
+			args: []string{"--set", "gatewayAPI.enabled=true"},
 		},
 		{
 			name: "managed EPE files source",
@@ -876,7 +947,7 @@ func TestEveryProfileAndModeCombinationRendersUniqueObjects(t *testing.T) {
 		{"--set", "profile=sidecar"},
 		{
 			"--set",
-			"egressGateway.mode=static",
+			"egressGateway.enabled=true",
 			"--set",
 			"epe.mode=managed",
 			"--set",
@@ -884,9 +955,7 @@ func TestEveryProfileAndModeCombinationRendersUniqueObjects(t *testing.T) {
 		},
 		{
 			"--set",
-			"egressGateway.mode=gatewayAPI",
-			"--set",
-			"egressGateway.gatewayAPI.create=true",
+			"agentiod.gatewayDeployer.enabled=true",
 			"--set",
 			"epe.mode=external",
 			"--set",
@@ -920,7 +989,7 @@ func TestAgentgatewayCAInjectorValues(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			manifest := renderAgentio(t,
-				"--set", "egressGateway.mode=gatewayAPI",
+				"--set", "agentiod.gatewayDeployer.enabled=true",
 				"--set", fmt.Sprintf("egressGateway.agentgateway.ca.enabled=%t", enabled),
 				"--set", "agentiod.tokenAudience=gateway-ca",
 				"--set", "agentiod.ca.trustBundleConfigMapName=gateway-root",

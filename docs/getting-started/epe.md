@@ -1,6 +1,8 @@
 # Get started with EPE
 
-This guide enables the Egress Policy Enforcer (EPE), applies a minimal `SecurityProfile`, and verifies that EPE blocks a gateway-routed request. It works with the workload created by any Agentio onboarding guide.
+This guide enables the Egress Policy Enforcer (EPE) in the standalone Agentio release, applies a minimal `SecurityProfile`, and verifies that EPE blocks a gateway-routed request.
+
+For Agentio embedded in sandbox-manager, enable `agentio.epe.mode: managed` in the manager release as shown in [Integrate OpenKruise Agents](../integrations/openkruise-agents.md). Then continue at [Apply a minimal profile](#apply-a-minimal-profile); the Helm commands on this page target the standalone release.
 
 ## Before you begin
 
@@ -22,11 +24,11 @@ $ kubectl wait pod \
     --for=condition=Ready \
     --timeout=2m
 
-$ AGENTIO_EPE_DEMO_POD=$(kubectl get pod \
+$ AGENTIO_WORKLOAD_POD=$(kubectl get pod \
     --namespace "$AGENTIO_DEMO_NAMESPACE" \
     --selector "app=$AGENTIO_WORKLOAD_LABEL" \
     --output jsonpath='{.items[0].metadata.name}')
-$ test -n "$AGENTIO_EPE_DEMO_POD"
+$ test -n "$AGENTIO_WORKLOAD_POD"
 ```
 
 ## Enable EPE
@@ -101,7 +103,7 @@ EOF
 The request should receive EPE's configured `403` response before it reaches the external service:
 
 ```console
-$ kubectl exec "$AGENTIO_EPE_DEMO_POD" \
+$ kubectl exec "$AGENTIO_WORKLOAD_POD" \
     --namespace "$AGENTIO_DEMO_NAMESPACE" \
     --container "$AGENTIO_WORKLOAD_CONTAINER" -- \
     curl --silent --show-error --include http://www.example.com/epe-denied

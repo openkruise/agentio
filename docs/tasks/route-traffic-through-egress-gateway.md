@@ -2,7 +2,9 @@
 
 This task routes outbound traffic for `www.example.com` from an enrolled workload through an Agentio egress gateway. Other outbound traffic continues directly to its destination.
 
-You can create the gateway as a static chart workload or with the Kubernetes Gateway API. Both methods support sidecar, ambient, and OpenKruise Agents onboarding paths; sidecar mode is the recommended deployment mode and ambient mode is Alpha. Choose one method, then configure the common routing policy.
+For a standalone Agentio release, create the gateway as a static chart workload or with the Kubernetes Gateway API. Both methods support sidecar and ambient profiles; sidecar mode is recommended and ambient mode is Alpha. Choose one method, then configure the common routing policy.
+
+For Agentio embedded in sandbox-manager, use [the OpenKruise routing instructions](../integrations/openkruise-agents.md#continue-with-agentio-policy). That installation uses the manager release and `agentio.*` values; the Helm commands below target the standalone `agentio` release in `agentio-system`.
 
 The gateway inspects traffic to decide routing; server-first protocols that do not send data within the detection window are disconnected, and the gateway filters a set of denied destination IPs. See [Egress gateway protocol detection and destination restrictions (design)](../design/egress-gateway-protocol-and-dfp.md).
 
@@ -54,7 +56,7 @@ Create an evaluation values file:
 ```console
 $ cat >/tmp/agentio-static-gateway-values.yaml <<'EOF'
 egressGateway:
-  mode: static
+  enabled: true
   replicaCount: 1
   autoscaling:
     enabled: false
@@ -89,31 +91,36 @@ The chart also registers the static gateway identity in the generated Agentio co
 
 Use this method when the cluster has the Gateway API CRDs and `agentiod` should reconcile an Agentio-owned Gateway.
 
-Verify the API, then enable Gateway API mode and ask the chart to create one Gateway:
+Verify the API, then enable the controller and create your Gateway separately:
 
 ```console
 $ kubectl get crd gateways.gateway.networking.k8s.io
 
-$ cat >/tmp/agentio-gateway-api-values.yaml <<'EOF'
-egressGateway:
-  mode: gatewayAPI
-  gatewayAPI:
-    create: true
-    name: agentio-egress
-    gatewayClassName: agentio-egress
-    listeners:
-    - name: mesh
-      port: 15008
-      protocol: HBONE
-EOF
-
 $ helm upgrade agentio manifests/charts/agentio \
     --namespace agentio-system \
     --reuse-values \
-    --values /tmp/agentio-gateway-api-values.yaml \
+    --set agentiod.gatewayDeployer.enabled=true \
     --wait \
     --timeout 5m
+
+$ kubectl apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentio-egress
+  namespace: agentio-system
+spec:
+  gatewayClassName: agentio-egress
+  listeners:
+  - name: mesh
+    port: 15008
+    protocol: HBONE
+EOF
 ```
+
+Keep Gateway YAML in your application configuration or GitOps repository.
+The controller owns its generated workloads. This example uses the same name
+as the alternative Helm-managed gateway; choose another name if enabling both.
 
 Verify the Agentio GatewayClass, Gateway status, and managed workload:
 
@@ -226,18 +233,27 @@ $ helm upgrade agentio ./manifests/charts/agentio \
     --timeout 5m
 ```
 
-Disable the selected gateway mode. This removes the static workload or the chart-created Gateway:
+For a static gateway, disable its Helm-managed workload:
 
 ```console
 $ helm upgrade agentio manifests/charts/agentio \
     --namespace agentio-system \
     --reuse-values \
-    --set egressGateway.mode=disabled \
+    --set egressGateway.enabled=false \
     --wait \
     --timeout 5m
 ```
 
 Do not remove the gateway while workloads still use its route. Existing connections and new requests can fail while the gateway or route is missing.
+
+For a Gateway API gateway, delete your Gateway after removing its routes:
+
+```console
+$ kubectl delete gateway agentio-egress --namespace agentio-system
+```
+
+Keep `agentiod.gatewayDeployer.enabled=true` while other Gateways need the
+controller. Disabling it does not delete user Gateways or their workloads.
 
 ## See also
 

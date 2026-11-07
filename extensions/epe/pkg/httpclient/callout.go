@@ -251,9 +251,7 @@ func (h *calloutH2) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h.err != nil {
 		return nil, h.err
 	}
-	if !h.cc.CanTakeNewRequest() {
-		return nil, http2.ErrNoCachedConn
-	}
+	// A released application slot can precede HTTP/2 stream cleanup; let RoundTrip wait.
 	return h.cc.RoundTrip(req)
 }
 

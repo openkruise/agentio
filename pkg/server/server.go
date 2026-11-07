@@ -178,6 +178,7 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	}
 	authority, err := ca.LoadOrCreateAuthority(ctx, kubeClient, authenticator, ca.AuthorityOptions{
 		TrustDomain:           options.TrustDomain,
+		ClusterDomain:         options.ClusterDomain,
 		Namespace:             options.RootNamespace,
 		SecretName:            features.CASecretName,
 		ConfigMapName:         features.CAConfigMapName,

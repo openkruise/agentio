@@ -91,7 +91,8 @@ agentiod:
   keepalive:
     # Set to 0s to disable periodic server-side gRPC connection expiry.
     maxServerConnectionAge: 30m
-  trustedNodeServiceAccount: ztunnel
+  # Empty follows ztunnel.serviceAccount.name (or the generated ztunnel name).
+  trustedNodeServiceAccount: ""
   enableDebugOnHTTP: true
   meshInternalTrafficPolicy: PEER_AWARE
   enableSNITrafficPolicy: false
@@ -159,6 +160,8 @@ agentiod:
       imageName: proxy-init
   gatewayDeployer:
     leaseName: agentiod-gateway-deployer-leader
+    # Gateway objects and per-Gateway deployment patches are user-managed.
+    enabled: false
   networkPolicy:
     enabled: false
   # Sandbox mode is managed by sandbox.enabled, not env overrides.
@@ -275,7 +278,9 @@ ztunnel:
   platform: ""
 
 egressGateway:
-  mode: disabled
+  # Only controls the Helm-managed Deployment; common defaults below also apply to Gateway API.
+  enabled: false
+  # Shared by Helm-managed Envoy and controller-created Envoy/native gateways.
   # First-party CONNECT processing; independent of epe.mode and sandboxExtProc.
   porter:
     # Shared across resource types; zero disables the corresponding limit.
@@ -290,23 +295,10 @@ egressGateway:
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {memory: 256Mi}
-  # Used only by gatewaydeployer for the agentio-agentgateway GatewayClass.
-  # Native file configuration comes from the Gateway's parametersRef ConfigMap.
   agentgateway:
     image: cr.agentgateway.dev/agentgateway:v1.7.0
-    # Enable the native CA client using Agentiod's address, trust bundle,
-    # token audience and the Gateway Pod's ServiceAccount identity.
-    # Native config must use tunnelProtocol: hboneGateway for HBONE termination.
     ca:
       enabled: false
-    terminationGracePeriodSeconds: 30
-    resources:
-      requests: {cpu: 100m, memory: 128Mi}
-      limits: {cpu: "2", memory: 1Gi}
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-    topologySpreadConstraints: []
   nameOverride: agentio-egress
   fullnameOverride: ""
   image:
@@ -318,6 +310,7 @@ egressGateway:
   replicaCount: 2
   serviceAccount:
     create: true
+    # Empty follows the gateway name; an explicit name must match it.
     name: ""
     annotations: {}
   rbac:
@@ -342,6 +335,7 @@ egressGateway:
     minAvailable: 1
   terminationGracePeriodSeconds: 30
   agentConfig: {}
+  # Common Envoy agent settings above; these two CLI overrides are Helm-only.
   statsFlushInterval: ""
   statsEvictionInterval: ""
   env: {}
@@ -353,17 +347,6 @@ egressGateway:
   topologySpreadConstraints: []
   networkPolicy:
     enabled: false
-  gatewayAPI:
-    create: false
-    name: agentio-egress
-    gatewayClassName: agentio-egress
-    infrastructure: {}
-    annotations: {}
-    labels: {}
-    listeners:
-      - name: mesh
-        port: 15008
-        protocol: HBONE
 
 epe:
   # Retain deleted administrator profiles for stale WDS references; 0s disables.

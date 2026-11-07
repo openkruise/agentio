@@ -79,7 +79,7 @@ func TestChartValuesPinSuiteImagesAndBehavior(t *testing.T) {
 	assertPinnedImage(t, topLevelZtunnel["image"], "registry.example/ztunnel", "sha256:"+strings.Repeat("c", 64))
 
 	gateway := values["egressGateway"].(map[string]any)
-	if gateway["mode"] != "static" || gateway["nameOverride"] != "egress-gateway" {
+	if gateway["enabled"] != true || gateway["nameOverride"] != "egress-gateway" {
 		t.Fatalf("gateway mode/name = %#v", gateway)
 	}
 	assertPinnedImage(t, gateway["image"], "registry.example/gateway", "sha256:"+strings.Repeat("e", 64))
@@ -257,7 +257,8 @@ func TestAgentgatewayChartValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	gw := values["egressGateway"].(map[string]any)
-	if gw["mode"] != "gatewayAPI" || gw["gatewayAPI"].(map[string]any)["create"] != false {
+	if values["agentiod"].(map[string]any)["gatewayDeployer"].(map[string]any)["enabled"] != true ||
+		gw["enabled"] != false {
 		t.Fatalf("gateway values: %v", gw)
 	}
 	if gw["agentgateway"].(map[string]any)["image"] != config.GatewayImage {

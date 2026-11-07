@@ -113,12 +113,16 @@ agentio:
       sources: ""
     gatewayDeployer:
       leaseName: agentiod-gateway-deployer-leader
+      # Gateway objects and per-Gateway deployment patches are user-managed.
+      enabled: false
     networkPolicy:
       enabled: false
     # Sandbox mode is managed by sandbox.enabled, not env overrides.
     env: {}
   egressGateway:
-    mode: static
+    # Only controls the Helm-managed Deployment; common defaults below also apply to Gateway API.
+    enabled: true
+    # Shared by Helm-managed Envoy and controller-created Envoy/native gateways.
     # First-party CONNECT processing; independent of epe.mode and sandboxExtProc.
     porter:
       # Shared across resource types; zero disables the corresponding limit.
@@ -144,6 +148,7 @@ agentio:
     replicaCount: 2
     serviceAccount:
       create: true
+      # Empty follows the gateway name; an explicit name must match it.
       name: ""
       annotations: {}
     rbac:
@@ -168,6 +173,7 @@ agentio:
       minAvailable: 1
     terminationGracePeriodSeconds: 30
     agentConfig: {}
+    # Common Envoy agent settings above; these two CLI overrides are Helm-only.
     statsFlushInterval: ""
     statsEvictionInterval: ""
     env: {}
@@ -179,17 +185,6 @@ agentio:
     topologySpreadConstraints: []
     networkPolicy:
       enabled: false
-    gatewayAPI:
-      create: false
-      name: agentio-egress
-      gatewayClassName: agentio-egress
-      infrastructure: {}
-      annotations: {}
-      labels: {}
-      listeners:
-        - name: mesh
-          port: 15008
-          protocol: HBONE
   epe:
     # Retain deleted administrator profiles for stale WDS references; 0s disables.
     profileDeletionGracePeriod: 60s

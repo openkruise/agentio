@@ -4,7 +4,7 @@ This task applies a namespaced `TrafficPolicy` to an enrolled workload. The poli
 
 ## Before you begin
 
-Complete one onboarding path from [Getting started](../getting-started.md), then complete [Route traffic through an egress gateway](route-traffic-through-egress-gateway.md).
+Complete one standalone onboarding path from [Getting started](../getting-started.md), then complete [Route traffic through an egress gateway](route-traffic-through-egress-gateway.md). For the embedded sandbox-manager installation, complete [Integrate OpenKruise Agents](../integrations/openkruise-agents.md#continue-with-agentio-policy) instead. Both paths export the workload variables below.
 
 The selected onboarding guide exports these variables:
 

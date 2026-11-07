@@ -6,7 +6,7 @@
 
 
 {{- define "agentio.gatewayDeployerEnabled" -}}
-{{- eq .Values.agentio.egressGateway.mode "gatewayAPI" -}}
+{{- .Values.agentio.agentiod.gatewayDeployer.enabled -}}
 {{- end -}}
 
 {{- define "agentio.epeEnabled" -}}
@@ -36,6 +36,9 @@
 {{- end -}}
 
 {{- define "agentio.validate" -}}
+{{- if and .Values.agentio.egressGateway.enabled (ne (include "agentio.gateway.serviceAccountName" .) (include "agentio.gateway.fullname" .)) -}}
+{{- fail "egressGateway.serviceAccount.name must match the gateway name; set egressGateway.fullnameOverride to rename the gateway and its identity together" -}}
+{{- end -}}
 {{- if and (false) .Values.agentio.sandbox.enabled -}}
 {{- fail "sandbox.enabled is not supported with profile=ambient; use profile=sidecar" -}}
 {{- end -}}
@@ -76,17 +79,6 @@
 {{- end -}}
 {{- if and (eq .Values.agentio.epe.mode "external") (empty .Values.agentio.epe.tls.peerSpiffeIDs) -}}
 {{- fail "epe.tls.peerSpiffeIDs is required for external mTLS" -}}
-{{- end -}}
-{{- end -}}
-{{- if and (eq .Values.agentio.egressGateway.mode "gatewayAPI") .Values.agentio.egressGateway.gatewayAPI.create -}}
-{{- if empty .Values.agentio.egressGateway.gatewayAPI.name -}}
-{{- fail "egressGateway.gatewayAPI.name is required when mode=gatewayAPI and create=true" -}}
-{{- end -}}
-{{- if empty .Values.agentio.egressGateway.gatewayAPI.gatewayClassName -}}
-{{- fail "egressGateway.gatewayAPI.gatewayClassName is required when mode=gatewayAPI and create=true" -}}
-{{- end -}}
-{{- if empty .Values.agentio.egressGateway.gatewayAPI.listeners -}}
-{{- fail "egressGateway.gatewayAPI.listeners must contain at least one listener when mode=gatewayAPI and create=true" -}}
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.agentio.epe.mode "managed" -}}

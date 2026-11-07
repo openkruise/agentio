@@ -324,10 +324,7 @@ spec:
           name: {{ .Values.global.trustBundleName | default "agentio-ca-root-cert" }}
       {{- end }}
       {{- if .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-        {{- range .Values.global.imagePullSecrets }}
-        - name: {{ . }}
-        {{- end }}
+      imagePullSecrets: {{ toJson .Values.global.imagePullSecrets }}
       {{- end }}
 ---
 apiVersion: v1
