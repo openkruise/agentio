@@ -22,6 +22,7 @@ import (
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/protobuf/types/known/anypb"
+	"istio.io/istio/pkg/util/sets"
 
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
@@ -354,19 +355,15 @@ func TestSandboxAttesterMigrationUpdatesVisibilityWithoutWorkloadChanges(t *test
 				WorkloadUID: worker.Facts.Workload.WorkloadUID,
 				Source:      worker.Facts.Workload.Source,
 			}
+			initial := initializedSubscription(t, SandboxGenerator{}, scope, model.SandboxType,
+				before, SubscriptionView{names: []string{"actor"}, wildcard: wildcard})
+			watch := &watchState{wildcard: wildcard, names: sets.New("actor"), sent: initial.sent}
 			delta, err := (SandboxGenerator{}).Generate(t.Context(), GenerationRequest{
-				Scope:   scope,
-				TypeURL: model.SandboxType,
-				Subscription: initializedSubscription(
-					t,
-					SandboxGenerator{},
-					scope,
-					model.SandboxType,
-					before,
-					SubscriptionView{names: []string{"actor"}, wildcard: wildcard},
-				),
-				Snapshot: after,
-				Update:   update,
+				Scope:        scope,
+				TypeURL:      model.SandboxType,
+				Subscription: newIncrementalSubscriptionView(watch, model.SandboxType, update),
+				Snapshot:     after,
+				Update:       update,
 			})
 			if err != nil {
 				t.Fatal(err)
