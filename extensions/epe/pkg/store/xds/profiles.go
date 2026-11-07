@@ -115,18 +115,17 @@ func (s *ProfileSource) changed(name string, sandbox bool, current *xdsclient.Re
 	}
 
 	previous := s.names[key]
-	if profile == nil {
-		if previous != "" {
+	if previous != "" && (profile == nil || previous != profile.ResourceName()) {
+		installed := s.profiles.GetKey(previous)
+		if installed != nil && (!sandbox || installed.Meta.SandboxUID == name) {
 			s.profiles.DeleteObject(previous)
-			delete(s.names, key)
 		}
-		return
+		delete(s.names, key)
 	}
-	if next := profile.ResourceName(); previous != "" && previous != next {
-		s.profiles.DeleteObject(previous)
+	if profile != nil {
+		s.names[key] = profile.ResourceName()
+		s.profiles.UpdateObject(*profile)
 	}
-	s.names[key] = profile.ResourceName()
-	s.profiles.UpdateObject(*profile)
 }
 
 // Watches validates and compiles policies before the xDS client ACKs.

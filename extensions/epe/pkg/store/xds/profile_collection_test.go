@@ -17,9 +17,12 @@ package xds
 import (
 	"testing"
 
+	"google.golang.org/protobuf/types/known/anypb"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/internal/testutil"
@@ -27,6 +30,35 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
+
+func TestSandboxReplacementRetainsNewProfile(t *testing.T) {
+	source := NewProfileSource(profilestore.NewXDSStore().ObserveAdmission, t.Context().Done())
+	cms := krt.NewMutableCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(t.Context().Done()))
+	collection := source.Collection(cms.AsCollection(), krt.WithStop(t.Context().Done()))
+	watch := source.Watches(nil)[1]
+	var newest *sandboxProfiles
+	for _, uid := range []string{"kruise:old", "kruise:new"} {
+		value, err := watch.Transform(packed(&sandboxv1.Sandbox{
+			Uid:        uid,
+			Extensions: []*anypb.Any{packed(profilePayload("ns"))},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest = value.(*sandboxProfiles)
+		watch.OnChange(uid, &xdsclient.Resource{Value: value}, nil)
+	}
+	// A delta publishes the replacement before removing the previous UID.
+	watch.OnChange("kruise:old", nil, nil)
+	testutil.Eventually(t, func() bool {
+		profile := collection.GetKey(newest.profile.ResourceName())
+		return profile != nil && profile.Meta.SandboxUID == "kruise:new"
+	}, "old Sandbox deletion must retain its same-name replacement")
+	watch.OnChange("kruise:new", nil, nil)
+	testutil.Eventually(t, func() bool {
+		return collection.GetKey(newest.profile.ResourceName()) == nil
+	}, "deleting the current Sandbox removes its profile")
+}
 
 func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 	local := profilestore.NewXDSStore()

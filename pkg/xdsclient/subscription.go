@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -44,6 +45,7 @@ type subscription struct {
 	persistent bool
 	active     bool // Requested on this stream, rather than merely retained locally.
 	waiters    int
+	rejected   map[string]struct{}
 }
 
 // notify wakes this generation's waiters. All access is under client.mu.
@@ -120,6 +122,7 @@ func (s *Subscription) Release() {
 		st.pending[s.name] = struct{}{}
 		delete(st.removed, s.name)
 		st.releaseResource(s.name)
+		st.releaseRejections(s.name, sub)
 		c.wakeSubscriptions()
 	}
 	sub.notify()
@@ -221,8 +224,55 @@ func (st *typeState) removeResource(name string) {
 }
 
 func (st *typeState) changed(name string, err error) {
+	if err == nil {
+		st.clearRejection(name)
+	}
 	if st.watch.OnChange != nil {
 		st.watch.OnChange(name, st.resources[name], err)
+	}
+}
+
+// Rejected aliases belong to the watching interests, never the accepted resource index.
+func (st *typeState) rejectResource(name string, aliases []string, err error) {
+	if st.watch.OnChange == nil {
+		return
+	}
+	if !st.watch.Wildcard && st.resources[name] == nil {
+		st.clearRejection(name)
+		for _, interest := range append([]string{name}, aliases...) {
+			if sub := st.names[interest]; sub != nil {
+				if st.rejectedInterests == nil {
+					st.rejectedInterests = make(map[string][]string)
+				}
+				if sub.rejected == nil {
+					sub.rejected = make(map[string]struct{})
+				}
+				st.rejectedInterests[name] = append(st.rejectedInterests[name], interest)
+				sub.rejected[name] = struct{}{}
+			}
+		}
+	}
+	st.changed(name, err)
+}
+
+func (st *typeState) clearRejection(name string) {
+	for _, interest := range st.rejectedInterests[name] {
+		if sub := st.names[interest]; sub != nil {
+			delete(sub.rejected, name)
+		}
+	}
+	delete(st.rejectedInterests, name)
+}
+
+func (st *typeState) releaseRejections(interest string, sub *subscription) {
+	for name := range sub.rejected {
+		delete(sub.rejected, name)
+		remaining := slices.DeleteFunc(st.rejectedInterests[name], func(value string) bool { return value == interest })
+		if len(remaining) == 0 {
+			st.changed(name, nil)
+		} else {
+			st.rejectedInterests[name] = remaining
+		}
 	}
 }
 
@@ -239,6 +289,7 @@ func (c *Client) deletedSubscription(st *typeState, name string) {
 	if sub == nil {
 		return
 	}
+	st.releaseRejections(name, sub)
 	sub.notify()
 	if st.watch.OnDelete == nil || st.watch.OnDelete(name) == KeepSubscription {
 		st.removed[name] = true

@@ -199,3 +199,85 @@ func TestResourceChangesIncludeRejectedUpdatesAndRemoval(t *testing.T) {
 		}
 	})
 }
+
+func TestRejectedAliasLifecycle(t *testing.T) {
+	for _, action := range []string{"release", "shared-release", "recover", "replace", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			rejected := map[string]error{}
+			watch := Watch{
+				TypeURL: testType,
+				OnChange: func(name string, _ *Resource, err error) {
+					if err != nil {
+						rejected[name] = err
+					} else {
+						delete(rejected, name)
+					}
+				},
+				Transform: func(wire *anypb.Any) (any, error) {
+					value := &wrapperspb.StringValue{}
+					if err := wire.UnmarshalTo(value); err != nil {
+						return nil, err
+					}
+					if value.Value == "bad" {
+						return nil, errors.New("invalid")
+					}
+					return value, nil
+				},
+			}
+			withSubscriptionClient(t, watch, func(t *testing.T, client *Client) {
+				lease, err := client.Acquire(testType, "ns/pod")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lease.Release()
+				var other *Subscription
+				if action == "shared-release" {
+					other, err = client.Acquire(testType, "uid")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer other.Release()
+				}
+				bad, err := anypb.New(wrapperspb.String("bad"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := client.apply(&discovery.DeltaDiscoveryResponse{
+					TypeUrl:   testType,
+					Resources: []*discovery.Resource{{Name: "uid", Aliases: []string{"ns/pod"}, Resource: bad}},
+				}); err == nil {
+					t.Fatal("invalid aliased resource accepted")
+				}
+				if len(rejected) != 1 || rejected["uid"] == nil {
+					t.Fatal("canonical rejection not observed", rejected)
+				}
+				st := client.types[testType]
+				if len(st.resources) != 0 || len(st.aliases) != 0 || len(st.resourceAliases) != 0 {
+					t.Fatal("NACK published candidate data or aliases")
+				}
+				switch action {
+				case "release":
+					lease.Release()
+				case "shared-release":
+					lease.Release()
+					if rejected["uid"] == nil {
+						t.Fatal("alias release cleared a rejection still watched by UID")
+					}
+					other.Release()
+				case "recover":
+					publishString(t, client, "uid", "good", "ns/pod")
+				case "replace":
+					publishString(t, client, "replacement", "good", "ns/pod")
+				case "remove":
+					removeNames(t, client, "ns/pod")
+				}
+				if len(rejected) != 0 {
+					t.Fatal("unavailable candidate retained its rejection", rejected)
+				}
+				if len(st.rejectedInterests) != 0 || len(lease.generation.rejected) != 0 {
+					t.Fatal("rejection interest tracking survived cleanup")
+				}
+			})
+		})
+	}
+}

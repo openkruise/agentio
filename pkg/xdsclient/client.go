@@ -111,18 +111,19 @@ func (s Snapshot) Usable(typ string) bool {
 }
 
 type typeState struct {
-	watch           Watch
-	names           map[string]*subscription
-	pending         map[string]struct{}
-	sharedAliases   map[string]map[string]struct{}
-	removed         map[string]bool
-	aliases         map[string]string
-	resourceAliases map[string][]string
-	resources       map[string]*Resource
-	synced          bool
-	epoch           uint64
-	graceUntil      time.Time
-	graceTimer      *time.Timer
+	watch             Watch
+	names             map[string]*subscription
+	pending           map[string]struct{}
+	sharedAliases     map[string]map[string]struct{}
+	removed           map[string]bool
+	aliases           map[string]string
+	resourceAliases   map[string][]string
+	rejectedInterests map[string][]string
+	resources         map[string]*Resource
+	synced            bool
+	epoch             uint64
+	graceUntil        time.Time
+	graceTimer        *time.Timer
 }
 
 // Client maintains synchronized Delta ADS resources and named subscriptions.
@@ -434,7 +435,7 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 	if err != nil {
 		c.mu.Lock()
 		if st.interested(failed.Name, failed.Aliases) {
-			st.changed(failed.Name, err)
+			st.rejectResource(failed.Name, failed.Aliases, err)
 		}
 		c.mu.Unlock()
 		return err
@@ -494,6 +495,9 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 		st.changed(res.Name, nil)
 		st.addResourceAliases(res.Name, res.Aliases)
 		for _, alias := range res.Aliases {
+			if sub := st.names[alias]; sub != nil {
+				st.releaseRejections(alias, sub)
+			}
 			touched[alias] = struct{}{}
 			delete(st.removed, alias)
 		}
