@@ -227,15 +227,16 @@ type store struct {
 // so the current collection contents are applied immediately and every
 // subsequent krt event batch triggers one copy-on-write snapshot rebuild.
 // The returned registration's WaitUntilSynced gates readiness on the initial
-// replay having been delivered.
+// replay having been delivered. UnregisterHandler detaches both publications
+// and source deletion notifications.
 func (s *store) RegisterCollection(profiles *Collection) krt.HandlerRegistration {
 	s.sandbox = profiles.sandbox
-	return profiles.RegisterBatch(s.applyBatch, true)
+	return profiles.register(s.applyBatch, s.notifyKeys)
 }
 
-// NotifyKeys wakes initial requests when raw sources disappear, before compilation
+// notifyKeys wakes initial requests when raw sources disappear, before compilation
 // or debounce publishes their removals. The installed snapshot remains immutable.
-func (s *store) NotifyKeys(keys []model.ResourceKey) {
+func (s *store) notifyKeys(keys []model.ResourceKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.snapshot.Load()

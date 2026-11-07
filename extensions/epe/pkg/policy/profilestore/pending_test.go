@@ -65,7 +65,7 @@ func TestPendingProfilesFilterNotificationsAndCancelIndependently(t *testing.T) 
 		}
 		other := inlineProfile("other", "ns", "1")
 		s.applyBatch([]krt.Event[securityprofile.Profile]{{New: other, Event: controllers.EventAdd}})
-		s.NotifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "other")})
+		s.notifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "other")})
 		synctest.Wait()
 		if aCalls.Load() != aBefore || bCalls.Load() != bBefore {
 			t.Fatal("unrelated update woke requests")
@@ -86,7 +86,7 @@ func TestPendingProfilesFilterNotificationsAndCancelIndependently(t *testing.T) 
 			t.Fatal("a publication woke b")
 		}
 		bRemoved.Store(true)
-		s.NotifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "b")})
+		s.notifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "b")})
 		synctest.Wait()
 		if err := <-bDone; err != nil {
 			t.Fatal(err)
@@ -131,7 +131,7 @@ func TestPendingProfileSourceRemovalBeforeRegistration(t *testing.T) {
 			calls++
 			if calls == 1 {
 				// The source disappears after lookup but before the request can register.
-				s.NotifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "a")})
+				s.notifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "a")})
 				return testSandboxSource(subj, "uid"), true, nil
 			}
 			return sandboxSource{}, false, nil
@@ -167,7 +167,7 @@ func TestPendingProfileRechecksAndReleasesCanceledWait(t *testing.T) {
 		synctest.Wait()
 		key := sandboxProfileKey("ns", "a")
 		previous := s.pending[key]
-		s.NotifyKeys([]model.ResourceKey{key, key})
+		s.notifyKeys([]model.ResourceKey{key, key})
 		synctest.Wait()
 		if calls != 2 || len(done) != 0 || s.pending[key] == nil || s.pending[key] == previous {
 			t.Fatal("notification did not recheck and renew the pending wait")
@@ -185,7 +185,7 @@ func TestPendingProfileConcurrentChangeRespectsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	s.sandbox = func(_ context.Context, subj subject.Subject) (sandboxSource, bool, error) {
-		s.NotifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "a")})
+		s.notifyKeys([]model.ResourceKey{sandboxProfileKey("ns", "a")})
 		cancel()
 		return testSandboxSource(subj, "uid"), true, nil
 	}

@@ -348,14 +348,14 @@ func run() error {
 		localProfiles := profilestore.NewStore(*profileDeletionGracePeriod)
 		profiles := profilestore.NewCollection(client, registrations, nil, ctx.Done())
 		profileReg = localProfiles.RegisterCollection(profiles)
-		defer profiles.Registry.RegisterDeletes(localProfiles.NotifyKeys)()
 		profileStore, matcher = localProfiles, localProfiles
 	} else {
 		profiles := profileSource.Collection(configMaps, krt.WithName("CompiledProfiles"), krt.WithStop(ctx.Done()))
 		profileReg = demandProfiles.RegisterCollection(profiles, nativeStore.AcquireProfileReferences)
-		defer profiles.Registry.RegisterDeletes(demandProfiles.NotifyKeys)()
 		matcher = demandProfiles
 	}
+
+	defer profileReg.UnregisterHandler()
 
 	// Liveness remains healthy during CA outages. Readiness follows certificate
 	// validity independently, allowing an expired identity to recover in place.

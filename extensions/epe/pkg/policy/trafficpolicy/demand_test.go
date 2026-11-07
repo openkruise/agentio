@@ -241,8 +241,8 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 		t.Fatal(err)
 	}
 	profileCollection := profileSource.Collection(cms.AsCollection(), krt.WithStop(t.Context().Done()))
-	profileStore.RegisterCollection(profileCollection, native.AcquireProfileReferences)
-	t.Cleanup(profileCollection.Registry.RegisterDeletes(profileStore.NotifyKeys))
+	reg := profileStore.RegisterCollection(profileCollection, native.AcquireProfileReferences)
+	t.Cleanup(reg.UnregisterHandler)
 	cacheDone := make(chan error, 1)
 	go func() { cacheDone <- native.Run(ctx) }()
 	t.Cleanup(func() {

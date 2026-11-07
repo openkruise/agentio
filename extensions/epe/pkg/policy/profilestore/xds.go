@@ -69,13 +69,14 @@ func NewXDSStore() *XDSStore {
 	return s
 }
 
-// RegisterCollection connects the prepared source and its asynchronous input projection.
+// RegisterCollection connects source deletions and asynchronous input publications.
+// The returned registration controls initial sync and unregisters both handlers.
 func (s *XDSStore) RegisterCollection(
 	profiles *Collection,
 	acquire func(context.Context, subject.Subject) ([]*securityprofile.Meta, func(), error),
 ) krt.HandlerRegistration {
 	s.acquire, s.sources = acquire, profiles.Registry
-	return profiles.RegisterBatch(s.applyBatch, true)
+	return profiles.register(s.applyBatch, s.notifyKeys)
 }
 
 func (s *XDSStore) applyBatch(events []krt.Event[securityprofile.Profile]) {
@@ -173,8 +174,8 @@ func (s *XDSStore) ResolveProfiles(ctx context.Context, subj subject.Subject) ([
 	}
 }
 
-// NotifyKeys wakes requests when an admitted source disappears before its derived deletion.
-func (s *XDSStore) NotifyKeys(keys []model.ResourceKey) {
+// notifyKeys wakes requests when an admitted source disappears before its derived deletion.
+func (s *XDSStore) notifyKeys(keys []model.ResourceKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := *s.snapshot.Load()

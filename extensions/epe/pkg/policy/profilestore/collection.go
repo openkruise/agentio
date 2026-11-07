@@ -155,6 +155,28 @@ type Collection struct {
 	sandbox func(context.Context, subject.Subject) (sandboxSource, bool, error)
 }
 
+// register couples derived publications and source invalidations for the store's lifetime.
+func (c *Collection) register(
+	publish func([]krt.Event[securityprofile.Profile]),
+	notify func([]model.ResourceKey),
+) krt.HandlerRegistration {
+	unregisterDeletes := c.Registry.RegisterDeletes(notify)
+	return profileRegistration{
+		HandlerRegistration: c.RegisterBatch(publish, true),
+		unregisterDeletes:   unregisterDeletes,
+	}
+}
+
+type profileRegistration struct {
+	krt.HandlerRegistration
+	unregisterDeletes func()
+}
+
+func (r profileRegistration) UnregisterHandler() {
+	r.unregisterDeletes()
+	r.HandlerRegistration.UnregisterHandler()
+}
+
 // sandboxSource keeps the policy's native key separate from its host Workload.
 type sandboxSource struct {
 	name     types.NamespacedName

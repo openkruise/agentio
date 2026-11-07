@@ -127,7 +127,7 @@ func TestXDSRequestWaitsForAdmittedRevision(t *testing.T) {
 			collection := NewSourceCollection(source.AsCollection(), nil, krt.WithStop(t.Context().Done()))
 			matcher := NewXDSStore()
 			reg := matcher.RegisterCollection(collection, acquire)
-			t.Cleanup(collection.Registry.RegisterDeletes(matcher.NotifyKeys))
+			t.Cleanup(reg.UnregisterHandler)
 			if !reg.WaitUntilSynced(t.Context().Done()) {
 				t.Fatal("profile collection did not sync")
 			}

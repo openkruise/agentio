@@ -71,7 +71,7 @@ func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 	cms := krt.NewMutableCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(t.Context().Done()))
 	collection := source.Collection(cms.AsCollection(), krt.WithStop(t.Context().Done()))
 	reg := local.RegisterCollection(collection, native.AcquireProfileReferences)
-	t.Cleanup(collection.Registry.RegisterDeletes(local.NotifyKeys))
+	t.Cleanup(reg.UnregisterHandler)
 	if !reg.WaitUntilSynced(t.Context().Done()) {
 		t.Fatal("profile collection did not sync")
 	}
