@@ -115,18 +115,24 @@ var (
 	fqdnUpstreamHTTPFilter = httpFilter("agentio.fqdn_upstream", mustPack(&setstatehttpv3.Config{
 		OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
 			{
-				Key:         &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-				Value:       &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(fqdnDialHostFormat)},
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnDialHostFormat),
+				},
 				SkipIfEmpty: true,
 			},
 			{
-				Key:         &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamServerNameKey},
-				Value:       &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(fqdnTLSNameFormat)},
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamServerNameKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnTLSNameFormat),
+				},
 				SkipIfEmpty: true,
 			},
 			{
-				Key:         &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamSubjectAltNamesKey},
-				Value:       &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(fqdnTLSNameFormat)},
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamSubjectAltNamesKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnTLSNameFormat),
+				},
 				SkipIfEmpty: true,
 			},
 		},
