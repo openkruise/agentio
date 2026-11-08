@@ -81,6 +81,10 @@ const (
 	staticEndpointCandidateFilter = "agentio.static_endpoint_candidate"
 
 	sniPolicyMetadataFormat = "%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":sni:policy)%"
+	fqdnDialHostFormat      = `%CEL(request.method != 'CONNECT' ? ` +
+		`re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\1\2') : '')%`
+	fqdnTLSNameFormat = `%CEL(request.method != 'CONNECT' ? ` +
+		`re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\1') : '')%`
 )
 
 // Package-level filters and their encoded configurations are shared read-only.
@@ -97,12 +101,42 @@ var (
   request.method != 'CONNECT' &&
   '%[1]s' in filter_state &&
   string(filter_state['%[1]s']) != '' &&
-  request.host.split(':')[0].lowerAscii() != string(filter_state['%[1]s']).lowerAscii()
+  !(request.host.split(':')[0].lowerAscii() in [
+    string(filter_state['%[1]s']).lowerAscii(),
+    string(filter_state['%[1]s']).lowerAscii() + '.'
+  ])
 `, outerSNIKey)
 
 	sniHostMismatchExpr = mustParseCEL(sniHostMismatchExprText)
 
 	sniHostMatchRBACFilter = buildSNIHostMatchRBACFilter(sniHostMismatchExpr)
+
+	// Normalize dialing and TLS names independently of the original HTTP authority.
+	fqdnUpstreamHTTPFilter = httpFilter("agentio.fqdn_upstream", mustPack(&setstatehttpv3.Config{
+		OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
+			{
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnDialHostFormat),
+				},
+				SkipIfEmpty: true,
+			},
+			{
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamServerNameKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnTLSNameFormat),
+				},
+				SkipIfEmpty: true,
+			},
+			{
+				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamSubjectAltNamesKey},
+				Value: &setstatecommonv3.FilterStateValue_FormatString{
+					FormatString: formatString(fqdnTLSNameFormat),
+				},
+				SkipIfEmpty: true,
+			},
+		},
+	}))
 
 	connectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(outerSNIKey)
 
@@ -443,6 +477,9 @@ func (b *resourceBuilder) buildForwardHCM(
 			return nil, err
 		}
 		filters = append(filters, filter)
+	}
+	if terminatedTLS {
+		filters = append(filters, fqdnUpstreamHTTPFilter)
 	}
 	if !b.legacyGateway || len(config.gateway.GetServiceEntries()) > 0 {
 		filters = append(filters, b.routeUpstreamFilter())

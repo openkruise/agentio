@@ -346,6 +346,12 @@ data:
 		src.CallOrFail(t, options)
 	})
 
+	t.Run("sni matches FQDN host with port: allowed", func(t *testing.T) {
+		options := callOptions("example.com.:443")
+		options.Check = check.OK()
+		src.CallOrFail(t, options)
+	})
+
 	t.Run("sni matches host case insensitive: allowed", func(t *testing.T) {
 		options := callOptions("EXAMPLE.COM")
 		options.Check = allowed
