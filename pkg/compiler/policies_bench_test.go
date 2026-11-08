@@ -33,7 +33,11 @@ func benchmarkPolicySnapshot(b *testing.B, workloadCount, policyCount int, match
 	options := []krt.CollectionOption{krt.WithStop(stop)}
 	workloads := krt.NewMutableCollection[model.Workload](nil, nil, options...)
 	for index := range workloadCount {
-		workload := testWDSWorkload(fmt.Sprintf("workload-%d", index), "", fmt.Sprintf("10.%d.%d.%d", (index/65536)%256, (index/256)%256, index%256))
+		workload := testWDSWorkload(
+			fmt.Sprintf("workload-%d", index),
+			"",
+			fmt.Sprintf("10.%d.%d.%d", (index/65536)%256, (index/256)%256, index%256),
+		)
 		workload.Labels = map[string]string{"app": "workload"}
 		workloads.ConditionalUpdateObject(workload)
 	}
@@ -85,7 +89,11 @@ func BenchmarkCompilerWorkloadUpdate(b *testing.B) {
 
 			workloads := krt.NewMutableCollection[model.Workload](nil, nil, options...)
 			for index := range workloadCount {
-				workload := testWDSWorkload(fmt.Sprintf("workload-%d", index), "", fmt.Sprintf("10.%d.%d.%d", (index/65536)%256, (index/256)%256, index%256))
+				workload := testWDSWorkload(
+					fmt.Sprintf("workload-%d", index),
+					"",
+					fmt.Sprintf("10.%d.%d.%d", (index/65536)%256, (index/256)%256, index%256),
+				)
 				workload.Labels = map[string]string{"app": "workload"}
 				workloads.ConditionalUpdateObject(workload)
 			}
@@ -96,10 +104,14 @@ func BenchmarkCompilerWorkloadUpdate(b *testing.B) {
 					Namespace: "demo",
 					Spec: agentsv1alpha1.SecurityProfileSpec{
 						Selector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "workload"}},
-						Rules: []agentsv1alpha1.SecurityRule{{
-							Name:  "api",
-							Match: []agentsv1alpha1.RuleMatch{{Domains: []string{fmt.Sprintf("api-%d.example.com", index)}}},
-						}},
+						Rules: []agentsv1alpha1.SecurityRule{
+							{
+								Name: "api",
+								Match: []agentsv1alpha1.RuleMatch{
+									{Domains: []string{fmt.Sprintf("api-%d.example.com", index)}},
+								},
+							},
+						},
 					},
 				})
 			}
