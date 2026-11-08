@@ -1106,6 +1106,44 @@
                       }
                     },
                     {
+                      "name": "agentio.fqdn_upstream",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",
+                        "on_request_headers": [
+                          {
+                            "object_key": "envoy.upstream.dynamic_host",
+                            "format_string": {
+                              "text_format_source": {
+                                "inline_string": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1\\2') : '')%"
+                              },
+                              "omit_empty_values": true
+                            },
+                            "skip_if_empty": true
+                          },
+                          {
+                            "object_key": "envoy.network.upstream_server_name",
+                            "format_string": {
+                              "text_format_source": {
+                                "inline_string": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1') : '')%"
+                              },
+                              "omit_empty_values": true
+                            },
+                            "skip_if_empty": true
+                          },
+                          {
+                            "object_key": "envoy.network.upstream_subject_alt_names",
+                            "format_string": {
+                              "text_format_source": {
+                                "inline_string": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1') : '')%"
+                              },
+                              "omit_empty_values": true
+                            },
+                            "skip_if_empty": true
+                          }
+                        ]
+                      }
+                    },
+                    {
                       "name": "agentio.egress_target",
                       "typed_config": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",

@@ -2207,6 +2207,44 @@
                       }
                     },
                     {
+                      "name": "agentio.fqdn_upstream",
+                      "typedConfig": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",
+                        "onRequestHeaders": [
+                          {
+                            "objectKey": "envoy.upstream.dynamic_host",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1\\2') : '')%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "envoy.network.upstream_server_name",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1') : '')%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "skipIfEmpty": true
+                          },
+                          {
+                            "objectKey": "envoy.network.upstream_subject_alt_names",
+                            "formatString": {
+                              "textFormatSource": {
+                                "inlineString": "%CEL(request.method != 'CONNECT' ? re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\\1') : '')%"
+                              },
+                              "omitEmptyValues": true
+                            },
+                            "skipIfEmpty": true
+                          }
+                        ]
+                      }
+                    },
+                    {
                       "name": "agentio.route_upstream",
                       "typedConfig": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",
