@@ -289,8 +289,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					return
 				}
 				wantBody := method + " " + protocol + " " + request.Host
-				body := make([]byte, len(wantBody))
-				if _, err := io.ReadFull(response.Body, body); err != nil {
+				body, err := io.ReadAll(response.Body)
+				if err != nil {
 					t.Fatal(err)
 				}
 				if response.StatusCode != 200 || string(body) != wantBody || response.Proto != protocol {
