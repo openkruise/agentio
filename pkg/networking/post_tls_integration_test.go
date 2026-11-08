@@ -94,7 +94,11 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	}
 	test.SetForTest(t, &features.GatewayRootCAPath, rootPath)
 	payload := []byte("\x00opaque application bytes after TLS termination")
-	for _, mode := range []string{"tcp", "nested_tls", "bad_certificate", "idle", "http1", "http2", "loopback_http1", "loopback_http2", "connect_http1", "connect_http2"} {
+	for _, mode := range []string{
+		"tcp", "nested_tls", "bad_certificate", "idle",
+		"http1", "http2", "fqdn_http1", "fqdn_http2",
+		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
 			serverName := upstreamHost
@@ -148,7 +152,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 						}
 						return
 					}
-					if _, err := fmt.Fprintf(w, "%s %s", r.Method, r.Proto); err != nil {
+					if _, err := fmt.Fprintf(w, "%s %s %s", r.Method, r.Proto, r.Host); err != nil {
 						t.Errorf("HTTP origin: %v", err)
 					}
 				}))
@@ -258,6 +262,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				}
 				if method == http.MethodConnect {
 					request.Host = "inner.invalid:443"
+				} else if strings.HasPrefix(mode, "fqdn") {
+					request.Host = net.JoinHostPort(serverName+".", port)
 				}
 				response, err := client.Do(request)
 				if err != nil {
@@ -282,17 +288,19 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					}
 					return
 				}
-				body := make([]byte, len(method+" "+protocol))
+				wantBody := method + " " + protocol + " " + request.Host
+				body := make([]byte, len(wantBody))
 				if _, err := io.ReadFull(response.Body, body); err != nil {
 					t.Fatal(err)
 				}
-				if response.StatusCode != 200 || string(body) != method+" "+protocol || response.Proto != protocol {
+				if response.StatusCode != 200 || string(body) != wantBody || response.Proto != protocol {
 					t.Fatalf(
-						"response = %s %s %q, want %s on both hops",
+						"response = %s %s %q, want %s %q",
 						response.Status,
 						response.Proto,
 						body,
 						protocol,
+						wantBody,
 					)
 				}
 				return

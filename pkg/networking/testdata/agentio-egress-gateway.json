@@ -1954,7 +1954,7 @@
                                       }
                                     },
                                     {
-                                      "id": "29",
+                                      "id": "38",
                                       "callExpr": {
                                         "function": "_\u0026\u0026_",
                                         "args": [
@@ -2001,88 +2001,151 @@
                                             }
                                           },
                                           {
-                                            "id": "23",
+                                            "id": "16",
                                             "callExpr": {
-                                              "function": "_!=_",
+                                              "function": "!_",
                                               "args": [
                                                 {
-                                                  "id": "22",
+                                                  "id": "24",
                                                   "callExpr": {
-                                                    "target": {
-                                                      "id": "20",
-                                                      "callExpr": {
-                                                        "function": "_[_]",
-                                                        "args": [
-                                                          {
-                                                            "id": "18",
+                                                    "function": "@in",
+                                                    "args": [
+                                                      {
+                                                        "id": "23",
+                                                        "callExpr": {
+                                                          "target": {
+                                                            "id": "21",
                                                             "callExpr": {
-                                                              "target": {
-                                                                "id": "17",
-                                                                "selectExpr": {
-                                                                  "operand": {
-                                                                    "id": "16",
-                                                                    "identExpr": {
-                                                                      "name": "request"
-                                                                    }
-                                                                  },
-                                                                  "field": "host"
-                                                                }
-                                                              },
-                                                              "function": "split",
+                                                              "function": "_[_]",
                                                               "args": [
                                                                 {
                                                                   "id": "19",
+                                                                  "callExpr": {
+                                                                    "target": {
+                                                                      "id": "18",
+                                                                      "selectExpr": {
+                                                                        "operand": {
+                                                                          "id": "17",
+                                                                          "identExpr": {
+                                                                            "name": "request"
+                                                                          }
+                                                                        },
+                                                                        "field": "host"
+                                                                      }
+                                                                    },
+                                                                    "function": "split",
+                                                                    "args": [
+                                                                      {
+                                                                        "id": "20",
+                                                                        "constExpr": {
+                                                                          "stringValue": ":"
+                                                                        }
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "id": "22",
                                                                   "constExpr": {
-                                                                    "stringValue": ":"
+                                                                    "int64Value": "0"
                                                                   }
                                                                 }
                                                               ]
                                                             }
                                                           },
-                                                          {
-                                                            "id": "21",
-                                                            "constExpr": {
-                                                              "int64Value": "0"
-                                                            }
-                                                          }
-                                                        ]
-                                                      }
-                                                    },
-                                                    "function": "lowerAscii"
-                                                  }
-                                                },
-                                                {
-                                                  "id": "28",
-                                                  "callExpr": {
-                                                    "target": {
-                                                      "id": "24",
-                                                      "callExpr": {
-                                                        "function": "string",
-                                                        "args": [
-                                                          {
-                                                            "id": "26",
-                                                            "callExpr": {
-                                                              "function": "_[_]",
-                                                              "args": [
-                                                                {
-                                                                  "id": "25",
-                                                                  "identExpr": {
-                                                                    "name": "filter_state"
+                                                          "function": "lowerAscii"
+                                                        }
+                                                      },
+                                                      {
+                                                        "id": "25",
+                                                        "listExpr": {
+                                                          "elements": [
+                                                            {
+                                                              "id": "30",
+                                                              "callExpr": {
+                                                                "target": {
+                                                                  "id": "26",
+                                                                  "callExpr": {
+                                                                    "function": "string",
+                                                                    "args": [
+                                                                      {
+                                                                        "id": "28",
+                                                                        "callExpr": {
+                                                                          "function": "_[_]",
+                                                                          "args": [
+                                                                            {
+                                                                              "id": "27",
+                                                                              "identExpr": {
+                                                                                "name": "filter_state"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "id": "29",
+                                                                              "constExpr": {
+                                                                                "stringValue": "agentio.tls.outer_sni"
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    ]
                                                                   }
                                                                 },
-                                                                {
-                                                                  "id": "27",
-                                                                  "constExpr": {
-                                                                    "stringValue": "agentio.tls.outer_sni"
+                                                                "function": "lowerAscii"
+                                                              }
+                                                            },
+                                                            {
+                                                              "id": "36",
+                                                              "callExpr": {
+                                                                "function": "_+_",
+                                                                "args": [
+                                                                  {
+                                                                    "id": "35",
+                                                                    "callExpr": {
+                                                                      "target": {
+                                                                        "id": "31",
+                                                                        "callExpr": {
+                                                                          "function": "string",
+                                                                          "args": [
+                                                                            {
+                                                                              "id": "33",
+                                                                              "callExpr": {
+                                                                                "function": "_[_]",
+                                                                                "args": [
+                                                                                  {
+                                                                                    "id": "32",
+                                                                                    "identExpr": {
+                                                                                      "name": "filter_state"
+                                                                                    }
+                                                                                  },
+                                                                                  {
+                                                                                    "id": "34",
+                                                                                    "constExpr": {
+                                                                                      "stringValue": "agentio.tls.outer_sni"
+                                                                                    }
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      },
+                                                                      "function": "lowerAscii"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "id": "37",
+                                                                    "constExpr": {
+                                                                      "stringValue": "."
+                                                                    }
                                                                   }
-                                                                }
-                                                              ]
+                                                                ]
+                                                              }
                                                             }
-                                                          }
-                                                        ]
+                                                          ]
+                                                        }
                                                       }
-                                                    },
-                                                    "function": "lowerAscii"
+                                                    ]
                                                   }
                                                 }
                                               ]

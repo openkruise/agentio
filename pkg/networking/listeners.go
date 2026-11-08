@@ -97,7 +97,10 @@ var (
   request.method != 'CONNECT' &&
   '%[1]s' in filter_state &&
   string(filter_state['%[1]s']) != '' &&
-  request.host.split(':')[0].lowerAscii() != string(filter_state['%[1]s']).lowerAscii()
+  !(request.host.split(':')[0].lowerAscii() in [
+    string(filter_state['%[1]s']).lowerAscii(),
+    string(filter_state['%[1]s']).lowerAscii() + '.'
+  ])
 `, outerSNIKey)
 
 	sniHostMismatchExpr = mustParseCEL(sniHostMismatchExprText)

@@ -798,25 +798,25 @@
                               ],
                               "condition": {
                                 "id": "15",
-                                "call_expr": {
-                                  "function": "_&&_",
+                                "callExpr": {
+                                  "function": "_\u0026\u0026_",
                                   "args": [
                                     {
                                       "id": "8",
-                                      "call_expr": {
-                                        "function": "_&&_",
+                                      "callExpr": {
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "3",
-                                            "call_expr": {
+                                            "callExpr": {
                                               "function": "_!=_",
                                               "args": [
                                                 {
                                                   "id": "2",
-                                                  "select_expr": {
+                                                  "selectExpr": {
                                                     "operand": {
                                                       "id": "1",
-                                                      "ident_expr": {
+                                                      "identExpr": {
                                                         "name": "request"
                                                       }
                                                     },
@@ -825,8 +825,8 @@
                                                 },
                                                 {
                                                   "id": "4",
-                                                  "const_expr": {
-                                                    "string_value": "CONNECT"
+                                                  "constExpr": {
+                                                    "stringValue": "CONNECT"
                                                   }
                                                 }
                                               ]
@@ -834,18 +834,18 @@
                                           },
                                           {
                                             "id": "6",
-                                            "call_expr": {
+                                            "callExpr": {
                                               "function": "@in",
                                               "args": [
                                                 {
                                                   "id": "5",
-                                                  "const_expr": {
-                                                    "string_value": "io.kruise.outer_sni"
+                                                  "constExpr": {
+                                                    "stringValue": "io.kruise.outer_sni"
                                                   }
                                                 },
                                                 {
                                                   "id": "7",
-                                                  "ident_expr": {
+                                                  "identExpr": {
                                                     "name": "filter_state"
                                                   }
                                                 }
@@ -856,35 +856,35 @@
                                       }
                                     },
                                     {
-                                      "id": "29",
-                                      "call_expr": {
-                                        "function": "_&&_",
+                                      "id": "38",
+                                      "callExpr": {
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "13",
-                                            "call_expr": {
+                                            "callExpr": {
                                               "function": "_!=_",
                                               "args": [
                                                 {
                                                   "id": "9",
-                                                  "call_expr": {
+                                                  "callExpr": {
                                                     "function": "string",
                                                     "args": [
                                                       {
                                                         "id": "11",
-                                                        "call_expr": {
+                                                        "callExpr": {
                                                           "function": "_[_]",
                                                           "args": [
                                                             {
                                                               "id": "10",
-                                                              "ident_expr": {
+                                                              "identExpr": {
                                                                 "name": "filter_state"
                                                               }
                                                             },
                                                             {
                                                               "id": "12",
-                                                              "const_expr": {
-                                                                "string_value": "io.kruise.outer_sni"
+                                                              "constExpr": {
+                                                                "stringValue": "io.kruise.outer_sni"
                                                               }
                                                             }
                                                           ]
@@ -895,96 +895,159 @@
                                                 },
                                                 {
                                                   "id": "14",
-                                                  "const_expr": {
-                                                    "string_value": ""
+                                                  "constExpr": {
+                                                    "stringValue": ""
                                                   }
                                                 }
                                               ]
                                             }
                                           },
                                           {
-                                            "id": "23",
-                                            "call_expr": {
-                                              "function": "_!=_",
+                                            "id": "16",
+                                            "callExpr": {
+                                              "function": "!_",
                                               "args": [
                                                 {
-                                                  "id": "22",
-                                                  "call_expr": {
-                                                    "target": {
-                                                      "id": "20",
-                                                      "call_expr": {
-                                                        "function": "_[_]",
-                                                        "args": [
-                                                          {
-                                                            "id": "18",
-                                                            "call_expr": {
-                                                              "target": {
-                                                                "id": "17",
-                                                                "select_expr": {
-                                                                  "operand": {
-                                                                    "id": "16",
-                                                                    "ident_expr": {
-                                                                      "name": "request"
-                                                                    }
-                                                                  },
-                                                                  "field": "host"
-                                                                }
-                                                              },
-                                                              "function": "split",
+                                                  "id": "24",
+                                                  "callExpr": {
+                                                    "function": "@in",
+                                                    "args": [
+                                                      {
+                                                        "id": "23",
+                                                        "callExpr": {
+                                                          "target": {
+                                                            "id": "21",
+                                                            "callExpr": {
+                                                              "function": "_[_]",
                                                               "args": [
                                                                 {
                                                                   "id": "19",
-                                                                  "const_expr": {
-                                                                    "string_value": ":"
+                                                                  "callExpr": {
+                                                                    "target": {
+                                                                      "id": "18",
+                                                                      "selectExpr": {
+                                                                        "operand": {
+                                                                          "id": "17",
+                                                                          "identExpr": {
+                                                                            "name": "request"
+                                                                          }
+                                                                        },
+                                                                        "field": "host"
+                                                                      }
+                                                                    },
+                                                                    "function": "split",
+                                                                    "args": [
+                                                                      {
+                                                                        "id": "20",
+                                                                        "constExpr": {
+                                                                          "stringValue": ":"
+                                                                        }
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "id": "22",
+                                                                  "constExpr": {
+                                                                    "int64Value": "0"
                                                                   }
                                                                 }
                                                               ]
                                                             }
                                                           },
-                                                          {
-                                                            "id": "21",
-                                                            "const_expr": {
-                                                              "int64_value": "0"
-                                                            }
-                                                          }
-                                                        ]
-                                                      }
-                                                    },
-                                                    "function": "lowerAscii"
-                                                  }
-                                                },
-                                                {
-                                                  "id": "28",
-                                                  "call_expr": {
-                                                    "target": {
-                                                      "id": "24",
-                                                      "call_expr": {
-                                                        "function": "string",
-                                                        "args": [
-                                                          {
-                                                            "id": "26",
-                                                            "call_expr": {
-                                                              "function": "_[_]",
-                                                              "args": [
-                                                                {
-                                                                  "id": "25",
-                                                                  "ident_expr": {
-                                                                    "name": "filter_state"
+                                                          "function": "lowerAscii"
+                                                        }
+                                                      },
+                                                      {
+                                                        "id": "25",
+                                                        "listExpr": {
+                                                          "elements": [
+                                                            {
+                                                              "id": "30",
+                                                              "callExpr": {
+                                                                "target": {
+                                                                  "id": "26",
+                                                                  "callExpr": {
+                                                                    "function": "string",
+                                                                    "args": [
+                                                                      {
+                                                                        "id": "28",
+                                                                        "callExpr": {
+                                                                          "function": "_[_]",
+                                                                          "args": [
+                                                                            {
+                                                                              "id": "27",
+                                                                              "identExpr": {
+                                                                                "name": "filter_state"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "id": "29",
+                                                                              "constExpr": {
+                                                                                "stringValue": "io.kruise.outer_sni"
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    ]
                                                                   }
                                                                 },
-                                                                {
-                                                                  "id": "27",
-                                                                  "const_expr": {
-                                                                    "string_value": "io.kruise.outer_sni"
+                                                                "function": "lowerAscii"
+                                                              }
+                                                            },
+                                                            {
+                                                              "id": "36",
+                                                              "callExpr": {
+                                                                "function": "_+_",
+                                                                "args": [
+                                                                  {
+                                                                    "id": "35",
+                                                                    "callExpr": {
+                                                                      "target": {
+                                                                        "id": "31",
+                                                                        "callExpr": {
+                                                                          "function": "string",
+                                                                          "args": [
+                                                                            {
+                                                                              "id": "33",
+                                                                              "callExpr": {
+                                                                                "function": "_[_]",
+                                                                                "args": [
+                                                                                  {
+                                                                                    "id": "32",
+                                                                                    "identExpr": {
+                                                                                      "name": "filter_state"
+                                                                                    }
+                                                                                  },
+                                                                                  {
+                                                                                    "id": "34",
+                                                                                    "constExpr": {
+                                                                                      "stringValue": "io.kruise.outer_sni"
+                                                                                    }
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      },
+                                                                      "function": "lowerAscii"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "id": "37",
+                                                                    "constExpr": {
+                                                                      "stringValue": "."
+                                                                    }
                                                                   }
-                                                                }
-                                                              ]
+                                                                ]
+                                                              }
                                                             }
-                                                          }
-                                                        ]
+                                                          ]
+                                                        }
                                                       }
-                                                    },
-                                                    "function": "lowerAscii"
+                                                    ]
                                                   }
                                                 }
                                               ]
