@@ -22,11 +22,30 @@ import (
 )
 
 func BenchmarkResourceSetSingleKeyUpdate(b *testing.B) {
-	b.Run("resources=100000", benchmarkResourceSetSingleKeyUpdate)
+	b.Run("resources=100000", func(b *testing.B) {
+		benchmarkResourceSetSingleKeyUpdate(b, 100_000, 0)
+	})
 }
 
-func benchmarkResourceSetSingleKeyUpdate(b *testing.B) {
-	const resourcesCount = 100_000
+func BenchmarkResourceSetReferenceUpdate(b *testing.B) {
+	for _, count := range []int{2, 100} {
+		b.Run(fmt.Sprintf("resources=10000/references=%d", count), func(b *testing.B) {
+			benchmarkResourceSetSingleKeyUpdate(b, 10_000, count)
+		})
+	}
+}
+
+func benchmarkResourceSetSingleKeyUpdate(b *testing.B, resourcesCount, referenceCount int) {
+	var references *ResourceReferences
+	if referenceCount > 0 {
+		references = &ResourceReferences{}
+		for i := range referenceCount {
+			references.Keys = append(references.Keys, ResourceKey{
+				TypeURL: SecurityProfileType,
+				Name:    fmt.Sprintf("global/profile-%03d", i),
+			})
+		}
+	}
 	resources := make([]Resource, 0, resourcesCount)
 	for i := range resourcesCount {
 		name := fmt.Sprintf("cluster//Pod/default/pod-%06d", i)
@@ -35,10 +54,14 @@ func benchmarkResourceSetSingleKeyUpdate(b *testing.B) {
 			XDSName: name,
 			Value:   &anypb.Any{TypeUrl: AddressType, Value: []byte("address")},
 			Hash:    name,
-			Facts: ResourceFacts{Workload: &WorkloadResourceFacts{Namespace: "demo",
-				WorkloadUID: name,
-				Principal:   testPrincipal(),
-			}},
+			Facts: ResourceFacts{
+				References: references,
+				Workload: &WorkloadResourceFacts{
+					Namespace:   "demo",
+					WorkloadUID: name,
+					Principal:   testPrincipal(),
+				},
+			},
 		})
 	}
 	initial, err := NewResourceSet(resources)
@@ -50,19 +73,32 @@ func benchmarkResourceSetSingleKeyUpdate(b *testing.B) {
 	variants[0].Hash += "-a"
 	variants[1].Hash += "-b"
 
-	b.Run("incremental-sharded", func(b *testing.B) {
-		set := initial
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			resource := variants[i%2]
-			var changed bool
-			set, changed, err = set.Apply([]ResourceChange{{Key: key, New: &resource}})
-			if err != nil || !changed {
-				b.Fatalf("Apply() changed=%t err=%v", changed, err)
+	for _, rebind := range []bool{false, true} {
+		name := "incremental-sharded"
+		updates := variants
+		if rebind {
+			if references == nil {
+				continue
 			}
+			name = "incremental-rebind"
+			keys := append([]ResourceKey(nil), references.Keys...)
+			keys[len(keys)-1].Name = "global/replacement"
+			updates[1].Facts.References = &ResourceReferences{Keys: keys}
 		}
-	})
+		b.Run(name, func(b *testing.B) {
+			set := initial
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				resource := updates[i%2]
+				var changed bool
+				set, changed, err = set.Apply([]ResourceChange{{Key: key, New: &resource}})
+				if err != nil || !changed {
+					b.Fatalf("Apply() changed=%t err=%v", changed, err)
+				}
+			}
+		})
+	}
 
 	b.Run("full-rebuild", func(b *testing.B) {
 		copyOfResources := append([]Resource(nil), resources...)

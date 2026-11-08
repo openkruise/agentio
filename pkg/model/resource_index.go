@@ -29,11 +29,14 @@ const resourceShardCount = 1024
 // Applying one key copies one small shard and the fixed-size shard table, while
 // unchanged shards remain shared by immutable snapshots already in use.
 type resourceTypeIndex struct {
-	shards [resourceShardCount]map[string]Resource
-	lookup resourceLookupIndex
-	facts  resourceLookupIndex
-	length int
+	shards     [resourceShardCount]map[string]Resource
+	lookup     resourceLookupIndex
+	facts      resourceLookupIndex
+	references *resourceReferenceCounts
+	length     int
 }
+
+type resourceReferenceCounts [resourceShardCount]map[ResourceKey]int
 
 // resourceLookupIndex is sharded so one-key updates copy one shard only.
 type resourceLookupIndex struct {
@@ -74,18 +77,10 @@ const (
 	resourceFactGatewayOwner
 	resourceFactAuthorizationGlobal
 	resourceFactAuthorizationNamespace
-	resourceFactReference
 )
 
 func resourceFactIndexKey(kind resourceFactKind, key string) string {
 	return string([]byte{byte(kind)}) + "\x00" + key
-}
-
-func resourceReferenceIndexKey(key ResourceKey) string {
-	if key.TypeURL == TrafficPolicyType {
-		return resourceFactIndexKey(resourceFactTrafficPolicyReference, key.Name)
-	}
-	return resourceFactIndexKey(resourceFactReference, key.TypeURL+"\x00"+key.Name)
 }
 
 func resourceFactKeys(resource Resource) []string {
@@ -119,13 +114,6 @@ func resourceFactKeys(resource Resource) []string {
 		for _, key := range workload.TrafficPolicyRefs {
 			add(resourceFactTrafficPolicyReference, key)
 		}
-	}
-	for _, key := range resource.Facts.referenceKeys() {
-		if key.TypeURL == TrafficPolicyType && resource.Facts.Workload != nil &&
-			slices.Contains(resource.Facts.Workload.TrafficPolicyRefs, key.Name) {
-			continue
-		}
-		result = append(result, resourceReferenceIndexKey(key))
 	}
 	if sandbox := resource.Facts.Sandbox; sandbox != nil {
 		add(resourceFactAttesterWorkloadUID, sandbox.AttesterWorkloadUID)

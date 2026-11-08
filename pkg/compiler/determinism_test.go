@@ -17,7 +17,7 @@ package compiler
 import "testing"
 
 func TestSnapshotVersionIsStable(t *testing.T) {
-	c := scaleCompiler(t, 500)
+	c := scaleCompiler(t, 500, scalePolicies)
 	waitSynced(t, c)
 	first, err := c.Snapshot()
 	if err != nil {
