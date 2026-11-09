@@ -32,7 +32,6 @@ func (s *XDSStore) ObserveAdmission(meta securityprofile.Meta, retained bool, er
 		s.rejections[key] = true
 	} else {
 		delete(s.rejections, key)
-		delete(s.degraded.stale, key)
-		delete(s.degraded.unenforced, key)
+		s.degraded.clearRejection(key)
 	}
 }

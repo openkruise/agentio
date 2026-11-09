@@ -133,3 +133,49 @@ func TestRejectedSourceInputsFollowConfigMapsWithoutRequests(t *testing.T) {
 		t.Fatal("eviction retained degraded state")
 	}
 }
+
+func TestAdmissionCountsStayConsistentAcrossRepeatedTransitions(t *testing.T) {
+	for _, scope := range []string{scopeNamespaced, scopeGlobal, scopeSandbox} {
+		t.Run(scope, func(t *testing.T) {
+			s := NewXDSStore()
+			meta := securityprofile.Meta{Name: "policy", Namespace: "ns"}
+			if scope == scopeGlobal {
+				meta.Namespace = ""
+			} else if scope == scopeSandbox {
+				meta.Match = securityprofile.MatchSandbox
+			}
+			other := meta
+			other.Name = "other"
+			check := func(stale, unenforced, inputs float64) {
+				t.Helper()
+				if staleCount(t, scope) != stale || unenforcedCount(t, scope) != unenforced ||
+					inputsUnavailableCount(t, scope) != inputs {
+					t.Fatalf("unexpected degraded counts: stale=%v unenforced=%v inputs=%v",
+						staleCount(t, scope), unenforcedCount(t, scope), inputsUnavailableCount(t, scope))
+				}
+			}
+			failure := errors.New("invalid config")
+			for _, candidate := range []securityprofile.Meta{meta, other} {
+				s.degraded.installed(keyFor(candidate), true)
+				s.ObserveAdmission(candidate, true, failure)
+				s.ObserveAdmission(candidate, true, failure)
+			}
+			check(2, 0, 2)
+			s.ObserveAdmission(meta, true, nil)
+			s.ObserveAdmission(meta, true, nil)
+			check(1, 0, 2)
+			s.degraded.installed(keyFor(meta), false)
+			s.degraded.removed(keyFor(other))
+			s.degraded.removed(keyFor(other))
+			s.degraded.publish()
+			check(0, 0, 0)
+			s.ObserveAdmission(other, false, failure)
+			s.ObserveAdmission(other, false, failure)
+			check(0, 1, 0)
+			s.ObserveAdmission(other, true, failure)
+			check(1, 0, 0)
+			s.ObserveAdmission(other, false, nil)
+			check(0, 0, 0)
+		})
+	}
+}

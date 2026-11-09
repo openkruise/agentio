@@ -68,6 +68,15 @@ func (p trafficWorkloadBinding) Equals(other trafficWorkloadBinding) bool {
 	return p.Name == other.Name && p.UID == other.UID && slices.Equal(p.AuthorizationNames, other.AuthorizationNames)
 }
 
+type securityWorkloadBinding struct {
+	UID       string
+	SNIPolicy *extensionsv1.SniTrafficPolicy
+}
+
+func (p securityWorkloadBinding) Equals(other securityWorkloadBinding) bool {
+	return p.UID == other.UID && proto.Equal(p.SNIPolicy, other.SNIPolicy)
+}
+
 func newTrafficWorkloadBindings(
 	policies krt.Collection[policy.CompiledTrafficPolicy],
 	options collectionOptions,
@@ -156,13 +165,16 @@ func compileWorkloadPolicies(
 	for _, name := range bindings.PolicyNames(model.PolicyKindSecurityProfile) {
 		reference := &extensionsv1.PolicyResourceReference{Name: name}
 		result.SecurityProfileReferences = append(result.SecurityProfileReferences, reference)
-		compiled := krt.FetchOne(ctx, policies.securityProfiles, krt.FilterKey(name))
-		if compiled == nil {
+		compiled := krt.PartialFetch(ctx, policies.securityProfiles,
+			func(p policy.CompiledSecurityProfile) securityWorkloadBinding {
+				return securityWorkloadBinding{UID: p.Attachment.UID, SNIPolicy: p.SNIPolicy}
+			}, securityWorkloadBinding.Equals, krt.FilterKey(name))
+		if len(compiled) == 0 {
 			policyErr = errors.Join(policyErr, fmt.Errorf("SecurityProfile %q is unavailable", name))
 			continue
 		}
-		reference.Uid = compiled.Attachment.UID
-		result.appendSNI(compiled.SNIPolicy)
+		reference.Uid = compiled[0].UID
+		result.appendSNI(compiled[0].SNIPolicy)
 	}
 	if names := bindings.PolicyNames(model.PolicyKindEgressPolicy); len(names) > 0 {
 		compiled := krt.Fetch(ctx, policies.egressPolicies, krt.FilterKeys(append([]string(nil), names...)...))

@@ -85,7 +85,12 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(profileCompileFailuresTotal, profileStale, profileUnenforced, profileInputsUnavailable)
+	metrics.Registry.MustRegister(
+		profileCompileFailuresTotal,
+		profileStale,
+		profileUnenforced,
+		profileInputsUnavailable,
+	)
 }
 
 // profileScope maps a profile's namespace onto the bounded scope label.
@@ -111,69 +116,71 @@ func profileScope(namespace string) string {
 // accompany every transition name the object and the error.
 //
 // Memory is bounded by the number of degraded sources, not by the number of
-// profiles: a healthy store holds three empty maps.
+// profiles; scope counters have only three entries per state.
 type degradedSets struct {
-	stale             map[profileKey]struct{}
-	unenforced        map[profileKey]struct{}
-	inputsUnavailable map[profileKey]struct{}
+	stale             degradedSet
+	unenforced        degradedSet
+	inputsUnavailable degradedSet
+}
+
+type degradedSet struct {
+	keys   map[profileKey]struct{}
+	counts map[string]int
 }
 
 func newDegradedSets() degradedSets {
 	return degradedSets{
-		stale:             map[profileKey]struct{}{},
-		unenforced:        map[profileKey]struct{}{},
-		inputsUnavailable: map[profileKey]struct{}{},
+		stale:             degradedSet{keys: map[profileKey]struct{}{}, counts: map[string]int{}},
+		unenforced:        degradedSet{keys: map[profileKey]struct{}{}, counts: map[string]int{}},
+		inputsUnavailable: degradedSet{keys: map[profileKey]struct{}{}, counts: map[string]int{}},
 	}
 }
 
-// rejected records a version that failed to compile: stale when an earlier
-// version is still installed, unenforced when none is. The inputs state is left
-// alone — whatever is installed keeps serving with the inputs it resolved.
+func (d degradedSet) set(k profileKey, present bool) {
+	_, found := d.keys[k]
+	if found == present {
+		return
+	}
+	if present {
+		d.keys[k] = struct{}{}
+		d.counts[k.scope()]++
+	} else {
+		delete(d.keys, k)
+		d.counts[k.scope()]--
+	}
+}
+
+// rejected preserves the installed profile's inputs status.
 func (d degradedSets) rejected(k profileKey, installed bool) {
-	if installed {
-		d.stale[k] = struct{}{}
-		delete(d.unenforced, k)
-		return
-	}
-	d.unenforced[k] = struct{}{}
-	delete(d.stale, k)
+	d.stale.set(k, installed)
+	d.unenforced.set(k, !installed)
 }
 
-// installed records a version that took effect, which clears both rejection
-// states and refreshes the inputs state.
+func (d degradedSets) clearRejection(k profileKey) {
+	d.stale.set(k, false)
+	d.unenforced.set(k, false)
+}
+
+// installed clears rejection states and refreshes inputs availability.
 func (d degradedSets) installed(k profileKey, inputsUnavailable bool) {
-	delete(d.stale, k)
-	delete(d.unenforced, k)
-	if inputsUnavailable {
-		d.inputsUnavailable[k] = struct{}{}
-		return
-	}
-	delete(d.inputsUnavailable, k)
+	d.clearRejection(k)
+	d.inputsUnavailable.set(k, inputsUnavailable)
 }
 
-// removed forgets a source entirely, so a deleted object leaves nothing behind.
 func (d degradedSets) removed(k profileKey) {
-	delete(d.stale, k)
-	delete(d.unenforced, k)
-	delete(d.inputsUnavailable, k)
+	d.clearRejection(k)
+	d.inputsUnavailable.set(k, false)
 }
 
-// publish republishes all three gauges from the current sets. It runs once per
-// event batch rather than once per event, and it always publishes every scope,
-// including the zeros: a series that vanishes when healthy forces every alert
-// to special-case absence.
+// publish uses incrementally maintained counts so admission callbacks never scan profiles.
 func (d degradedSets) publish() {
 	publishDegraded(profileStale, d.stale)
 	publishDegraded(profileUnenforced, d.unenforced)
 	publishDegraded(profileInputsUnavailable, d.inputsUnavailable)
 }
 
-func publishDegraded(g *prometheus.GaugeVec, set map[profileKey]struct{}) {
-	counts := map[string]int{scopeNamespaced: 0, scopeGlobal: 0, scopeSandbox: 0}
-	for k := range set {
-		counts[k.scope()]++
-	}
-	for scope, n := range counts {
-		g.WithLabelValues(scope).Set(float64(n))
+func publishDegraded(g *prometheus.GaugeVec, set degradedSet) {
+	for _, scope := range []string{scopeNamespaced, scopeGlobal, scopeSandbox} {
+		g.WithLabelValues(scope).Set(float64(set.counts[scope]))
 	}
 }
