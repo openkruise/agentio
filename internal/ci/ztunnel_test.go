@@ -83,7 +83,7 @@ func TestZtunnelPresubmitTestsPinnedSourceWithoutRegistryCredentials(t *testing.
 	publish := stringValue(t, workflowStep(t, e2e, "product-e2e", "Publish candidates to a local registry"), "run")
 	if !strings.Contains(
 		publish,
-		"for image in agentiod agentio-epe agentio-porter agentio-gateway ztunnel ext-proc;",
+		"for image in agentiod agentio-epe agentio-porter agentio-gateway proxy-init ztunnel ext-proc;",
 	) ||
 		!strings.Contains(publish, "AGENTIO_E2E_ZTUNNEL_IMAGE=$digest_ref") {
 		t.Fatal("E2E must run the archived ztunnel by its local registry digest")

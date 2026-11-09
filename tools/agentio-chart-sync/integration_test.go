@@ -178,6 +178,10 @@ func TestControllerUsesMasterBootstrapOverrides(t *testing.T) {
 	agentiod["fullnameOverride"], agentiod["tokenAudience"] = "custom-agentiod", "custom-ca"
 	agentiod["ca"].(map[string]any)["trustBundleConfigMapName"] = "custom-root"
 	injector := agentiod["injector"].(map[string]any)
+	proxyInit := injector["proxyInit"].(map[string]any)
+	proxyInit["nativeNftables"] = true
+	proxyInit["natOutputPriority"] = "-101"
+	proxyInit["rejectNonTCP"] = true
 	injector["ztunnel"].(map[string]any)["enableFirewallRules"] = false
 	injector["ztunnel"].(map[string]any)["firewallBackend"] = "nftables"
 	encoded, err := yaml.Marshal(values)
@@ -203,6 +207,16 @@ func TestControllerUsesMasterBootstrapOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy := config.InitContainers[1]
+	for name, want := range map[string]string{
+		"AGENTIO_REDIRECT_DNS":                    "true",
+		"AGENTIO_NATIVE_NFTABLES":                 "true",
+		"AGENTIO_NATIVE_NFTABLES_OUTPUT_PRIORITY": "-101",
+		"AGENTIO_REJECT_NON_TCP":                  "true",
+	} {
+		if got := envValue(config.InitContainers[0].Env, name); got != want {
+			t.Errorf("proxy-init %s = %s, want %s", name, got, want)
+		}
+	}
 	if !slices.Contains(proxy.VolumeMounts, corev1.VolumeMount{
 		Name:      "agentio-sandbox-state",
 		MountPath: "/var/lib/ztunnel/sandbox",
@@ -212,13 +226,15 @@ func TestControllerUsesMasterBootstrapOverrides(t *testing.T) {
 		t.Fatal("enabled traffic-proxy has no writable Sandbox state volume")
 	}
 	for name, want := range map[string]string{
-		"AGENTIO_SANDBOX_MODE":   "true",
-		"ENABLE_SANDBOX_MANAGER": "true",
-		"CA_ADDRESS":             "custom-agentiod.sandbox-system.svc.example.internal:15012",
-		"XDS_ADDRESS":            "custom-agentiod.sandbox-system.svc.example.internal:15012",
-		"ISTIO_META_CLUSTER_ID":  "test-cluster",
-		"ENABLE_FIREWALL_RULES":  "false",
-		"FIREWALL_BACKEND":       "nftables",
+		"AGENTIO_SANDBOX_MODE":    "true",
+		"ENABLE_SANDBOX_MANAGER":  "true",
+		"CA_ADDRESS":              "custom-agentiod.sandbox-system.svc.example.internal:15012",
+		"XDS_ADDRESS":             "custom-agentiod.sandbox-system.svc.example.internal:15012",
+		"ISTIO_META_CLUSTER_ID":   "test-cluster",
+		"ISTIO_META_DNS_CAPTURE":  "true",
+		"ISTIO_META_ENABLE_HBONE": "true",
+		"ENABLE_FIREWALL_RULES":   "false",
+		"FIREWALL_BACKEND":        "nftables",
 	} {
 		if got := envValue(proxy.Env, name); got != want {
 			t.Errorf("%s = %s, want %s", name, got, want)

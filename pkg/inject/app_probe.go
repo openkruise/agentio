@@ -26,7 +26,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"istio.io/api/annotation"
 	"istio.io/istio/pkg/slices"
 )
 
@@ -260,10 +259,10 @@ func allContainers(pod *corev1.Pod) []corev1.Container {
 // patchRewriteProbe generates the patch for webhook.
 func patchRewriteProbe(annotations map[string]string, pod *corev1.Pod, defaultPort int32) {
 	statusPort := int(defaultPort)
-	if v, f := annotations[annotation.SidecarStatusPort.Name]; f {
+	if v, f := annotations[statusPortAnnotation]; f {
 		p, err := strconv.Atoi(v)
 		if err != nil {
-			log.Error("invalid annotation", "annotation", annotation.SidecarStatusPort.Name,
+			log.Error("invalid annotation", "annotation", statusPortAnnotation,
 				"value", v, "error", err)
 		}
 		statusPort = p

@@ -56,7 +56,7 @@ data:
       xdsAddress: {{ printf "%s.%s.svc.%s:15012" (include "agentiod.fullname" .) .Release.Namespace .Values.global.clusterDomain | quote }}
       trustBundleName: {{ .Values.agentiod.ca.trustBundleConfigMapName | quote }}
       clusterTrustBundleName: {{ .Values.ztunnel.trustBundle.clusterTrustBundleName | quote }}
-      nativeNftables: false
+      nativeNftables: {{ .Values.agentiod.injector.proxyInit.nativeNftables }}
       logging:
         level: default:info
       logAsJson: false
@@ -84,6 +84,8 @@ data:
       proxyInit:
         image: {{ $proxyInitImage | quote }}
         forceApplyIptables: false
+        natOutputPriority: {{ .Values.agentiod.injector.proxyInit.natOutputPriority | quote }}
+        rejectNonTCP: {{ .Values.agentiod.injector.proxyInit.rejectNonTCP }}
       proxyZtunnel:
         image: {{ $ztunnelImage | quote }}
         sandboxMode: {{ .Values.sandbox.enabled | quote }}

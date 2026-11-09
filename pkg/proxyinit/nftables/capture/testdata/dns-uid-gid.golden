@@ -1,0 +1,57 @@
+add table inet agentio-proxy-nat
+flush table inet agentio-proxy-nat
+add chain inet agentio-proxy-nat output { type nat hook output priority -100 ; }
+add chain inet agentio-proxy-nat agentio-inbound
+add chain inet agentio-proxy-nat agentio-redirect
+add chain inet agentio-proxy-nat agentio-in-redirect
+add chain inet agentio-proxy-nat agentio-output
+add chain inet agentio-proxy-nat agentio-output-dns
+add rule inet agentio-proxy-nat agentio-inbound meta l4proto tcp tcp dport 15008 counter return
+add rule inet agentio-proxy-nat agentio-redirect meta l4proto tcp counter redirect to :15001
+add rule inet agentio-proxy-nat agentio-in-redirect meta l4proto tcp counter redirect to :15006
+add rule inet agentio-proxy-nat output counter jump agentio-output
+add rule inet agentio-proxy-nat agentio-output oifname lo ip saddr 127.0.0.6/32 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo ip6 saddr ::6/128 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != { 53, 15008 } skuid 3 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != { 53, 15008 } skuid 3 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp tcp dport != 53 skuid != 3 counter return
+add rule inet agentio-proxy-nat agentio-output skuid 3 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != { 53, 15008 } skuid 4 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != { 53, 15008 } skuid 4 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp tcp dport != 53 skuid != 4 counter return
+add rule inet agentio-proxy-nat agentio-output skuid 4 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skgid 1 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skgid 1 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp tcp dport != 53 skgid != 1 counter return
+add rule inet agentio-proxy-nat agentio-output skgid 1 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skgid 2 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skgid 2 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp tcp dport != 53 skgid != 2 counter return
+add rule inet agentio-proxy-nat agentio-output skgid 2 counter return
+add rule inet agentio-proxy-nat agentio-output counter jump agentio-output-dns
+add rule inet agentio-proxy-nat agentio-output-dns ip daddr 127.0.0.53/32 tcp dport 53 counter redirect to :15053
+add rule inet agentio-proxy-nat agentio-output-dns ip6 daddr ::127.0.0.53/128 tcp dport 53 counter redirect to :15053
+add rule inet agentio-proxy-nat agentio-output-dns ip daddr 127.0.0.53/32 udp dport 53 counter redirect to :15053
+add rule inet agentio-proxy-nat agentio-output-dns ip6 daddr ::127.0.0.53/128 udp dport 53 counter redirect to :15053
+add rule inet agentio-proxy-nat agentio-output ip daddr 127.0.0.1/32 counter return
+add rule inet agentio-proxy-nat agentio-output ip6 daddr ::1/128 counter return
+add table inet agentio-proxy-raw
+flush table inet agentio-proxy-raw
+add chain inet agentio-proxy-raw prerouting { type filter hook prerouting priority -300 ; }
+add chain inet agentio-proxy-raw output { type filter hook output priority -300 ; }
+add chain inet agentio-proxy-raw agentio-inbound
+add chain inet agentio-proxy-raw agentio-output-dns
+add rule inet agentio-proxy-raw output counter jump agentio-output-dns
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 meta skuid 3 counter ct zone set 1
+add rule inet agentio-proxy-raw agentio-output-dns udp sport 15053 meta skuid 3 counter ct zone set 2
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 meta skuid 4 counter ct zone set 1
+add rule inet agentio-proxy-raw agentio-output-dns udp sport 15053 meta skuid 4 counter ct zone set 2
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 meta skgid 1 counter ct zone set 1
+add rule inet agentio-proxy-raw agentio-output-dns udp sport 15053 meta skgid 1 counter ct zone set 2
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 meta skgid 2 counter ct zone set 1
+add rule inet agentio-proxy-raw agentio-output-dns udp sport 15053 meta skgid 2 counter ct zone set 2
+add rule inet agentio-proxy-raw prerouting counter jump agentio-inbound
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 ip daddr 127.0.0.53/32 counter ct zone set 2
+add rule inet agentio-proxy-raw agentio-inbound udp sport 53 ip saddr 127.0.0.53/32 counter ct zone set 1
+add rule inet agentio-proxy-raw agentio-output-dns udp dport 53 ip6 daddr ::127.0.0.53/128 counter ct zone set 2
+add rule inet agentio-proxy-raw agentio-inbound udp sport 53 ip6 saddr ::127.0.0.53/128 counter ct zone set 1

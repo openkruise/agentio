@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# Copyright 2026 The Kruise Authors
+FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY pkg/log/ ./pkg/log/
+COPY pkg/proxyinit/ ./pkg/proxyinit/
+COPY cmd/proxy-init/ ./cmd/proxy-init/
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/proxy-init ./cmd/proxy-init
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iptables nftables \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/proxy-init /usr/local/bin/proxy-init
+COPY LICENSE NOTICE /usr/share/doc/proxy-init/
+USER 0:0
+ENTRYPOINT ["/usr/local/bin/proxy-init"]
+CMD []

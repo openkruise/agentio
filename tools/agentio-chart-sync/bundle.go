@@ -257,8 +257,11 @@ type sandboxControllerSourceValues struct {
 				FirewallBackend     string `json:"firewallBackend"`
 			} `json:"ztunnel"`
 			ProxyInit struct {
-				Image     string `json:"image"`
-				ImageName string `json:"imageName"`
+				NativeNftables    bool   `json:"nativeNftables"`
+				NATOutputPriority string `json:"natOutputPriority"`
+				RejectNonTCP      bool   `json:"rejectNonTCP"`
+				Image             string `json:"image"`
+				ImageName         string `json:"imageName"`
 			} `json:"proxyInit"`
 		} `json:"injector"`
 	} `json:"agentiod"`
@@ -404,6 +407,10 @@ func generatedSandboxControllerValuesBlock(content []byte) ([]byte, error) {
 	}
 	service = strings.TrimRight(truncateName(service), "-")
 
+	priority := values.Agentiod.Injector.ProxyInit.NATOutputPriority
+	if priority == "" {
+		priority = "-100"
+	}
 	generated := map[string]any{
 		"agentio": map[string]any{
 			"sandbox": map[string]any{"enabled": values.Sandbox.Enabled},
@@ -423,6 +430,9 @@ func generatedSandboxControllerValuesBlock(content []byte) ([]byte, error) {
 				"imagePullPolicy":         values.Global.ImagePullPolicy,
 				"healthProbeRewrite":      true,
 				"dnsCapture":              true,
+				"nativeNftables":          values.Agentiod.Injector.ProxyInit.NativeNftables,
+				"natOutputPriority":       priority,
+				"rejectNonTCP":            values.Agentiod.Injector.ProxyInit.RejectNonTCP,
 				"includeOutboundIPRanges": "*",
 				"excludeOutboundIPRanges": "",
 				"includeInboundPorts":     "*",

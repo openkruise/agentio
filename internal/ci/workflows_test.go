@@ -401,7 +401,7 @@ func TestOwnedImageWorkflowExportsImmutableReferences(t *testing.T) {
 	jobs := workflowJobs(t, workflow)
 	job := workflowJob(t, jobs, "build-images")
 	outputs := mapValue(t, job, "outputs")
-	for _, output := range []string{"agentiod_image", "epe_image", "ztunnel_image"} {
+	for _, output := range []string{"agentiod_image", "epe_image", "ztunnel_image", "proxy_init_image"} {
 		if _, found := outputs[output]; !found {
 			t.Errorf("build-images is missing immutable output %q", output)
 		}
@@ -420,7 +420,7 @@ func TestExternalDependencyUpdatesUsePublishedImages(t *testing.T) {
 		"options",
 	)
 	for _, option := range options {
-		if option == "ztunnel" {
+		if option == "ztunnel" || option == "proxy-init" {
 			t.Error("ztunnel source updates must not accept a published-image override")
 		}
 	}
@@ -441,11 +441,11 @@ func TestExternalDependencyUpdatesUsePublishedImages(t *testing.T) {
 	}
 	want := map[string]bool{
 		"ZTUNNEL_REPO_SHA": false, "CNI_IMAGE": false,
-		"PROXY_INIT_IMAGE": false, "GATEWAY_IMAGE": false,
+		"GATEWAY_IMAGE":       false,
 		"TRUST_PACKAGE_IMAGE": false,
 	}
 	if len(pins) != len(want) {
-		t.Fatalf("agentio.deps has %d entries, want one source pin and four external image pins", len(pins))
+		t.Fatalf("agentio.deps has %d entries, want one source pin and three external image pins", len(pins))
 	}
 	for _, pin := range pins {
 		if _, found := want[pin.Name]; !found {

@@ -35,6 +35,13 @@ linters:
   exclusions:
     generated: strict
     rules:
+      # Keep the migrated rule generators' structure and exports reviewable against their source.
+      - path: ^pkg/proxyinit/(iptables|nftables|config)/
+        linters:
+          - dupl
+          - funlen
+          - gocyclo
+          - revive
       - path: _test\.go
         linters:
           - dupl

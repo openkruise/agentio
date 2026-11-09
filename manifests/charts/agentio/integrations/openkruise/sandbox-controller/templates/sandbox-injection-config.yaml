@@ -16,7 +16,7 @@ data:
       "initContainers": [
         {
           "args": [
-            "istio-iptables",
+            "proxy-init",
             "-p",
             "15001",
             "-z",
@@ -45,17 +45,13 @@ data:
             "-o",
             {{ .Values.agentio.trafficProxy.excludeOutboundPorts | quote }}
             {{- end }},
-            "--log_output_level=default:info"
+            "--log-output-level=default:info"
           ],
           "env": [
-            {
-              "name": "ISTIO_META_DNS_CAPTURE",
-              "value": {{ .Values.agentio.trafficProxy.dnsCapture | toString | quote }}
-            },
-            {
-              "name": "ISTIO_META_ENABLE_HBONE",
-              "value": "true"
-            }
+            { "name": "AGENTIO_REDIRECT_DNS", "value": {{ .Values.agentio.trafficProxy.dnsCapture | toString | quote }} },
+            { "name": "AGENTIO_NATIVE_NFTABLES", "value": {{ .Values.agentio.trafficProxy.nativeNftables | toString | quote }} },
+            { "name": "AGENTIO_NATIVE_NFTABLES_OUTPUT_PRIORITY", "value": {{ .Values.agentio.trafficProxy.natOutputPriority | quote }} },
+            { "name": "AGENTIO_REJECT_NON_TCP", "value": {{ .Values.agentio.trafficProxy.rejectNonTCP | toString | quote }} }
           ],
           "image": {{ .Values.agentio.trafficProxy.initImage | quote }},
           "imagePullPolicy": {{ .Values.agentio.trafficProxy.imagePullPolicy | quote }},

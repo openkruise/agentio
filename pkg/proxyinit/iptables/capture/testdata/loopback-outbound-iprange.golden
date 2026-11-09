@@ -1,0 +1,44 @@
+iptables-save
+ip6tables-save
+* nat
+-N AGENTIO_INBOUND
+-N AGENTIO_REDIRECT
+-N AGENTIO_IN_REDIRECT
+-N AGENTIO_OUTPUT
+-N AGENTIO_OUTPUT_DNS
+-A AGENTIO_INBOUND -p tcp --dport 15008 -j RETURN
+-A AGENTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
+-A AGENTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+-A OUTPUT -j AGENTIO_OUTPUT
+-A AGENTIO_OUTPUT -o lo -s 127.0.0.6/32 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp -m multiport ! --dports 53,15008 -m owner --uid-owner 3 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -m owner --uid-owner 3 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp -m multiport ! --dports 53,15008 -m owner --uid-owner 4 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -m owner --uid-owner 4 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 1 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -m owner --gid-owner 1 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 2 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -m owner --gid-owner 2 -j RETURN
+-A AGENTIO_OUTPUT -j AGENTIO_OUTPUT_DNS
+-A AGENTIO_OUTPUT_DNS -p tcp --dport 53 -d 127.0.0.53/32 -j REDIRECT --to-ports 15053
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -d 127.0.0.53/32 -j REDIRECT --to-port 15053
+-A AGENTIO_OUTPUT -d 127.0.0.1/32 -j RETURN
+-A AGENTIO_OUTPUT -d 127.1.2.3/32 -j AGENTIO_REDIRECT
+COMMIT
+* raw
+-N AGENTIO_OUTPUT_DNS
+-N AGENTIO_INBOUND
+-A OUTPUT -j AGENTIO_OUTPUT_DNS
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -m owner --uid-owner 3 -j CT --zone 1
+-A AGENTIO_OUTPUT_DNS -p udp --sport 15053 -m owner --uid-owner 3 -j CT --zone 2
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -m owner --uid-owner 4 -j CT --zone 1
+-A AGENTIO_OUTPUT_DNS -p udp --sport 15053 -m owner --uid-owner 4 -j CT --zone 2
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -m owner --gid-owner 1 -j CT --zone 1
+-A AGENTIO_OUTPUT_DNS -p udp --sport 15053 -m owner --gid-owner 1 -j CT --zone 2
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -m owner --gid-owner 2 -j CT --zone 1
+-A AGENTIO_OUTPUT_DNS -p udp --sport 15053 -m owner --gid-owner 2 -j CT --zone 2
+-A PREROUTING -j AGENTIO_INBOUND
+-A AGENTIO_OUTPUT_DNS -p udp --dport 53 -d 127.0.0.53/32 -j CT --zone 2
+-A AGENTIO_INBOUND -p udp --sport 53 -s 127.0.0.53/32 -j CT --zone 1
+COMMIT
+iptables-save

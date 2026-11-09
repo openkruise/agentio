@@ -1,6 +1,23 @@
 .PHONY: build build.agentiod build.epe build.porter test.porter lint.porter clean fmt format gen gen.crddocs gen.envdocs check.envdocs lint lint.golangci lint.logging racetest test test.epe test.integration.agentio.kube test.integration.agentio.product tidy
 
-build: build.agentiod build.epe build.porter build.gateway-agent
+build: build.agentiod build.epe build.porter build.gateway-agent build.proxy-init
+
+.PHONY: build.proxy-init test.proxy-init test.integration.proxy-init
+build.proxy-init:
+	mkdir -p out
+	go build -trimpath -o out/proxy-init ./cmd/proxy-init
+
+test.proxy-init:
+	go test -race ./cmd/proxy-init ./pkg/proxyinit/...
+
+# These tests unshare their own network namespaces and require Linux tools/capabilities.
+test.integration.proxy-init:
+	go test -tags=proxyinit_integration -count=1 ./pkg/proxyinit/...
+
+.PHONY: test.integration.proxy-init.kind
+test.integration.proxy-init.kind:
+	docker build -f docker/Dockerfile.proxy-init -t agentio-proxy-init:standalone-test .
+	bash bin/test_proxy_init_kind.sh
 
 build.agentiod:
 	mkdir -p out

@@ -158,6 +158,9 @@ agentiod:
     proxyInit:
       image: ""
       imageName: proxy-init
+      nativeNftables: false
+      natOutputPriority: "-100"
+      rejectNonTCP: false
   gatewayDeployer:
     leaseName: agentiod-gateway-deployer-leader
     # Gateway objects and per-Gateway deployment patches are user-managed.

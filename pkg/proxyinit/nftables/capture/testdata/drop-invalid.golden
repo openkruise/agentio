@@ -1,0 +1,25 @@
+add table inet agentio-proxy-nat
+flush table inet agentio-proxy-nat
+add chain inet agentio-proxy-nat output { type nat hook output priority -100 ; }
+add chain inet agentio-proxy-nat agentio-inbound
+add chain inet agentio-proxy-nat agentio-redirect
+add chain inet agentio-proxy-nat agentio-in-redirect
+add chain inet agentio-proxy-nat agentio-output
+add rule inet agentio-proxy-nat agentio-inbound meta l4proto tcp tcp dport 15008 counter return
+add rule inet agentio-proxy-nat agentio-redirect meta l4proto tcp counter redirect to :15001
+add rule inet agentio-proxy-nat agentio-in-redirect meta l4proto tcp counter redirect to :15006
+add rule inet agentio-proxy-nat output counter jump agentio-output
+add rule inet agentio-proxy-nat agentio-output oifname lo ip saddr 127.0.0.6/32 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skuid 1337 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skuid != 1337 counter return
+add rule inet agentio-proxy-nat agentio-output skuid 1337 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skgid 1337 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skgid != 1337 counter return
+add rule inet agentio-proxy-nat agentio-output skgid 1337 counter return
+add rule inet agentio-proxy-nat agentio-output ip daddr 127.0.0.1/32 counter return
+add table inet agentio-proxy-mangle
+flush table inet agentio-proxy-mangle
+add chain inet agentio-proxy-mangle prerouting { type filter hook prerouting priority -150 ; }
+add chain inet agentio-proxy-mangle agentio-drop
+add rule inet agentio-proxy-mangle prerouting meta l4proto tcp ct state invalid counter jump agentio-drop
+add rule inet agentio-proxy-mangle agentio-drop counter drop
