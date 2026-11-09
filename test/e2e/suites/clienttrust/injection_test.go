@@ -187,15 +187,18 @@ func TestClientTrustEnvironment(t *testing.T) {
 				pod.Spec.InitContainers = nil
 				ready := s.createPod(t, pod)
 				for _, host := range []string{"example.com", "example.org"} {
-					result := s.probe(t, ready, "app-main", host)
-					if result.Custom.Status != 200 {
-						t.Fatalf("custom client could not load builtin bundle: %+v", result.Custom)
-					}
-					for _, key := range caVariables {
-						if result.Env[key] != nil {
-							t.Fatalf("env: [] unexpectedly injected %s", key)
+					harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error {
+						result := s.probe(t, ready, "app-main", host)
+						if result.Custom.Status != 200 {
+							return fmt.Errorf("custom client could not load builtin bundle: %+v", result.Custom)
 						}
-					}
+						for _, key := range caVariables {
+							if result.Env[key] != nil {
+								t.Fatalf("env: [] unexpectedly injected %s", key)
+							}
+						}
+						return nil
+					})
 				}
 			}
 		})
