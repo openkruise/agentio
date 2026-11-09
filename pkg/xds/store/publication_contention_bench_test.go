@@ -34,7 +34,13 @@ func BenchmarkStoreSnapshotDuringBulkApply(b *testing.B) {
 	store := New(initial)
 	changes := [2][]model.ResourceChange{make([]model.ResourceChange, count), make([]model.ResourceChange, count)}
 	for i, old := range initial.List(model.AddressType) {
-		updated, err := model.NewResource(old.Key, "", &anypb.Any{TypeUrl: model.AddressType, Value: []byte("updated")}, nil, old.Facts)
+		updated, err := model.NewResource(
+			old.Key,
+			"",
+			&anypb.Any{TypeUrl: model.AddressType, Value: []byte("updated")},
+			nil,
+			old.Facts,
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
