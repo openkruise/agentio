@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "proto/ext_proc.proto",
         "../../api/workload/v1/workload.proto",
         "../../api/sandbox/v1/sandbox.proto",
+        "../../api/security/v1/trafficpolicy.proto",
         "../../api/extensions/v1/extensions.proto",
         "../../api/extensions/v1/snipolicy.proto",
     ];

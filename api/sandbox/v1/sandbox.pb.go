@@ -22,7 +22,6 @@ package sandboxv1
 
 import (
 	any1 "github.com/golang/protobuf/ptypes/any"
-	v1 "github.com/openkruise/agentio/api/security/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -50,10 +49,6 @@ type Sandbox struct {
 	// The single Workload currently hosting this Sandbox. Absent when unassigned.
 	// Replacing or clearing this field invalidates the previous host binding.
 	Attester *Sandbox_Attester `protobuf:"bytes,2,opt,name=attester,proto3" json:"attester,omitempty"`
-	// Sandbox-owned traffic rules, delivered atomically with the host binding.
-	// Evaluated before the host Workload policies. DENY rejects the connection;
-	// ALLOW continues to Workload policy evaluation.
-	TrafficPolicy *v1.TrafficPolicy `protobuf:"bytes,3,opt,name=traffic_policy,json=trafficPolicy,proto3" json:"traffic_policy,omitempty"`
 	// Extension policy bodies and bindings, replaced atomically with this Sandbox.
 	// Entries of the same type retain their evaluation order. Different types
 	// define their own execution stages; list order does not order those stages.
@@ -104,13 +99,6 @@ func (x *Sandbox) GetUid() string {
 func (x *Sandbox) GetAttester() *Sandbox_Attester {
 	if x != nil {
 		return x.Attester
-	}
-	return nil
-}
-
-func (x *Sandbox) GetTrafficPolicy() *v1.TrafficPolicy {
-	if x != nil {
-		return x.TrafficPolicy
 	}
 	return nil
 }
@@ -172,16 +160,15 @@ var File_api_sandbox_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_api_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\n" +
-	"\x1capi/sandbox/v1/sandbox.proto\x12\x0fagentio.sandbox\x1a#api/security/v1/trafficpolicy.proto\x1a\x19google/protobuf/any.proto\"\x87\x02\n" +
+	"\x1capi/sandbox/v1/sandbox.proto\x12\x0fagentio.sandbox\x1a\x19google/protobuf/any.proto\"\xd5\x01\n" +
 	"\aSandbox\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12=\n" +
-	"\battester\x18\x02 \x01(\v2!.agentio.sandbox.Sandbox.AttesterR\battester\x12F\n" +
-	"\x0etraffic_policy\x18\x03 \x01(\v2\x1f.agentio.security.TrafficPolicyR\rtrafficPolicy\x124\n" +
+	"\battester\x18\x02 \x01(\v2!.agentio.sandbox.Sandbox.AttesterR\battester\x124\n" +
 	"\n" +
 	"extensions\x18\x04 \x03(\v2\x14.google.protobuf.AnyR\n" +
 	"extensions\x1a-\n" +
 	"\bAttester\x12!\n" +
-	"\fworkload_uid\x18\x01 \x01(\tR\vworkloadUidB8Z6github.com/openkruise/agentio/api/sandbox/v1;sandboxv1b\x06proto3"
+	"\fworkload_uid\x18\x01 \x01(\tR\vworkloadUidJ\x04\b\x03\x10\x04R\x0etraffic_policyB8Z6github.com/openkruise/agentio/api/sandbox/v1;sandboxv1b\x06proto3"
 
 var (
 	file_api_sandbox_v1_sandbox_proto_rawDescOnce sync.Once
@@ -199,18 +186,16 @@ var file_api_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 2
 var file_api_sandbox_v1_sandbox_proto_goTypes = []any{
 	(*Sandbox)(nil),          // 0: agentio.sandbox.Sandbox
 	(*Sandbox_Attester)(nil), // 1: agentio.sandbox.Sandbox.Attester
-	(*v1.TrafficPolicy)(nil), // 2: agentio.security.TrafficPolicy
-	(*any1.Any)(nil),         // 3: google.protobuf.Any
+	(*any1.Any)(nil),         // 2: google.protobuf.Any
 }
 var file_api_sandbox_v1_sandbox_proto_depIdxs = []int32{
 	1, // 0: agentio.sandbox.Sandbox.attester:type_name -> agentio.sandbox.Sandbox.Attester
-	2, // 1: agentio.sandbox.Sandbox.traffic_policy:type_name -> agentio.security.TrafficPolicy
-	3, // 2: agentio.sandbox.Sandbox.extensions:type_name -> google.protobuf.Any
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	2, // 1: agentio.sandbox.Sandbox.extensions:type_name -> google.protobuf.Any
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_api_sandbox_v1_sandbox_proto_init() }

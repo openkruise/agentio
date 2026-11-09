@@ -16,7 +16,6 @@ syntax = "proto3";
 
 package agentio.sandbox;
 
-import "api/security/v1/trafficpolicy.proto";
 import "google/protobuf/any.proto";
 
 option go_package = "github.com/openkruise/agentio/api/sandbox/v1;sandboxv1";
@@ -33,10 +32,8 @@ message Sandbox {
   // The single Workload currently hosting this Sandbox. Absent when unassigned.
   // Replacing or clearing this field invalidates the previous host binding.
   Attester attester = 2;
-  // Sandbox-owned traffic rules, delivered atomically with the host binding.
-  // Evaluated before the host Workload policies. DENY rejects the connection;
-  // ALLOW continues to Workload policy evaluation.
-  agentio.security.TrafficPolicy traffic_policy = 3;
+  reserved 3;
+  reserved "traffic_policy";
   // Extension policy bodies and bindings, replaced atomically with this Sandbox.
   // Entries of the same type retain their evaluation order. Different types
   // define their own execution stages; list order does not order those stages.

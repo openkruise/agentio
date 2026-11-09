@@ -43,13 +43,12 @@ func (s compiledSandbox) Equals(other compiledSandbox) bool {
 
 func newCompiledSandboxes(
 	inputs Inputs,
-	trafficInputs policy.TrafficPolicyInputs,
 	failures *failureRecorder,
 	options collectionOptions,
 ) krt.Collection[compiledSandbox] {
 	clearFailureOnSourceDelete(inputs.Sandboxes, failures, "SandboxPolicies")
 	return krt.NewCollection(inputs.Sandboxes, func(ctx krt.HandlerContext, sandbox model.Sandbox) *compiledSandbox {
-		result, err := compileSandbox(ctx, sandbox, trafficInputs)
+		result, err := compileSandbox(sandbox)
 		currentInput := func() bool {
 			current := inputs.Sandboxes.GetKey(sandbox.UID)
 			return current != nil && current.Equals(sandbox)
@@ -64,11 +63,7 @@ func newCompiledSandboxes(
 	}, options("compiled-sandboxes")...)
 }
 
-func compileSandbox(
-	ctx krt.HandlerContext,
-	sandbox model.Sandbox,
-	trafficInputs policy.TrafficPolicyInputs,
-) (*compiledSandbox, error) {
+func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 	result := &compiledSandbox{
 		Payload:        &sandboxv1.Sandbox{Uid: sandbox.UID},
 		SourceIdentity: sandbox.SourceIdentity,
@@ -81,18 +76,6 @@ func compileSandbox(
 	if policies := sandbox.Policies; policies != nil {
 		if policies.InputError != "" {
 			return nil, fmt.Errorf("sandbox policies: %s", policies.InputError)
-		}
-		if policies.TrafficRules != nil {
-			traffic, err := policy.CompileTrafficPolicyRules(
-				ctx,
-				*policies.TrafficRules,
-				sandbox.Namespace,
-				trafficInputs,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("sandbox traffic rules: %w", err)
-			}
-			result.Payload.TrafficPolicy = traffic
 		}
 		if policies.SecurityRules != nil {
 			sni, err := policy.CompileSNIRules(policies.SecurityRules)

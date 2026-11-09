@@ -54,13 +54,6 @@ func TestCompilerOptionalSandboxInputs(t *testing.T) {
 								Namespace: "demo",
 								Attester:  &model.Attester{WorkloadUID: worker.UID},
 								Policies: &model.SandboxPolicies{
-									TrafficRules: &model.TrafficPolicyRules{
-										Egress: &agentsv1alpha1.TrafficPolicyDirection{
-											Rules: []agentsv1alpha1.TrafficPolicyRule{
-												{Action: agentsv1alpha1.RuleActionAllow},
-											},
-										},
-									},
 									SecurityRules: []agentsv1alpha1.SecurityRule{
 										{
 											Name:  "secret",
@@ -176,8 +169,7 @@ func TestCompilerOptionalSandboxInputs(t *testing.T) {
 				if sandboxMode && withSandbox {
 					manifest := manifestAt(t, compiler, "actor")
 					if manifest == nil ||
-						manifest.GetAttester().GetWorkloadUid() != worker.UID || len(manifest.Extensions) != 2 ||
-						manifest.TrafficPolicy == nil {
+						manifest.GetAttester().GetWorkloadUid() != worker.UID || len(manifest.Extensions) != 2 {
 						t.Fatalf("Sandbox inline output = %v", manifest)
 					}
 					if compiler.Bindings().GetKey("actor") != nil {
@@ -319,7 +311,7 @@ func TestSandboxLifecyclePreservesWorkloadPolicies(t *testing.T) {
 	)
 	testutil.Eventually(t, func() bool {
 		manifest := manifestAt(t, fixture.compiler, "actor")
-		return manifest != nil && manifest.TrafficPolicy == nil && len(manifest.Extensions) == 1
+		return manifest != nil && len(manifest.Extensions) == 1
 	}, "Sandbox only carries its own policies")
 	checkWorkloads()
 	fixture.sandboxes.DeleteObject("actor")
