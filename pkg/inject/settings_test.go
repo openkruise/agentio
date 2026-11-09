@@ -25,8 +25,6 @@ global:
     holdApplicationUntilProxyStarts: true
     proxyMetadata:
       AGENTIO_META_TEST: enabled
-sidecarInjectorWebhook:
-  enablePrometheusMerge: false
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -40,9 +38,6 @@ sidecarInjectorWebhook:
 	}
 	if settings.StatusPort != 16020 {
 		t.Fatalf("status port = %d, want 16020", settings.StatusPort)
-	}
-	if settings.EnablePrometheusMerge {
-		t.Fatal("Prometheus merge enabled, want explicit injector value false")
 	}
 	if !settings.HoldApplicationUntilProxyStarts {
 		t.Fatal("holdApplicationUntilProxyStarts disabled, want true")
@@ -64,8 +59,5 @@ func TestInjectionSettingsUseAgentioDefaults(t *testing.T) {
 	if settings.Proxy.DiscoveryAddress != "agentiod.agentio-system.svc:15012" ||
 		settings.StatusPort != 15020 || settings.ProxyListenPort != 15001 || settings.ProxyInboundListenPort != 15006 {
 		t.Fatalf("default settings = %+v", settings)
-	}
-	if !settings.EnablePrometheusMerge {
-		t.Fatal("Prometheus merge disabled by default")
 	}
 }

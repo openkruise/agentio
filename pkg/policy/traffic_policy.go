@@ -97,7 +97,7 @@ func CompileTrafficPolicy(
 }
 
 // CompileTrafficPolicyRules compiles rule bodies without resource identity or
-// binding metadata. Sandbox-owned rules and shared policies use the same resolver.
+// binding metadata.
 func CompileTrafficPolicyRules(
 	ctx krt.HandlerContext,
 	rules model.TrafficPolicyRules,

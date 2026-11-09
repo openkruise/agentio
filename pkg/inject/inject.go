@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"text/template"
 
@@ -354,14 +353,6 @@ func stripPod(req InjectionParameters) *corev1.Pod {
 		pod.Spec.InitContainers = modifyContainers(pod.Spec.InitContainers, c, Remove)
 	}
 
-	targetPort := strconv.Itoa(req.settings.StatusPort)
-	if cur, f := getPrometheusPort(pod); f {
-		// We have already set the port, assume user is controlling this or, more likely, re-injected
-		// the pod.
-		if cur == targetPort {
-			clearPrometheusAnnotations(pod)
-		}
-	}
 	delete(pod.Annotations, injectionStatusAnnotation)
 
 	return pod

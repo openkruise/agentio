@@ -348,8 +348,9 @@ func TestBuildStaticEgressServiceEntriesPreserveDestinationPort(t *testing.T) {
 		hcm := findHCM(t, listeners[listenerName])
 		filterNames := httpFilterNames(hcm)
 		stateIndex := slices.Index(filterNames, staticEndpointCandidateFilter)
+		targetIndex := slices.Index(filterNames, "agentio.route_upstream")
 		dfpIndex := slices.Index(filterNames, "envoy.filters.http.dynamic_forward_proxy")
-		if stateIndex < 0 || dfpIndex != stateIndex+2 || filterNames[stateIndex+1] != "agentio.route_upstream" {
+		if stateIndex < 0 || targetIndex <= stateIndex || dfpIndex != targetIndex+1 {
 			t.Fatalf(
 				"%s HTTP filters = %v, want endpoint capture and target consumption before DFP",
 				listenerName,

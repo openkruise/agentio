@@ -77,7 +77,6 @@ pub struct WorkloadView {
 pub struct SandboxView {
     pub uid: String,
     pub workload_uid: String,
-    pub traffic_policy: Option<Policy>,
     pub rules: Vec<SniRule>,
 }
 
@@ -204,7 +203,6 @@ pub fn decode(kind: ResourceKind, value: &Any) -> Result<View> {
                 uid: sandbox.uid,
                 workload_uid: sandbox.attester.map(|a| a.workload_uid).unwrap_or_default(),
                 rules: rules(&sandbox.extensions)?,
-                traffic_policy: sandbox.traffic_policy.map(Policy::compile).transpose()?,
             }))
         }
     }

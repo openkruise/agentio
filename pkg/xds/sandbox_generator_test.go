@@ -21,36 +21,30 @@ import (
 	"testing"
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
-	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/model"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
 
-func sandboxResource(t *testing.T, uid string, policies ...*securityv1.TrafficPolicy) model.Resource {
-	return sandboxResourceWithAttester(t, uid, "", policies...)
+func sandboxResource(t *testing.T, uid string, extensions ...*anypb.Any) model.Resource {
+	return sandboxResourceWithAttester(t, uid, "", extensions...)
 }
 
 func sandboxResourceWithAttester(
 	t testing.TB,
 	uid, workloadUID string,
-	policies ...*securityv1.TrafficPolicy,
+	extensions ...*anypb.Any,
 ) model.Resource {
 	t.Helper()
-	var trafficPolicy *securityv1.TrafficPolicy
-	if len(policies) > 1 {
-		t.Fatal("expected one effective TrafficPolicy")
-	}
-	if len(policies) == 1 {
-		trafficPolicy = policies[0]
-	}
 	value, err := anypb.New(
 		&sandboxv1.Sandbox{
-			Uid:           uid,
-			Attester:      &sandboxv1.Sandbox_Attester{WorkloadUid: workloadUID},
-			TrafficPolicy: trafficPolicy,
+			Uid:        uid,
+			Attester:   &sandboxv1.Sandbox_Attester{WorkloadUid: workloadUID},
+			Extensions: extensions,
 		},
 	)
 	if err != nil {
@@ -264,7 +258,7 @@ func TestSandboxWatchStartsEmptyAndUnsubscribeStopsDelivery(t *testing.T) {
 	stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SandboxType, ResourceNamesUnsubscribe: []string{"a"}})
 	stream.awaitResponses(t, model.SandboxType, 3)
 	// A subsequent explicit request is a barrier proving the earlier update was processed.
-	changed := sandboxResource(t, "a", &securityv1.TrafficPolicy{Egress: &securityv1.TrafficPolicy_RuleSet{}})
+	changed := sandboxResource(t, "a", sandboxExtension(t))
 	server.resources.publish(selectionSnapshot(t, []model.Resource{changed}))
 	stream.send(&discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.SandboxType})
 	responses := stream.awaitResponses(t, model.SandboxType, 4)
@@ -316,7 +310,7 @@ func TestSandboxImplicitWildcardDelivery(t *testing.T) {
 				t,
 				"a",
 				"worker",
-				&securityv1.TrafficPolicy{Egress: &securityv1.TrafficPolicy_RuleSet{}},
+				sandboxExtension(t),
 			)
 			b := sandboxResourceWithAttester(t, "b", "worker")
 			server.resources.publish(selectionSnapshot(t, []model.Resource{worker, changed, b, outside}))
@@ -342,13 +336,7 @@ func TestSandboxImplicitWildcardDelivery(t *testing.T) {
 
 func TestSandboxInlinePolicyChangeIsDeliveredWithoutPolicySubscriptions(t *testing.T) {
 	worker := workerResource(t, "pod-1")
-	policy := &securityv1.TrafficPolicy{
-		Egress: &securityv1.TrafficPolicy_RuleSet{
-			Rules: []*securityv1.TrafficPolicy_Rule{
-				{Action: securityv1.TrafficPolicy_DENY, Match: &securityv1.TrafficPolicy_Match{}},
-			},
-		},
-	}
+	policy := sandboxExtension(t)
 	before := selectionSnapshot(t, []model.Resource{worker, sandboxResourceWithAttester(t, "a", "worker")})
 	after := selectionSnapshot(t, []model.Resource{worker, sandboxResourceWithAttester(t, "a", "worker", policy)})
 	update := updateBetween(before, after, before.Diff(after))
@@ -369,8 +357,8 @@ func TestSandboxInlinePolicyChangeIsDeliveredWithoutPolicySubscriptions(t *testi
 	if err := delta.Resources[0].Value.UnmarshalTo(manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.TrafficPolicy == nil || manifest.TrafficPolicy.Egress.Rules[0].Action != securityv1.TrafficPolicy_DENY {
-		t.Fatal("Sandbox update lost the complete deny policy")
+	if len(manifest.Extensions) != 1 || !proto.Equal(manifest.Extensions[0], policy) {
+		t.Fatal("Sandbox update lost the complete extension")
 	}
 }
 
@@ -469,4 +457,13 @@ func TestScopedStoreSandboxLifecycle(t *testing.T) {
 	if err := server.finish(t, stream, done); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func sandboxExtension(t testing.TB) *anypb.Any {
+	t.Helper()
+	value, err := anypb.New(&extensionsv1.PolicyReference{TypeUrl: model.SecurityProfileType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }

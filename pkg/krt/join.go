@@ -42,6 +42,7 @@ type join[T any] struct {
 	// This ensures RegisterBatch only sends events for objects that have been fully processed,
 	// avoiding duplicates from in-flight sub-collection events
 	processedState shrinkingMap[string, *T]
+	indexes        map[string]*joinedIndex[T]
 	eventHandlers  *handlerSet[T]
 
 	stop <-chan struct{}
@@ -191,6 +192,9 @@ func (j *join[T]) handleSubCollectionEvents(events []Event[T], sourceCollectionI
 	// This is used by RegisterBatch to provide consistent initial state
 	for _, ev := range refreshedEvents {
 		key := GetKey(ev.Latest())
+		for _, index := range j.indexes {
+			index.update(j.processedState.data[key], ev.New)
+		}
 		if ev.Event == controllers.EventDelete {
 			j.processedState.delete(key)
 		} else {
@@ -355,11 +359,65 @@ func (j joinIndexer[T]) LookupFiltered(key string, filter func(T) bool) []T {
 
 // nolint: unused // (not true, its to implement an interface)
 func (j *join[T]) index(name string, extract func(o T) []string) indexer[T] {
+	if !j.uncheckedOverlap && len(j.collections) > 1 {
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		if index, found := j.indexes[name]; found {
+			return index
+		}
+		index := &joinedIndex[T]{parent: j, extract: extract}
+		for _, obj := range j.processedState.data {
+			index.update(nil, obj)
+		}
+		if j.indexes == nil {
+			j.indexes = make(map[string]*joinedIndex[T])
+		}
+		j.indexes[name] = index
+		return index
+	}
 	ji := joinIndexer[T]{indexers: make([]indexer[T], 0, len(j.collections))}
 	for _, c := range j.collections {
 		ji.indexers = append(ji.indexers, c.index(name, extract))
 	}
 	return ji
+}
+
+// joinedIndex follows the same committed winners as Join's event replay, before notifying consumers.
+type joinedIndex[T any] struct {
+	parent  *join[T]
+	extract func(T) []string
+	// Retain committed pointers to avoid key extraction and a second table lookup on reads.
+	keys shrinkingMapOfSets[string, *T]
+}
+
+func (i *joinedIndex[T]) update(old, next *T) {
+	if old != nil {
+		for _, indexKey := range i.extract(*old) {
+			i.keys.delete(indexKey, old)
+		}
+	}
+	if next != nil {
+		for _, indexKey := range i.extract(*next) {
+			i.keys.insert(indexKey, next)
+		}
+	}
+}
+
+// LookupFiltered returns committed Join objects matching the key and filter.
+func (i *joinedIndex[T]) LookupFiltered(key string, filter func(T) bool) []T {
+	i.parent.mu.RLock()
+	defer i.parent.mu.RUnlock()
+	keys := i.keys.data[key]
+	var result []T
+	if filter == nil {
+		result = make([]T, 0, len(keys))
+	}
+	for obj := range keys {
+		if filter == nil || filter(*obj) {
+			result = append(result, *obj)
+		}
+	}
+	return result
 }
 
 func (j *join[T]) Synced() Syncer {
@@ -384,6 +442,8 @@ func (j *join[T]) Metadata() Metadata {
 // JoinCollection combines multiple Collection[T] into a single
 // Collection[T]. Key conflicts are resolved by picking the item
 // produced by the first collections in the list of input collections.
+// In checked mode, indexes follow processed events, like handler replay,
+// and advance asynchronously as child events are handled.
 func JoinCollection[T any](cs []Collection[T], opts ...CollectionOption) Collection[T] {
 	o := buildCollectionOptions(opts...)
 	if o.name == "" {

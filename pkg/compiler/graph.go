@@ -44,7 +44,7 @@ func buildGraph(inputs Inputs, failures *failureRecorder, builder krt.OptionsBui
 	trafficPolicyInputs := newTrafficPolicyInputs(inputs)
 	policies := newPolicyCollections(inputs, configuration, trafficPolicyInputs, failures, collectionOptions, builder)
 
-	compiledSandboxes := newCompiledSandboxes(inputs, trafficPolicyInputs, failures, collectionOptions)
+	compiledSandboxes := newCompiledSandboxes(inputs, failures, collectionOptions)
 	selectedWorkloadPolicies := newWorkloadPolicies(inputs, policies, compiledSandboxes, failures, collectionOptions)
 
 	workloadResources := newWorkloadResources(

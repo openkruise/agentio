@@ -15,7 +15,6 @@
 package compiler
 
 import (
-	"net/netip"
 	"reflect"
 	"testing"
 
@@ -316,45 +315,4 @@ func TestWorkloadSelectorMetadataUpdateRecomputesBindings(t *testing.T) {
 		binding := fixture.compiler.Bindings().GetKey(sandbox.UID)
 		return binding != nil && len(binding.PolicyNames(policy.PolicyKindTrafficPolicy)) == 0
 	}, "Workload label update removes selector-derived binding")
-}
-
-func TestSandboxTrafficPolicyTracksPeerUpdates(t *testing.T) {
-	fixture := newIncrementalFixture(t)
-	fixture.setResolved("api.example.com", netip.MustParseAddr("192.0.2.1"))
-	sandbox := model.Sandbox{
-		UID:       "a",
-		Namespace: "tenant",
-		Policies: &model.SandboxPolicies{TrafficRules: &model.TrafficPolicyRules{
-			Egress: &agentsv1alpha1.TrafficPolicyDirection{Rules: []agentsv1alpha1.TrafficPolicyRule{{
-				Action: agentsv1alpha1.RuleActionAllow,
-				To:     []agentsv1alpha1.TrafficPolicyPeer{{FQDN: "api.example.com"}},
-			}}},
-		}},
-	}
-	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	waitSynced(t, fixture.compiler)
-	awaitAddress := func(last byte) {
-		t.Helper()
-		testutil.Eventually(t, func() bool {
-			rules := manifestAt(t, fixture.compiler, "a").GetTrafficPolicy().GetEgress().GetRules()
-			return len(rules) == 1 && len(rules[0].Match.DestinationIps) == 1 &&
-				reflect.DeepEqual(rules[0].Match.DestinationIps[0].Address, []byte{192, 0, 2, last})
-		}, "inline policy follows the peer resolver dependency")
-	}
-	awaitAddress(1)
-	refs, _ := securityReferencesAt(t, fixture.compiler, sandbox.SourceKey())
-	if refs != nil {
-		t.Fatal("traffic-only Sandbox acquired a SecurityProfile reference")
-	}
-	if len(currentSnapshot(t, fixture.compiler).List(model.TrafficPolicyType)) != 0 {
-		t.Fatal("inline traffic rules published an independent TrafficPolicy resource")
-	}
-	sandbox.Attester = &model.Attester{WorkloadUID: "new-worker"}
-	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	testutil.Eventually(t, func() bool {
-		return manifestAt(t, fixture.compiler, "a").GetAttester().GetWorkloadUid() == "new-worker"
-	}, "binding and inline rules publish together")
-	awaitAddress(1)
-	fixture.setResolved("api.example.com", netip.MustParseAddr("192.0.2.2"))
-	awaitAddress(2)
 }

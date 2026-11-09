@@ -302,6 +302,12 @@ func TestSNIHostMismatchConditionUsesProxyAuthorityForConnect(t *testing.T) {
 		{name: "ordinary mismatch denied", method: "GET", host: "target.example:443", want: true},
 		{name: "CONNECT target differs from proxy SNI", method: "CONNECT", host: "target.example:443", want: false},
 		{name: "ordinary match allowed", method: "GET", host: "proxy.example:8443", want: false},
+		{name: "FQDN match allowed", method: "GET", host: "proxy.example.", want: false},
+		{name: "FQDN with port allowed", method: "GET", host: "proxy.example.:443", want: false},
+		{name: "FQDN match is case insensitive", method: "GET", host: "PROXY.Example.:8443", want: false},
+		{name: "FQDN mismatch denied", method: "GET", host: "target.example.:443", want: true},
+		{name: "multiple trailing dots denied", method: "GET", host: "proxy.example..:443", want: true},
+		{name: "subdomain mismatch denied", method: "GET", host: "sub.proxy.example.:443", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, _, err := program.Eval(map[string]any{
