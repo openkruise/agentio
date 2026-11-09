@@ -21,7 +21,6 @@ pkg/inject/inject.go
 pkg/inject/native_sidecar.go
 pkg/inject/patch.go
 pkg/inject/pod.go
-pkg/inject/prometheus.go
 pkg/inject/template_functions.go
 pkg/inject/validate.go
 pkg/inject/webhook.go
