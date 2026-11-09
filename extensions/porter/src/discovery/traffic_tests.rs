@@ -185,7 +185,6 @@ async fn disabled_sni_policy_omits_only_sni_metadata_and_preserves_identity_chec
                 workload_uid: UID.into(),
             }),
             extensions: vec![sni],
-            ..Default::default()
         };
         seed(
             &p.client,
@@ -497,7 +496,6 @@ async fn sandbox_and_workload_policies_load_concurrently() {
                     attester: Some(Attester {
                         workload_uid: UID.into(),
                     }),
-                    traffic_policy: Some(policy(proto::Action::Allow)),
                     ..Default::default()
                 },
             ),
@@ -518,11 +516,7 @@ fn assert_denied(response: extproc::ProcessingResponse) {
 #[tokio::test(start_paused = true)]
 async fn sandbox_rejection_does_not_wait_for_platform_policy() {
     for udp in [false, true] {
-        for (sandbox_id, workload_uid, action) in [
-            ("sandbox", UID, proto::Action::Deny),
-            ("sandbox", "other-workload", proto::Action::Allow),
-            ("other-sandbox", UID, proto::Action::Allow),
-        ] {
+        for (sandbox_id, workload_uid) in [("sandbox", "other-workload"), ("other-sandbox", UID)] {
             let p = processor();
             seed(
                 &p.client,
@@ -549,7 +543,6 @@ async fn sandbox_rejection_does_not_wait_for_platform_policy() {
                         attester: Some(Attester {
                             workload_uid: workload_uid.into(),
                         }),
-                        traffic_policy: Some(policy(action)),
                         ..Default::default()
                     },
                 ),
@@ -570,45 +563,6 @@ async fn sandbox_rejection_does_not_wait_for_platform_policy() {
                 "rejection must cancel the outstanding policy wait"
             );
         }
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn sandbox_denial_does_not_wait_for_workload() {
-    for udp in [false, true] {
-        let p = processor();
-        let mut pending = Box::pin(p.handle(request("sandbox", udp)));
-        assert!(futures_util::poll!(&mut pending).is_pending());
-        seed(
-            &p.client,
-            ResourceKind::Sandbox,
-            "sandbox",
-            any(
-                view::SANDBOX,
-                Sandbox {
-                    uid: "sandbox".into(),
-                    attester: Some(Attester {
-                        workload_uid: UID.into(),
-                    }),
-                    traffic_policy: Some(policy(proto::Action::Deny)),
-                    ..Default::default()
-                },
-            ),
-        );
-        let std::task::Poll::Ready(response) = futures_util::poll!(&mut pending) else {
-            panic!("Sandbox DENY waited for Workload");
-        };
-        assert_denied(response.unwrap());
-        assert_eq!(
-            p.client
-                .metrics
-                .waiters
-                .get_or_create(&ResourceType {
-                    resource_type: view::WORKLOAD,
-                })
-                .get(),
-            0
-        );
     }
 }
 
@@ -666,7 +620,7 @@ async fn workload_rejection_does_not_wait_for_sandbox() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn sandbox_allow_still_waits_for_platform_policy() {
+async fn sandbox_binding_still_waits_for_platform_policy() {
     for udp in [false, true] {
         for action in [proto::Action::Allow, proto::Action::Deny] {
             let p = processor();
@@ -687,7 +641,6 @@ async fn sandbox_allow_still_waits_for_platform_policy() {
                         attester: Some(Attester {
                             workload_uid: UID.into(),
                         }),
-                        traffic_policy: Some(policy(proto::Action::Allow)),
                         ..Default::default()
                     },
                 ),
@@ -733,7 +686,6 @@ async fn disabled_policy_preserves_identity_and_skips_policy_demands() {
                         attester: Some(Attester {
                             workload_uid: UID.into(),
                         }),
-                        traffic_policy: Some(policy(proto::Action::Deny)),
                         ..Default::default()
                     },
                 ),
@@ -878,12 +830,11 @@ async fn policy_logs_identify_destination_binding_and_final_decision() {
                     attester: Some(Attester {
                         workload_uid: UID.into(),
                     }),
-                    traffic_policy: Some(policy(proto::Action::Deny)),
                     ..Default::default()
                 },
             ),
         );
-        assert!(!allowed(p.handle(request("sandbox", false)).await.unwrap()));
+        assert!(allowed(p.handle(request("sandbox", false)).await.unwrap()));
     }
     .with_subscriber(subscriber)
     .await;
@@ -917,9 +868,10 @@ async fn policy_logs_identify_destination_binding_and_final_decision() {
     assert!(events[2].get("policy").is_none());
     assert!(events[2].get("rule_index").is_none());
     assert_eq!(events[3]["reason"], "no_egress_policy");
-    assert_eq!(events[4]["stage"], "sandbox");
+    assert_eq!(events[4]["stage"], "workload");
     assert_eq!(events[4]["sandbox_id"], "sandbox");
-    assert_eq!(events[4]["rule_index"], 0);
+    assert_eq!(events[4]["reason"], "no_egress_policy");
+    assert!(events[4].get("rule_index").is_none());
     assert!(events[4].get("policy").is_none());
 }
 
@@ -960,7 +912,7 @@ async fn ordered_policy_stages_and_binding_presence() {
         );
         assert!(!allowed(p.handle(request("", udp)).await.unwrap()));
 
-        // Sandbox ALLOW cannot override a Workload DENY.
+        // Sandbox-bound requests still enforce the Workload policy order.
         seed(
             c,
             ResourceKind::Sandbox,
@@ -972,7 +924,6 @@ async fn ordered_policy_stages_and_binding_presence() {
                     attester: Some(Attester {
                         workload_uid: UID.into(),
                     }),
-                    traffic_policy: Some(policy(proto::Action::Allow)),
                     ..Default::default()
                 },
             ),
@@ -985,23 +936,6 @@ async fn ordered_policy_stages_and_binding_presence() {
             workload(Some(&["allow"])),
         );
         assert!(allowed(p.handle(request("sandbox", udp)).await.unwrap()));
-        seed(
-            c,
-            ResourceKind::Sandbox,
-            "sandbox",
-            any(
-                view::SANDBOX,
-                Sandbox {
-                    uid: "sandbox".into(),
-                    attester: Some(Attester {
-                        workload_uid: UID.into(),
-                    }),
-                    traffic_policy: Some(policy(proto::Action::Deny)),
-                    ..Default::default()
-                },
-            ),
-        );
-        assert!(!allowed(p.handle(request("sandbox", udp)).await.unwrap()));
     }
 }
 
@@ -1448,7 +1382,6 @@ async fn complete_dependency_cache_serves_connect_only_within_disconnect_grace()
                 attester: Some(Attester {
                     workload_uid: UID.into(),
                 }),
-                traffic_policy: Some(policy(proto::Action::Allow)),
                 ..Default::default()
             },
         ),
@@ -1523,7 +1456,6 @@ async fn snapshot_rebuilds_when_binding_changes_without_policy_deletion() {
                     attester: Some(Attester {
                         workload_uid: UID.into(),
                     }),
-                    traffic_policy: Some(policy(proto::Action::Allow)),
                     ..Default::default()
                 },
             ),
@@ -1624,32 +1556,26 @@ async fn snapshot_rebuilds_when_sandbox_changes_during_policy_discovery() {
         "/10.0.0.1",
         workload(Some(&["pending"])),
     );
-    let sandbox = |action| {
+    let sandbox = |workload_uid: &str| {
         any(
             view::SANDBOX,
             Sandbox {
                 uid: "sandbox".into(),
                 attester: Some(Attester {
-                    workload_uid: UID.into(),
+                    workload_uid: workload_uid.into(),
                 }),
-                traffic_policy: Some(policy(action)),
                 ..Default::default()
             },
         )
     };
-    seed(
-        c,
-        ResourceKind::Sandbox,
-        "sandbox",
-        sandbox(proto::Action::Allow),
-    );
+    seed(c, ResourceKind::Sandbox, "sandbox", sandbox(UID));
     let mut pending = Box::pin(p.handle(request("sandbox", false)));
     assert!(futures_util::poll!(&mut pending).is_pending());
     seed(
         c,
         ResourceKind::Sandbox,
         "sandbox",
-        sandbox(proto::Action::Deny),
+        sandbox("other-workload"),
     );
     seed(
         c,
@@ -1747,7 +1673,6 @@ async fn changed_policy_invalidates_evaluation_before_capture() {
                 attester: Some(Attester {
                     workload_uid: UID.into(),
                 }),
-                traffic_policy: Some(policy(proto::Action::Allow)),
                 ..Default::default()
             },
         ),

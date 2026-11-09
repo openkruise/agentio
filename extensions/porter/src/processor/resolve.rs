@@ -42,7 +42,6 @@ struct RequestSnapshot {
     workload: Arc<View>,
     sandbox: Option<Arc<View>>,
     policies: Vec<Arc<View>>,
-    sandbox_decision: Option<traffic::Evaluation>,
     workload_decision: Option<traffic::Evaluation>,
 }
 
@@ -131,7 +130,7 @@ impl Resolver<'_> {
                 .shared();
                 let sandbox = async {
                     if sandbox_id.is_empty() {
-                        return Ok((None, None));
+                        return Ok(None);
                     }
                     let resource = self
                         .client
@@ -144,26 +143,10 @@ impl Resolver<'_> {
                         debug!(reason = "sandbox_id_mismatch", "request denied");
                         return Err(ResolveError::Denied);
                     }
-                    let evaluation = target
-                        .map(|target| traffic::evaluate(sandbox.traffic_policy.iter(), target));
-                    if let (Some(target), Some(evaluation)) = (target, &evaluation)
-                        && !evaluation.allowed
-                    {
-                        log_policy(
-                            &sandbox.workload_uid,
-                            sandbox_id,
-                            target,
-                            "sandbox",
-                            None,
-                            evaluation,
-                        );
-                        return Err(ResolveError::Denied);
-                    }
-                    Ok((Some(resource), evaluation))
+                    Ok(Some(resource))
                 };
                 let identity = async {
-                    let (workload, (sandbox, sandbox_decision)) =
-                        tokio::try_join!(workload.clone(), sandbox)?;
+                    let (workload, sandbox) = tokio::try_join!(workload.clone(), sandbox)?;
                     let View::Workload(source) = workload.as_ref() else {
                         unreachable!("typed Workload watch")
                     };
@@ -176,7 +159,7 @@ impl Resolver<'_> {
                             return Err(ResolveError::Denied);
                         }
                     }
-                    Ok((workload, sandbox, sandbox_decision))
+                    Ok((workload, sandbox))
                 };
                 let policies = async {
                     if let Some(target) = target {
@@ -251,8 +234,7 @@ impl Resolver<'_> {
             {
                 continue;
             }
-            let ((workload, sandbox, sandbox_decision), (policies, workload_decision)) =
-                resolution?;
+            let ((workload, sandbox), (policies, workload_decision)) = resolution?;
             if captured[0].is_none() {
                 continue;
             }
@@ -279,7 +261,6 @@ impl Resolver<'_> {
                 workload,
                 sandbox: sandbox.map(|held| held.value),
                 policies,
-                sandbox_decision,
                 workload_decision,
             });
         }
@@ -320,7 +301,6 @@ impl Resolver<'_> {
             workload,
             sandbox,
             policies: _policies,
-            sandbox_decision,
             workload_decision,
         } = self
             .snapshot(
@@ -336,9 +316,6 @@ impl Resolver<'_> {
             unreachable!("typed Workload watch")
         };
         if let Some(target) = target {
-            if let Some(evaluation) = &sandbox_decision {
-                log_policy(&source.uid, sandbox_id, target, "sandbox", None, evaluation);
-            }
             let references = source.traffic_policies.as_ref().unwrap();
             let evaluation = workload_decision.as_ref().unwrap();
             let policy = evaluation
