@@ -32,14 +32,12 @@ message Sandbox {
   // The single Workload currently hosting this Sandbox. Absent when unassigned.
   // Replacing or clearing this field invalidates the previous host binding.
   Attester attester = 2;
-  reserved 3;
-  reserved "traffic_policy";
   // Extension policy bodies and bindings, replaced atomically with this Sandbox.
   // Entries of the same type retain their evaluation order. Different types
   // define their own execution stages; list order does not order those stages.
   // Consumers must reject this Sandbox update if any extension is unsupported
   // or cannot be decoded.
-  repeated google.protobuf.Any extensions = 4;
+  repeated google.protobuf.Any extensions = 3;
 
   message Attester {
     // Required, non-empty Workload.uid, used to locate its WDS Address resource.

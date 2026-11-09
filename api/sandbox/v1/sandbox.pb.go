@@ -54,7 +54,7 @@ type Sandbox struct {
 	// define their own execution stages; list order does not order those stages.
 	// Consumers must reject this Sandbox update if any extension is unsupported
 	// or cannot be decoded.
-	Extensions    []*any1.Any `protobuf:"bytes,4,rep,name=extensions,proto3" json:"extensions,omitempty"`
+	Extensions    []*any1.Any `protobuf:"bytes,3,rep,name=extensions,proto3" json:"extensions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -160,15 +160,15 @@ var File_api_sandbox_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_api_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\n" +
-	"\x1capi/sandbox/v1/sandbox.proto\x12\x0fagentio.sandbox\x1a\x19google/protobuf/any.proto\"\xd5\x01\n" +
+	"\x1capi/sandbox/v1/sandbox.proto\x12\x0fagentio.sandbox\x1a\x19google/protobuf/any.proto\"\xbf\x01\n" +
 	"\aSandbox\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12=\n" +
 	"\battester\x18\x02 \x01(\v2!.agentio.sandbox.Sandbox.AttesterR\battester\x124\n" +
 	"\n" +
-	"extensions\x18\x04 \x03(\v2\x14.google.protobuf.AnyR\n" +
+	"extensions\x18\x03 \x03(\v2\x14.google.protobuf.AnyR\n" +
 	"extensions\x1a-\n" +
 	"\bAttester\x12!\n" +
-	"\fworkload_uid\x18\x01 \x01(\tR\vworkloadUidJ\x04\b\x03\x10\x04R\x0etraffic_policyB8Z6github.com/openkruise/agentio/api/sandbox/v1;sandboxv1b\x06proto3"
+	"\fworkload_uid\x18\x01 \x01(\tR\vworkloadUidB8Z6github.com/openkruise/agentio/api/sandbox/v1;sandboxv1b\x06proto3"
 
 var (
 	file_api_sandbox_v1_sandbox_proto_rawDescOnce sync.Once
