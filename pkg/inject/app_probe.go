@@ -34,16 +34,6 @@ import (
 // rewritten probe map read by the proxy.
 const KubeAppProberEnvName = "ISTIO_KUBE_APP_PROBERS"
 
-// PrometheusScrapingConfigName identifies the serialized scrape configuration.
-const PrometheusScrapingConfigName = "ISTIO_PROMETHEUS_ANNOTATIONS"
-
-// PrometheusScrapeConfiguration captures the supported scrape annotations.
-type PrometheusScrapeConfiguration struct {
-	Scrape string `json:"scrape"`
-	Path   string `json:"path"`
-	Port   string `json:"port"`
-}
-
 // formatProberURL builds the well-known per-container proxy paths.
 func formatProberURL(container string) (string, string, string, string, string) {
 	return fmt.Sprintf("/app-health/%v/readyz", container),

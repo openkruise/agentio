@@ -25,7 +25,6 @@ const (
 	defaultProxyListenPort   = 15001
 	defaultProxyInboundPort  = 15006
 	defaultInterceptionMode  = "REDIRECT"
-	prometheusMergeValuesKey = "enablePrometheusMerge"
 	holdApplicationValuesKey = "holdApplicationUntilProxyStarts"
 	proxyMetadataValuesKey   = "proxyMetadata"
 )
@@ -54,7 +53,6 @@ type InjectionSettings struct {
 	StatusPort                      int
 	ProxyListenPort                 int
 	ProxyInboundListenPort          int
-	EnablePrometheusMerge           bool
 	HoldApplicationUntilProxyStarts bool
 }
 
@@ -67,7 +65,6 @@ func defaultInjectionSettings(discoveryAddress string) InjectionSettings {
 		StatusPort:             defaultStatusPort,
 		ProxyListenPort:        defaultProxyListenPort,
 		ProxyInboundListenPort: defaultProxyInboundPort,
-		EnablePrometheusMerge:  true,
 	}
 }
 
@@ -88,9 +85,6 @@ func injectionSettingsFromValues(
 	}
 	if configured, ok := values.intValue("global", "proxy", "statusPort"); ok && configured > 0 {
 		settings.StatusPort = configured
-	}
-	if configured, ok := values.boolValueWithPresence("sidecarInjectorWebhook", prometheusMergeValuesKey); ok {
-		settings.EnablePrometheusMerge = configured
 	}
 	settings.HoldApplicationUntilProxyStarts = values.boolValue("global", "proxy", holdApplicationValuesKey)
 	settings.Proxy.ProxyMetadata = values.stringMapValue("global", "proxy", proxyMetadataValuesKey)

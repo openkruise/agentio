@@ -20,6 +20,7 @@ package inject
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -229,9 +230,6 @@ func TestInjectZtunnelTemplate(t *testing.T) {
 	if _, found := patched.Annotations["sidecar.istio.io/status"]; found {
 		t.Fatal("init-container injection must not emit the Istio status annotation")
 	}
-	if got, want := patched.Annotations["prometheus.io/port"], "15020"; got != want {
-		t.Fatalf("prometheus.io/port = %q, want %q", got, want)
-	}
 	if value, found := patched.Annotations["istio.io/rev"]; found {
 		t.Fatalf("injected Pod has legacy revision annotation %q", value)
 	}
@@ -408,12 +406,84 @@ templates:
 	webhook := newTestWebhookWithValues(t, NativeSidecarModeDisabled, config, customValues)
 	patched := injectTestPod(t, webhook, testPod())
 
-	if got := patched.Annotations["prometheus.io/port"]; got != "16020" {
-		t.Fatalf("prometheus.io/port = %q, want 16020", got)
-	}
 	hello := FindContainer("hello", patched.Spec.Containers)
 	if got := hello.ReadinessProbe.HTTPGet.Port.IntValue(); got != 16020 {
 		t.Fatalf("rewritten readiness probe port = %d, want 16020", got)
+	}
+}
+
+func TestInjectPreservesPrometheusScrapeAnnotations(t *testing.T) {
+	for _, mode := range []NativeSidecarMode{NativeSidecarModeDisabled, NativeSidecarModeEnabled} {
+		for _, tt := range []struct {
+			name        string
+			annotations map[string]string
+		}{
+			{name: "absent"},
+			{
+				name: "application",
+				annotations: map[string]string{
+					"prometheus.io/scrape": "true",
+					"prometheus.io/port":   "8080",
+					"prometheus.io/path":   "/custom/metrics",
+				},
+			},
+			{
+				name: "disabled",
+				annotations: map[string]string{
+					"prometheus.io/scrape": "false",
+					"prometheus.io/port":   "8080",
+				},
+			},
+			{
+				name: "status-port",
+				annotations: map[string]string{
+					"prometheus.io/scrape": "true",
+					"prometheus.io/port":   "15020",
+					"prometheus.io/path":   "/metrics",
+				},
+			},
+			{
+				name: "annotation-aliases",
+				annotations: map[string]string{
+					"prometheus.io.scrape": "true",
+					"prometheus.io.port":   "8080",
+					"prometheus.io.path":   "/metrics",
+				},
+			},
+			{
+				name: "obsolete-merge-opt-in",
+				annotations: map[string]string{
+					"prometheus.agentio.kruise.io/merge-metrics": "true",
+					"prometheus.io/scrape":                       "true",
+					"prometheus.io/port":                         "8080",
+					"prometheus.io/path":                         "/metrics",
+				},
+			},
+		} {
+			t.Run(string(mode)+"/"+tt.name, func(t *testing.T) {
+				webhook := newTestWebhook(t, mode)
+				pod := testPod()
+				pod.Annotations = tt.annotations
+				once := injectTestPod(t, webhook, pod)
+				twice := injectTestPod(t, webhook, once.DeepCopy())
+				for _, injected := range []*corev1.Pod{once, twice} {
+					got := map[string]string{}
+					for key, value := range injected.Annotations {
+						if strings.HasPrefix(key, "prometheus") {
+							got[key] = value
+						}
+					}
+					if !maps.Equal(got, tt.annotations) {
+						t.Fatalf("scrape annotations = %v, want %v", got, tt.annotations)
+					}
+					for _, env := range FindSidecar(injected).Env {
+						if env.Name == "ISTIO_PROMETHEUS_ANNOTATIONS" {
+							t.Fatal("ztunnel must not receive unsupported metrics merge configuration")
+						}
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -602,9 +672,8 @@ func TestAgentioInjectionMetadata(t *testing.T) {
 			pod := testPod()
 			pod.Labels[networkLabel] = "edge-network"
 			pod.Annotations = map[string]string{
-				"prometheus.io/scrape":    "true",
-				"prometheus.io/port":      "8080",
-				prometheusMergeAnnotation: "false",
+				"prometheus.io/scrape": "true",
+				"prometheus.io/port":   "8080",
 			}
 			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
 				Name:  ProxyContainerName,
@@ -628,7 +697,7 @@ func TestAgentioInjectionMetadata(t *testing.T) {
 					t.Fatalf("proxy network = %q, want edge-network", got)
 				}
 				if injected.Annotations["prometheus.io/port"] != "8080" {
-					t.Fatal("disabled metrics merge must preserve the application's scrape port")
+					t.Fatal("injection must preserve the application's scrape port")
 				}
 				for key := range injected.Labels {
 					if strings.Contains(key, "istio.io/") {

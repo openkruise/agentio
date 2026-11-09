@@ -387,10 +387,6 @@ func postProcessPod(pod *corev1.Pod, injectedPod corev1.Pod, req InjectionParame
 
 	overwriteClusterInfo(pod, req)
 
-	if err := applyPrometheusMerge(pod, req.settings); err != nil {
-		return err
-	}
-
 	if err := applyRewrite(pod, req); err != nil {
 		return err
 	}

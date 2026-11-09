@@ -41,11 +41,10 @@ var AnnotationValidation = map[string]annotationValidationFunc{
 	annotation.SidecarTrafficIncludeInboundPorts.Name:     ValidateIncludeInboundPorts,
 	annotation.SidecarTrafficExcludeInboundPorts.Name:     ValidateExcludeInboundPorts,
 	annotation.SidecarTrafficExcludeOutboundPorts.Name:    ValidateExcludeOutboundPorts,
-	prometheusMergeAnnotation:                             validateBool,
-	proxyCPUAnnotation:                                    validateResourceQuantity,
-	proxyMemoryAnnotation:                                 validateResourceQuantity,
-	proxyCPULimitAnnotation:                               validateResourceQuantity,
-	proxyMemoryLimitAnnotation:                            validateResourceQuantity,
+	proxyCPUAnnotation:         validateResourceQuantity,
+	proxyMemoryAnnotation:      validateResourceQuantity,
+	proxyCPULimitAnnotation:    validateResourceQuantity,
+	proxyMemoryLimitAnnotation: validateResourceQuantity,
 }
 
 func validateAnnotations(annotations map[string]string) (err error) {
@@ -120,12 +119,6 @@ func validateStatusPort(port string) error {
 		return fmt.Errorf("excludeInboundPorts invalid: %v", e)
 	}
 	return nil
-}
-
-// validateBool validates that the given annotation value is a boolean.
-func validateBool(value string) error {
-	_, err := strconv.ParseBool(value)
-	return err
 }
 
 // validateResourceQuantity validates Kubernetes resource quantity - rejects control chars, validates format
