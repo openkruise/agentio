@@ -72,7 +72,6 @@ const (
 const (
 	injectionStatusAnnotation   = "sidecar.agentio.kruise.io/status"
 	proxyOverridesAnnotation    = "sidecar.agentio.kruise.io/overrides"
-	prometheusMergeAnnotation   = "prometheus.agentio.kruise.io/merge-metrics"
 	networkLabel                = "agentio.kruise.io/network"
 	injectTemplatesAnnotation   = "inject.agentio.kruise.io/templates"
 	nativeSidecarAnnotation     = "sidecar.agentio.kruise.io/native-sidecar"
