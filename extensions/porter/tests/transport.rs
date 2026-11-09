@@ -121,6 +121,24 @@ impl AggregatedDiscoveryService for Ads {
                         reply.removed_resources.push(name);
                         continue;
                     }
+                    if name == "unknown-type" {
+                        yield ads::DeltaDiscoveryResponse {
+                            type_url: "type.googleapis.com/example.Unknown".into(),
+                            nonce: "unknown-nonce".into(),
+                            ..Default::default()
+                        };
+                        reply.nonce = "after-unknown-nonce".into();
+                        reply.resources.push(ads::Resource {
+                            name: "after-unknown".into(),
+                            aliases: vec![name],
+                            resource: Some(prost_types::Any {
+                                type_url: ResourceKind::Workload.type_url().into(),
+                                value: Workload { uid: "after-unknown".into(), ..Default::default() }.encode_to_vec(),
+                            }),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
                     reply.resources.push(ads::Resource {
                         name: "canonical".into(),
                         aliases: vec![name.clone()],
@@ -312,6 +330,112 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
             && event["error"].as_str().unwrap().contains("invalid token")),
         "{output}"
     );
+}
+
+#[tokio::test]
+async fn unknown_type_is_nacked_without_reconnecting_or_dropping_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let root = dir.path().join("root.pem");
+    let token = dir.path().join("token");
+    tokio::fs::write(&root, cert.cert.pem()).await.unwrap();
+    tokio::fs::write(&token, "token").await.unwrap();
+    let (seen, mut requests) = mpsc::unbounded_channel();
+    let (disconnect, _) = broadcast::channel(1);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = CancellationToken::new();
+    let server_stop = stop.clone();
+    let server = tokio::spawn(
+        Server::builder()
+            .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(
+                cert.cert.pem(),
+                cert.signing_key.serialize_pem(),
+            )))
+            .unwrap()
+            .add_service(AggregatedDiscoveryServiceServer::new(Ads {
+                seen,
+                disconnect: disconnect.clone(),
+                handshake: None,
+                delayed_rejections: None,
+            }))
+            .serve_with_incoming_shutdown(
+                TcpListenerStream::new(listener),
+                server_stop.cancelled_owned(),
+            ),
+    );
+    let c = Client::new(CacheConfig::default(), Metrics::new());
+    let mut health = c.readiness();
+    let client = tokio::spawn(c.clone().run(
+        TransportConfig {
+            address: format!("localhost:{port}"),
+            root_path: root.to_string_lossy().into(),
+            token_path: token.to_string_lossy().into(),
+            node: ads::Node {
+                id: "porter-unknown-type-test".into(),
+                metadata: None,
+            },
+        },
+        stop.clone(),
+    ));
+    ready(&mut health, true).await;
+    let warm = c
+        .demand(ResourceKind::Workload, "warm", None)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let pending = tokio::spawn({
+            let c = c.clone();
+            async move { c.demand(ResourceKind::Workload, "unknown-type", None).await }
+        });
+        let mut rejected = false;
+        let mut accepted = false;
+        while !rejected || !accepted {
+            let request = requests.recv().await.unwrap();
+            match request.response_nonce.as_str() {
+                "unknown-nonce" => {
+                    assert_eq!(request.type_url, "type.googleapis.com/example.Unknown");
+                    let error = request.error_detail.unwrap();
+                    assert_eq!(error.code, 3);
+                    assert!(error.message.contains(&request.type_url));
+                    assert!(request.resource_names_subscribe.is_empty());
+                    assert!(request.resource_names_unsubscribe.is_empty());
+                    rejected = true;
+                }
+                "after-unknown-nonce" => {
+                    assert_eq!(request.type_url, ResourceKind::Workload.type_url());
+                    assert!(request.error_detail.is_none());
+                    accepted = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(matches!(pending.await.unwrap().unwrap().as_ref(),
+            agentio_porter::view::View::Workload(w) if w.uid == "after-unknown"
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &warm,
+            &c.demand(ResourceKind::Workload, "warm", None)
+                .await
+                .unwrap()
+        ));
+        assert!(*health.borrow());
+        assert_eq!(c.metrics.reconnects.get(), 0);
+        assert_eq!(
+            c.metrics
+                .nacks
+                .get_or_create(&ResourceType {
+                    resource_type: "unknown"
+                })
+                .get(),
+            1
+        );
+    })
+    .await
+    .unwrap();
+    stop.cancel();
+    client.await.unwrap();
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test]
