@@ -1328,7 +1328,6 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "readOnly": true,
                             "skipIfEmpty": true
                           },
                           {
@@ -2275,7 +2274,6 @@
                               },
                               "omitEmptyValues": true
                             },
-                            "readOnly": true,
                             "skipIfEmpty": true
                           },
                           {
