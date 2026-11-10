@@ -214,7 +214,7 @@ func (o *origin) serve(c net.Conn) {
 
 type runtime struct {
 	port       int
-	admin      int
+	admin      string
 	cmd        *exec.Cmd
 	listener   object
 	lds        string
@@ -304,8 +304,9 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 		root, err = os.MkdirTemp(artifacts, "envoy-")
 		must(t, err)
 	}
-	r := &runtime{port: freePort(t), admin: freePort(t), lds: filepath.Join(root, "lds.json")}
-	nested(b, "admin", "address", "socket_address")["port_value"] = r.admin
+	r := &runtime{lds: filepath.Join(root, "lds.json")}
+	// Let Envoy bind its own ephemeral ports instead of releasing reservations before startup.
+	nested(b, "admin", "address", "socket_address")["port_value"] = 0
 	resources := obj(b["static_resources"])
 	r.listener = obj(resources["listeners"].([]any)[0])
 	nested(r.listener, "address", "socket_address")["port_value"] = r.port
@@ -360,7 +361,15 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 	if value := os.Getenv("AGENTIO_TEST_WORKERS"); value != "" {
 		workers = value
 	}
-	r.cmd = exec.Command(binary, "-c", path, "--concurrency", workers, "--disable-hot-restart", "--log-level", "error")
+	adminPath := filepath.Join(root, "admin.address")
+	r.cmd = exec.Command(
+		binary,
+		"-c", path,
+		"--concurrency", workers,
+		"--disable-hot-restart",
+		"--admin-address-path", adminPath,
+		"--log-level", "error",
+	)
 	r.cmd.Stdout = log
 	r.cmd.Stderr = log
 	must(t, r.cmd.Start())
@@ -387,7 +396,36 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 			t.Log(string(data))
 		}
 	})
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
 	testutil.Eventually(t, func() bool {
+		address, err := os.ReadFile(adminPath)
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		must(t, err)
+		r.admin = strings.TrimSpace(string(address))
+		response, err := client.Get("http://" + r.admin + "/listeners?format=json")
+		if err != nil {
+			return false
+		}
+		defer closeTest(t, response.Body)
+		var listing struct {
+			Statuses []struct {
+				Address struct {
+					Socket struct {
+						Port int `json:"port_value"`
+					} `json:"socket_address"`
+				} `json:"local_address"`
+			} `json:"listener_statuses"`
+		}
+		must(t, json.NewDecoder(response.Body).Decode(&listing))
+		if len(listing.Statuses) != 1 {
+			return false
+		}
+		r.port = listing.Statuses[0].Address.Socket.Port
+		// Keep LDS updates on the same bound port.
+		nested(r.listener, "address", "socket_address")["port_value"] = r.port
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", r.port), 100*time.Millisecond)
 		if err != nil {
 			return false
@@ -404,7 +442,7 @@ func (r *runtime) stat(t *testing.T, name string) int {
 	t.Helper()
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(
-		fmt.Sprintf("http://127.0.0.1:%d/stats?format=json&filter=%s", r.admin, name),
+		fmt.Sprintf("http://%s/stats?format=json&filter=%s", r.admin, name),
 	)
 	must(t, err)
 	defer closeTest(t, resp.Body)
