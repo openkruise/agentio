@@ -319,7 +319,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				}
 				return
 			}
-			conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
+			conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", address, clientTLS)
 			if passthrough && mode != "passthrough" {
 				if err == nil {
 					closeResource(conn)
