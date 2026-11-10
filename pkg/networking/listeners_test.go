@@ -604,7 +604,8 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 					timeout.AsDuration() != wantTimeout {
 					t.Errorf("%s inspection timeout = %v, want %s", name, timeout, wantTimeout)
 				}
-				if !tc.legacyGateway && (len(listener.ListenerFilters) < 2 || !proto.Equal(listener.ListenerFilters[1], inspectionDeadlineFilter)) {
+				if !tc.legacyGateway &&
+					(len(listener.ListenerFilters) < 2 || !proto.Equal(listener.ListenerFilters[1], inspectionDeadlineFilter)) {
 					t.Errorf("%s is missing the pacing-aware inspection deadline", name)
 				}
 				if listener.GetContinueOnListenerFiltersTimeout() {

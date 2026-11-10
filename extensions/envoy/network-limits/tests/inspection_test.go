@@ -46,11 +46,21 @@ func TestEnvoyShapedProtocolInspection(t *testing.T) {
 			clusters = append(clusters, upstream)
 			ep := nested(cluster, "load_assignment")["endpoints"].([]any)[0]
 			lb := obj(ep)["lb_endpoints"].([]any)[0]
-			nested(lb, "endpoint")["address"] = object{"envoy_internal_address": object{"server_listener_name": "inspected"}}
-			cluster["transport_socket"] = object{"name": "envoy.transport_sockets.internal_upstream", "typed_config": object{
-				"@type":            "type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport",
-				"transport_socket": object{"name": "envoy.transport_sockets.raw_buffer", "typed_config": object{"@type": "type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer"}},
-			}}
+			nested(lb, "endpoint")["address"] = object{
+				"envoy_internal_address": object{"server_listener_name": "inspected"},
+			}
+			cluster["transport_socket"] = object{
+				"name": "envoy.transport_sockets.internal_upstream",
+				"typed_config": object{
+					"@type": "type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport",
+					"transport_socket": object{
+						"name": "envoy.transport_sockets.raw_buffer",
+						"typed_config": object{
+							"@type": "type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer",
+						},
+					},
+				},
+			}
 		}
 		resources["clusters"] = clusters
 		module := "/usr/local/lib/libenvoy_agentio_network_limits.so"
@@ -58,23 +68,52 @@ func TestEnvoyShapedProtocolInspection(t *testing.T) {
 			module = value
 		}
 		resources["listeners"] = []any{object{
-			"name": "inspected", "internal_listener": object{}, "listener_filters_timeout": "0s",
+			"name":                     "inspected",
+			"internal_listener":        object{},
+			"listener_filters_timeout": "0s",
 			"listener_filters": []any{
-				object{"name": "envoy.filters.listener.dynamic_modules", "typed_config": object{
-					"@type":                 "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
-					"dynamic_module_config": object{"name": "envoy_agentio_network_limits", "do_not_close": true, "module": object{"local": object{"filename": module}}},
-					"filter_name":           "envoy_agentio_inspection_deadline",
-				}},
-				object{"name": "envoy.filters.listener.http_inspector", "typed_config": object{"@type": "type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector"}},
+				object{
+					"name": "envoy.filters.listener.dynamic_modules",
+					"typed_config": object{
+						"@type": "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+						"dynamic_module_config": object{
+							"name":         "envoy_agentio_network_limits",
+							"do_not_close": true,
+							"module":       object{"local": object{"filename": module}},
+						},
+						"filter_name": "envoy_agentio_inspection_deadline",
+					},
+				},
+				object{
+					"name": "envoy.filters.listener.http_inspector",
+					"typed_config": object{
+						"@type": "type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector",
+					},
+				},
 			},
-			"filter_chains": []any{object{"filters": []any{object{"name": "envoy.filters.network.tcp_proxy", "typed_config": object{
-				"@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy", "stat_prefix": "inspection", "cluster": "origin",
-			}}}}},
+			"filter_chains": []any{object{"filters": []any{object{
+				"name": "envoy.filters.network.tcp_proxy",
+				"typed_config": object{
+					"@type":       "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+					"stat_prefix": "inspection",
+					"cluster":     "origin",
+				},
+			}}}},
 		}}
-		b["bootstrap_extensions"] = []any{object{"name": "envoy.bootstrap.internal_listener", "typed_config": object{"@type": "type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener"}}}
-		b["layered_runtime"] = object{"layers": []any{object{"name": "agentio", "static_layer": object{
-			"envoy.reloadable_features.enable_send_rst_on_user_space_socket": false,
-		}}}}
+		b["bootstrap_extensions"] = []any{
+			object{
+				"name": "envoy.bootstrap.internal_listener",
+				"typed_config": object{
+					"@type": "type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener",
+				},
+			},
+		}
+		b["layered_runtime"] = object{"layers": []any{object{
+			"name": "agentio",
+			"static_layer": object{
+				"envoy.reloadable_features.enable_send_rst_on_user_space_socket": false,
+			},
+		}}}
 	})
 	client := newClient(t, r.port)
 	t.Run("queued_bytes_do_not_consume_inspection_time", func(t *testing.T) {

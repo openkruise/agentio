@@ -47,7 +47,9 @@ func buildInspectionDeadlineListenerFilter() *listenerv3.ListenerFilter {
 		"dynamic_module_config": map[string]any{
 			"name":         "envoy_agentio_network_limits",
 			"do_not_close": true,
-			"module":       map[string]any{"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_network_limits.so"}},
+			"module": map[string]any{
+				"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_network_limits.so"},
+			},
 		},
 		"filter_name": "envoy_agentio_inspection_deadline",
 	})
@@ -57,7 +59,8 @@ func buildInspectionDeadlineListenerFilter() *listenerv3.ListenerFilter {
 	return &listenerv3.ListenerFilter{
 		Name: "envoy.filters.listener.dynamic_modules",
 		ConfigType: &listenerv3.ListenerFilter_TypedConfig{TypedConfig: mustPack(&udpatypev1.TypedStruct{
-			TypeUrl: "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter", Value: fields,
+			TypeUrl: "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+			Value:   fields,
 		})},
 	}
 }

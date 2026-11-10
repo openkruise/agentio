@@ -160,10 +160,16 @@ var (
 	outerTLSIdentityFilter = buildOuterTLSIdentityFilter(outerSNIKey)
 
 	inspectionDeadlineFilter = buildInspectionDeadlineListenerFilter()
-	originalDstFilter        = listenerFilter("envoy.filters.listener.original_dst", mustPack(&originaldstv3.OriginalDst{}))
-	tlsInspectorFilter       = listenerFilter("envoy.filters.listener.tls_inspector", mustPack(&tlsinspectorv3.TlsInspector{
-		InitialReadBufferSize: wrapperspb.UInt32(16 * 1024),
-	}))
+	originalDstFilter        = listenerFilter(
+		"envoy.filters.listener.original_dst",
+		mustPack(&originaldstv3.OriginalDst{}),
+	)
+	tlsInspectorFilter = listenerFilter(
+		"envoy.filters.listener.tls_inspector",
+		mustPack(&tlsinspectorv3.TlsInspector{
+			InitialReadBufferSize: wrapperspb.UInt32(16 * 1024),
+		}),
+	)
 	httpInspectorFilter = listenerFilter(
 		"envoy.filters.listener.http_inspector",
 		mustPack(&httpinspectorv3.HttpInspector{}),

@@ -290,7 +290,13 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 	return startEnvoyBootstrap(t, plain, tlsPort, edit, ecds, nil)
 }
 
-func startEnvoyBootstrap(t *testing.T, plain, tlsPort int, edit func(object), ecds bool, editBootstrap func(object)) *runtime {
+func startEnvoyBootstrap(
+	t *testing.T,
+	plain, tlsPort int,
+	edit func(object),
+	ecds bool,
+	editBootstrap func(object),
+) *runtime {
 	t.Helper()
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
