@@ -315,7 +315,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 
 	// Gateway exclusions retain precedence over both ztunnel actions and
 	// gateway policy. tls_action_test.go covers the action branch.
-	internalMatcher := listeners[MainInternal].GetFilterChainMatcher()
+	internalMatcher := routingMatcher(listeners[MainInternal])
 	internalTree := internalMatcher.GetMatcherTree()
 	if got := internalTree.GetInput().GetTypedConfig().GetTypeUrl(); got != transportProtocolInputType {
 		t.Errorf("MainInternal outer matcher input = %q, want %q", got, transportProtocolInputType)

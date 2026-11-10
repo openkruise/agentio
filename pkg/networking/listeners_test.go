@@ -15,6 +15,7 @@
 package networking
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestGatewayHTTP10(t *testing.T) {
 					return &listenerv3.Listener{}
 				})
 				for _, name := range []string{MainInternal, MainForward} {
-					matcher := listeners[name].GetFilterChainMatcher()
+					matcher := routingMatcher(listeners[name])
 					if name == MainInternal {
 						matcher = matcher.GetOnNoMatch().GetMatcher()
 					}
@@ -357,7 +358,7 @@ func TestBuildWithoutSNITrafficPolicyUsesProtocolMatcher(t *testing.T) {
 	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain}; !equalStrings(gotChains, want) {
 		t.Fatalf("MainInternal filter chains = %v, want %v without SNI policy runtime", gotChains, want)
 	}
-	tls := internal.GetFilterChainMatcher().GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
+	tls := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
 	if got := tls.GetAction().GetName(); got != forwardTLSChain {
 		t.Fatalf("TLS fallback chain = %q, want %q without SNI policy runtime", got, forwardTLSChain)
 	}
@@ -383,7 +384,7 @@ func TestBuildStaticSNIMatcherOmitsEmptyHostGroups(t *testing.T) {
 		func() *listenerv3.Listener { return &listenerv3.Listener{} },
 	)
 	domains := &xdsmatcherv3.ServerNameMatcher{}
-	if err := listeners[MainInternal].GetFilterChainMatcher().
+	if err := routingMatcher(listeners[MainInternal]).
 		GetMatcherTree().
 		GetCustomMatch().
 		GetTypedConfig().
@@ -686,7 +687,7 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 					t.Errorf("%s must close the connection when inspection times out", name)
 				}
 				// Non-HTTP traffic that completes inspection retains TCP forwarding.
-				fallback := listener.GetFilterChainMatcher().GetOnNoMatch()
+				fallback := routingMatcher(listener).GetOnNoMatch()
 				for fallback.GetMatcher() != nil {
 					fallback = fallback.GetMatcher().GetOnNoMatch()
 				}
@@ -699,5 +700,68 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func routingMatcher(listener *listenerv3.Listener) *xdsmatcherv3.Matcher {
+	matcher := listener.GetFilterChainMatcher()
+	if matcher.GetMatcherList() != nil {
+		return matcher.GetMatcherList().GetMatchers()[0].GetOnMatch().GetMatcher()
+	}
+	return matcher
+}
+
+func TestSNIHostnameMatcher(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		test.SetForTest(t, &features.EnableSNITrafficPolicy, enabled)
+		for _, legacy := range []bool{false, true} {
+			resources, err := Build(Inputs{
+				LegacyGateway:    legacy,
+				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
+				TrustDomain:      "cluster.local",
+				Gateway: testGateway(&configv1.EgressGateway{TlsTermination: &configv1.TlsTerminationConfig{
+					IncludeHosts: []string{"*"},
+					ExcludeHosts: []string{"*"},
+				}}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener {
+				return &listenerv3.Listener{}
+			})
+			matcher := listeners[MainInternal].GetFilterChainMatcher()
+			if legacy {
+				if matcher.GetMatcherList() != nil {
+					t.Fatal("legacy matcher must remain unchanged")
+				}
+				continue
+			}
+			if matcher.OnNoMatch != nil || len(matcher.GetMatcherList().GetMatchers()) != 1 {
+				t.Fatal("invalid SNI must have no filter-chain fallback")
+			}
+			predicates := matcher.GetMatcherList().GetMatchers()[0].GetPredicate().GetOrMatcher().GetPredicate()
+			if len(predicates) != 2 ||
+				!proto.Equal(predicates[0].GetNotMatcher().GetSinglePredicate().GetInput(), transportProtocolInput) ||
+				predicates[0].GetNotMatcher().GetSinglePredicate().GetValueMatch().GetExact() != "tls" ||
+				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) {
+				t.Fatal("only cleartext or a valid TLS hostname may reach the routing matcher")
+			}
+			pattern := predicates[1].GetSinglePredicate().GetValueMatch().GetSafeRegex().GetRegex()
+			// Envoy StringMatcher uses a full match; anchor the Go equivalent.
+			hostname := regexp.MustCompile("^(?:" + pattern + ")$")
+			for _, name := range []string{"api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
+				if !hostname.MatchString(name) {
+					t.Errorf("valid SNI %q rejected", name)
+				}
+			}
+			for _, name := range []string{"", "api.example.com:8443", "api.example.com:443", "[::1]:443",
+				"user@api.example.com", "api.example.com/path", "*.example.com", "a..example", "-api.example",
+				"api-.example", "api_example.com", "é.example"} {
+				if hostname.MatchString(name) {
+					t.Errorf("invalid SNI %q accepted", name)
+				}
+			}
+		}
 	}
 }

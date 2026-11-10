@@ -379,6 +379,8 @@ An HTTPS connection reaches gateway HTTP filters such as EPE only when its SNI h
 
 Native Envoy gateways resolve the actual ClientHello SNI for TLS passthrough and connect to that name on the original destination port. They do not fall back to the original destination IP when SNI is absent or resolution fails. The gateway's DNS destination restrictions apply to this resolution. TLS passthrough preserves the client's TLS handshake; it does not create an additional upstream TLS layer.
 
+Native gateways reject malformed SNI hostnames, including names containing a port, before selecting a TLS filter chain. This check also applies to excluded hosts and when SNI traffic policy is disabled, so SNI cannot override the original destination port.
+
 After TLS termination, non-HTTP TCP payloads and application-level CONNECT requests use the saved outer SNI to resolve the upstream destination and verify its certificate, retaining the original destination port. Nested TLS or an inner CONNECT authority cannot select a different outer destination. HTTP requests continue to require an authority consistent with the outer SNI. Matching `serviceEntries` preserve the explicitly bound original endpoint instead of resolving SNI again, including TLS passthrough and post-termination forwarding. Legacy proxyv2 gateways retain their existing forwarding behavior during upgrades.
 
 Configure all three parts of the trust boundary:

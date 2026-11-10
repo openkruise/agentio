@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -72,6 +73,132 @@ data:
 		Check:           check.OK(),
 		Retry:           harness.FixedRetry(2*time.Minute, 5*time.Second),
 	})
+}
+
+func TestSandboxSNIRejectsPortOverride(t *testing.T) {
+	environment, scope := rig.BeginScenario(t)
+	src, dst := trafficFixture.Client, trafficFixture.Server
+	const gatewayConfig = `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ` + harness.ConfigMapName + `
+data:
+  config: |
+    egressPolicies:
+    - gateway:
+        service: egress-gateway.{{ .Namespace }}.svc.cluster.local
+      policy: GATEWAY
+    egressGateways:
+    - name: egress-gateway
+      namespace: {{ .Namespace }}
+{{ if .Exclude }}
+      tlsTermination:
+        includeHosts: ["*"]
+        excludeHosts: ["*"]
+{{ end }}
+`
+	rig.ApplyConfig(t, scope, map[string]any{
+		"Namespace": resolvedAgentioConfig.Namespace,
+		"Exclude":   false,
+	}, gatewayConfig)
+	// Both destinations must be healthy so a failed attack cannot be attributed to an unreachable port.
+	for _, port := range []int{443, 9443} {
+		src.CallOrFail(t, echo.CallOptions{
+			Protocol:   echo.HTTPS,
+			Address:    dst.Address(),
+			Port:       port,
+			ServerName: dst.Address(),
+			Count:      1,
+			Check:      check.OK(),
+			Retry:      harness.FixedRetry(2*time.Minute, time.Second),
+		})
+	}
+	e2econfig.New(scope).Eval(src.Namespace(), nil, `
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata:
+  name: sni-original-port
+spec:
+  priority: 1
+  selector:
+    matchLabels: {app: client}
+  rules:
+  - name: allow-original-443
+    match: [{domains: ["*"], ports: [443]}]
+    actions: {tls: {action: Passthrough}}
+  - name: deny-other-ports
+    match: [{domains: ["*"]}]
+    actions: {tls: {action: Deny}}
+`).ApplyOrFail(t, kube.CreateOnly)
+	for _, excluded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("excluded=%v", excluded), func(t *testing.T) {
+			if excluded {
+				rig.ApplyConfig(t, scope, map[string]any{
+					"Namespace": resolvedAgentioConfig.Namespace,
+					"Exclude":   true,
+				}, gatewayConfig)
+			}
+			portCheck := check.Error()
+			if excluded {
+				portCheck = check.OK()
+			}
+			// Wait for the actual policy or exclusion to reach the gateway before sending the attack.
+			src.CallOrFail(t, echo.CallOptions{
+				Protocol:   echo.HTTPS,
+				Address:    dst.Address(),
+				Port:       9443,
+				ServerName: dst.Address(),
+				Count:      1,
+				Check:      portCheck,
+				Retry:      harness.FixedRetry(2*time.Minute, time.Second),
+			})
+			src.CallOrFail(t, echo.CallOptions{
+				Protocol:   echo.HTTPS,
+				Address:    dst.Address(),
+				Port:       443,
+				ServerName: dst.Address(),
+				Count:      1,
+				Check:      check.OK(),
+				Retry:      harness.FixedRetry(2*time.Minute, time.Second),
+			})
+			malformed := net.JoinHostPort(dst.Address(), "9443")
+			if excluded {
+				// DNS is case-insensitive; distinct SNI prevents reusing the previous case's denial log.
+				malformed = strings.ToUpper(malformed)
+			}
+			src.CallOrFail(t, echo.CallOptions{
+				Protocol:   echo.HTTPS,
+				Address:    dst.Address(),
+				Port:       443,
+				ServerName: malformed,
+				Count:      1,
+				Check:      check.Error(),
+			})
+			harness.RetryAssertion(t, 30*time.Second, time.Second, func() error {
+				ctx, cancel := e2e.Context(t, 10*time.Second)
+				defer cancel()
+				lines := int64(200)
+				logs, err := logsFirstReadyPod(ctx, environment, resolvedAgentioConfig.Namespace,
+					harness.GatewayPodSelector, "agentio-proxy", &lines)
+				if err != nil {
+					return err
+				}
+				for line := range strings.SplitSeq(logs, "\n") {
+					var entry struct {
+						SNI      string `json:"requested_server_name"`
+						Details  string `json:"response_code_details"`
+						Upstream string `json:"upstream_host"`
+					}
+					if json.Unmarshal([]byte(line), &entry) == nil && entry.SNI == malformed &&
+						entry.Details == "filter_chain_not_found" && (entry.Upstream == "" || entry.Upstream == "-") {
+						return nil
+					}
+				}
+				return fmt.Errorf("gateway has not rejected malformed SNI %q before upstream selection", malformed)
+			})
+		})
+	}
 }
 
 func TestSandboxOnDemandCert(t *testing.T) {

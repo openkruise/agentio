@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	xdsmatcher "github.com/cncf/xds/go/xds/type/matcher/v3"
 	bootstrap "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -98,6 +99,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	for _, mode := range []string{
 		"tcp", "nested_tls", "bad_certificate", "idle", "loopback_tcp",
 		"passthrough", "passthrough_no_sni", "passthrough_dns_failure", "passthrough_loopback",
+		"passthrough_port_override",
 		"http1", "http2", "fqdn_http1", "fqdn_http2",
 		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2", "connect_pinned_http1", "connect_pinned_http2",
 	} {
@@ -215,12 +217,17 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			// A connection to the original IP would fail; only SNI resolution reaches the origin.
 			original := net.JoinHostPort("127.0.0.2", upstreamPort)
+			if mode == "passthrough_port_override" {
+				original = "127.0.0.2:443"
+			}
 			address := startTLSEnvoy(t, binary, original, leaves[serverName], mode)
 			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
 			if mode == "passthrough_no_sni" {
 				clientTLS.ServerName = "127.0.0.1" // Go omits SNI for literal IPs.
 			} else if mode == "passthrough_dns_failure" {
 				clientTLS.ServerName = "unresolvable.invalid"
+			} else if mode == "passthrough_port_override" {
+				clientTLS.ServerName = net.JoinHostPort(upstreamHost, upstreamPort)
 			}
 			if strings.HasPrefix(mode, "connect") && strings.HasSuffix(mode, "http1") {
 				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
@@ -464,6 +471,8 @@ func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Issued
 				Address:         socketAddress("127.0.0.1", uint32(address.Port)),
 				ListenerFilters: []*listener.ListenerFilter{tlsInspectorFilter},
 				FilterChains:    []*listener.FilterChain{chain},
+				FilterChainMatcher: b.sniHostnameMatcher(exactMatcher(transportProtocolInput,
+					map[string]*xdsmatcher.Matcher_OnMatch{"tls": b.toChain(chain.Name)}, nil)),
 			}},
 			Clusters: []*cluster.Cluster{
 				b.buildInternalCluster(MainForward),
