@@ -108,7 +108,7 @@ fn identity(attributes: Option<&Struct>) -> IdentityEvidence<'_> {
         certificate: attribute(attributes, "filter_state['agentio.peer.certificate']"),
         peer_ip: attribute(attributes, "filter_state['agentio.downstream.ip']"),
         principal: attribute(attributes, "filter_state['agentio.peer.principal']"),
-        sandbox_id: attribute(attributes, "filter_state['agentio.sandbox.id']"),
+        requested_sandbox_id: attribute(attributes, "filter_state['agentio.sandbox.id']"),
     }
 }
 
@@ -173,14 +173,14 @@ impl Processor {
             timeout: self.timeout,
         };
         let response = match resolver.resolve(&parsed.resolution).await {
-            Ok(resolved) => Ok(match self.gateway {
-                Gateway::AgentioEgress => agentio_egress::encode(
+            Ok(resolved) => match self.gateway {
+                Gateway::AgentioEgress => Ok(agentio_egress::encode(
                     resolved,
                     parsed.protocol,
                     self.enable_sni_traffic_policy,
-                ),
+                )),
                 Gateway::Agentgateway => agentgateway::encode(resolved),
-            }),
+            },
             Err(ResolveError::Denied) => Ok(denied()),
             Err(ResolveError::Discovery(DemandError::NotFound)) => {
                 debug!(reason = "resource_not_found", "request denied");

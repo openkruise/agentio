@@ -384,6 +384,49 @@ fn http_request(address: &str, port: f64) -> extproc::ProcessingRequest {
 }
 
 #[tokio::test]
+async fn agentgateway_rejects_runtime_derived_sandbox() {
+    for enforce_policy in [false, true] {
+        let mut p = processor();
+        p.gateway = crate::processor::Gateway::Agentgateway;
+        p.enable_traffic_policy = enforce_policy;
+        p.authenticator = Arc::new(RuntimeIdentity {
+            delay: Duration::ZERO,
+            failure: None,
+        });
+        seed(
+            &p.client,
+            ResourceKind::Workload,
+            "runtime-instance",
+            workload(Some(&[])),
+        );
+        seed(
+            &p.client,
+            ResourceKind::Sandbox,
+            "runtime-sandbox",
+            any(
+                view::SANDBOX,
+                Sandbox {
+                    uid: "runtime-sandbox".into(),
+                    attester: Some(Attester {
+                        workload_uid: UID.into(),
+                    }),
+                    ..Default::default()
+                },
+            ),
+        );
+        let error = p
+            .handle(http_request("192.0.2.1", 443.0))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "agentgateway does not support Sandbox identity"
+        );
+    }
+}
+
+#[tokio::test]
 async fn agentgateway_resolves_identity_without_sni_or_connect_metrics() {
     let mut p = processor();
     p.gateway = crate::processor::Gateway::Agentgateway;

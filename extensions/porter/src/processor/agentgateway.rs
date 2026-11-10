@@ -27,7 +27,7 @@ pub(super) fn parse<'a>(
         ));
     }
     let identity = identity(attributes);
-    if !identity.sandbox_id.is_empty() {
+    if !identity.requested_sandbox_id.is_empty() {
         return Err(Status::invalid_argument(
             "agentgateway does not support Sandbox identity",
         ));
@@ -61,9 +61,14 @@ pub(super) fn parse<'a>(
     })
 }
 
-pub(super) fn encode(resolved: Resolved) -> extproc::ProcessingResponse {
-    allowed(identity_metadata(
+pub(super) fn encode(resolved: Resolved) -> Result<extproc::ProcessingResponse, Status> {
+    if resolved.sandbox.is_some() {
+        return Err(Status::invalid_argument(
+            "agentgateway does not support Sandbox identity",
+        ));
+    }
+    Ok(allowed(identity_metadata(
         resolved.workload.as_ref(),
         resolved.instance,
-    ))
+    )))
 }

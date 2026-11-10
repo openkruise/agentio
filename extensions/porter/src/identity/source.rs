@@ -8,23 +8,33 @@ use tracing::debug;
 
 use super::certificate_instance;
 
-/// Evidence captured by the gateway from its authenticated downstream connection.
+/// Connection evidence and the request's unverified Sandbox selection.
 #[derive(Clone, Copy)]
 pub struct Evidence<'a> {
+    /// TLS-verified peer certificate captured by the gateway, as PEM or URL-encoded PEM.
+    /// Empty when no certificate was captured; never sourced from a request header.
     pub certificate: &'a str,
+    /// Direct connection peer IP, which need not identify the Sandbox. Empty if absent.
     pub peer_ip: &'a str,
+    /// TLS-authenticated peer principal supplied by the gateway. Empty if absent.
     pub principal: &'a str,
-    pub sandbox_id: &'a str,
+    /// Unverified request selection; empty means no Sandbox was requested.
+    pub requested_sandbox_id: &'a str,
 }
 
 pub enum WorkloadIdentity {
+    /// WDS resource name or alias identifying an authenticated workload instance.
+    /// The Adapter must bind this key to trusted evidence; Pod/IP checks do not apply.
     Instance(String),
+    /// Default-network IP lookup for a non-hostNetwork Pod in the configured cluster.
+    /// The resolver must verify its Pod identity and matching principal.
     Peer { ip: IpAddr, principal: String },
 }
 
 /// Discovery must still validate the selected Workload and Sandbox binding.
 pub struct ConnectionIdentity {
     pub workload: WorkloadIdentity,
+    /// Empty means no Sandbox selection; nonempty still requires discovery binding checks.
     pub sandbox_id: String,
 }
 
@@ -69,7 +79,7 @@ impl Authenticator for Native {
         };
         Ok(ConnectionIdentity {
             workload,
-            sandbox_id: evidence.sandbox_id.into(),
+            sandbox_id: evidence.requested_sandbox_id.into(),
         })
     }
 }
