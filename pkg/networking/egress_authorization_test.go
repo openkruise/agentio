@@ -15,6 +15,7 @@
 package networking
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -25,6 +26,54 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, terminatedTLS := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy=%t/tls=%t", legacy, terminatedTLS), func(t *testing.T) {
+				b := &resourceBuilder{legacyGateway: legacy}
+				h, err := b.buildForwardHCM(HTTPDynamicForwardProxy, effectiveConfig{
+					gateway: &configv1.EgressGateway{ServiceEntries: []*configv1.EgressServiceEntry{{
+						Hosts:     []string{"test.invalid"},
+						Endpoints: []*configv1.EgressServiceEntryEndpoint{{Address: "192.0.2.1"}},
+					}}},
+					extProc: &configv1.ExtProcProvider{Service: "epe", Port: 9002},
+				}, terminatedTLS)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writes := map[string]bool{}
+				lastWriter := map[string]string{}
+				for _, filter := range h.HttpFilters {
+					cfg := &state.Config{}
+					if !filter.GetTypedConfig().MessageIs(cfg) {
+						continue
+					}
+					if err := filter.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+						t.Fatal(err)
+					}
+					for _, value := range cfg.OnRequestHeaders {
+						key := value.GetObjectKey()
+						if key != dynamicHostKey && key != dynamicPortKey {
+							continue
+						}
+						if previous, exists := writes[key]; exists && (previous || previous != value.ReadOnly) {
+							t.Fatalf(
+								"%s conflicts with %s writing %s: readOnly=%t -> %t",
+								filter.Name, lastWriter[key], key, previous, value.ReadOnly,
+							)
+						}
+						writes[key], lastWriter[key] = value.ReadOnly, filter.Name
+					}
+				}
+				if lastWriter[dynamicHostKey] != "agentio.egress_target" ||
+					lastWriter[dynamicPortKey] != "agentio.egress_target" {
+					t.Fatal("EPE must select the final DFP address")
+				}
+			})
+		}
+	}
+}
 
 func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 	in := Inputs{

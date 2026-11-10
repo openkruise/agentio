@@ -33,7 +33,7 @@ func (b *resourceBuilder) egressTargetFilters() []*hcm.HttpFilter {
 				Value: &common.FilterStateValue_FormatString{
 					FormatString: formatString("%DYNAMIC_METADATA(agentio.route:upstream:ip)%"),
 				},
-				ReadOnly:    true,
+				// Envoy requires the same mutability when replacing the route candidate.
 				SkipIfEmpty: true,
 			},
 			{

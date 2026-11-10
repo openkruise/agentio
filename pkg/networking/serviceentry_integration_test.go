@@ -66,6 +66,18 @@ func TestEnvoyServiceEntryAuthorization(t *testing.T) {
 	if binary == "" {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
 	}
+	testEnvoyServiceEntryAuthorization(t, binary, false)
+}
+
+func TestLegacyEnvoyServiceEntryAuthorization(t *testing.T) {
+	binary := os.Getenv("AGENTIO_TEST_LEGACY_ENVOY_BINARY")
+	if binary == "" {
+		t.Skip("set AGENTIO_TEST_LEGACY_ENVOY_BINARY")
+	}
+	testEnvoyServiceEntryAuthorization(t, binary, true)
+}
+
+func testEnvoyServiceEntryAuthorization(t *testing.T, binary string, legacy bool) {
 	for _, mode := range []string{"authorization", "routing_only", "no_epe", "explicit_without_serviceentry"} {
 		t.Run(mode, func(t *testing.T) {
 			enabled := mode == "authorization" || mode == "explicit_without_serviceentry"
@@ -170,7 +182,7 @@ func TestEnvoyServiceEntryAuthorization(t *testing.T) {
 			if mode == "explicit_without_serviceentry" {
 				gateway.ServiceEntries = nil
 			}
-			b := &resourceBuilder{}
+			b := &resourceBuilder{legacyGateway: legacy}
 			effective := effectiveConfig{
 				gateway: gateway,
 				extProc: &configv1.ExtProcProvider{
@@ -186,7 +198,7 @@ func TestEnvoyServiceEntryAuthorization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "explicit_without_serviceentry" {
+			if mode == "explicit_without_serviceentry" && !legacy {
 				manager.HttpFilters = append([]*hcm.HttpFilter{
 					httpFilter("test.route_upstream", b.staticEndpointCandidateConfig("127.0.0.3")),
 				}, manager.HttpFilters...)
@@ -314,11 +326,14 @@ func TestEnvoyServiceEntryAuthorization(t *testing.T) {
 				if err := logFile.Close(); err != nil {
 					t.Error(err)
 				}
+				log, err := os.ReadFile(logPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(log), "FilterStateAccessViolation") {
+					t.Error("DFP target override violated Envoy filter-state mutability")
+				}
 				if t.Failed() {
-					log, err := os.ReadFile(logPath)
-					if err != nil {
-						t.Error(err)
-					}
 					t.Logf("Envoy: %s", log)
 				}
 			})
@@ -411,6 +426,14 @@ func TestEnvoyServiceEntryAuthorization(t *testing.T) {
 				}
 			}
 			if mode == "explicit_without_serviceentry" {
+				if legacy {
+					// Legacy graphs without ServiceEntries do not publish route candidates.
+					// An explicit EPE target and normal DNS routing must still work.
+					check("unmapped.invalid", "/explicit", 200, "127.0.0.3")
+					check(net.JoinHostPort("localhost", strconv.Itoa(port)), "/rewrite", 200, "127.0.0.1")
+					check("unmapped.invalid", "/", 500, "")
+					return
+				}
 				check("unmapped.invalid", "/", 200, "127.0.0.3")
 				check("unmapped.invalid", "/rewrite", 200, "127.0.0.3")
 				return

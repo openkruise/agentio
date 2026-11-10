@@ -296,7 +296,7 @@ func TestEnvoyBandwidth(t *testing.T) {
 			must(t, c.Close())
 		}
 		client := http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/ready", r.admin))
+		resp, err := client.Get(fmt.Sprintf("http://%s/ready", r.admin))
 		must(t, err)
 		must(t, resp.Body.Close())
 		if resp.StatusCode != 200 {

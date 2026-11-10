@@ -935,6 +935,19 @@ func TestLegacyGatewayGraphParity(t *testing.T) {
 							TypedConfig: mustPack(&routerv3.Router{SuppressEnvoyHeaders: true}),
 						}
 					}
+					if httpFilter.Name == "agentio.egress_target" {
+						state := &setstatehttpv3.Config{}
+						if err := httpFilter.GetTypedConfig().UnmarshalTo(state); err != nil {
+							t.Fatal(err)
+						}
+						// EPE replaces the mutable route candidate with the same mutability.
+						for _, value := range state.OnRequestHeaders {
+							if value.GetObjectKey() == dynamicHostKey {
+								value.ReadOnly = false
+							}
+						}
+						httpFilter.ConfigType = &hcmv3.HttpFilter_TypedConfig{TypedConfig: mustPack(state)}
+					}
 				}
 				filter.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: mustPack(manager)}
 			}
