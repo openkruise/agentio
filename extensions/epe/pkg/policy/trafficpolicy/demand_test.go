@@ -372,7 +372,6 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 			t.Fatal(err)
 		}
 	}
-	beforeInvalid := client.Snapshot().Resources[model.SecurityProfileType]["global/policy"]
 	metricValue := func(name string) float64 {
 		t.Helper()
 		families, err := metrics.Registry.Gather()
@@ -394,10 +393,25 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 		return 0
 	}
 	beforeFailures := metricValue("epe_profile_compile_failures_total")
+	forwardCompatible := resource(
+		model.SecurityProfileType,
+		"global/policy",
+		&sec.SecurityProfile{Name: "policy", PolicyJson: []byte(`{"future":true,"rules":[{"name":"compatible","match":[{"domains":["*"]}],"actions":{"futureAction":{}}}]}`)},
+		model.ResourceFacts{},
+	)
+	apply(model.ResourceChange{Key: forwardCompatible.Key, New: &forwardCompatible})
+	await(func() bool {
+		profiles, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
+		return err == nil && len(profiles) == 1 && len(profiles[0].Rules) == 1 && profiles[0].Rules[0].Name == "compatible"
+	})
+	if rejected.Load() || metricValue("epe_profile_compile_failures_total") != beforeFailures {
+		t.Fatal("unknown fields rejected the update")
+	}
+	beforeInvalid := client.Snapshot().Resources[model.SecurityProfileType]["global/policy"]
 	bad := resource(
 		model.SecurityProfileType,
 		"global/policy",
-		&sec.SecurityProfile{Name: "policy", PolicyJson: []byte(`{"unsupported":true}`)},
+		&sec.SecurityProfile{Name: "policy", PolicyJson: []byte(`{"rules":"invalid"}`)},
 		model.ResourceFacts{},
 	)
 	apply(model.ResourceChange{Key: bad.Key, New: &bad})
