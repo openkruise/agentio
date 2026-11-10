@@ -632,7 +632,8 @@ Merge this fragment into the existing `data.config` or Helm `agentiod.config.val
 Behavior:
 
 - All connections and workers matching a descriptor share its budget; reconnecting does not reset it.
-- **Burst bytes are not a strict wire-level burst cap:** a callback batch larger than the burst capacity can exceed it.
+- **Burst bytes are not a strict wire-level burst cap:** a callback batch larger than the burst capacity can exceed it. The whole batch is charged, and subsequent traffic waits for the outstanding debt, including after reconnecting.
+- The native gateway's one-second internal protocol inspection deadline excludes bandwidth pacing waits. Silent clients still time out; increasing `listener_filters_timeout` with a GatewayPatch is unnecessary and reintroduces a wall-clock limit on queued connections.
 - A complete exact descriptor takes precedence over wildcards; otherwise the first matching wildcard wins. Multiple matching action groups charge their budgets together.
 - Missing required identity returns 403; a complete unmatched descriptor is unlimited; a new key exceeding dynamic capacity returns 503.
 - Lowering capacity retains existing buckets but blocks new keys until space is available.

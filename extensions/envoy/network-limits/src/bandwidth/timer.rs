@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::budget::Ledger;
-use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilterScheduler;
+use envoy_proxy_dynamic_modules_rust_sdk::{
+    EnvoyHttpFilterScheduler, EnvoyListenerFilterScheduler,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
@@ -15,6 +17,7 @@ use std::{
 
 enum Task {
     Resume(Arc<dyn EnvoyHttpFilterScheduler>),
+    Inspect(Arc<dyn EnvoyListenerFilterScheduler>),
     Reap(Arc<Mutex<Ledger>>),
 }
 
@@ -95,6 +98,7 @@ impl Timer {
                             // cancel() must quiesce commits before stream teardown.
                             scheduler.commit(0);
                         }
+                        Task::Inspect(scheduler) => scheduler.commit(0),
                         Task::Reap(ledger) => {
                             drop(queue);
                             let next = ledger.lock().unwrap().reap(now);
@@ -141,6 +145,18 @@ impl Timer {
         let mut queue = self.inner.0.lock().unwrap();
         if let Some(due) = queue.pending.remove(&id) {
             queue.deadlines.remove(&(due, id));
+        }
+    }
+
+    pub fn inspect(&self, id: u64, due: Instant, scheduler: Arc<dyn EnvoyListenerFilterScheduler>) {
+        let wake = self
+            .inner
+            .0
+            .lock()
+            .unwrap()
+            .insert(id, due, Task::Inspect(scheduler));
+        if wake {
+            self.inner.1.notify_one();
         }
     }
 }

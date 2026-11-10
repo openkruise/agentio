@@ -159,8 +159,9 @@ var (
 	captureSNIFilter       = buildCaptureSNIFilter("envoy.hashable_string", outerSNIKey)
 	outerTLSIdentityFilter = buildOuterTLSIdentityFilter(outerSNIKey)
 
-	originalDstFilter  = listenerFilter("envoy.filters.listener.original_dst", mustPack(&originaldstv3.OriginalDst{}))
-	tlsInspectorFilter = listenerFilter("envoy.filters.listener.tls_inspector", mustPack(&tlsinspectorv3.TlsInspector{
+	inspectionDeadlineFilter = buildInspectionDeadlineListenerFilter()
+	originalDstFilter        = listenerFilter("envoy.filters.listener.original_dst", mustPack(&originaldstv3.OriginalDst{}))
+	tlsInspectorFilter       = listenerFilter("envoy.filters.listener.tls_inspector", mustPack(&tlsinspectorv3.TlsInspector{
 		InitialReadBufferSize: wrapperspb.UInt32(16 * 1024),
 	}))
 	httpInspectorFilter = listenerFilter(
@@ -360,6 +361,15 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		// Apply the same close-on-timeout behavior after TLS termination.
 		ListenerFiltersTimeout:           durationpb.New(time.Second),
 		ContinueOnListenerFiltersTimeout: false,
+	}
+	if !b.legacyGateway {
+		for _, listener := range []*listenerv3.Listener{mainInternal, mainForward} {
+			// The guard keeps the 1s inspection deadline but excludes CONNECT pacing waits.
+			listener.ListenerFiltersTimeout = durationpb.New(0)
+			listener.ListenerFilters = append([]*listenerv3.ListenerFilter{
+				listener.ListenerFilters[0], inspectionDeadlineFilter,
+			}, listener.ListenerFilters[1:]...)
+		}
 	}
 	b.bindServiceEntryEndpoints(mainInternal, config, httpInternal, false)
 	b.bindServiceEntryEndpoints(mainForward, config, httpForward, true)

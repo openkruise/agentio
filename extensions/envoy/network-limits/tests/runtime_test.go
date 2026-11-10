@@ -287,6 +287,10 @@ func startEnvoy(t *testing.T, plain, tlsPort int, edit func(object)) *runtime {
 	return startEnvoyConfig(t, plain, tlsPort, edit, false)
 }
 func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds bool) *runtime {
+	return startEnvoyBootstrap(t, plain, tlsPort, edit, ecds, nil)
+}
+
+func startEnvoyBootstrap(t *testing.T, plain, tlsPort int, edit func(object), ecds bool, editBootstrap func(object)) *runtime {
 	t.Helper()
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
@@ -347,6 +351,9 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 		}
 	}
 	delete(resources, "listeners")
+	if editBootstrap != nil {
+		editBootstrap(b)
+	}
 	b["node"] = object{"id": "network-limits-test", "cluster": "network-limits-test"}
 	b["dynamic_resources"] = object{
 		"lds_config": object{"resource_api_version": "V3", "path_config_source": object{"path": r.lds}},
@@ -412,6 +419,7 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 		defer closeTest(t, response.Body)
 		var listing struct {
 			Statuses []struct {
+				Name    string `json:"name"`
 				Address struct {
 					Socket struct {
 						Port int `json:"port_value"`
@@ -420,10 +428,14 @@ func startEnvoyConfig(t *testing.T, plain, tlsPort int, edit func(object), ecds 
 			} `json:"listener_statuses"`
 		}
 		must(t, json.NewDecoder(response.Body).Decode(&listing))
-		if len(listing.Statuses) != 1 {
+		for _, status := range listing.Statuses {
+			if status.Name == r.listener["name"] {
+				r.port = status.Address.Socket.Port
+			}
+		}
+		if r.port == 0 {
 			return false
 		}
-		r.port = listing.Statuses[0].Address.Socket.Port
 		// Keep LDS updates on the same bound port.
 		nested(r.listener, "address", "socket_address")["port_value"] = r.port
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", r.port), 100*time.Millisecond)

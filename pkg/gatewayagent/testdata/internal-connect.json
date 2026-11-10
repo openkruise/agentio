@@ -16,11 +16,23 @@
       "route_config":{"name":"front","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"connect_matcher":{}},"route":{"cluster":"internal","timeout":"0s","upgrade_configs":[{"upgrade_type":"CONNECT","connect_config":{}}]}}]}]},
       "http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]
     }}]}]},
-    {"name":"internal","internal_listener":{},"filter_chains":[{
+    {"name":"internal","internal_listener":{},"listener_filters_timeout":"0s","listener_filters":[
+      {"name":"envoy.filters.listener.dynamic_modules","typed_config":{
+        "@type":"type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+        "dynamic_module_config":{"name":"envoy_agentio_network_limits","do_not_close":true,"module":{"local":{"filename":"/usr/local/lib/libenvoy_agentio_network_limits.so"}}},
+        "filter_name":"envoy_agentio_inspection_deadline"}},
+      {"name":"envoy.filters.listener.tls_inspector","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"}}
+    ],"filter_chains":[{
       "transport_socket":{"name":"envoy.transport_sockets.tls","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext","common_tls_context":{"tls_certificates":[{"certificate_chain":{"inline_string":""},"private_key":{"inline_string":""}}]}}},
       "filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"bridge","cluster":"forward"}}]
     }]},
-    {"name":"forward","internal_listener":{},"filter_chains":[{"filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{
+    {"name":"forward","internal_listener":{},"listener_filters_timeout":"0s","listener_filters":[
+      {"name":"envoy.filters.listener.dynamic_modules","typed_config":{
+        "@type":"type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+        "dynamic_module_config":{"name":"envoy_agentio_network_limits","do_not_close":true,"module":{"local":{"filename":"/usr/local/lib/libenvoy_agentio_network_limits.so"}}},
+        "filter_name":"envoy_agentio_inspection_deadline"}},
+      {"name":"envoy.filters.listener.http_inspector","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector"}}
+    ],"filter_chains":[{"filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{
       "@type":"type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager","stat_prefix":"forward",
       "route_config":{"name":"forward","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"prefix":"/"},"route":{"cluster":"origin"}}]}]},
       "http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]

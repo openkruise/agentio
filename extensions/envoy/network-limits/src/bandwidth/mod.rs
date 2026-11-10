@@ -3,9 +3,10 @@
 
 mod budget;
 mod config;
-mod timer;
+pub(crate) mod timer;
 
 use crate::descriptor::Key;
+use crate::inspection::Pacing;
 use budget::{Budget, Registration, Wait};
 use config::Config;
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -75,6 +76,7 @@ impl<E: EnvoyHttpFilter> HttpFilterConfig<E> for FilterConfig {
             timer_armed: Cell::new(false),
             generation: Cell::new(0),
             registered: Cell::new(false),
+            pacing: Pacing::new(self.timer.id()),
         })
     }
 }
@@ -99,6 +101,7 @@ struct Filter {
     timer_armed: Cell<bool>,
     generation: Cell<u64>,
     registered: Cell<bool>,
+    pacing: Pacing,
 }
 
 impl Filter {
@@ -148,6 +151,8 @@ impl Filter {
             ledger.waiters.remove(&self.id);
         }
         drop(ledger);
+        self.pacing
+            .pause(self.waiting.get().iter().any(Option::is_some));
         self.arm();
         self.waiting.get()[direction].is_none()
     }
@@ -217,6 +222,10 @@ impl<E: EnvoyHttpFilter> HttpFilter<E> for Filter {
                     envoy.set_buffer_limit(buffer_limit as u64);
                 }
             }
+        }
+        if !self.pacing.publish(envoy) {
+            envoy.send_response(500, &[], None, Some("bandwidth_clock_unavailable"));
+            return Headers::StopIteration;
         }
         Headers::Continue
     }
