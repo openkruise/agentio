@@ -176,7 +176,7 @@ func TestInjectZtunnelTemplate(t *testing.T) {
 		t.Fatalf("agentio-init image = %q, want %q", got, want)
 	}
 	args := strings.Join(initContainer.Args, " ")
-	for _, want := range []string{"istio-iptables", "-p 15001", "-z 15006", "-u 1337", "-m REDIRECT", "-i *", "-b *"} {
+	for _, want := range []string{"proxy-init", "-p 15001", "-z 15006", "-u 1337", "-m REDIRECT", "-i *", "-b *"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("agentio-init args %q missing %q", args, want)
 		}
@@ -663,6 +663,85 @@ func TestCNIInjectionStatus(t *testing.T) {
 	if status == "" || pod.Annotations["sidecar.istio.io/status"] != status {
 		t.Fatal("CNI injection must expose the same status to Agentio and the pinned CNI plugin")
 	}
+}
+
+func TestAgentioTrafficCaptureAnnotations(t *testing.T) {
+	for _, cni := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cni=%t", cni), func(t *testing.T) {
+			webhook := newTestWebhook(t, NativeSidecarModeEnabled)
+			name := InitContainerName
+			if cni {
+				values, err := os.ReadFile("testdata/values.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := webhook.UpdateConfig(webhook.config,
+					strings.Replace(string(values), `"enabled": false`, `"enabled": true`, 1)); err != nil {
+					t.Fatal(err)
+				}
+				name = ValidationContainerName
+			}
+			pod := testPod()
+			pod.Annotations = map[string]string{
+				"traffic.sidecar.agentio.kruise.io/include-outbound-ip-ranges": "10.0.0.0/8",
+				"traffic.sidecar.agentio.kruise.io/exclude-outbound-ip-ranges": "10.1.0.0/16",
+				"traffic.sidecar.agentio.kruise.io/include-inbound-ports":      "8080,9090",
+				"traffic.sidecar.agentio.kruise.io/exclude-inbound-ports":      "8081",
+				"traffic.sidecar.agentio.kruise.io/include-outbound-ports":     "443",
+				"traffic.sidecar.agentio.kruise.io/exclude-outbound-ports":     "8082",
+				"traffic.sidecar.agentio.kruise.io/kubevirt-interfaces":        "tap0",
+				"traffic.sidecar.agentio.kruise.io/exclude-interfaces":         "eth1",
+				"traffic.sidecar.agentio.kruise.io/reject-non-tcp":             "true",
+				"traffic.sidecar.agentio.kruise.io/native-nftables":            "true",
+				"traffic.sidecar.agentio.kruise.io/nat-output-priority":        "-101",
+			}
+			injected := injectTestPod(t, webhook, pod)
+			init := FindContainer(name, injected.Spec.InitContainers)
+			if init == nil {
+				t.Fatal("missing proxy-init")
+			}
+			args := strings.Join(init.Args, " ")
+			for _, want := range []string{
+				"-i 10.0.0.0/8", "-x 10.1.0.0/16", "-b 8080,9090", "-d 15090,15021,8081,15020",
+				"-q 443", "-o 8082", "-k tap0", "-c eth1",
+				"--reject-non-tcp=true", "--native-nftables=true", "--native-nftables-output-priority=-101",
+			} {
+				if !strings.Contains(args, want) {
+					t.Fatalf("missing %s in %s", want, args)
+				}
+			}
+			if cni {
+				for suffix, want := range map[string]string{
+					"includeOutboundIPRanges": "10.0.0.0/8",
+					"excludeOutboundIPRanges": "10.1.0.0/16",
+					"includeInboundPorts":     "8080,9090",
+					"excludeInboundPorts":     "8081,15020",
+					"includeOutboundPorts":    "443",
+					"excludeOutboundPorts":    "8082",
+					"kubevirtInterfaces":      "tap0",
+					"excludeInterfaces":       "eth1",
+				} {
+					if got := injected.Annotations["traffic.sidecar.istio.io/"+suffix]; got != want {
+						t.Fatalf("CNI annotation %s = %q, want %q", suffix, got, want)
+					}
+				}
+			} else {
+				for key := range injected.Annotations {
+					if strings.Contains(key, "istio.io/") {
+						t.Fatalf("unexpected legacy annotation %s", key)
+					}
+				}
+			}
+		})
+	}
+	t.Run("invalid-cidr", func(t *testing.T) {
+		pod := testPod()
+		pod.Annotations = map[string]string{"traffic.sidecar.agentio.kruise.io/include-outbound-ip-ranges": "invalid"}
+		response, _ := admitTestPod(t, newTestWebhook(t, NativeSidecarModeEnabled), pod)
+		if response.Allowed {
+			t.Fatal("invalid CIDR must be rejected for the kebab-case annotation")
+		}
+	})
 }
 
 func TestAgentioInjectionMetadata(t *testing.T) {

@@ -1,6 +1,6 @@
 name: agentio-image
 
-# Agentio builds agentiod, EPE, the gateway agent and Porter, and pinned ztunnel source. Callers receive
+# Agentio builds agentiod, EPE, the gateway agent, proxy-init and Porter, and pinned ztunnel source. Callers receive
 # immutable references so the exact candidates tested by E2E can be promoted.
 on:
   push:
@@ -19,6 +19,9 @@ on:
         default: ""
         type: string
     outputs:
+      proxy_init_image:
+        description: Immutable proxy-init image built from this source
+        value: ${{ jobs.build-images.outputs.proxy_init_image }}
       gateway_agent_image:
         description: Immutable community Envoy gateway image
         value: ${{ jobs.build-images.outputs.gateway_agent_image }}
@@ -63,8 +66,10 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-        image: [agentio-gateway, agentiod, agentio-epe, agentio-porter]
+        image: [agentio-gateway, agentiod, agentio-epe, agentio-porter, proxy-init]
         include:
+          - image: proxy-init
+            dockerfile: docker/Dockerfile.proxy-init
           - image: agentio-gateway
             dockerfile: docker/Dockerfile.gateway
           - image: agentiod
@@ -141,6 +146,7 @@ jobs:
     timeout-minutes: 90
     environment: development
     outputs:
+      proxy_init_image: ${{ steps.images.outputs.proxy_init_image }}
       gateway_agent_image: ${{ steps.images.outputs.gateway_agent_image }}
       agentiod_image: ${{ steps.images.outputs.agentiod_image }}
       epe_image: ${{ steps.images.outputs.epe_image }}
@@ -247,6 +253,7 @@ jobs:
           merge_image agentiod_image agentiod
           merge_image epe_image agentio-epe
           merge_image porter_image agentio-porter
+          merge_image proxy_init_image proxy-init
           build_image ztunnel_image ztunnel docker/Dockerfile.ztunnel ztunnel-context \
             --build-arg "ZTUNNEL_VERSION=$ZTUNNEL_SOURCE_SHA" \
             --label "org.opencontainers.image.source=https://github.com/${ZTUNNEL_SOURCE_REPOSITORY}" \

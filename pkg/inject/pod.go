@@ -281,7 +281,7 @@ func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, prox
 	tproxy := false
 	if proxyConfig.InterceptionMode == "TPROXY" {
 		tproxy = true
-	} else if mode, found := finalPod.Annotations[annotation.SidecarInterceptionMode.Name]; found && mode == "TPROXY" {
+	} else if mode, found := finalPod.Annotations[interceptionModeAnnotation]; found && mode == "TPROXY" {
 		tproxy = true
 	}
 

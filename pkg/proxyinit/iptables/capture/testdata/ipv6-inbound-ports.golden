@@ -1,0 +1,46 @@
+iptables-save
+ip6tables-save
+* nat
+-N AGENTIO_INBOUND
+-N AGENTIO_REDIRECT
+-N AGENTIO_IN_REDIRECT
+-N AGENTIO_OUTPUT
+-A AGENTIO_INBOUND -p tcp --dport 15008 -j RETURN
+-A AGENTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
+-A AGENTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+-A PREROUTING -p tcp -j AGENTIO_INBOUND
+-A AGENTIO_INBOUND -p tcp --dport 4000 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_INBOUND -p tcp --dport 5000 -j AGENTIO_IN_REDIRECT
+-A OUTPUT -j AGENTIO_OUTPUT
+-A AGENTIO_OUTPUT -o lo -s 127.0.0.6/32 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --uid-owner 1337 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -o lo -m owner ! --uid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -m owner --uid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d 127.0.0.1/32 -p tcp ! --dport 15008 -m owner --gid-owner 1337 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -o lo -m owner ! --gid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -m owner --gid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -d 127.0.0.1/32 -j RETURN
+COMMIT
+* nat
+-N AGENTIO_INBOUND
+-N AGENTIO_REDIRECT
+-N AGENTIO_IN_REDIRECT
+-N AGENTIO_OUTPUT
+-A AGENTIO_INBOUND -p tcp --dport 15008 -j RETURN
+-A AGENTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
+-A AGENTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+-A PREROUTING -p tcp -j AGENTIO_INBOUND
+-A AGENTIO_INBOUND -p tcp --dport 4000 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_INBOUND -p tcp --dport 5000 -j AGENTIO_IN_REDIRECT
+-A OUTPUT -j AGENTIO_OUTPUT
+-A AGENTIO_OUTPUT -o lo -s ::6/128 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d ::1/128 -p tcp ! --dport 15008 -m owner --uid-owner 1337 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -o lo -m owner ! --uid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -m owner --uid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -o lo ! -d ::1/128 -p tcp ! --dport 15008 -m owner --gid-owner 1337 -j AGENTIO_IN_REDIRECT
+-A AGENTIO_OUTPUT -o lo -m owner ! --gid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -m owner --gid-owner 1337 -j RETURN
+-A AGENTIO_OUTPUT -d ::1/128 -j RETURN
+COMMIT
+iptables-save
+ip6tables-save

@@ -29,6 +29,9 @@ agentio:
       requests:
         cpu: 100m
         memory: 128Mi
+    natOutputPriority: "-100"
+    nativeNftables: false
+    rejectNonTCP: false
     resources:
       limits:
         cpu: 200m

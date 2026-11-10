@@ -13,12 +13,6 @@
     "digest": "sha256:6e0689ddf98d85860626cabc62953965145aa453ec1a0b10298593da06663ef8"
   },
   {
-    "_comment": "Immutable digest of the multi-architecture proxy-init image.",
-    "name": "PROXY_INIT_IMAGE",
-    "repository": "docker.io/openkruise/proxy-init",
-    "digest": "sha256:90149ed0be522e6ffa9f00d7d52076efbe12f9fd79af7c61e499d058c5312a38"
-  },
-  {
     "_comment": "Legacy proxyv2 image retained for rolling-upgrade compatibility tests. New gateways are built from docker/Dockerfile.gateway.",
     "name": "GATEWAY_IMAGE",
     "repository": "docker.io/openkruise/proxyv2",

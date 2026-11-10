@@ -27,24 +27,27 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"istio.io/api/annotation"
+	proxyinitconfig "github.com/openkruise/agentio/pkg/proxyinit/config"
 )
 
 type annotationValidationFunc func(value string) error
 
 // per-sidecar policy and status
 var AnnotationValidation = map[string]annotationValidationFunc{
-	annotation.SidecarInterceptionMode.Name:               validateInterceptionMode,
-	annotation.SidecarStatusPort.Name:                     validateStatusPort,
-	annotation.SidecarTrafficIncludeOutboundIPRanges.Name: ValidateIncludeIPRanges,
-	annotation.SidecarTrafficExcludeOutboundIPRanges.Name: ValidateExcludeIPRanges,
-	annotation.SidecarTrafficIncludeInboundPorts.Name:     ValidateIncludeInboundPorts,
-	annotation.SidecarTrafficExcludeInboundPorts.Name:     ValidateExcludeInboundPorts,
-	annotation.SidecarTrafficExcludeOutboundPorts.Name:    ValidateExcludeOutboundPorts,
-	proxyCPUAnnotation:         validateResourceQuantity,
-	proxyMemoryAnnotation:      validateResourceQuantity,
-	proxyCPULimitAnnotation:    validateResourceQuantity,
-	proxyMemoryLimitAnnotation: validateResourceQuantity,
+	"traffic.sidecar.agentio.kruise.io/reject-non-tcp":      validateBool,
+	"traffic.sidecar.agentio.kruise.io/native-nftables":     validateBool,
+	"traffic.sidecar.agentio.kruise.io/nat-output-priority": proxyinitconfig.ValidateNATOutputPriority,
+	interceptionModeAnnotation:                              validateInterceptionMode,
+	statusPortAnnotation:                                    validateStatusPort,
+	includeOutboundIPRangesAnnotation:                       ValidateIncludeIPRanges,
+	excludeOutboundIPRangesAnnotation:                       ValidateExcludeIPRanges,
+	includeInboundPortsAnnotation:                           ValidateIncludeInboundPorts,
+	excludeInboundPortsAnnotation:                           ValidateExcludeInboundPorts,
+	excludeOutboundPortsAnnotation:                          ValidateExcludeOutboundPorts,
+	proxyCPUAnnotation:                                      validateResourceQuantity,
+	proxyMemoryAnnotation:                                   validateResourceQuantity,
+	proxyCPULimitAnnotation:                                 validateResourceQuantity,
+	proxyMemoryLimitAnnotation:                              validateResourceQuantity,
 }
 
 func validateAnnotations(annotations map[string]string) (err error) {
@@ -69,10 +72,9 @@ func validatePortList(parameterName, ports string) error {
 func validateInterceptionMode(mode string) error {
 	switch mode {
 	case "REDIRECT":
-	case "TPROXY":
 	case "NONE": // must be selected explicitly for each injected Pod
 	default:
-		return fmt.Errorf("interceptionMode invalid, use REDIRECT,TPROXY,NONE: %v", mode)
+		return fmt.Errorf("interceptionMode invalid, use REDIRECT,NONE: %v", mode)
 	}
 	return nil
 }
@@ -119,6 +121,12 @@ func validateStatusPort(port string) error {
 		return fmt.Errorf("excludeInboundPorts invalid: %v", e)
 	}
 	return nil
+}
+
+// validateBool validates that the given annotation value is a boolean.
+func validateBool(value string) error {
+	_, err := strconv.ParseBool(value)
+	return err
 }
 
 // validateResourceQuantity validates Kubernetes resource quantity - rejects control chars, validates format

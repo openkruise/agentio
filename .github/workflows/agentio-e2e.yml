@@ -315,7 +315,7 @@ jobs:
           fi
           docker load --input "$archive"
 
-          for image in agentiod agentio-epe agentio-porter agentio-gateway ztunnel ext-proc; do
+          for image in agentiod agentio-epe agentio-porter agentio-gateway proxy-init ztunnel ext-proc; do
             source="agentio-e2e.local/${image}:${GITHUB_SHA}"
             target="localhost:5001/${image}:${GITHUB_SHA}"
             docker image inspect "$source" >/dev/null
@@ -332,6 +332,7 @@ jobs:
               agentio-epe) echo "AGENTIO_E2E_EPE_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
               agentio-gateway) echo "AGENTIO_E2E_GATEWAY_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
               agentio-porter) echo "AGENTIO_E2E_PORTER_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
+              proxy-init) echo "AGENTIO_E2E_PROXY_INIT_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
               ztunnel) echo "AGENTIO_E2E_ZTUNNEL_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
               ext-proc) echo "AGENTIO_E2E_EXT_PROC_IMAGE=$digest_ref" >> "$GITHUB_ENV" ;;
             esac

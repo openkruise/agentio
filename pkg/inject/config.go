@@ -68,19 +68,26 @@ const (
 )
 
 // Agentio injection metadata and Pod tuning annotations.
-// Traffic annotations consumed by the pinned CNI plugin keep their Istio keys.
+// The injection template projects these keys to the pinned CNI contract when enabled.
 const (
-	injectionStatusAnnotation   = "sidecar.agentio.kruise.io/status"
-	proxyOverridesAnnotation    = "sidecar.agentio.kruise.io/overrides"
-	networkLabel                = "agentio.kruise.io/network"
-	injectTemplatesAnnotation   = "inject.agentio.kruise.io/templates"
-	nativeSidecarAnnotation     = "sidecar.agentio.kruise.io/native-sidecar"
-	proxyImageTypeAnnotation    = "sidecar.agentio.kruise.io/proxy-image-type"
-	rewriteAppProbersAnnotation = "sidecar.agentio.kruise.io/rewrite-app-http-probers"
-	proxyCPUAnnotation          = "sidecar.agentio.kruise.io/proxy-cpu"
-	proxyMemoryAnnotation       = "sidecar.agentio.kruise.io/proxy-memory"
-	proxyCPULimitAnnotation     = "sidecar.agentio.kruise.io/proxy-cpu-limit"
-	proxyMemoryLimitAnnotation  = "sidecar.agentio.kruise.io/proxy-memory-limit"
+	interceptionModeAnnotation        = "sidecar.agentio.kruise.io/interception-mode"
+	statusPortAnnotation              = "sidecar.agentio.kruise.io/status-port"
+	includeOutboundIPRangesAnnotation = "traffic.sidecar.agentio.kruise.io/include-outbound-ip-ranges"
+	excludeOutboundIPRangesAnnotation = "traffic.sidecar.agentio.kruise.io/exclude-outbound-ip-ranges"
+	includeInboundPortsAnnotation     = "traffic.sidecar.agentio.kruise.io/include-inbound-ports"
+	excludeInboundPortsAnnotation     = "traffic.sidecar.agentio.kruise.io/exclude-inbound-ports"
+	excludeOutboundPortsAnnotation    = "traffic.sidecar.agentio.kruise.io/exclude-outbound-ports"
+	injectionStatusAnnotation         = "sidecar.agentio.kruise.io/status"
+	proxyOverridesAnnotation          = "sidecar.agentio.kruise.io/overrides"
+	networkLabel                      = "agentio.kruise.io/network"
+	injectTemplatesAnnotation         = "inject.agentio.kruise.io/templates"
+	nativeSidecarAnnotation           = "sidecar.agentio.kruise.io/native-sidecar"
+	proxyImageTypeAnnotation          = "sidecar.agentio.kruise.io/proxy-image-type"
+	rewriteAppProbersAnnotation       = "sidecar.agentio.kruise.io/rewrite-app-http-probers"
+	proxyCPUAnnotation                = "sidecar.agentio.kruise.io/proxy-cpu"
+	proxyMemoryAnnotation             = "sidecar.agentio.kruise.io/proxy-memory"
+	proxyCPULimitAnnotation           = "sidecar.agentio.kruise.io/proxy-cpu-limit"
+	proxyMemoryLimitAnnotation        = "sidecar.agentio.kruise.io/proxy-memory-limit"
 )
 
 func isProxyContainerName(name string) bool {

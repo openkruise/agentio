@@ -1,0 +1,41 @@
+add table inet agentio-proxy-nat
+flush table inet agentio-proxy-nat
+add chain inet agentio-proxy-nat prerouting { type nat hook prerouting priority -100 ; }
+add chain inet agentio-proxy-nat output { type nat hook output priority -100 ; }
+add chain inet agentio-proxy-nat agentio-inbound
+add chain inet agentio-proxy-nat agentio-redirect
+add chain inet agentio-proxy-nat agentio-in-redirect
+add chain inet agentio-proxy-nat agentio-output
+add rule inet agentio-proxy-nat prerouting iifname eth0 counter return
+insert rule inet agentio-proxy-nat prerouting index 0 iifname eth1 counter return
+add rule inet agentio-proxy-nat agentio-inbound meta l4proto tcp tcp dport 15008 counter return
+add rule inet agentio-proxy-nat agentio-redirect meta l4proto tcp counter redirect to :15001
+add rule inet agentio-proxy-nat agentio-in-redirect meta l4proto tcp counter redirect to :15006
+add rule inet agentio-proxy-nat prerouting meta l4proto tcp counter jump agentio-inbound
+add rule inet agentio-proxy-nat agentio-inbound meta l4proto tcp tcp dport 4000 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-inbound meta l4proto tcp tcp dport 5000 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat output counter jump agentio-output
+add rule inet agentio-proxy-nat agentio-output oifname lo ip saddr 127.0.0.6/32 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo ip6 saddr ::6/128 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skuid 3 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skuid 3 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skuid != 3 counter return
+add rule inet agentio-proxy-nat agentio-output skuid 3 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skuid 4 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skuid 4 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skuid != 4 counter return
+add rule inet agentio-proxy-nat agentio-output skuid 4 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skgid 1 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skgid 1 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skgid != 1 counter return
+add rule inet agentio-proxy-nat agentio-output skgid 1 counter return
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip daddr != 127.0.0.1/32 tcp dport != 15008 skgid 2 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo meta l4proto tcp ip6 daddr != ::1/128 tcp dport != 15008 skgid 2 counter jump agentio-in-redirect
+add rule inet agentio-proxy-nat agentio-output oifname lo skgid != 2 counter return
+add rule inet agentio-proxy-nat agentio-output skgid 2 counter return
+add rule inet agentio-proxy-nat agentio-output ip daddr 127.0.0.1/32 counter return
+add rule inet agentio-proxy-nat agentio-output ip6 daddr ::1/128 counter return
+add rule inet agentio-proxy-nat agentio-output ip6 daddr 2001:db8::/32 counter return
+insert rule inet agentio-proxy-nat prerouting index 0 iifname eth0 ip6 daddr 2001:db8::/32 counter jump agentio-redirect
+insert rule inet agentio-proxy-nat prerouting index 0 iifname eth1 ip6 daddr 2001:db8::/32 counter jump agentio-redirect
+add rule inet agentio-proxy-nat agentio-output ip6 daddr 2001:db8::/32 counter jump agentio-redirect

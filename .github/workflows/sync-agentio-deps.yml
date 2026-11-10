@@ -1,6 +1,6 @@
 name: sync-agentio-dependency-bom
 
-# CNI, proxy-init, and gateway publishers dispatch immutable images here.
+# CNI and gateway publishers dispatch immutable images here.
 # ztunnel tracks source commits through sync-ztunnel-deps.yml instead.
 on:
   repository_dispatch:
@@ -14,7 +14,6 @@ on:
         type: choice
         options:
           - cni
-          - proxy-init
           - gateway
       image:
         description: Immutable released image (repository@sha256:digest)
@@ -57,7 +56,6 @@ jobs:
         run: |
           case "$COMPONENT" in
             cni) pin_name=CNI_IMAGE ;;
-            proxy-init) pin_name=PROXY_INIT_IMAGE ;;
             gateway) pin_name=GATEWAY_IMAGE ;;
             *)
               echo "Unsupported dependency component: $COMPONENT" >&2

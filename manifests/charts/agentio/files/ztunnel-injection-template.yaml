@@ -1,9 +1,5 @@
-# ztunnel does not support TPROXY
 {{- $sandboxEnabled := eq (printf "%v" (default false .Values.global.proxyZtunnel.sandboxMode)) "true" -}}
-{{- $interception := (annotation .ObjectMeta `sidecar.istio.io/interceptionMode` .ProxyConfig.InterceptionMode) -}}
-{{- if eq $interception "TPROXY" -}}
-  {{- $interception = "REDIRECT" -}}
-{{- end -}}
+{{- $interception := (annotation .ObjectMeta `sidecar.agentio.kruise.io/interception-mode` .ProxyConfig.InterceptionMode) -}}
 
 {{- define "resources"  }}
   {{- if or (isset .ObjectMeta.Annotations `sidecar.agentio.kruise.io/proxy-cpu`) (isset .ObjectMeta.Annotations `sidecar.agentio.kruise.io/proxy-memory`) (isset .ObjectMeta.Annotations `sidecar.agentio.kruise.io/proxy-cpu-limit`) (isset .ObjectMeta.Annotations `sidecar.agentio.kruise.io/proxy-memory-limit`) }}
@@ -53,19 +49,19 @@ metadata:
     {{- if eq .Values.pilot.cni.provider "multus" }}
     k8s.v1.cni.cncf.io/networks : '{{ appendMultusNetwork (index .ObjectMeta.Annotations `k8s.v1.cni.cncf.io/networks`) (.Values.pilot.cni.networkName | default "default/agentio-cni") }}',
     {{- end }}
-    {{ with annotation .ObjectMeta `traffic.sidecar.istio.io/includeOutboundIPRanges` .Values.global.proxy.includeIPRanges }}traffic.sidecar.istio.io/includeOutboundIPRanges: "{{.}}",{{ end }}
-    {{ with annotation .ObjectMeta `traffic.sidecar.istio.io/excludeOutboundIPRanges` .Values.global.proxy.excludeIPRanges }}traffic.sidecar.istio.io/excludeOutboundIPRanges: "{{.}}",{{ end }}
-    traffic.sidecar.istio.io/includeInboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/includeInboundPorts` .Values.global.proxy.includeInboundPorts }}",
-    traffic.sidecar.istio.io/excludeInboundPorts: "{{ excludeInboundPort (annotation .ObjectMeta `status.sidecar.istio.io/port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.istio.io/excludeInboundPorts` .Values.global.proxy.excludeInboundPorts) }}",
-    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/includeOutboundPorts`) (ne (valueOrDefault .Values.global.proxy.includeOutboundPorts "") "") }}
-    traffic.sidecar.istio.io/includeOutboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/includeOutboundPorts` .Values.global.proxy.includeOutboundPorts }}",
+    {{ with annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-outbound-ip-ranges` .Values.global.proxy.includeIPRanges }}traffic.sidecar.istio.io/includeOutboundIPRanges: "{{.}}",{{ end }}
+    {{ with annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-outbound-ip-ranges` .Values.global.proxy.excludeIPRanges }}traffic.sidecar.istio.io/excludeOutboundIPRanges: "{{.}}",{{ end }}
+    traffic.sidecar.istio.io/includeInboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-inbound-ports` .Values.global.proxy.includeInboundPorts }}",
+    traffic.sidecar.istio.io/excludeInboundPorts: "{{ excludeInboundPort (annotation .ObjectMeta `sidecar.agentio.kruise.io/status-port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-inbound-ports` .Values.global.proxy.excludeInboundPorts) }}",
+    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/include-outbound-ports`) (ne (valueOrDefault .Values.global.proxy.includeOutboundPorts "") "") }}
+    traffic.sidecar.istio.io/includeOutboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-outbound-ports` .Values.global.proxy.includeOutboundPorts }}",
     {{- end }}
-    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeOutboundPorts`) (ne .Values.global.proxy.excludeOutboundPorts "") }}
-    traffic.sidecar.istio.io/excludeOutboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/excludeOutboundPorts` .Values.global.proxy.excludeOutboundPorts }}",
+    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/exclude-outbound-ports`) (ne .Values.global.proxy.excludeOutboundPorts "") }}
+    traffic.sidecar.istio.io/excludeOutboundPorts: "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-outbound-ports` .Values.global.proxy.excludeOutboundPorts }}",
     {{- end }}
-    {{ with index .ObjectMeta.Annotations `traffic.sidecar.istio.io/kubevirtInterfaces` }}traffic.sidecar.istio.io/kubevirtInterfaces: "{{.}}",{{ end }}
-    {{ with index .ObjectMeta.Annotations `istio.io/reroute-virtual-interfaces` }}istio.io/reroute-virtual-interfaces: "{{.}}",{{ end }}
-    {{ with index .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeInterfaces` }}traffic.sidecar.istio.io/excludeInterfaces: "{{.}}",{{ end }}
+    {{ with index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/kubevirt-interfaces` }}traffic.sidecar.istio.io/kubevirtInterfaces: "{{.}}",{{ end }}
+    {{ with index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/reroute-virtual-interfaces` }}istio.io/reroute-virtual-interfaces: "{{.}}",{{ end }}
+    {{ with index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/exclude-interfaces` }}traffic.sidecar.istio.io/excludeInterfaces: "{{.}}",{{ end }}
 {{- end }}
   }
 {{ with .Values.podAnnotations -}}{{ toYaml . | indent 8 }}{{ end }}
@@ -89,7 +85,7 @@ spec:
     image: "{{ .ProxyImage }}"
   {{- end }}
     args:
-    - istio-iptables
+    - proxy-init
     - "-p"
     - {{ .MeshConfig.ProxyListenPort | default "15001" | quote }}
     - "-z"
@@ -99,48 +95,48 @@ spec:
     - "-m"
     - "{{ $interception }}"
     - "-i"
-    - "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/includeOutboundIPRanges` .Values.global.proxy.includeIPRanges }}"
+    - "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-outbound-ip-ranges` .Values.global.proxy.includeIPRanges }}"
     - "-x"
-    - "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/excludeOutboundIPRanges` .Values.global.proxy.excludeIPRanges }}"
+    - "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-outbound-ip-ranges` .Values.global.proxy.excludeIPRanges }}"
     - "-b"
-    - "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/includeInboundPorts` .Values.global.proxy.includeInboundPorts }}"
+    - "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-inbound-ports` .Values.global.proxy.includeInboundPorts }}"
     - "-d"
-  {{- if excludeInboundPort (annotation .ObjectMeta `status.sidecar.istio.io/port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.istio.io/excludeInboundPorts` .Values.global.proxy.excludeInboundPorts) }}
-    - "15090,15021,{{ excludeInboundPort (annotation .ObjectMeta `status.sidecar.istio.io/port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.istio.io/excludeInboundPorts` .Values.global.proxy.excludeInboundPorts) }}"
+  {{- if excludeInboundPort (annotation .ObjectMeta `sidecar.agentio.kruise.io/status-port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-inbound-ports` .Values.global.proxy.excludeInboundPorts) }}
+    - "15090,15021,{{ excludeInboundPort (annotation .ObjectMeta `sidecar.agentio.kruise.io/status-port` .Values.global.proxy.statusPort) (annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-inbound-ports` .Values.global.proxy.excludeInboundPorts) }}"
   {{- else }}
     - "15090,15021"
   {{- end }}
-    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/includeOutboundPorts`) (ne (valueOrDefault .Values.global.proxy.includeOutboundPorts "") "") -}}
+    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/include-outbound-ports`) (ne (valueOrDefault .Values.global.proxy.includeOutboundPorts "") "") -}}
     - "-q"
-    - "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/includeOutboundPorts` .Values.global.proxy.includeOutboundPorts }}"
+    - "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/include-outbound-ports` .Values.global.proxy.includeOutboundPorts }}"
     {{ end -}}
-    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeOutboundPorts`) (ne (valueOrDefault .Values.global.proxy.excludeOutboundPorts "") "") -}}
+    {{ if or (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/exclude-outbound-ports`) (ne (valueOrDefault .Values.global.proxy.excludeOutboundPorts "") "") -}}
     - "-o"
-    - "{{ annotation .ObjectMeta `traffic.sidecar.istio.io/excludeOutboundPorts` .Values.global.proxy.excludeOutboundPorts }}"
+    - "{{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/exclude-outbound-ports` .Values.global.proxy.excludeOutboundPorts }}"
     {{ end -}}
-    {{ if (isset .ObjectMeta.Annotations `istio.io/reroute-virtual-interfaces`) -}}
+    {{ if (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/reroute-virtual-interfaces`) -}}
     - "-k"
-    - "{{ index .ObjectMeta.Annotations `istio.io/reroute-virtual-interfaces` }}"
-    {{ else if (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/kubevirtInterfaces`) -}}
+    - "{{ index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/reroute-virtual-interfaces` }}"
+    {{ else if (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/kubevirt-interfaces`) -}}
     - "-k"
-    - "{{ index .ObjectMeta.Annotations `traffic.sidecar.istio.io/kubevirtInterfaces` }}"
+    - "{{ index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/kubevirt-interfaces` }}"
     {{ end -}}
-    {{ if (isset .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeInterfaces`) -}}
+    {{ if (isset .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/exclude-interfaces`) -}}
     - "-c"
-    - "{{ index .ObjectMeta.Annotations `traffic.sidecar.istio.io/excludeInterfaces` }}"
+    - "{{ index .ObjectMeta.Annotations `traffic.sidecar.agentio.kruise.io/exclude-interfaces` }}"
     {{ end -}}
-    - "--log_output_level={{ annotation .ObjectMeta `sidecar.agentio.kruise.io/agent-log-level` .Values.global.logging.level }}"
+    - "--reject-non-tcp={{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/reject-non-tcp` (valueOrDefault .Values.global.proxyInit.rejectNonTCP false) }}"
+    - "--native-nftables={{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/native-nftables` (valueOrDefault .Values.global.nativeNftables false) }}"
+    - "--native-nftables-output-priority={{ annotation .ObjectMeta `traffic.sidecar.agentio.kruise.io/nat-output-priority` (valueOrDefault .Values.global.proxyInit.natOutputPriority "-100") }}"
+    - "--log-output-level={{ annotation .ObjectMeta `sidecar.agentio.kruise.io/agent-log-level` .Values.global.logging.level }}"
     {{ if .Values.global.logAsJson -}}
-    - "--log_as_json"
+    - "--log-as-json"
     {{ end -}}
     {{ if .Values.pilot.cni.enabled -}}
     - "--run-validation"
     - "--skip-rule-apply"
     {{ else if .Values.global.proxyInit.forceApplyIptables -}}
     - "--force-apply"
-    {{ end -}}
-    {{ if .Values.global.nativeNftables -}}
-    - "--native-nftables"
     {{ end -}}
     {{with .Values.global.imagePullPolicy }}imagePullPolicy: "{{.}}"{{end}}
   {{- if .ProxyConfig.ProxyMetadata }}
