@@ -86,15 +86,20 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 			})
 			port := uint32(origin.Addr().(*net.TCPAddr).Port)
 			for _, tc := range []struct {
-				name    string
-				matches []*configv1.TcpPassthroughMatch
-				allowed bool
+				name             string
+				matches          []*configv1.TcpPassthroughMatch
+				allowed          bool
+				zeroPrefixedPort bool
 			}{
 				{name: "CIDR and port", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}, Ports: []uint32{port}}}, allowed: true},
 				{name: "CIDR only", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}}}, allowed: true},
 				{name: "port only", matches: []*configv1.TcpPassthroughMatch{{Ports: []uint32{port}}}, allowed: true},
 				{name: "empty entry", matches: []*configv1.TcpPassthroughMatch{{}}, allowed: true},
 				{name: "entries are ORed", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{"192.0.2.0/24"}}, {Ports: []uint32{port}}}, allowed: true},
+				{name: "ports are ORed", matches: []*configv1.TcpPassthroughMatch{{Ports: []uint32{1, port}}}, allowed: true},
+				{name: "CIDRs are ORed", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{"192.0.2.0/24", cidr}}}, allowed: true},
+				{name: "port miss continues to next entry", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}, Ports: []uint32{1}}, {Ports: []uint32{port}}}, allowed: true},
+				{name: "zero-prefixed port", matches: []*configv1.TcpPassthroughMatch{{Ports: []uint32{port}}}, allowed: true, zeroPrefixedPort: true},
 				{name: "CIDR miss", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{"192.0.2.0/24"}, Ports: []uint32{port}}}},
 				{name: "port miss", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}, Ports: []uint32{1}}}},
 				{name: "unconfigured"},
@@ -183,11 +188,18 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 					if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 						t.Fatal(err)
 					}
+					destination := origin.Addr().String()
+					if tc.zeroPrefixedPort {
+						destination = net.JoinHostPort(
+							origin.Addr().(*net.TCPAddr).IP.String(),
+							fmt.Sprintf("0%d", port),
+						)
+					}
 					if _, err := fmt.Fprintf(
 						connection,
 						"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
-						origin.Addr(),
-						origin.Addr(),
+						destination,
+						destination,
 					); err != nil {
 						t.Fatal(err)
 					}

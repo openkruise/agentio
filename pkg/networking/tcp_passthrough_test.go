@@ -15,7 +15,6 @@
 package networking
 
 import (
-	"regexp"
 	"testing"
 	"time"
 
@@ -24,6 +23,9 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	matchinginputv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
+	ipmatcherv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/input_matchers/ip/v3"
+	"google.golang.org/protobuf/proto"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/config"
@@ -106,31 +108,82 @@ tcp:
 			model.RouteType,
 			func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 		)
-		var passthrough []*routev3.Route
-		for _, route := range routes[ConnectTerminate].VirtualHosts[0].Routes {
-			if route.GetRoute().GetCluster() == TCPPassthrough {
-				passthrough = append(passthrough, route)
+		vhost := routes[ConnectTerminate].VirtualHosts[0]
+		matches := vhost.GetMatcher().GetMatcherList().GetMatchers()
+		if len(vhost.Routes) != 0 || len(matches) != 3 {
+			t.Fatalf("CONNECT must use a matcher instead of routes: %v", vhost)
+		}
+		for _, match := range matches {
+			route := &routev3.Route{}
+			if err := match.OnMatch.GetAction().TypedConfig.UnmarshalTo(route); err != nil {
+				t.Fatal(err)
+			}
+			if route.GetRoute().GetCluster() != TCPPassthrough || len(route.Match.Headers) != 0 ||
+				len(route.Match.FilterState) != 0 {
+				t.Fatalf("passthrough route must not reparse authority: %v", route)
 			}
 		}
-		if len(passthrough) != 3 {
-			t.Fatalf("routes=%v", passthrough)
+		predicates := matches[0].Predicate.GetAndMatcher().Predicate
+		address := predicates[1].GetSinglePredicate()
+		input := &matchinginputv3.FilterStateInput{}
+		if err := address.Input.TypedConfig.UnmarshalTo(input); err != nil {
+			t.Fatal(err)
 		}
-		address := passthrough[0].Match.FilterState[0]
-		if address.Key != "envoy.filters.listener.original_dst.local_ip" ||
-			address.GetAddressMatch().Ranges[0].AddressPrefix != "10.20.0.0" {
-			t.Fatalf("must match normalized original destination: %v", address)
+		cidrs := &ipmatcherv3.Ip{}
+		if err := address.GetCustomMatch().TypedConfig.UnmarshalTo(cidrs); err != nil {
+			t.Fatal(err)
 		}
-		ports := regexp.MustCompile(
-			"^(?:" + passthrough[0].Match.Headers[0].GetStringMatch().GetSafeRegex().Regex + ")$",
-		)
-		for _, authority := range []string{"10.20.1.2:3306", "[2001:db8::1]:5432", "10.20.1.2:03306"} {
-			if !ports.MatchString(authority) {
-				t.Errorf("port match missed %s", authority)
+		if input.Key != "envoy.filters.listener.original_dst.local_ip" || input.Field != "ip" ||
+			cidrs.CidrRanges[0].AddressPrefix != "10.20.0.0" {
+			t.Fatalf("must match normalized original destination: input=%v CIDRs=%v", input, cidrs)
+		}
+		for index, port := range predicates[2].GetOrMatcher().Predicate {
+			value := port.GetSinglePredicate()
+			if err := value.Input.TypedConfig.UnmarshalTo(input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Field != "port" || value.GetValueMatch().GetExact() != []string{"3306", "5432"}[index] {
+				t.Fatalf("port must use an exact field match: %v", value)
 			}
 		}
-		if ports.MatchString("10.20.1.2:33060") || len(passthrough[1].Match.FilterState) != 0 ||
-			len(passthrough[2].Match.Headers) != 0 {
-			t.Fatal("port-only, CIDR-only or exact port matching changed")
+		if len(matches[1].Predicate.GetAndMatcher().Predicate) != 2 ||
+			len(matches[2].Predicate.GetAndMatcher().Predicate) != 2 {
+			t.Fatal("port-only or CIDR-only matching changed")
+		}
+	}
+}
+
+func TestTCPPassthroughMatcherPreservesAdmission(t *testing.T) {
+	b := &resourceBuilder{}
+	routes, err := b.buildRoutes(&configv1.EgressGateway{
+		TcpPassthrough:          []*configv1.TcpPassthroughMatch{{}},
+		BandwidthLimit:          &configv1.BandwidthLimitSettings{},
+		ConnectConcurrencyLimit: &configv1.ConnectConcurrencyLimitSettings{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matcher := routes[0].VirtualHosts[0].Matcher
+	fallback := &routev3.RouteList{}
+	if err := matcher.OnNoMatch.GetAction().TypedConfig.UnmarshalTo(fallback); err != nil {
+		t.Fatal(err)
+	}
+	passthrough := &routev3.Route{}
+	if err := matcher.GetMatcherList().Matchers[0].OnMatch.GetAction().TypedConfig.UnmarshalTo(
+		passthrough,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Routes[len(fallback.Routes)-1].GetRoute().GetCluster() != MainInternal {
+		t.Fatal("unmatched CONNECT lost its default route")
+	}
+	for _, name := range []string{bandwidthFilterName, concurrencyFilterName} {
+		if passthrough.TypedPerFilterConfig[name] == nil ||
+			!proto.Equal(
+				passthrough.TypedPerFilterConfig[name],
+				fallback.Routes[len(fallback.Routes)-1].TypedPerFilterConfig[name],
+			) {
+			t.Fatalf("passthrough lost per-route admission: %s", name)
 		}
 	}
 }
