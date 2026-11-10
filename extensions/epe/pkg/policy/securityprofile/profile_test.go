@@ -65,10 +65,11 @@ func TestCompileRulesExcludesTLSFromHTTP(t *testing.T) {
 // behaviour.
 func TestCompileRuleMatch_AndMatches(t *testing.T) {
 	tests := []struct {
-		name string
-		raw  v1alpha1.RuleMatch
-		req  httpreq.HTTPRequest
-		want bool
+		name             string
+		raw              v1alpha1.RuleMatch
+		req              httpreq.HTTPRequest
+		want             bool
+		wantCompileError bool
 	}{
 		{
 			name: "wildcard domain matches anything",
@@ -241,7 +242,8 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 		},
 		// Invalid header regex: likewise rejected at compile time now.
 		{
-			name: "unknown header type fails closed",
+			name:             "unknown header type fails closed",
+			wantCompileError: true,
 			raw: v1alpha1.RuleMatch{
 				Domains: []string{"*"},
 				Headers: []v1alpha1.HeaderMatch{{Name: "X-Foo", Type: "Weird", Value: "x"}},
@@ -341,6 +343,12 @@ func TestCompileRuleMatch_AndMatches(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.wantCompileError {
+				if _, err := compileRuleMatch(tc.raw); err == nil {
+					t.Fatal("unsupported matcher accepted")
+				}
+				return
+			}
 			rm := mustCompileRuleMatch(t, tc.raw)
 			if got := rm.Matches(&tc.req); got != tc.want {
 				t.Errorf("Matches() = %v, want %v", got, tc.want)

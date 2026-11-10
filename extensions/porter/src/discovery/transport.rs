@@ -4,9 +4,13 @@
 //! ADS transport and reconnect lifecycle. Cache and subscription state live in
 //! the parent module; sending requests never blocks incoming responses.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
@@ -96,6 +100,11 @@ impl Client {
         let node = transport.node.clone();
         let cancel = CancellationToken::new();
         let _guard = cancel.clone().drop_guard();
+        // Coalesce unsupported-type NACKs without creating resource watches.
+        let unknown_nacks = Arc::new(Mutex::new(
+            HashMap::<String, ads::DeltaDiscoveryRequest>::new(),
+        ));
+        let outgoing_unknown_nacks = unknown_nacks.clone();
         let outbound = async_stream::stream! {
             // The RPC polls this body before confirming the stream. Only pending
             // demands may be sent while the old cache is still in its grace period.
@@ -109,6 +118,10 @@ impl Client {
                     _ = client.wake.notified() => {},
                 }
                 for request in client.outgoing(&mut sent_generations) {
+                    yield request;
+                }
+                let rejected = std::mem::take(&mut *outgoing_unknown_nacks.lock().unwrap());
+                for request in rejected.into_values() {
                     yield request;
                 }
             }
@@ -134,16 +147,17 @@ impl Client {
         self.established();
         info!("ADS stream established");
         while let Some(response) = responses.message().await.context("receive ADS response")? {
-            let Some(kind) = ResourceKind::from_type_url(&response.type_url) else {
-                bail!("unexpected discovery type {}", response.type_url);
+            let kind = ResourceKind::from_type_url(&response.type_url);
+            let applied = match kind {
+                Some(kind) => self.apply(kind, &response),
+                None => Err(anyhow!("unexpected discovery type {}", response.type_url)),
             };
-            let applied = self.apply(kind, &response);
             *received |= applied.is_ok();
             let error = applied.err().map(|error| {
                 self.metrics
                     .nacks
                     .get_or_create(&ResourceType {
-                        resource_type: kind.type_url(),
+                        resource_type: kind.map_or("unknown", |kind| kind.type_url()),
                     })
                     .inc();
                 warn!(
@@ -157,7 +171,19 @@ impl Client {
                     message: format!("{error:#}"),
                 }
             });
-            self.state.lock().unwrap().types[kind.index()].ack = Some((response.nonce, error));
+            if let Some(kind) = kind {
+                self.state.lock().unwrap().types[kind.index()].ack = Some((response.nonce, error));
+            } else {
+                unknown_nacks.lock().unwrap().insert(
+                    response.type_url.clone(),
+                    ads::DeltaDiscoveryRequest {
+                        type_url: response.type_url,
+                        response_nonce: response.nonce,
+                        error_detail: error,
+                        ..Default::default()
+                    },
+                );
+            }
             self.wake.notify_one();
         }
         Ok(())

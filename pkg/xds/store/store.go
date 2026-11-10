@@ -34,6 +34,9 @@ type Publication struct {
 
 // Store publishes immutable resource snapshots and notifies interested subscribers.
 type Store struct {
+	// Serialize snapshot construction without blocking readers and subscription changes.
+	publicationMu sync.Mutex
+	// A commit holds both locks; either lock permits reading current.
 	mu      sync.RWMutex
 	current model.ResourceSet
 	// Source deletions wait until all published references have been withdrawn.
@@ -67,8 +70,8 @@ func (s *Store) Snapshot() model.ResourceSet {
 
 // Replace atomically installs a snapshot and notifies subscribers of effective changes.
 func (s *Store) Replace(snapshot model.ResourceSet) Publication {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.publicationMu.Lock()
+	defer s.publicationMu.Unlock()
 	before := s.current
 	for key := range s.pendingRemovals {
 		if _, exists := snapshot.Get(key); exists {
@@ -82,10 +85,13 @@ func (s *Store) Replace(snapshot model.ResourceSet) Publication {
 		panic(err) // Both snapshots contain already validated resources.
 	}
 	if len(changes) == 0 {
-		return Publication{Snapshot: s.current, SubscriberCount: len(s.subscribers)}
+		return s.unchangedPublication()
 	}
+	update := updateBetween(before, snapshot, changes)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.current = snapshot
-	s.notifyLocked(updateBetween(before, snapshot, changes))
+	s.notifyLocked(update)
 	return Publication{Changed: true, Snapshot: snapshot, SubscriberCount: len(s.subscribers)}
 }
 
@@ -93,20 +99,20 @@ func (s *Store) Replace(snapshot model.ResourceSet) Publication {
 // resource graph. Multiple changes for the same key collapse to their final
 // value before the immutable snapshot is updated.
 func (s *Store) Apply(changes []model.ResourceChange) (Publication, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.publicationMu.Lock()
+	defer s.publicationMu.Unlock()
 	coalesced := coalesceChanges(changes)
 	if len(coalesced) == 0 {
-		return Publication{Snapshot: s.current, SubscriberCount: len(s.subscribers)}, nil
+		return s.unchangedPublication(), nil
 	}
 	before := s.current
 	next, changed, err := before.Apply(coalesced)
 	if err != nil || (!changed && len(s.pendingRemovals) == 0) {
-		return Publication{Snapshot: before, SubscriberCount: len(s.subscribers)}, err
+		return s.unchangedPublication(), err
 	}
 	next, coalesced, err = s.retainReferencedResources(next, coalesced)
 	if err != nil {
-		return Publication{Snapshot: before, SubscriberCount: len(s.subscribers)}, err
+		return s.unchangedPublication(), err
 	}
 	effective := make([]model.ResourceChange, 0, len(coalesced))
 	for _, requested := range coalesced {
@@ -130,11 +136,20 @@ func (s *Store) Apply(changes []model.ResourceChange) (Publication, error) {
 		effective = append(effective, change)
 	}
 	if len(effective) == 0 {
-		return Publication{Snapshot: before, SubscriberCount: len(s.subscribers)}, nil
+		return s.unchangedPublication(), nil
 	}
+	update := updateBetween(before, next, effective)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.current = next
-	s.notifyLocked(updateBetween(before, next, effective))
+	s.notifyLocked(update)
 	return Publication{Changed: true, Snapshot: next, SubscriberCount: len(s.subscribers)}, nil
+}
+
+func (s *Store) unchangedPublication() Publication {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Publication{Snapshot: s.current, SubscriberCount: len(s.subscribers)}
 }
 
 // Check only deleted resources and withdrawn references. The immutable reverse

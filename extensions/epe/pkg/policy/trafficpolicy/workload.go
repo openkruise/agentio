@@ -86,8 +86,16 @@ func workloadBinding(w *workload.Workload) (subject.Workload, error) {
 		return identity, fmt.Errorf("SecurityProfile binding missing or invalid for %s", identity.String())
 	}
 	identity.SecurityProfileReferences = make([]string, 0, len(binding.Resources))
+	seen := map[string]bool{}
 	for _, reference := range binding.Resources {
+		if reference.GetName() == "" {
+			return identity, fmt.Errorf("empty SecurityProfile reference")
+		}
+		if seen[reference.Name] {
+			return identity, fmt.Errorf("duplicate SecurityProfile reference %q", reference.Name)
+		}
 		identity.SecurityProfileReferences = append(identity.SecurityProfileReferences, reference.GetName())
+		seen[reference.Name] = true
 	}
 	if metadata != nil {
 		identity.Labels = metadata.Labels

@@ -105,7 +105,7 @@ var (
 	profileDeletionGracePeriod = flag.Duration(
 		"profile-deletion-grace-period",
 		60*time.Second,
-		"Retain deleted administrator profile bodies for stale WDS references; 0 disables. Does not delay Sandbox or identity deletion.",
+		"Retain deleted administrator profile bodies for stale WDS references in kubernetes mode; 0 disables. Does not delay Sandbox or identity deletion.",
 	)
 	pluginBudget = flag.Duration(
 		"plugin-budget",
@@ -208,6 +208,9 @@ func run() error {
 			},
 		})
 	}
+	if *securityProfileSource != "kubernetes" && *securityProfileSource != "xds" {
+		return fmt.Errorf("--security-profile-source must be kubernetes or xds")
+	}
 	if *profileDeletionGracePeriod < 0 {
 		return fmt.Errorf("--profile-deletion-grace-period must not be negative")
 	}
@@ -229,8 +232,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Initialize the process-wide Kubernetes client and CRD watcher. The same
-	// client owns core, metadata, and agents-api reads for every EPE component.
+	// Kubernetes supplies EPEConfig, profile inputs and credential material.
 	kubeConfig, err := kube.LoadConfig(*kubeconfig)
 	if err != nil {
 		setupLog.Error(err, "failed to load Kubernetes configuration")
@@ -241,7 +243,9 @@ func run() error {
 		setupLog.Error(err, "failed to create kube client")
 		return err
 	}
-	client = kube.EnableCrdWatcher(client, kube.CrdWatcherOptions{})
+	if *securityProfileSource == "kubernetes" {
+		client = kube.EnableCrdWatcher(client, kube.CrdWatcherOptions{})
+	}
 
 	group := &runnable.Group{}
 
@@ -256,31 +260,6 @@ func run() error {
 	}
 	providers := &extensionprovider.Registry{}
 	defer providers.Close()
-	xds, conn, err := newEgressXDS()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			setupLog.Error(err, "close xDS connection")
-		}
-	}()
-	nativeStore, err := xdsstore.NewCached(
-		xds,
-		demandcache.Config{IdleTTL: *xdsCacheIdleTTL, MaxEntries: *xdsCacheMaxEntries},
-	)
-	if err != nil {
-		return err
-	}
-	resourceStore := resourcestore.NewAggregate(nativeStore)
-	metrics.Registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Name: "agentio_epe_demand_cache_entries",
-		Help: "Retained Workload and TrafficPolicy subscriptions, including active resolutions.",
-	}, func() float64 { return float64(nativeStore.CacheEntries()) }))
-	trafficpolicy.RegisterQueries(resourceStore, *xdsClusterID)
-	group.Add(runnable.Func(nativeStore.Run))
-	group.Add(runnable.Func(resourceStore.Run))
-	group.Add(runnable.Func(xds.Run))
 	servingTLS, err := buildExtProcTLS(extProcTLSOptions{
 		Source:   *tlsSource,
 		CertPath: *tlsCertPath,
@@ -310,11 +289,6 @@ func run() error {
 		Apply:     wiring.ApplyEPEConfig,
 		Validate:  validateEPEConfig,
 	}, krt.WithName("EPEConfig"), krt.WithStop(ctx.Done())).AsCollection()
-	var authorizationResources *resourcestore.Aggregate
-	if *enableXDSEgressAuthz {
-		authorizationResources = resourceStore
-	}
-	authorize, authorizationReg := newRequestAuthorizer(configs, authorizationResources, dns.NewClient(nil, 0))
 	providerConfigs := extensionprovider.NewCollection(client, *systemNamespace,
 		configs, configMaps, nil, ctx.Done())
 	providerReg := providers.RegisterCollection(providerConfigs)
@@ -331,17 +305,57 @@ func run() error {
 		return err
 	}
 
-	// Create the in-memory config store, materialized from one joined krt
-	// collection of compiled SecurityProfile / GlobalSecurityProfile objects
-	// and per-Sandbox rule profiles (agents.kruise.io/security-rules
-	// annotation, looked up by Sandbox identity and evaluated after the
-	// selector-matched profiles). Registration replays current collection
-	// state and then applies every event batch.
-	store := profilestore.NewStore(*profileDeletionGracePeriod)
-	profiles := profilestore.NewCollection(client, registrations, nil, ctx.Done())
-	profileReg := store.RegisterCollection(profiles)
-	unregisterSandboxDeletes := profiles.Registry.RegisterDeletes(store.NotifyKeys)
-	defer unregisterSandboxDeletes()
+	var demandProfiles *profilestore.XDSStore
+	var profileSource *xdsstore.ProfileSource
+	if *securityProfileSource == "xds" {
+		demandProfiles = profilestore.NewXDSStore()
+		profileSource = xdsstore.NewProfileSource(demandProfiles.ObserveAdmission, ctx.Done())
+	}
+	xds, conn, err := newEgressXDS(registrations, profileSource)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			setupLog.Error(err, "close xDS connection")
+		}
+	}()
+	nativeStore, err := xdsstore.NewCached(
+		xds,
+		demandcache.Config{IdleTTL: *xdsCacheIdleTTL, MaxEntries: *xdsCacheMaxEntries},
+	)
+	if err != nil {
+		return err
+	}
+	resourceStore := resourcestore.NewAggregate(nativeStore)
+	metrics.Registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "agentio_epe_demand_cache_entries",
+		Help: "Retained Workload, TrafficPolicy, SecurityProfile and Sandbox subscriptions, including active resolutions.",
+	}, func() float64 { return float64(nativeStore.CacheEntries()) }))
+	trafficpolicy.RegisterQueries(resourceStore, *xdsClusterID)
+	group.Add(runnable.Func(nativeStore.Run))
+	group.Add(runnable.Func(resourceStore.Run))
+	group.Add(runnable.Func(xds.Run))
+	var authorizationResources *resourcestore.Aggregate
+	if *enableXDSEgressAuthz {
+		authorizationResources = resourceStore
+	}
+	authorize, authorizationReg := newRequestAuthorizer(configs, authorizationResources, dns.NewClient(nil, 0))
+	var profileStore profilestore.Store
+	var matcher securityprofile.Matcher
+	var profileReg krt.HandlerRegistration
+	if *securityProfileSource == "kubernetes" {
+		localProfiles := profilestore.NewStore(*profileDeletionGracePeriod)
+		profiles := profilestore.NewCollection(client, registrations, nil, ctx.Done())
+		profileReg = localProfiles.RegisterCollection(profiles)
+		profileStore, matcher = localProfiles, localProfiles
+	} else {
+		profiles := profileSource.Collection(configMaps, krt.WithName("CompiledProfiles"), krt.WithStop(ctx.Done()))
+		profileReg = demandProfiles.RegisterCollection(profiles, nativeStore.AcquireProfileReferences)
+		matcher = demandProfiles
+	}
+
+	defer profileReg.UnregisterHandler()
 
 	// Liveness remains healthy during CA outages. Readiness follows certificate
 	// validity independently, allowing an expired identity to recover in place.
@@ -384,7 +398,7 @@ func run() error {
 	adminHandler := admin.NewHandler(admin.Options{
 		Credentials: providers,
 		EnableDebug: *enableDebug,
-		Store:       store,
+		Store:       profileStore,
 		LogLevel:    &logLevel,
 	})
 	group.Add(runnable.HTTPServer("admin", adminHandler, *adminAddr))
@@ -410,7 +424,7 @@ func run() error {
 
 	// Assemble the ext-proc gRPC server around the shared filter chain built
 	// above.
-	resolve := securityprofile.NewResolver(store, registrations, auditRouter)
+	resolve := securityprofile.NewResolver(matcher, registrations, auditRouter)
 	extProcServer := runserver.New(runserver.Config{
 		GrpcPort:                    *grpcPort,
 		PluginBudget:                *pluginBudget,

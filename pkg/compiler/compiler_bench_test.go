@@ -15,19 +15,32 @@
 package compiler
 
 import (
+	"fmt"
 	"testing"
 )
 
 func BenchmarkCompilerSnapshot(b *testing.B) {
 	b.Run("workloads=10000/sandboxes=5000", func(b *testing.B) {
-		compiler := scaleCompiler(b, 10_000)
-		waitSynced(b, compiler)
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if _, err := compiler.Snapshot(); err != nil {
-				b.Fatal(err)
-			}
-		}
+		benchmarkCompilerSnapshot(b, scalePolicies)
 	})
+}
+
+func BenchmarkCompilerSandboxPolicySnapshot(b *testing.B) {
+	for _, policyCount := range []int{1, 5, 10} {
+		b.Run(fmt.Sprintf("workloads=10000/sandboxes=5000/policies=%d", policyCount), func(b *testing.B) {
+			benchmarkCompilerSnapshot(b, policyCount)
+		})
+	}
+}
+
+func benchmarkCompilerSnapshot(b *testing.B, policyCount int) {
+	compiler := scaleCompiler(b, 10_000, policyCount)
+	waitSynced(b, compiler)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := compiler.Snapshot(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

@@ -15,6 +15,7 @@
 package compiler
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"testing/synctest"
@@ -112,6 +113,94 @@ func TestTrafficPolicyBodyUpdateDoesNotRecomputeWorkloadPolicies(t *testing.T) {
 		}
 		if got := failures.snapshot(); len(got) != 0 {
 			t.Fatalf("unexpected compilation failures: %v", got)
+		}
+	})
+}
+
+func TestSecurityProfileBodyUpdateDoesNotRecomputeWorkloadPolicies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const count = 32
+		stop := t.Context().Done()
+		builder := krt.NewOptionsBuilder(stop, "", nil)
+		var clients []model.Workload
+		for i := range count {
+			clients = append(clients, testWorkload("demo", fmt.Sprintf("client-%d", i), fmt.Sprintf("10.0.0.%d", i+1)))
+			clients[i].Labels = map[string]string{"app": "shared"}
+		}
+		source := model.SecurityProfile{
+			Name:      "policy",
+			Namespace: "demo",
+			UID:       "old",
+			Spec:      agents.SecurityProfileSpec{Selector: metav1.LabelSelector{MatchLabels: clients[0].Labels}},
+		}
+		sources := krt.NewMutableCollection(nil, []model.SecurityProfile{source}, builder.WithName("sources")...)
+		inputs := validCompilerInputs(stop)
+		inputs.SandboxMode = false
+		inputs.Workloads = krt.NewStaticCollection(nil, clients, builder.WithName("workloads")...)
+		inputs.SecurityProfiles = sources.AsCollection()
+		failures := newFailureRecorder()
+		policies := newPolicyCollections(inputs, newConfiguration(inputs, failures, builder.WithName),
+			newTrafficPolicyInputs(inputs), failures, builder.WithName, builder)
+		workloads := newWorkloadPolicies(inputs, policies, nil, failures, builder.WithName)
+		bodies := newSecurityProfileResources(policies.securityProfiles, failures, builder.WithName)
+		if !workloads.WaitUntilSynced(stop) || !bodies.WaitUntilSynced(stop) {
+			t.Fatal("profile and Workload collections did not sync")
+		}
+		synctest.Wait()
+		recomputes := workloads.Metadata()["recomputeTotal"].(uint64)
+		body := bodies.GetKey(model.SecurityProfileType + "|" + source.ResourceName())
+		if body == nil {
+			t.Fatal("initial profile body missing")
+		}
+		for _, change := range []func(){
+			func() { source.Spec.Rules = []agents.SecurityRule{{Name: "http"}} },
+			func() {
+				source.Spec.Inputs = []agents.SecurityProfileInput{{Name: "settings", Inline: map[string]string{"key": "value"}}}
+			},
+			func() { source.Spec.Audit = []agents.AuditAction{{Name: "audit"}} },
+		} {
+			source.Spec = *source.Spec.DeepCopy()
+			change()
+			sources.UpdateObject(source)
+			synctest.Wait()
+			current := bodies.GetKey(body.ResourceName())
+			if current == nil || current.Hash == body.Hash {
+				t.Fatal("HTTP configuration change did not publish its body")
+			}
+			if got := workloads.Metadata()["recomputeTotal"].(uint64); got != recomputes {
+				t.Fatalf("body-only update triggered %d redundant Workload transforms", got-recomputes)
+			}
+			body = current
+		}
+		source.UID = "new"
+		sources.UpdateObject(source)
+		synctest.Wait()
+		if got := workloads.Metadata()["recomputeTotal"].(uint64); got != recomputes+count {
+			t.Fatalf("UID change recomputed %d Workloads, want %d", got-recomputes, count)
+		}
+		source.Spec = *source.Spec.DeepCopy()
+		source.Spec.Rules = []agents.SecurityRule{{Name: "tls",
+			Match:   []agents.RuleMatch{{Domains: []string{"example.com"}}},
+			Actions: agents.SecurityRuleActions{TLS: &agents.TLSAction{Action: agents.TLSActionDeny}},
+		}}
+		sources.UpdateObject(source)
+		synctest.Wait()
+		for _, client := range clients {
+			matched := workloads.GetKey(client.UID)
+			if matched == nil || len(matched.SecurityProfileReferences) != 1 ||
+				matched.SecurityProfileReferences[0].Uid != "new" || len(matched.SNIPolicy.GetRules()) != 1 {
+				t.Fatal("identity or SNI change did not reach the bound Workload")
+			}
+		}
+		if got := workloads.Metadata()["recomputeTotal"].(uint64); got != recomputes+2*count {
+			t.Fatalf("SNI change did not recompute exactly the bound Workloads: %d", got)
+		}
+		sources.DeleteObject(source.ResourceName())
+		synctest.Wait()
+		for _, client := range clients {
+			if matched := workloads.GetKey(client.UID); matched == nil || len(matched.SecurityProfileReferences) != 0 {
+				t.Fatal("deleted profile binding retained")
+			}
 		}
 	})
 }

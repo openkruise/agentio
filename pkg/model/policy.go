@@ -118,8 +118,3 @@ func (p SecurityProfile) Equals(other SecurityProfile) bool {
 		p.CreationTime.Equal(other.CreationTime) &&
 		reflect.DeepEqual(p.Spec, other.Spec)
 }
-
-// SandboxSecurityProfileName preserves the execution-plane reference for Sandbox security rules.
-func SandboxSecurityProfileName(uid string) string {
-	return "sandboxes/" + uid + "/securityProfiles/inline"
-}

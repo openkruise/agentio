@@ -39,7 +39,9 @@ func metadataString(metadata *structpb.Struct, key string) string {
 func typeAccess(class model.ClientClass, typeURL string) (known, allowed bool) {
 	if class == model.ClientEPE {
 		known, _ := typeAccess(model.ClientEgressGateway, typeURL)
-		return known, typeURL == model.WorkloadType || typeURL == model.TrafficPolicyType
+		return known, typeURL == model.WorkloadType || typeURL == model.TrafficPolicyType ||
+			typeURL == model.SecurityProfileType ||
+			typeURL == model.SandboxType
 	}
 	if class == model.ClientAgentioEgress {
 		switch typeURL {
@@ -59,6 +61,8 @@ func typeAccess(class model.ClientClass, typeURL string) (known, allowed bool) {
 		}
 	}
 	switch typeURL {
+	case model.SecurityProfileType:
+		return true, false
 	case model.AddressType, model.WorkloadAuthorizationType, model.TrafficPolicyType, model.SandboxType:
 		return true, true
 	case model.WorkloadType,

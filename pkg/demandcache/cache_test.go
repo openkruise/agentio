@@ -133,6 +133,12 @@ func TestIdleTTL(t *testing.T) {
 		if source.acquisitions != 2 {
 			t.Fatal("expired lease reused")
 		}
+		second := source.leases[key{"workload", "a"}]
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if !second.released.Load() || cache.Len() != 0 {
+			t.Fatal("expiration timer did not restart after the cache emptied")
+		}
 	})
 }
 

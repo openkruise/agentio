@@ -160,11 +160,15 @@ func (c *Cache[V]) release(e *entry[V], err error) {
 			c.remove(e)
 		} else {
 			e.lastAccess = time.Now()
+			startTimer := c.idle.Len() == 0 && c.config.IdleTTL > 0
 			e.idle = c.idle.PushFront(e)
 			c.prune(e.lastAccess)
+			// An existing idle entry already has an earlier expiration timer.
+			if startTimer {
+				c.signal()
+			}
 		}
 	}
-	c.signal()
 }
 
 // Len returns the number of retained leases, including in-flight lookups.

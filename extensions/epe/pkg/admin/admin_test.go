@@ -23,9 +23,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
-	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
 
 func testSP(name, namespace string, priority int32, matchLabels map[string]string) *v1alpha1.SecurityProfile {
@@ -48,9 +49,28 @@ func testGSP(name string, priority int32, matchLabels map[string]string) *v1alph
 	}
 }
 
+func TestProfileInspectionOmittedWithoutLocalStore(t *testing.T) {
+	handler := NewHandler(Options{EnableDebug: true})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/debug/profiles", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("profile inspection without local store: %d", response.Code)
+	}
+	index := httptest.NewRecorder()
+	handler.ServeHTTP(index, httptest.NewRequest(http.MethodGet, "/", nil))
+	if index.Code != http.StatusOK || strings.Contains(index.Body.String(), "/debug/profiles") {
+		t.Fatalf("index advertised unavailable profile inspection: %s", index.Body.String())
+	}
+}
+
 // newTestHandler builds an admin handler backed by a store seeded with the
 // given profiles.
-func newTestHandler(t *testing.T, enableDebug bool, sps []*v1alpha1.SecurityProfile, gsps []*v1alpha1.GlobalSecurityProfile) http.Handler {
+func newTestHandler(
+	t *testing.T,
+	enableDebug bool,
+	sps []*v1alpha1.SecurityProfile,
+	gsps []*v1alpha1.GlobalSecurityProfile,
+) http.Handler {
 	t.Helper()
 	store := profilestore.MakeFakeStore()
 	for _, sp := range sps {

@@ -186,7 +186,9 @@ agentio:
     networkPolicy:
       enabled: false
   epe:
-    # Retain deleted administrator profiles for stale WDS references; 0s disables.
+    # Profile body source: kubernetes (informer cache) or xds (control plane).
+    securityProfileSource: kubernetes
+    # Retain deleted administrator profiles in kubernetes mode; 0s disables.
     profileDeletionGracePeriod: 60s
     xdsCache:
       idleTTL: 10m

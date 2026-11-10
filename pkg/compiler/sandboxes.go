@@ -17,10 +17,12 @@ package compiler
 import (
 	"fmt"
 
+	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"google.golang.org/protobuf/proto"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -72,7 +74,6 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 		result.Payload.Attester = &sandboxv1.Sandbox_Attester{WorkloadUid: sandbox.Attester.WorkloadUID}
 	}
 
-	references := &extensionsv1.PolicyReference{TypeUrl: model.SecurityProfileType}
 	if policies := sandbox.Policies; policies != nil {
 		if policies.InputError != "" {
 			return nil, fmt.Errorf("sandbox policies: %s", policies.InputError)
@@ -82,6 +83,22 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 			if err != nil {
 				return nil, fmt.Errorf("sandbox security rules: %w", err)
 			}
+			name := sandbox.Name
+			if name == "" {
+				name = sandbox.UID
+			}
+			payload, err := securityProfilePayload(&securityv1.SecurityProfile{
+				Name:      name,
+				Namespace: sandbox.Namespace,
+				Uid:       sandbox.SourceIdentity.UID,
+			}, &agentsv1alpha1.SecurityProfileSpec{Rules: policies.SecurityRules})
+			if err != nil {
+				return nil, err
+			}
+			body, err := marshalDeterministicAny(payload)
+			if err != nil {
+				return nil, err
+			}
 			result.SNIPolicy = sni
 			if len(sni.GetRules()) > 0 {
 				extension, err := marshalDeterministicAny(sni)
@@ -90,17 +107,9 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 				}
 				result.Payload.Extensions = append(result.Payload.Extensions, extension)
 			}
-			references.Resources = []*extensionsv1.PolicyResourceReference{{
-				Name: model.SandboxSecurityProfileName(sandbox.UID),
-				Uid:  sandbox.SourceIdentity.UID,
-			}}
+			result.Payload.Extensions = append(result.Payload.Extensions, body)
 		}
 	}
-	extension, err := marshalDeterministicAny(references)
-	if err != nil {
-		return nil, err
-	}
-	result.Payload.Extensions = append(result.Payload.Extensions, extension)
 	return result, nil
 }
 
@@ -133,11 +142,15 @@ func newSandboxResources(
 			failures.recordIf("SandboxResource", sandbox.ResourceName(), err, currentInput)
 			return nil
 		}
+		var aliases []string
+		if source.Namespace != "" && source.Name != "" {
+			aliases = []string{source.Namespace + "/" + source.Name}
+		}
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.SandboxType, Name: sandbox.ResourceName()},
 			"",
 			value,
-			nil,
+			aliases,
 			model.ResourceFacts{
 				SourceIdentity: sandbox.SourceIdentity,
 				Sandbox:        &model.SandboxResourceFacts{AttesterWorkloadUID: workloadUID},

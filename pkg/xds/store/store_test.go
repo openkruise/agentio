@@ -16,6 +16,9 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +31,67 @@ import (
 )
 
 var _ Subscription = (*subscription)(nil)
+
+func TestConcurrentPublicationsPreserveSnapshotsAndNotices(t *testing.T) {
+	const count = 64
+	names := make([]string, count)
+	for i := range names {
+		names[i] = fmt.Sprintf("workload-%d", i)
+	}
+	resources := newSnapshot(t, names...).List(model.AddressType)
+	store := New(newSnapshot(t))
+	before := store.Snapshot()
+	subscription := store.Subscribe(t.Context(), model.ClientScope{})
+	subscription.Watch(model.AddressType)
+	start := make(chan struct{})
+	sizes := make(chan int, count)
+	var workers sync.WaitGroup
+	for _, resource := range resources {
+		workers.Go(func() {
+			<-start
+			publication, err := store.Apply([]model.ResourceChange{{Key: resource.Key, New: &resource}})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			sizes <- len(publication.Snapshot.List(model.AddressType))
+		})
+		workers.Go(func() {
+			<-start
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			sub := store.Subscribe(ctx, model.ClientScope{})
+			sub.Watch(model.AddressType)
+			store.Snapshot()
+			if _, err := store.Apply(nil); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	close(start)
+	workers.Wait()
+	close(sizes)
+	observed := make([]int, 0, count)
+	for size := range sizes {
+		observed = append(observed, size)
+	}
+	sort.Ints(observed)
+	if len(observed) != count {
+		t.Fatalf("publications = %d, want %d", len(observed), count)
+	}
+	for i, size := range observed {
+		if size != i+1 {
+			t.Fatalf("concurrent publication lost a resource: %v", observed)
+		}
+	}
+	if len(before.List(model.AddressType)) != 0 {
+		t.Fatal("publication modified a previous snapshot")
+	}
+	update := <-subscription.Updates()
+	if len(update.Candidates(model.AddressType)) != count || update.Version() != store.Snapshot().Version() {
+		t.Fatal("concurrent publication lost a subscriber notice")
+	}
+}
 
 func TestNotificationsPreserveTypeSubscriptions(t *testing.T) {
 	store := New(newSnapshot(t))

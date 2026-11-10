@@ -29,7 +29,7 @@ import (
 
 // The fixture mixes ordinary endpoints and Sandbox hosts with services and policies.
 func TestCompileMixedEndpointsAtScale(t *testing.T) {
-	compiler := scaleCompiler(t, 5_000)
+	compiler := scaleCompiler(t, 5_000, scalePolicies)
 	// Race instrumentation and concurrent package tests can exceed the small-fixture timeout.
 	waitSyncedWithin(t, compiler, 2*time.Minute)
 	snapshot, err := compiler.Snapshot()
@@ -83,7 +83,7 @@ const (
 	scaleGateways            = 5
 )
 
-func scaleCompiler(t testing.TB, count int) *Compiler {
+func scaleCompiler(t testing.TB, count, policyCount int) *Compiler {
 	t.Helper()
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
@@ -128,7 +128,7 @@ func scaleCompiler(t testing.TB, count int) *Compiler {
 
 	trafficPolicies := krt.NewMutableCollection[model.TrafficPolicy](nil, nil, options...)
 	securityProfiles := krt.NewMutableCollection[model.SecurityProfile](nil, nil, options...)
-	for index := range scalePolicies {
+	for index := range policyCount {
 		selector := metav1.LabelSelector{MatchLabels: map[string]string{"app": "sandbox"}}
 		trafficPolicies.ConditionalUpdateObject(model.TrafficPolicy{
 			Name:      fmt.Sprintf("policy-%d", index),

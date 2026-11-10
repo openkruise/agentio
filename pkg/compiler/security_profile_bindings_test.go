@@ -15,6 +15,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
@@ -224,12 +226,13 @@ func TestSecurityProfileBindingsLifecycle(t *testing.T) {
 	await()
 }
 
-func TestSandboxSecurityProfileReferences(t *testing.T) {
+func TestSandboxSecurityProfileInline(t *testing.T) {
 	fixture := newIncrementalFixture(t)
 	workload := testWorkload("demo", "client", "10.1.0.1")
 	fixture.workloads.ConditionalUpdateObject(workload)
 	sandbox := model.Sandbox{
 		UID:            "kruise:one",
+		Name:           "client",
 		Namespace:      "demo",
 		SourceIdentity: model.SourceIdentity{UID: "sandbox-source"},
 		Attester:       &model.Attester{WorkloadUID: workload.UID},
@@ -237,25 +240,38 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	sibling := model.Sandbox{UID: "kruise:two", Namespace: "demo", Attester: &model.Attester{WorkloadUID: workload.UID}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	fixture.sandboxes.ConditionalUpdateObject(sibling)
-	profileName := model.SandboxSecurityProfileName(sandbox.UID)
 	sandbox.Policies = &model.SandboxPolicies{SecurityRules: []agentsv1alpha1.SecurityRule{}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	shared := model.SecurityProfile{Name: "shared", Namespace: "demo"}
 	fixture.securityProfiles.ConditionalUpdateObject(shared)
 	waitSynced(t, fixture.compiler)
-	key := model.ResourceKey{TypeURL: model.SandboxType, Name: sandbox.UID}
+	awaitInline := func(host string) {
+		t.Helper()
+		testutil.Eventually(t, func() bool {
+			manifest := manifestAt(t, fixture.compiler, sandbox.UID)
+			resources := currentSnapshot(t, fixture.compiler).Lookup(model.SandboxType, "demo/client")
+			if len(resources) != 1 || resources[0].Key.Name != sandbox.UID {
+				return false
+			}
+			if manifest.GetAttester().GetWorkloadUid() != host || len(manifest.GetExtensions()) != 1 {
+				return false
+			}
+			body := &securityv1.SecurityProfile{}
+			if err := manifest.Extensions[0].UnmarshalTo(body); err != nil {
+				t.Fatal(err)
+			}
+			var document model.HTTPPolicy
+			if err := json.Unmarshal(body.PolicyJson, &document); err != nil {
+				t.Fatal(err)
+			}
+			return body.Name == sandbox.Name && body.Namespace == sandbox.Namespace && manifest.Uid == sandbox.UID &&
+				body.Uid == "sandbox-source" && len(document.Rules) == 0
+		}, "Sandbox carries owned profile without a PolicyReference")
+	}
+	awaitInline(workload.UID)
 	testutil.Eventually(t, func() bool {
-		refs, _ := securityReferencesAt(t, fixture.compiler, key)
-		return refs != nil && len(refs.Resources) == 1 &&
-			refs.Resources[0].Name == profileName && refs.Resources[0].Uid == "sandbox-source"
-	}, "Sandbox binds owned profile without SNI rules")
-	testutil.Eventually(t, func() bool {
-		refs, _ := securityReferencesAt(
-			t,
-			fixture.compiler,
-			model.ResourceKey{TypeURL: model.SandboxType, Name: sibling.UID},
-		)
-		return refs != nil && len(refs.Resources) == 0
+		manifest := manifestAt(t, fixture.compiler, sibling.UID)
+		return manifest != nil && len(manifest.Extensions) == 0
 	}, "sibling does not inherit dedicated profile")
 	testutil.Eventually(t, func() bool {
 		refs, _ := securityReferencesAt(
@@ -267,19 +283,13 @@ func TestSandboxSecurityProfileReferences(t *testing.T) {
 	}, "host carries only shared bindings")
 	sandbox.Attester = &model.Attester{WorkloadUID: "new-host"}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
-	testutil.Eventually(t, func() bool {
-		return manifestAt(t, fixture.compiler, sandbox.UID).GetAttester().GetWorkloadUid() == "new-host"
-	}, "Sandbox migration")
-	refs, _ := securityReferencesAt(t, fixture.compiler, key)
-	if refs == nil || !slices.Equal(policyReferenceNames(refs.Resources), []string{profileName}) {
-		t.Fatalf("migration lost owned reference: %v", refs)
-	}
+	awaitInline("new-host")
 	sandbox.Policies = nil
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
-		refs, _ := securityReferencesAt(t, fixture.compiler, key)
-		return refs != nil && len(refs.Resources) == 0
-	}, "owned profile deletion publishes an explicit empty binding")
+		manifest := manifestAt(t, fixture.compiler, sandbox.UID)
+		return manifest != nil && len(manifest.Extensions) == 0
+	}, "owned profile deletion removes the inline body")
 	fixture.sandboxes.DeleteObject(sandbox.UID)
 	testutil.Eventually(t, func() bool { return manifestAt(t, fixture.compiler, sandbox.UID) == nil },
 		"Sandbox deletion")
@@ -289,14 +299,15 @@ func TestSecurityProfileBindingsPublishEmptyReferences(t *testing.T) {
 	fixture := newIncrementalFixture(t)
 	workload := testWorkload("demo", "client", "10.1.0.1")
 	fixture.workloads.ConditionalUpdateObject(workload)
-	fixture.sandboxes.ConditionalUpdateObject(model.Sandbox{UID: "kruise:one", Namespace: "demo"})
 	waitSynced(t, fixture.compiler)
-	for _, key := range []model.ResourceKey{{TypeURL: model.AddressType, Name: workload.UID}, {TypeURL: model.SandboxType, Name: "kruise:one"}} {
-		testutil.Eventually(t, func() bool {
-			refs, hash := securityReferencesAt(t, fixture.compiler, key)
-			return hash != "" && refs != nil && len(refs.Resources) == 0
-		}, "explicit empty SecurityProfile binding")
-	}
+	testutil.Eventually(t, func() bool {
+		refs, hash := securityReferencesAt(
+			t,
+			fixture.compiler,
+			model.ResourceKey{TypeURL: model.AddressType, Name: workload.UID},
+		)
+		return hash != "" && refs != nil && len(refs.Resources) == 0
+	}, "explicit empty SecurityProfile binding")
 }
 
 func TestSecurityProfileBindingDrivesSNIProjection(t *testing.T) {

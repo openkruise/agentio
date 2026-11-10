@@ -186,8 +186,6 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 func TestSandboxSecurityRulesRejectInvalidAnnotation(t *testing.T) {
 	for _, raw := range []string{
 		`[]`, `null`, `{}`, `[{"name":`,
-		`[{"unknown":true}]`,
-		`[{"match":[{"domains":["api.example"],"unknown":true}]}]`,
 		`[{"match":[{"domains":["api.example"]}]}] []`,
 	} {
 		sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
@@ -196,6 +194,22 @@ func TestSandboxSecurityRulesRejectInvalidAnnotation(t *testing.T) {
 		if _, err := sandboxSecurityRules(sandbox); err == nil {
 			t.Errorf("invalid security-rules accepted: %s", raw)
 		}
+	}
+}
+
+func TestSandboxSecurityRulesIgnoreUnknownFields(t *testing.T) {
+	sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{
+			agentsv1alpha1.AnnotationSecurityRules: `[{"name":"r","unknown":true,"match":[{"domains":["api.example"],"unknown":true}],"actions":{"block":{},"futureAction":{}}}]`,
+		},
+	}}
+	rules, err := sandboxSecurityRules(sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].Name != "r" || rules[0].Actions.Block == nil ||
+		len(rules[0].Match) != 1 || rules[0].Match[0].Domains[0] != "api.example" {
+		t.Fatalf("known rule changed: %+v", rules)
 	}
 }
 
@@ -551,7 +565,11 @@ func TestSourceDeleteNotifications(t *testing.T) {
 				want := []model.ResourceKey{
 					{TypeURL: model.SandboxType, Name: "kruise:delivery"},
 				}
-				if len(keys) != len(want) || !slices.Contains(keys, want[0]) {
+				if action != "rename" {
+					want = append(want, model.ResourceKey{TypeURL: model.SandboxType, Name: "demo/sandbox"})
+				}
+				if len(keys) != len(want) || !slices.Contains(keys, want[0]) ||
+					len(want) > 1 && !slices.Contains(keys, want[1]) {
 					t.Fatalf("source invalidations = %v, want %v", keys, want)
 				}
 				if _, found := config.Lookup(keys[0]); found {
@@ -575,6 +593,12 @@ func TestSandboxSourceConflictAndInlineAbsence(t *testing.T) {
 	objects := krt.NewMutableCollection(nil, []*agentsv1alpha1.Sandbox{first, second}, krt.WithStop(t.Context().Done()))
 	sandboxes := newSandboxSources(objects.AsCollection())
 	key := model.ResourceKey{TypeURL: model.SandboxType, Name: "kruise:duplicate"}
+	if got, found := sandboxes.Lookup(
+		model.ResourceKey{TypeURL: model.SandboxType, Name: "demo/first"},
+	); !found ||
+		got.UID != "first" {
+		t.Fatalf("namespace/name source lookup: %v, %v", got, found)
+	}
 	if got, found := sandboxes.Lookup(key); !found || got != (model.SourceIdentity{}) {
 		t.Fatalf("ambiguous source must stay present without a selected identity: %v, %v", got, found)
 	}

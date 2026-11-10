@@ -14,15 +14,17 @@
 package profilestore
 
 import (
-	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
+
+	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
-	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 )
 
 // FakeStore embeds the production *store and adds synchronous
@@ -106,12 +108,15 @@ func (s *FakeStore) SandboxProfileSet(sandbox metav1.Object) {
 // rather than dropped, so — exactly as in NewCollection — an invalid update
 // leaves any prior effective profile installed instead of removing it.
 //
-// The nil krt context and nil ConfigMap collection mean ConfigMap-sourced
-// inputs cannot resolve here and fail compilation; inline inputs resolve
+// Without a ConfigMap collection, ConfigMap-sourced inputs cannot resolve
+// here and fail compilation; inline inputs resolve
 // normally. Tests that need ConfigMap inputs must drive NewCollection.
 func (s *FakeStore) apply(obj metav1.Object, spec *v1alpha1.SecurityProfileSpec) {
 	log := ctrllog.Log.WithName("profile")
-	sp, err := compileProfile(obj, spec, s.regs, nil, nil)
+	sp, err := compileProfile(obj, spec, s.regs)
+	if err == nil {
+		sp.Inputs, sp.InputsError, err = resolveInputs(krt.TestingDummyContext{}, nil, sp.Meta, spec.Inputs)
+	}
 	if err != nil {
 		log.Error(err, "profile is invalid; retaining last-known-good version",
 			"profile", obj.GetNamespace()+"/"+obj.GetName())

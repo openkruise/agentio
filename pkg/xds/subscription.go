@@ -228,7 +228,7 @@ func newSubscriptionView(watch *watchState) SubscriptionView {
 }
 
 // demandSubscriptionView reconciles only explicitly requested resources,
-// including unique Workload aliases and missing names. Empty sent state forces
+// including unique Workload/Sandbox aliases and missing names. Empty sent state forces
 // a reply after client eviction. Ambiguous aliases and Service expansion still
 // use the complete selection; other subscriptions retain their sent versions.
 func demandSubscriptionView(snapshot model.ResourceSet, typeURL string, names []string) (SubscriptionView, bool) {
@@ -239,7 +239,7 @@ func demandSubscriptionView(snapshot model.ResourceSet, typeURL string, names []
 	switch typeURL {
 	case model.WorkloadType:
 		lookupType = model.AddressType
-	case model.TrafficPolicyType, model.SandboxType:
+	case model.TrafficPolicyType, model.SandboxType, model.SecurityProfileType:
 	default:
 		return SubscriptionView{}, false
 	}
@@ -253,7 +253,7 @@ func demandSubscriptionView(snapshot model.ResourceSet, typeURL string, names []
 		}
 		if len(resources) != 1 ||
 			(typeURL == model.WorkloadType && !resources[0].IsWorkloadAddress()) ||
-			(typeURL != model.WorkloadType && resources[0].XDSName != name) {
+			(typeURL != model.WorkloadType && typeURL != model.SandboxType && resources[0].XDSName != name) {
 			return SubscriptionView{}, false
 		}
 	}
@@ -270,7 +270,33 @@ func demandReconciliationView(snapshot model.ResourceSet, typeURL string, scope 
 	if len(unsubscribed) == 0 {
 		return view, ok
 	}
-	if typeURL == model.TrafficPolicyType && (len(subscribed) == 0 || ok) {
+	if typeURL == model.SandboxType && (len(subscribed) == 0 || ok) {
+		view.sent = make(map[string]string)
+		names := sets.New(view.names...)
+		for _, name := range unsubscribed {
+			resources := snapshot.Lookup(typeURL, name)
+			if name == "*" || len(resources) != 1 {
+				return SubscriptionView{}, false
+			}
+			resource := resources[0]
+			retained := watch.names.Contains(resource.XDSName)
+			for _, alias := range resource.Aliases {
+				retained = retained || watch.names.Contains(alias)
+			}
+			if !retained {
+				// Forget an evicted alias without withdrawing a subsequent demand.
+				delete(watch.sent, resource.XDSName)
+				continue
+			}
+			names.Insert(resource.XDSName)
+			if version, sent := watch.sent[resource.XDSName]; sent {
+				view.sent[resource.XDSName] = version
+			}
+		}
+		view.names = sortedNames(names)
+		return view, true
+	}
+	if (typeURL == model.TrafficPolicyType || typeURL == model.SecurityProfileType) && (len(subscribed) == 0 || ok) {
 		for _, name := range unsubscribed {
 			resources := snapshot.Lookup(typeURL, name)
 			if name == "*" || containsSorted(view.names, name) || len(resources) != 1 ||

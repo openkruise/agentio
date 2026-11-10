@@ -36,6 +36,7 @@ type Options struct {
 	// EnableDebug toggles registration of the /debug endpoints.
 	EnableDebug bool
 	// Store provides the compiled profile snapshot used for matching.
+	// Nil omits /debug/profiles when the source does not support local selection.
 	Store profilestore.Store
 	// Credentials invalidates the same client used by the filter chain. Nil omits
 	// the cache endpoint; its registration is independent of EnableDebug.
@@ -67,7 +68,9 @@ func NewHandler(opts Options) http.Handler {
 		mux.HandleFunc(credentialInvalidationPath, h.handleCredentialInvalidation)
 	}
 	if opts.EnableDebug {
-		mux.HandleFunc("/debug/profiles", h.handleList)
+		if h.store != nil {
+			mux.HandleFunc("/debug/profiles", h.handleList)
+		}
 		if h.logLevel != nil {
 			mux.HandleFunc(loggingPath, h.handleLogging)
 			mux.HandleFunc(loggingPath+"/", h.handleLogging)
@@ -103,6 +106,9 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 			); err != nil {
 				return
 			}
+		}
+		if h.store == nil {
+			return
 		}
 		fmt.Fprintf(w, "  GET|POST /debug/profiles                          list all loaded profiles\n")
 		fmt.Fprintf(w, "  GET|POST /debug/profiles?namespace=<ns>           filter by namespace\n")

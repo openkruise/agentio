@@ -21,7 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func transformResources(resources []*discovery.Resource, watch Watch) ([]*Resource, error) {
+func transformResources(resources []*discovery.Resource, watch Watch) ([]*Resource, *discovery.Resource, error) {
 	result := make([]*Resource, len(resources))
 	for i, resource := range resources {
 		// Named watches leave unselected response positions empty.
@@ -35,10 +35,10 @@ func transformResources(resources []*discovery.Resource, watch Watch) ([]*Resour
 			var err error
 			value, err = watch.Transform(resource.Resource)
 			if err != nil {
-				return nil, fmt.Errorf("transform %s %q: %w", watch.TypeURL, resource.Name, err)
+				return nil, resource, fmt.Errorf("transform %s %q: %w", watch.TypeURL, resource.Name, err)
 			}
 		}
 		result[i] = &Resource{Value: value}
 	}
-	return result, nil
+	return result, nil, nil
 }

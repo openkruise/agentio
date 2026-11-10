@@ -47,7 +47,6 @@ func buildGraph(inputs Inputs, failures *failureRecorder, builder krt.OptionsBui
 	compiledSandboxes := newCompiledSandboxes(inputs, failures, collectionOptions)
 	selectedWorkloadPolicies := newWorkloadPolicies(inputs, policies, compiledSandboxes, failures, collectionOptions)
 
-	// Each key must identify exactly one family; build resources via model.NewResource.
 	workloadResources := newWorkloadResources(
 		inputs,
 		base,
@@ -57,13 +56,15 @@ func buildGraph(inputs Inputs, failures *failureRecorder, builder krt.OptionsBui
 		collectionOptions,
 	)
 	sandboxResources := newSandboxResources(inputs.Sandboxes, compiledSandboxes, failures, collectionOptions)
+	// Resource families have disjoint keys, so the join needs no conflict resolution.
 	resources := krt.JoinCollection([]krt.Collection[model.Resource]{
 		sandboxResources,
 		newTrafficPolicyResources(policies.trafficPolicies, failures, collectionOptions),
+		newSecurityProfileResources(policies.securityProfiles, failures, collectionOptions),
 		workloadResources,
 		newServiceResources(inputs, gateways, failures, collectionOptions),
 		newGatewayResources(inputs, base, gatewayGlobalExtProc, gateways, failures, collectionOptions),
-	}, collectionOptions("resources")...)
+	}, append(collectionOptions("resources"), krt.WithJoinUnchecked())...)
 
 	return &graph{
 		configuration: configuration,

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -60,6 +61,16 @@ func NewResourceSet(resources []Resource) (ResourceSet, error) {
 		}
 		index.shards[shardID][normalized.Key.Name] = normalized
 		indexResourceLookups(index, normalized)
+		for _, key := range normalized.Facts.referenceKeys() {
+			if index.references == nil {
+				index.references = new(resourceReferenceCounts)
+			}
+			shard := resourceShard(key.Name)
+			if index.references[shard] == nil {
+				index.references[shard] = make(map[ResourceKey]int)
+			}
+			index.references[shard][key]++
+		}
 		index.length++
 		result.length++
 	}
@@ -130,11 +141,14 @@ func (s ResourceSet) ListWorkloads(typeURL string, query WorkloadQuery) []Resour
 	return result
 }
 
-// HasReference uses the publication's reverse indexes, without listing dependents.
+// HasReference uses counts for body retention; no caller needs the referrers' names.
 func (s ResourceSet) HasReference(key ResourceKey) bool {
-	indexKey := resourceReferenceIndexKey(key)
 	for _, index := range s.resources {
-		if len(lookupNames(&index.facts, indexKey)) != 0 {
+		if index.references != nil && index.references[resourceShard(key.Name)][key] > 0 {
+			return true
+		}
+		if key.TypeURL == TrafficPolicyType &&
+			len(lookupNames(&index.facts, resourceFactIndexKey(resourceFactTrafficPolicyReference, key.Name))) != 0 {
 			return true
 		}
 	}
@@ -240,6 +254,7 @@ func (s ResourceSet) Apply(changes []ResourceChange) (ResourceSet, bool, error) 
 		shard   uint16
 	}
 	clonedShards := sets.New[shardKey]()
+	clonedReferences := sets.New[shardKey]()
 	lookupUpdates := lookupIndexUpdates{cloned: sets.New[lookupShardKey](), batch: len(changes) > 1}
 	effective := make([]ResourceChange, 0, len(changes))
 	length := s.length
@@ -293,6 +308,43 @@ func (s ResourceSet) Apply(changes []ResourceChange) (ResourceSet, bool, error) 
 			change.Old = &old
 		}
 		updateResourceLookupDiff(index, change.Old, change.New, change.Key.TypeURL, &lookupUpdates)
+		var oldReferences, newReferences []ResourceKey
+		if change.Old != nil {
+			oldReferences = change.Old.Facts.referenceKeys()
+		}
+		if change.New != nil {
+			newReferences = change.New.Facts.referenceKeys()
+		}
+		if !slices.Equal(oldReferences, newReferences) {
+			if original := s.resources[change.Key.TypeURL]; original != nil && index.references != nil &&
+				index.references == original.references {
+				references := *index.references
+				index.references = &references
+			}
+			for _, item := range []struct {
+				references []ResourceKey
+				delta      int
+			}{{oldReferences, -1}, {newReferences, 1}} {
+				for _, reference := range item.references {
+					if index.references == nil {
+						index.references = new(resourceReferenceCounts)
+					}
+					shard := resourceShard(reference.Name)
+					key := shardKey{typeURL: change.Key.TypeURL, shard: shard}
+					if !clonedReferences.Contains(key) {
+						copied := make(map[ResourceKey]int, len(index.references[shard])+1)
+						maps.Copy(copied, index.references[shard])
+						index.references[shard] = copied
+						clonedReferences.Insert(key)
+					}
+					counts := index.references[shard]
+					counts[reference] += item.delta
+					if counts[reference] == 0 {
+						delete(counts, reference)
+					}
+				}
+			}
+		}
 		if change.New == nil {
 			delete(index.shards[shardID], change.Key.Name)
 			index.length--

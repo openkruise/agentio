@@ -81,6 +81,11 @@ func compileRuleMatch(raw v1alpha1.RuleMatch) (Match, error) {
 	}
 
 	for _, p := range raw.Paths {
+		switch p.Type {
+		case "", v1alpha1.PathMatchTypeExact, v1alpha1.PathMatchTypePrefix, v1alpha1.PathMatchTypeRegex:
+		default:
+			return Match{}, fmt.Errorf("unsupported path match type %q", p.Type)
+		}
 		pm := pathMatcher{Type: p.Type, Value: p.Value}
 		if p.Type == v1alpha1.PathMatchTypeRegex {
 			re, err := regexp.Compile(p.Value)
@@ -93,6 +98,11 @@ func compileRuleMatch(raw v1alpha1.RuleMatch) (Match, error) {
 	}
 
 	for _, h := range raw.Headers {
+		switch h.Type {
+		case "", v1alpha1.StringMatchTypeExact, v1alpha1.StringMatchTypePrefix, v1alpha1.StringMatchTypeRegex:
+		default:
+			return Match{}, fmt.Errorf("unsupported header match type %q", h.Type)
+		}
 		sm := stringMatcher{Name: strings.ToLower(h.Name), Type: h.Type, Value: h.Value}
 		if h.Type == v1alpha1.StringMatchTypeRegex {
 			re, err := regexp.Compile(h.Value)
@@ -105,6 +115,11 @@ func compileRuleMatch(raw v1alpha1.RuleMatch) (Match, error) {
 	}
 
 	for _, q := range raw.QueryParams {
+		switch q.Type {
+		case "", v1alpha1.StringMatchTypeExact, v1alpha1.StringMatchTypePrefix, v1alpha1.StringMatchTypeRegex:
+		default:
+			return Match{}, fmt.Errorf("unsupported query match type %q", q.Type)
+		}
 		sm := stringMatcher{Name: q.Name, Type: q.Type, Value: q.Value}
 		if q.Type == v1alpha1.StringMatchTypeRegex {
 			re, err := regexp.Compile(q.Value)
@@ -350,6 +365,8 @@ type Meta struct {
 	// Version is the source object's resourceVersion, carried for admin
 	// output and for identifying which version of a profile is installed.
 	Version string
+	// AdmissionRevision orders accepted candidates while their collection publishes asynchronously.
+	AdmissionRevision uint64 `json:"-"`
 	// Match says how this profile is selected for a workload. It is the only
 	// difference the store draws between policy sources, and it doubles as a
 	// key discriminator: a Sandbox and a SecurityProfile in one namespace may
@@ -452,9 +469,6 @@ func (sp Profile) ResourceName() string {
 // compile, or any audit entry fails to compile. The caller rejects that
 // candidate; the profile store may continue serving LKG.
 func NewProfile(obj metav1.Object, spec *v1alpha1.SecurityProfileSpec) (*Profile, error) {
-	if err := ValidateInputs(obj.GetNamespace(), spec.Inputs); err != nil {
-		return nil, err
-	}
 	selector, err := metav1.LabelSelectorAsSelector(&spec.Selector)
 	if err != nil {
 		return nil, err
@@ -466,15 +480,26 @@ func NewProfile(obj metav1.Object, spec *v1alpha1.SecurityProfileSpec) (*Profile
 		Priority:          ptr.Deref(spec.Priority, v1alpha1.DefaultSecurityProfilePriority),
 		Version:           obj.GetResourceVersion(),
 	}
+	profile, err := newProfile(meta, spec)
+	if err != nil {
+		return nil, err
+	}
+	profile.Selector = selector
+	return profile, nil
+}
+
+func newProfile(meta Meta, spec *v1alpha1.SecurityProfileSpec) (*Profile, error) {
+	if err := ValidateInputs(meta.Namespace, spec.Inputs); err != nil {
+		return nil, err
+	}
 	rules, err := compileRules(spec.Rules)
 	if err != nil {
 		return nil, err
 	}
 	sp := &Profile{
-		Meta:     meta,
-		Spec:     spec,
-		Selector: selector,
-		Rules:    rules,
+		Meta:  meta,
+		Spec:  spec,
+		Rules: rules,
 	}
 	if err := sp.compileAudits(spec); err != nil {
 		return nil, err

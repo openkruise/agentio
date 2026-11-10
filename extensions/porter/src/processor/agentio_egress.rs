@@ -60,16 +60,16 @@ pub(super) fn encode(
     }
     if enable_sni_traffic_policy && protocol == "tcp" {
         let mut rules = Vec::new();
+        let View::Workload(workload) = resolved.workload.as_ref() else {
+            unreachable!("typed Workload watch")
+        };
+        rules.extend(view::project_rules(&workload.rules));
         if let Some(sandbox) = &resolved.sandbox {
             let View::Sandbox(sandbox) = sandbox.as_ref() else {
                 unreachable!("typed Sandbox watch")
             };
             rules.extend(view::project_rules(&sandbox.rules));
         }
-        let View::Workload(workload) = resolved.workload.as_ref() else {
-            unreachable!("typed Workload watch")
-        };
-        rules.extend(view::project_rules(&workload.rules));
         let policy = if rules.is_empty() {
             view::object([])
         } else {

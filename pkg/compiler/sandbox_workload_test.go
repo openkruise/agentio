@@ -357,7 +357,11 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 				return false
 			}
 			if host == "" {
-				return len(manifest.Extensions) == 1
+				want := 0
+				if sandbox.Policies != nil && sandbox.Policies.SecurityRules != nil {
+					want++
+				}
+				return len(manifest.Extensions) == want
 			}
 			if len(manifest.Extensions) != 2 {
 				return false

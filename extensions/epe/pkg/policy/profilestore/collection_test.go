@@ -340,7 +340,7 @@ func TestProfileCollectionSandboxMode(t *testing.T) {
 			store := NewStore(0)
 			profiles := NewCollection(c, nil, krt.GlobalDebugHandler, stop)
 			reg := store.RegisterCollection(profiles)
-			t.Cleanup(profiles.Registry.RegisterDeletes(store.NotifyKeys))
+			t.Cleanup(reg.UnregisterHandler)
 			c.Run(stop)
 			if !reg.WaitUntilSynced(stop) {
 				t.Fatal("profile collection never synced")

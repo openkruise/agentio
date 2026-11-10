@@ -413,7 +413,7 @@ func TestDegradedGaugesAreBoundedByScope(t *testing.T) {
 	if got := unenforcedCount(t, scopeNamespaced) + unenforcedCount(t, scopeSandbox); got != 0 {
 		t.Errorf("unenforced counts total = %v after deleting every source, want 0", got)
 	}
-	if got := len(s.degraded.unenforced); got != 0 {
+	if got := len(s.degraded.unenforced.keys); got != 0 {
 		t.Errorf("degraded set retains %d entries after every source was deleted, want 0", got)
 	}
 }

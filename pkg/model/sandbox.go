@@ -26,11 +26,8 @@ import (
 // Attester identifies the one Workload currently hosting a Sandbox.
 type Attester struct{ WorkloadUID string }
 
-// Sandbox kinds identify the provider used to qualify an instance ID.
-const (
-	SandboxKindWorkload = "workload"
-	SandboxKindKruise   = "kruise"
-)
+// SandboxKindKruise identifies the provider used to qualify a Kruise instance ID.
+const SandboxKindKruise = "kruise"
 
 // SandboxUID qualifies a provider's instance ID with its Sandbox kind. Providers
 // supply stable IDs unique within their kind; consumers compare the full string.
@@ -44,6 +41,7 @@ type Sandbox struct {
 	SourceIdentity SourceIdentity
 	Attester       *Attester
 	UID            string
+	Name           string
 	Namespace      string
 	Policies       *SandboxPolicies
 }
@@ -73,6 +71,7 @@ func (s Sandbox) ResourceName() string {
 // Equals compares identity, host binding, and Sandbox policy inputs.
 func (s Sandbox) Equals(other Sandbox) bool {
 	return s.UID == other.UID &&
+		s.Name == other.Name &&
 		s.SourceIdentity == other.SourceIdentity &&
 		reflect.DeepEqual(s.Policies, other.Policies) &&
 		s.Namespace == other.Namespace &&

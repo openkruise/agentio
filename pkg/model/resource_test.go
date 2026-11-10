@@ -78,6 +78,74 @@ func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
 	}
 }
 
+func TestReferenceCountsTrackLastReferrerAcrossBatchUpdates(t *testing.T) {
+	profile := ResourceKey{TypeURL: SecurityProfileType, Name: "shared"}
+	makeReferrer := func(name string, references []ResourceKey) Resource {
+		t.Helper()
+		raw := testWorkloadResource(t, name, "value", "", "", nil, nil)
+		raw.Facts.References = &ResourceReferences{Keys: references}
+		resource, err := NewResource(raw.Key, raw.XDSName, raw.Value, raw.Aliases, raw.Facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resource
+	}
+	a := makeReferrer("a", []ResourceKey{profile})
+	b := makeReferrer("b", []ResourceKey{profile})
+	before, err := NewResourceSet([]Resource{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound := makeReferrer("a", nil)
+	after, _, err := before.Apply([]ResourceChange{
+		{Key: a.Key, New: &unbound},
+		{Key: a.Key, New: &a},
+		{Key: b.Key},
+	})
+	if err != nil || !after.HasReference(profile) || !before.HasReference(profile) {
+		t.Fatalf("remaining or previous reference lost: %v", err)
+	}
+	empty, _, err := after.Apply([]ResourceChange{{Key: a.Key, New: &unbound}})
+	if err != nil || empty.HasReference(profile) || !after.HasReference(profile) {
+		t.Fatalf("last reference removal corrupted a snapshot: %v", err)
+	}
+}
+
+func TestReferenceCountsSurviveContentUpdatesInMixedBatch(t *testing.T) {
+	profile := ResourceKey{TypeURL: SecurityProfileType, Name: "shared"}
+	a := testWorkloadResource(t, "a", "old", "", "", nil, nil)
+	a.Facts.References = &ResourceReferences{Keys: []ResourceKey{profile}}
+	b := testWorkloadResource(t, "b", "old", "", "", nil, nil)
+	b.Facts.References = a.Facts.References
+	updated, err := NewResource(a.Key, a.XDSName,
+		&anypb.Any{TypeUrl: a.Key.TypeURL, Value: []byte("new")}, a.Aliases, a.Facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contentFirst := range []bool{true, false} {
+		before, err := NewResourceSet([]Resource{a, b})
+		if err != nil {
+			t.Fatal(err)
+		}
+		changes := []ResourceChange{{Key: a.Key, New: &updated}, {Key: b.Key}}
+		if !contentFirst {
+			slices.Reverse(changes)
+		}
+		after, _, err := before.Apply(changes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := after.Get(a.Key)
+		if !ok || got.Hash != updated.Hash || !after.HasReference(profile) {
+			t.Fatal("content update or remaining reference lost")
+		}
+		empty, _, err := after.Apply([]ResourceChange{{Key: a.Key}})
+		if err != nil || empty.HasReference(profile) || !after.HasReference(profile) || !before.HasReference(profile) {
+			t.Fatalf("reference counts corrupted across content update and deletion: %v", err)
+		}
+	}
+}
+
 // Hash is computed once at construction, so a resource built by NewResource
 // carries a hash that NewResourceSet accepts without re-encoding it.
 func TestNewResourceHashesOnceAndMatchesSetNormalization(t *testing.T) {

@@ -236,8 +236,7 @@ func TestSandboxFirstRequestWaitsForSource(t *testing.T) {
 			}
 			s := NewStore(0)
 			reg := s.RegisterCollection(profiles)
-			unregister := profiles.Registry.RegisterDeletes(s.NotifyKeys)
-			defer unregister()
+			defer reg.UnregisterHandler()
 			c.Run(ctx.Done())
 			if !reg.WaitUntilSynced(ctx.Done()) {
 				t.Fatal("initial sync failed")

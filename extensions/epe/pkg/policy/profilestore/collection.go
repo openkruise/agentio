@@ -108,8 +108,8 @@ func NewCollection(
 
 	compiledSPs := krt.NewCollection(
 		sps,
-		func(ctx krt.HandlerContext, o *agentsv1alpha1.SecurityProfile) *securityprofile.Profile {
-			sp, err := compileProfile(o, &o.Spec, regs, ctx, configMaps)
+		func(_ krt.HandlerContext, o *agentsv1alpha1.SecurityProfile) *securityprofile.Profile {
+			sp, err := compileProfile(o, &o.Spec, regs)
 			if err != nil {
 				// Whether anything is still being served for this identity is the
 				// store's knowledge, not this layer's; applyBatch logs that.
@@ -122,8 +122,8 @@ func NewCollection(
 
 	compiledGSPs := krt.NewCollection(
 		gsps,
-		func(ctx krt.HandlerContext, o *agentsv1alpha1.GlobalSecurityProfile) *securityprofile.Profile {
-			sp, err := compileProfile(o, &o.Spec, regs, ctx, configMaps)
+		func(_ krt.HandlerContext, o *agentsv1alpha1.GlobalSecurityProfile) *securityprofile.Profile {
+			sp, err := compileProfile(o, &o.Spec, regs)
 			if err != nil {
 				log.Error(err, "global profile failed to compile", "profile", o.Name)
 				return securityprofile.InvalidProfile(o, &o.Spec, err)
@@ -141,21 +141,40 @@ func NewCollection(
 		collections = append(collections, profiles.Collection)
 	}
 
-	// Debounce on the checked-mode join coalesces event bursts into one
-	// batch per window (KRT_EVENT_DISTRIBUTE_DEBOUNCE[_MAX], default off),
-	// so RegisterCollection's applyBatch rebuilds the snapshot once per
-	// batch instead of once per profile change.
-	profiles.Collection = krt.JoinCollection(collections,
+	// Debounce derived informer events so the store copies its snapshot once per batch.
+	prepared := krt.JoinCollection(collections, opts.WithName("PreparedProfiles")...)
+	profiles.Collection = inputCollection(prepared, configMaps,
 		append(opts.WithName("CompiledProfiles"),
 			krt.WithDebounce(features.KRTDebounceAfter, features.KRTDebounceMax))...)
 	return profiles
 }
 
-// Collection keeps the raw Sandbox source beside its asynchronous projection.
+// Collection keeps source discovery beside its asynchronous policy projection.
 type Collection struct {
-	// Only Sandbox sources gate first requests; administrator profiles remain asynchronous.
 	registry.Source[securityprofile.Profile]
 	sandbox func(context.Context, subject.Subject) (sandboxSource, bool, error)
+}
+
+// register couples derived publications and source invalidations for the store's lifetime.
+func (c *Collection) register(
+	publish func([]krt.Event[securityprofile.Profile]),
+	notify func([]model.ResourceKey),
+) krt.HandlerRegistration {
+	unregisterDeletes := c.Registry.RegisterDeletes(notify)
+	return profileRegistration{
+		HandlerRegistration: c.RegisterBatch(publish, true),
+		unregisterDeletes:   unregisterDeletes,
+	}
+}
+
+type profileRegistration struct {
+	krt.HandlerRegistration
+	unregisterDeletes func()
+}
+
+func (r profileRegistration) UnregisterHandler() {
+	r.unregisterDeletes()
+	r.HandlerRegistration.UnregisterHandler()
 }
 
 // sandboxSource keeps the policy's native key separate from its host Workload.
@@ -318,8 +337,6 @@ func compileProfile(
 	obj metav1.Object,
 	spec *agentsv1alpha1.SecurityProfileSpec,
 	regs []filter.Registration,
-	ctx krt.HandlerContext,
-	configMaps krt.Collection[*corev1.ConfigMap],
 ) (*securityprofile.Profile, error) {
 	sp, err := securityprofile.NewProfile(obj, spec)
 	if err != nil {
@@ -328,17 +345,7 @@ func compileProfile(
 	if err := sp.Project(regs); err != nil {
 		return nil, err
 	}
-	// Static input authoring errors reject the version like any other compile
-	// error. A ConfigMap that is merely absent must not: the profile's rules
-	// install and enforce, only inputs-dependent evaluations fail — otherwise
-	// a missing ConfigMap on first create would leave the workloads this profile
-	// selects with none of its Block rules in effect.
-	inputs, unavailable, err := resolveInputs(ctx, configMaps, sp.Meta, spec.Inputs)
-	if err != nil {
-		return nil, fmt.Errorf("resolve inputs: %w", err)
-	}
-	sp.Inputs = inputs
-	sp.InputsError = unavailable
+
 	return sp, nil
 }
 
@@ -376,7 +383,7 @@ func resolveInputs(
 			namespace = meta.Namespace
 		}
 		key := namespace + "/" + input.ConfigMap.Name
-		if configMaps == nil || ctx == nil {
+		if configMaps == nil {
 			return nil, "", fmt.Errorf(
 				"load input %q from ConfigMap %s: ConfigMap collection is not configured",
 				input.Name,

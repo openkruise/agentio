@@ -153,6 +153,85 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
 }
 
 #[tokio::test]
+async fn workload_sni_rules_precede_conflicting_sandbox_rules() {
+    for (domain, shared_action, inline_action) in [
+        ("api.example.com", SniAction::Deny, SniAction::Passthrough),
+        ("api.example.com", SniAction::Passthrough, SniAction::Deny),
+        ("other.example.com", SniAction::Deny, SniAction::Passthrough),
+    ] {
+        let p = processor();
+        let shared = SniRule {
+            r#match: Some(SniMatch {
+                sni: vec![domain.into()],
+                ports: vec![443],
+            }),
+            action: shared_action as i32,
+        };
+        let inline = SniRule {
+            r#match: Some(SniMatch {
+                sni: vec!["api.example.com".into()],
+                ports: vec![443],
+            }),
+            action: inline_action as i32,
+        };
+        let mut body = Workload::decode(workload(Some(&[])).value.as_slice()).unwrap();
+        body.extensions.push(Extension {
+            name: "sni".into(),
+            config: Some(any(
+                "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy",
+                SniTrafficPolicy {
+                    rules: vec![shared.clone()],
+                },
+            )),
+        });
+        seed(
+            &p.client,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            any(view::WORKLOAD, body),
+        );
+        seed(
+            &p.client,
+            ResourceKind::Sandbox,
+            "sandbox",
+            any(
+                view::SANDBOX,
+                Sandbox {
+                    uid: "sandbox".into(),
+                    attester: Some(Attester {
+                        workload_uid: UID.into(),
+                    }),
+                    extensions: vec![any(
+                        "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy",
+                        SniTrafficPolicy {
+                            rules: vec![inline.clone()],
+                        },
+                    )],
+                },
+            ),
+        );
+        let response = p.handle(request("sandbox", false)).await.unwrap();
+        assert!(allowed(response.clone()));
+        let metadata = response.dynamic_metadata.unwrap();
+        let Some(prost_types::value::Kind::StructValue(agentio)) = &metadata.fields["agentio"].kind
+        else {
+            panic!("expected Agentio metadata");
+        };
+        assert_eq!(
+            agentio.fields["sni"],
+            view::object([(
+                "policy".into(),
+                view::object([(
+                    "rules".into(),
+                    view::list(view::project_rules(&[shared, inline]).collect())
+                )])
+            )]),
+            "{domain}: {shared_action:?} before {inline_action:?}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn disabled_sni_policy_omits_only_sni_metadata_and_preserves_identity_checks() {
     for udp in [false, true] {
         let mut p = processor();

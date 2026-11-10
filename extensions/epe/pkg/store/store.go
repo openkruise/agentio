@@ -22,8 +22,10 @@ type Type string
 
 // Resource types currently consumed by EPE through the aggregate.
 const (
-	Workload      Type = "Workload"
-	TrafficPolicy Type = "TrafficPolicy"
+	Workload        Type = "Workload"
+	TrafficPolicy   Type = "TrafficPolicy"
+	SecurityProfile Type = "SecurityProfile"
+	Sandbox         Type = "Sandbox"
 )
 
 // Key identifies a resource. Name is an opaque, source-independent resource ID.

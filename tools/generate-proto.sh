@@ -22,6 +22,7 @@ proto_files=(
   api/workload/v1/workload.proto
   api/security/v1/authorization.proto
   api/security/v1/trafficpolicy.proto
+  api/security/v1/securityprofile.proto
   api/sandbox/v1/sandbox.proto
   api/extensions/v1/extensions.proto
   api/extensions/v1/egresspolicy.proto

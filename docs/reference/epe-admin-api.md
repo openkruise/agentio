@@ -10,6 +10,8 @@ $ test -n "$EPE_POD"
 $ kubectl port-forward --namespace agentio-system "$EPE_POD" 15000:15000
 ```
 
+With `--security-profile-source=xds`, `/debug/profiles` is not registered: profile selection and evaluation order come from control-plane Workload bindings, and selector or ordering metadata is not delivered to EPE. Runtime logging and credential cache operations remain available. The default `kubernetes` mode retains profile inspection through the informer-backed store.
+
 ## Index endpoint
 
 `GET /` is always available and returns plain text. It lists available debug endpoints and says whether they are enabled. Only the exact root path is an index: unknown paths return `404 Not Found`.

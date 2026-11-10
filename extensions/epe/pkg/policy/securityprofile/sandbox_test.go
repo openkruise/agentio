@@ -95,8 +95,6 @@ func TestNewSandboxProfileTLSRules(t *testing.T) {
 	}
 }
 
-// The annotation is a server artifact: anything the reader does not
-// understand must fail closed instead of degrading into dropped rules.
 func TestNewInlineProfileRejections(t *testing.T) {
 	tests := []struct {
 		name string
@@ -105,11 +103,6 @@ func TestNewInlineProfileRejections(t *testing.T) {
 	}{
 		{"invalid json", `{`, "decode"},
 		{"empty array", `[]`, "contains no rules"},
-		{
-			"unknown field",
-			`[{"name":"r","priority":3,"match":[{"domains":["a.example.com"]}],"actions":{"block":{}}}]`,
-			"decode",
-		},
 		{
 			"bad regex",
 			`[{"name":"r","match":[{"domains":["a.example.com"],"paths":[{"type":"Regex","value":"["}]}],"actions":{"block":{}}}]`,
@@ -126,6 +119,18 @@ func TestNewInlineProfileRejections(t *testing.T) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestNewSandboxProfileIgnoresUnknownFields(t *testing.T) {
+	raw := `[{"name":"r","priority":3,"match":[{"domains":["a.example.com"],"futureMatch":true}],"actions":{"block":{},"futureAction":{}}}]`
+	p, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Rules) != 1 || p.Rules[0].Name != "r" || p.Rules[0].Actions.Block == nil ||
+		len(p.Rules[0].Matches) != 1 || p.Rules[0].Matches[0].Domains[0] != "a.example.com" {
+		t.Fatalf("known rule changed: %+v", p.Rules)
 	}
 }
 

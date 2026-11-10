@@ -509,6 +509,10 @@
         "mode"
       ],
       "properties": {
+        "securityProfileSource": {
+          "type": "string",
+          "enum": ["kubernetes", "xds"]
+        },
         "xdsCache": {
           "type": "object",
           "properties": {
