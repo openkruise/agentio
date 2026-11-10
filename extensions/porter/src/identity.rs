@@ -1,6 +1,10 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+mod source;
+
+pub use source::{Authenticator, ConnectionIdentity, Evidence, Native, WorkloadIdentity};
+
 use serde::Deserialize;
 use x509_parser::{
     certificate::X509Certificate,
@@ -36,7 +40,7 @@ pub enum Error {
 }
 
 #[derive(Deserialize)]
-struct WorkloadIdentity {
+struct WorkloadClaim {
     registry: String,
     uid: String,
 }
@@ -67,7 +71,7 @@ pub fn certificate_instance(encoded: &str) -> Result<Option<String>, Error> {
     let (_, certificate) = X509Certificate::from_der(&pem.contents).map_err(Error::Der)?;
     for extension in certificate.extensions() {
         if extension.oid.to_id_string() == WORKLOAD_IDENTITY_OID {
-            let identity: WorkloadIdentity = serde_json::from_slice(extension.value)?;
+            let identity: WorkloadClaim = serde_json::from_slice(extension.value)?;
             if identity.registry.is_empty() || identity.uid.is_empty() {
                 return Err(Error::MissingIdentityFields);
             }

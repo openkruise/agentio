@@ -322,6 +322,7 @@ async fn connect_traffic_policy_benchmark() {
         .await
         .unwrap();
         let processor = Processor {
+            authenticator: Arc::new(agentio_porter::identity::Native),
             gateway: agentio_porter::processor::Gateway::AgentioEgress,
             client,
             cluster_id: "Kubernetes".into(),

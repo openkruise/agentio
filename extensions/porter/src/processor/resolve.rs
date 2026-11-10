@@ -1,25 +1,17 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{borrow::Cow, net::IpAddr, sync::Arc, time::Duration};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use futures_util::FutureExt;
 use tracing::{debug, info};
 
 use crate::{
     discovery::{Client, DemandError},
-    identity::certificate_instance,
+    identity::{Authenticator, ConnectionIdentity, Evidence as IdentityEvidence, WorkloadIdentity},
     traffic::{self, Target},
     view::{ResourceKind, View},
 };
-
-#[derive(Clone, Copy)]
-pub(super) struct IdentityEvidence<'a> {
-    pub certificate: &'a str,
-    pub peer_ip: &'a str,
-    pub principal: &'a str,
-    pub sandbox_id: &'a str,
-}
 
 pub(super) struct ResolveRequest<'a> {
     pub identity: IdentityEvidence<'a>,
@@ -34,6 +26,7 @@ pub(super) struct Resolved {
 
 pub(super) struct Resolver<'a> {
     pub client: &'a Arc<Client>,
+    pub authenticator: &'a dyn Authenticator,
     pub cluster_id: &'a str,
     pub timeout: Duration,
 }
@@ -45,7 +38,7 @@ struct RequestSnapshot {
     workload_decision: Option<traffic::Evaluation>,
 }
 
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub(super) enum ResolveError {
     #[error("deadline exceeded")]
     Timeout,
@@ -55,12 +48,24 @@ pub(super) enum ResolveError {
     Denied,
     #[error(transparent)]
     Discovery(#[from] DemandError),
+    #[error("identity provider failed: {0}")]
+    Authentication(tonic::Status),
 }
 
 impl Resolver<'_> {
     pub async fn resolve(&self, request: &ResolveRequest<'_>) -> Result<Resolved, ResolveError> {
         let deadline = tokio::time::Instant::now() + self.timeout;
         tokio::time::timeout_at(deadline, async {
+            let identity = self
+                .authenticator
+                .authenticate(request.identity, deadline)
+                .await
+                .map_err(|status| match status.code() {
+                    tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+                        ResolveError::Denied
+                    }
+                    _ => ResolveError::Authentication(status),
+                })?;
             let mut invalidated = self.client.invalidations();
             loop {
                 let epoch = *invalidated.borrow_and_update();
@@ -68,7 +73,7 @@ impl Resolver<'_> {
                 tokio::select! {
                     biased;
                     _ = invalidated.changed() => continue,
-                    result = self.resolve_once(request, deadline) => {
+                    result = self.resolve_once(request.target, &identity, deadline) => {
                         if self.client.current_epoch() == epoch {
                             break result;
                         }
@@ -268,34 +273,20 @@ impl Resolver<'_> {
 
     async fn resolve_once(
         &self,
-        request: &ResolveRequest<'_>,
+        target: Option<Target>,
+        identity: &ConnectionIdentity,
         request_deadline: tokio::time::Instant,
     ) -> Result<Resolved, ResolveError> {
-        let IdentityEvidence {
-            certificate,
-            peer_ip,
-            principal,
-            sandbox_id,
-        } = request.identity;
-        let target = request.target;
-        let instance = match certificate_instance(certificate) {
-            Ok(instance) => instance,
-            Err(error) => {
-                debug!(reason = "invalid_certificate", %error, "request denied");
-                return Err(ResolveError::Denied);
+        let sandbox_id = identity.sandbox_id.as_str();
+        let (lookup, instance, principal) = match &identity.workload {
+            WorkloadIdentity::Instance(instance) => (
+                Cow::Borrowed(instance.as_str()),
+                Some(instance.as_str()),
+                "",
+            ),
+            WorkloadIdentity::Peer { ip, principal } => {
+                (Cow::Owned(format!("/{ip}")), None, principal.as_str())
             }
-        };
-        let lookup = if let Some(instance) = instance.as_deref() {
-            Cow::Borrowed(instance)
-        } else {
-            let ip = match peer_ip.parse::<IpAddr>() {
-                Ok(ip) if !principal.is_empty() => ip,
-                _ => {
-                    debug!(reason = "missing_fallback_identity", "request denied");
-                    return Err(ResolveError::Denied);
-                }
-            };
-            Cow::Owned(format!("/{}", ip.to_canonical()))
         };
         let RequestSnapshot {
             workload,
@@ -305,7 +296,7 @@ impl Resolver<'_> {
         } = self
             .snapshot(
                 &lookup,
-                instance.as_deref(),
+                instance,
                 principal,
                 sandbox_id,
                 target,
@@ -333,7 +324,7 @@ impl Resolver<'_> {
         Ok(Resolved {
             workload,
             sandbox,
-            instance,
+            instance: instance.map(str::to_owned),
         })
     }
 }

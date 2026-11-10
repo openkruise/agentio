@@ -20,17 +20,19 @@ use tracing::debug;
 
 use crate::{
     discovery::{Client, DemandError},
+    identity::{Authenticator, Evidence as IdentityEvidence},
     view::{self, View},
     wire::extproc::{
         self, external_processor_server::ExternalProcessor,
         processing_response::Response as Decision,
     },
 };
-use resolve::{IdentityEvidence, ResolveError, ResolveRequest, Resolved, Resolver};
+use resolve::{ResolveError, ResolveRequest, Resolved, Resolver};
 
 #[derive(Clone)]
 pub struct Processor {
     pub client: Arc<Client>,
+    pub authenticator: Arc<dyn Authenticator>,
     pub cluster_id: String,
     pub timeout: Duration,
     pub enable_traffic_policy: bool,
@@ -166,6 +168,7 @@ impl Processor {
             });
         let resolver = Resolver {
             client: &self.client,
+            authenticator: self.authenticator.as_ref(),
             cluster_id: &self.cluster_id,
             timeout: self.timeout,
         };
@@ -307,6 +310,7 @@ mod tests {
         for (name, selected_headers, expected_protocol) in cases {
             let metrics = Metrics::new();
             let processor = Processor {
+                authenticator: Arc::new(crate::identity::Native),
                 gateway: crate::processor::Gateway::AgentioEgress,
                 client: Client::new(
                     CacheConfig {
