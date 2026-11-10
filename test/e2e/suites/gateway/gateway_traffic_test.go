@@ -17,6 +17,7 @@ package gateway
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -86,9 +87,8 @@ data:
 	})
 }
 
-// TestEgressStaticServiceEntries exercises the route-selected endpoint state
-// for static services. The intercepted TEST-NET address cannot reach the echo
-// server unless the configured static endpoint replaces it.
+// TestEgressStaticServiceEntries verifies that the original endpoint is retained
+// for an allowed Host and that another Host cannot use the same endpoint.
 func TestEgressStaticServiceEntries(t *testing.T) {
 	environment, scope := rig.BeginScenario(t)
 	src := trafficFixture.Client
@@ -122,7 +122,7 @@ data:
 `)
 
 	waitForGatewayConfig(t, environment, 200*time.Millisecond, func(dump string) error {
-		for _, want := range []string{"sandbox|service-entry|0|0", host, dstIP} {
+		for _, want := range []string{"service-entry|" + dstIP + "|http", host, "agentio.route.upstream"} {
 			if !strings.Contains(dump, want) {
 				return fmt.Errorf("gateway config_dump does not contain %q", want)
 			}
@@ -130,14 +130,28 @@ data:
 		return nil
 	})
 
-	src.CallOrFail(t, echo.CallOptions{
-		Protocol: echo.HTTP,
-		Address:  "192.0.2.1",
-		Port:     80,
-		Count:    1,
-		Headers:  map[string]string{"Host": net.JoinHostPort(host, "80")},
-		Check:    check.And(check.OK(), hostnameIs(dstPod), noEnvoyResponseHeader()),
-		Retry:    harness.FixedRetry(2*time.Minute, 5*time.Second),
+	t.Run("allowed Host retains endpoint", func(t *testing.T) {
+		src.CallOrFail(t, echo.CallOptions{
+			Protocol: echo.HTTP,
+			Address:  dstIP,
+			Port:     80,
+			Count:    1,
+			Headers:  map[string]string{"Host": net.JoinHostPort(host, "80")},
+			Check:    check.And(check.OK(), hostnameIs(dstPod), noEnvoyResponseHeader()),
+			Retry:    harness.FixedRetry(2*time.Minute, 5*time.Second),
+		})
+	})
+
+	t.Run("unlisted Host is denied", func(t *testing.T) {
+		src.CallOrFail(t, echo.CallOptions{
+			Protocol: echo.HTTP,
+			Address:  dstIP,
+			Port:     80,
+			Count:    1,
+			Headers:  map[string]string{"Host": "unlisted.example"},
+			Check:    check.NoErrorAndStatus(http.StatusForbidden),
+			Retry:    harness.FixedRetry(2*time.Minute, 5*time.Second),
+		})
 	})
 }
 
