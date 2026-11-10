@@ -143,6 +143,10 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 	// Retained as a fail-closed default-route cluster.
 	delete(got, gatewayResourceKey(model.ClusterType, BlackHoleCluster))
 	delete(got, gatewayResourceKey(model.ClusterType, PorterCluster))
+	// Native SNI routing is covered by the gateway golden and TLS forwarding tests.
+	delete(got, gatewayResourceKey(model.ClusterType, TLSPassthrough))
+	delete(got, gatewayResourceKey(model.ClusterType, TLSProxyOriginate))
+	delete(want, gatewayResourceKey(model.ClusterType, TLSProxyOriginate))
 	if diff := semanticGatewayDiff(want, got); len(diff) != 0 {
 		t.Fatalf("supported gateway cluster differences:\n%s", strings.Join(diff, "\n"))
 	}
@@ -217,7 +221,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	}
 	for listenerName, want := range map[string][]string{
 		MainInternal: {"envoy.filters.http.ext_proc", "agentio.route_upstream", "agentio.egress_target", "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
-		MainForward:  {"envoy.filters.http.rbac", "envoy.filters.http.ext_proc", "agentio.fqdn_upstream", "agentio.route_upstream", "agentio.egress_target", "envoy.filters.http.dynamic_forward_proxy", connectProxyTLSIdentityFilter, "envoy.filters.http.router"},
+		MainForward:  {"envoy.filters.http.rbac", "envoy.filters.http.ext_proc", "agentio.fqdn_upstream", "agentio.route_upstream", "agentio.egress_target", connectProxyTLSIdentityFilter, "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
 	} {
 		if got := httpFilterNames(findHCM(t, listeners[listenerName])); !equalStrings(got, want) {
 			t.Errorf("listener %s HTTP filter order = %v, want %v", listenerName, got, want)
@@ -273,7 +277,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	}
 	rawTCP := findFilterChain(t, listeners[MainForward], forwardTCPChain)
 	if got, want := networkFilterNames(rawTCP), []string{
-		"envoy.filters.network.set_filter_state", "envoy.filters.network.tcp_proxy",
+		"envoy.filters.network.set_filter_state", "envoy.filters.network.sni_dynamic_forward_proxy", "envoy.filters.network.tcp_proxy",
 	}; !equalStrings(got, want) {
 		t.Errorf("MainForward raw-TCP filter order = %v, want %v", got, want)
 	}

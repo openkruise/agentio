@@ -76,6 +76,23 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 			},
 		},
 	}))
+	cluster := HTTPDynamicForwardProxy
+	if !b.legacyGateway {
+		cluster = TLSPassthrough
+		values := tlsDestinationState("%REQUESTED_SERVER_NAME%")
+		if len(config.gateway.GetServiceEntries()) > 0 {
+			values = append(values, &common.FilterStateValue{
+				Key: &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+				Value: &common.FilterStateValue_FormatString{FormatString: formatString(
+					"%FILTER_STATE(agentio.route.upstream:PLAIN)%",
+				)},
+				SkipIfEmpty: true,
+			})
+		}
+		state = networkFilter("envoy.filters.network.set_filter_state", b.pack(&networkstate.Config{
+			OnNewConnection: values,
+		}))
+	}
 	filters := append(
 		slices.Clone(prefix),
 		state,
@@ -84,7 +101,7 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 			PortSpecifier:  &snidfp.FilterConfig_PortValue{PortValue: 443},
 		})),
 	)
-	return b.applicationTCPFilters(config, filters, HTTPDynamicForwardProxy, config.gateway.GetTcp())
+	return b.applicationTCPFilters(config, filters, cluster, config.gateway.GetTcp())
 }
 
 // Each address accepts the union of names from entries sharing that endpoint.
@@ -111,7 +128,7 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 			Filters: []*listener.Filter{
 				networkFilter(
 					"envoy.filters.network.http_connection_manager",
-					b.pack(b.serviceEntryHCM(manager, hosts)),
+					b.pack(b.serviceEntryHCM(manager, hosts, terminated)),
 				),
 			},
 		})
@@ -123,6 +140,19 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 		if terminated {
 			// Non-HTTP bytes keep the TLS identity and original destination chosen upstream.
 			http.OnNoMatch = b.toChain(forwardTCPChain)
+			if !b.legacyGateway {
+				l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+					Name: name + "|tcp",
+					Filters: b.applicationTCPFilters(config, []*listener.Filter{
+						outerTLSIdentityFilter,
+						networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
+							OnNewConnection: tlsDestinationState("%DOWNSTREAM_LOCAL_ADDRESS%"),
+						})),
+						b.sniDFPFilter(),
+					}, TLSProxyOriginate, config.gateway.GetTcp()),
+				})
+				http.OnNoMatch = b.toChain(name + "|tcp")
+			}
 			addresses[ip] = toMatcher(http)
 			continue
 		}
@@ -182,8 +212,16 @@ func serviceEntryTarget() *common.FilterStateValue {
 func (b *resourceBuilder) serviceEntryHCM(
 	manager *hcm.HttpConnectionManager,
 	hosts []string,
+	terminated bool,
 ) *hcm.HttpConnectionManager {
 	manager = proto.Clone(manager).(*hcm.HttpConnectionManager)
+	if terminated && !b.legacyGateway {
+		for i, filter := range manager.HttpFilters {
+			if filter.GetName() == connectProxyTLSIdentityFilter {
+				manager.HttpFilters[i] = buildConnectProxyTLSIdentityHTTPFilter(outerSNIKey, "%DOWNSTREAM_LOCAL_ADDRESS%")
+			}
+		}
+	}
 	names := make([]string, 0, len(hosts)*2)
 	for _, host := range hosts {
 		names = append(names, strconv.Quote(host), strconv.Quote(host+"."))

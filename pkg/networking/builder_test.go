@@ -314,8 +314,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 			filters[0] != "envoy.filters.http.dynamic_modules" {
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
-		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-1 {
-			t.Fatal("TLS identity must precede router")
+		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-2 {
+			t.Fatal("proxy target and TLS identity must precede DFP")
 		}
 	}
 

@@ -40,6 +40,7 @@ import (
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	internal "github.com/envoyproxy/go-control-plane/envoy/extensions/bootstrap/internal_listener/v3"
 	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tlsconfig "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -95,14 +96,16 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	test.SetForTest(t, &features.GatewayRootCAPath, rootPath)
 	payload := []byte("\x00opaque application bytes after TLS termination")
 	for _, mode := range []string{
-		"tcp", "nested_tls", "bad_certificate", "idle",
+		"tcp", "nested_tls", "bad_certificate", "idle", "loopback_tcp",
+		"passthrough", "passthrough_no_sni", "passthrough_dns_failure", "passthrough_loopback",
 		"http1", "http2", "fqdn_http1", "fqdn_http2",
-		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2",
+		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2", "connect_pinned_http1", "connect_pinned_http2",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
+			passthrough := strings.HasPrefix(mode, "passthrough")
 			serverName := upstreamHost
-			if strings.HasPrefix(mode, "loopback") {
+			if strings.Contains(mode, "loopback") {
 				serverName = "localhost"
 			}
 			closeResource := func(resource io.Closer) {
@@ -167,7 +170,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				t.Cleanup(origin.Close)
 				upstreamAddress = origin.Listener.Addr().String()
 			} else {
-				origin, err := tls.Listen("tcp4", "127.0.0.1:0", upstreamTLS)
+				origin, err := tls.Listen("tcp4", net.JoinHostPort(serverName, "0"), upstreamTLS)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -206,9 +209,20 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					completed <- err
 				}()
 			}
-			address := startPostTLSEnvoy(t, binary, upstreamAddress, leaves[serverName])
+			_, upstreamPort, err := net.SplitHostPort(upstreamAddress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A connection to the original IP would fail; only SNI resolution reaches the origin.
+			original := net.JoinHostPort("127.0.0.2", upstreamPort)
+			address := startTLSEnvoy(t, binary, original, leaves[serverName], mode)
 			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
-			if mode == "connect_http1" {
+			if mode == "passthrough_no_sni" {
+				clientTLS.ServerName = "127.0.0.1" // Go omits SNI for literal IPs.
+			} else if mode == "passthrough_dns_failure" {
+				clientTLS.ServerName = "unresolvable.invalid"
+			}
+			if strings.HasPrefix(mode, "connect") && strings.HasSuffix(mode, "http1") {
 				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
 				if err != nil {
 					t.Fatal(err)
@@ -306,6 +320,20 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				return
 			}
 			conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
+			if passthrough && mode != "passthrough" {
+				if err == nil {
+					closeResource(conn)
+					t.Fatal("invalid TLS destination completed a handshake")
+				}
+				var timeout net.Error
+				if errors.As(err, &timeout) && timeout.Timeout() {
+					t.Fatalf("invalid TLS destination timed out instead of closing: %v", err)
+				}
+				if handshakes.Load() != 0 {
+					t.Fatal("invalid TLS destination opened an upstream connection")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -326,13 +354,13 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			data := make([]byte, len(payload))
 			_, err = io.ReadFull(conn, data)
-			if mode == "idle" || mode == "bad_certificate" {
+			if mode == "idle" || mode == "bad_certificate" || mode == "loopback_tcp" {
 				var timeout net.Error
 				if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 					t.Fatalf("expected connection close, got data=%q error=%v", data, err)
 				}
-				if mode == "idle" && handshakes.Load() != 0 {
-					t.Fatal("inspection timeout opened an upstream connection")
+				if (mode == "idle" || mode == "loopback_tcp") && handshakes.Load() != 0 {
+					t.Fatal("denied connection opened an upstream connection")
 				}
 				if mode == "bad_certificate" && handshakes.Load() != 1 {
 					t.Fatal("certificate rejection must exercise the original upstream TLS handshake")
@@ -349,7 +377,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	}
 }
 
-func startPostTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.IssuedCertificate) string {
+func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.IssuedCertificate, mode string) string {
 	t.Helper()
 	b := &resourceBuilder{}
 	config := effectiveConfig{gateway: &configv1.EgressGateway{}}
@@ -357,15 +385,33 @@ func startPostTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Is
 	if err != nil {
 		t.Fatal(err)
 	}
-	var forward *listener.Listener
+	var forward, internalListener *listener.Listener
 	for _, candidate := range listeners {
 		if candidate.GetName() == MainForward {
 			forward = candidate
+		} else if candidate.GetName() == MainInternal {
+			internalListener = candidate
 		}
 	}
 	manager := findHCM(t, forward)
 	manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
 		RouteConfig: b.buildForwardRoute(TLSConnectOriginate, config.gateway),
+	}
+	if strings.HasPrefix(mode, "connect_pinned") {
+		// Model EPE's mutable host and read-only inner port before proxy target selection.
+		manager.HttpFilters = append([]*hcm.HttpFilter{httpFilter("test.pinned_target", b.pack(&httpstate.Config{
+			OnRequestHeaders: []*common.FilterStateValue{
+				{
+					Key:   &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+					Value: &common.FilterStateValue_FormatString{FormatString: formatString("127.0.0.1")},
+				},
+				{
+					Key:      &common.FilterStateValue_ObjectKey{ObjectKey: dynamicPortKey},
+					Value:    &common.FilterStateValue_FormatString{FormatString: formatString("443")},
+					ReadOnly: true,
+				},
+			},
+		}))}, manager.HttpFilters...)
 	}
 	findFilterChain(t, forward, forwardHTTPChain).Filters[0] = networkFilter(
 		"envoy.filters.network.http_connection_manager",
@@ -388,6 +434,9 @@ func startPostTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Is
 				},
 			},
 		}),
+	}
+	if strings.HasPrefix(mode, "passthrough") {
+		chain = findFilterChain(t, internalListener, forwardTLSChain)
 	}
 	chain.Filters = append(
 		[]*listener.Filter{networkFilter("envoy.filters.network.set_filter_state", b.pack(&state.Config{
@@ -420,6 +469,7 @@ func startPostTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Is
 				b.buildInternalCluster(MainForward),
 				b.buildTLSProxyOriginateCluster(nil),
 				b.buildDFPCluster(TLSConnectOriginate, false, true, nil),
+				b.buildDFPCluster(TLSPassthrough, true, false, nil),
 			},
 		},
 	}

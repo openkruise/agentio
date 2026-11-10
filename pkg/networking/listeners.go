@@ -42,6 +42,7 @@ import (
 	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
+	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	matchinginputv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	rlexprv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/rate_limit_descriptors/expr/v3"
@@ -79,6 +80,7 @@ const (
 	connectAuthorityKey           = "io.istio.connect_authority"
 	dynamicHostKey                = "envoy.upstream.dynamic_host"
 	dynamicPortKey                = "envoy.upstream.dynamic_port"
+	originalPortFormat            = "%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:FIELD:port)%"
 
 	sniPolicyMetadataFormat = "%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":sni:policy)%"
 	fqdnDialHostFormat      = `%CEL(request.method != 'CONNECT' ? ` +
@@ -138,7 +140,9 @@ var (
 		},
 	}))
 
-	connectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(outerSNIKey)
+	connectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(
+		outerSNIKey, "%FILTER_STATE("+outerSNIKey+":PLAIN)%:"+originalPortFormat,
+	)
 
 	connectAuthorityHTTPFilter = buildConnectAuthorityFilter(
 		"envoy.hashable_string",
@@ -208,7 +212,7 @@ func buildSNIDenialReasonFilter(key string) *listenerv3.Filter {
 
 // TCP payload cannot supply a new TLS identity after termination.
 func buildOuterTLSIdentityFilter(key string) *listenerv3.Filter {
-	return networkFilter("envoy.filters.network.set_filter_state", mustPack(&setstatenetworkv3.Config{
+	config := &setstatenetworkv3.Config{
 		OnNewConnection: []*setstatecommonv3.FilterStateValue{
 			{
 				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamServerNameKey},
@@ -223,6 +227,32 @@ func buildOuterTLSIdentityFilter(key string) *listenerv3.Filter {
 				},
 			},
 		},
+	}
+	if key == outerSNIKey {
+		config.OnNewConnection = append(config.OnNewConnection, tlsDestinationState("%FILTER_STATE("+key+":PLAIN)%")...)
+	}
+	return networkFilter("envoy.filters.network.set_filter_state", mustPack(config))
+}
+
+func tlsDestinationState(host string) []*setstatecommonv3.FilterStateValue {
+	return []*setstatecommonv3.FilterStateValue{
+		{
+			Key:   &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+			Value: &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(host)},
+		},
+		{
+			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicPortKey},
+			Value: &setstatecommonv3.FilterStateValue_FormatString{
+				FormatString: formatString(originalPortFormat),
+			},
+		},
+	}
+}
+
+func (b *resourceBuilder) sniDFPFilter() *listenerv3.Filter {
+	return networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&dfpnetworkv3.FilterConfig{
+		DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
 	}))
 }
 
@@ -332,6 +362,10 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 			sniPolicyListenerFilter(),
 		)
 	}
+	tcpForwardFilters := []*listenerv3.Filter{tcpTLSIdentityFilter}
+	if !b.legacyGateway {
+		tcpForwardFilters = append(tcpForwardFilters, b.sniDFPFilter())
+	}
 	mainForward := &listenerv3.Listener{
 		Name: MainForward,
 		ListenerSpecifier: &listenerv3.Listener_InternalListener{
@@ -350,7 +384,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 				Name: forwardTCPChain,
 				Filters: b.applicationTCPFilters(
 					config,
-					[]*listenerv3.Filter{tcpTLSIdentityFilter},
+					tcpForwardFilters,
 					TLSProxyOriginate,
 					tcpSettings,
 				),
@@ -514,18 +548,17 @@ func (b *resourceBuilder) buildForwardHCM(
 	if config.extProc != nil {
 		filters = append(filters, b.egressTargetFilters()...)
 	}
+	if terminatedTLS && !b.legacyGateway {
+		filters = append(filters, connectProxyTLSIdentityHTTPFilter)
+	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
 		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
 			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
 		},
 		AllowDynamicHostFromFilterState: true,
 	})))
-	if terminatedTLS {
-		identity := connectProxyTLSIdentityHTTPFilter
-		if b.legacyGateway {
-			identity = legacyConnectProxyTLSIdentityHTTPFilter
-		}
-		filters = append(filters, identity)
+	if terminatedTLS && b.legacyGateway {
+		filters = append(filters, legacyConnectProxyTLSIdentityHTTPFilter)
 	}
 	filters = append(
 		filters,
@@ -593,7 +626,7 @@ func mustParseCEL(expression string) *exprpb.Expr {
 // buildConnectProxyTLSIdentityHTTPFilter copies the outer proxy SNI into Envoy's
 // upstream TLS identity keys only for CONNECT. Ordinary HTTPS requests retain
 // DFP auto-SNI/SAN behavior.
-func buildConnectProxyTLSIdentityHTTPFilter(key string) *hcmv3.HttpFilter {
+func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilter {
 	outerSNI := formatString(fmt.Sprintf("%%FILTER_STATE(%s:PLAIN)%%", key))
 	setIdentity := &setstatehttpv3.Config{OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
 		{
@@ -607,6 +640,15 @@ func buildConnectProxyTLSIdentityHTTPFilter(key string) *hcmv3.HttpFilter {
 			SkipIfEmpty: true,
 		},
 	}}
+	if target != "" {
+		// The embedded proxy port overrides any EPE-pinned inner CONNECT port.
+		setIdentity.OnRequestHeaders = append(setIdentity.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
+			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+			Value: &setstatecommonv3.FilterStateValue_FormatString{
+				FormatString: formatString(target),
+			},
+		})
+	}
 	connectMethod := &xdsmatcherv3.Matcher_MatcherList_Predicate{
 		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
 			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
