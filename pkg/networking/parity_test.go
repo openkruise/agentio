@@ -277,7 +277,9 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	}
 	rawTCP := findFilterChain(t, listeners[MainForward], forwardTCPChain)
 	if got, want := networkFilterNames(rawTCP), []string{
-		"envoy.filters.network.set_filter_state", "envoy.filters.network.sni_dynamic_forward_proxy", "envoy.filters.network.tcp_proxy",
+		"envoy.filters.network.set_filter_state",
+		"envoy.filters.network.sni_dynamic_forward_proxy",
+		"envoy.filters.network.tcp_proxy",
 	}; !equalStrings(got, want) {
 		t.Errorf("MainForward raw-TCP filter order = %v, want %v", got, want)
 	}

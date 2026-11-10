@@ -399,9 +399,19 @@ func TestBuildStaticSNIMatcherOmitsEmptyHostGroups(t *testing.T) {
 
 func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 	resources := buildGatewayGraph(t, false)
-	listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener { return &listenerv3.Listener{} })
+	listeners := messagesOf(
+		t,
+		resources,
+		model.ListenerType,
+		func() *listenerv3.Listener { return &listenerv3.Listener{} },
+	)
 	chain := findFilterChain(t, listeners[MainInternal], forwardTLSChain)
-	if want := []string{"envoy.filters.network.set_filter_state", "envoy.filters.network.sni_dynamic_forward_proxy", "envoy.filters.network.tcp_proxy"}; !equalStrings(networkFilterNames(chain), want) {
+	want := []string{
+		"envoy.filters.network.set_filter_state",
+		"envoy.filters.network.sni_dynamic_forward_proxy",
+		"envoy.filters.network.tcp_proxy",
+	}
+	if !equalStrings(networkFilterNames(chain), want) {
 		t.Fatalf("TLS passthrough filters = %v", networkFilterNames(chain))
 	}
 	state := &setstatenetworkv3.Config{}
@@ -466,7 +476,11 @@ func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 		wantFilters := []string{"envoy.filters.network.set_filter_state", "envoy.filters.network.tcp_proxy"}
 		wantValues := 2
 		if !legacy {
-			wantFilters = []string{"envoy.filters.network.set_filter_state", "envoy.filters.network.sni_dynamic_forward_proxy", "envoy.filters.network.tcp_proxy"}
+			wantFilters = []string{
+				"envoy.filters.network.set_filter_state",
+				"envoy.filters.network.sni_dynamic_forward_proxy",
+				"envoy.filters.network.tcp_proxy",
+			}
 			wantValues = 4
 		}
 		if !equalStrings(
@@ -519,7 +533,10 @@ func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 		} else {
 			if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
 				values[2].GetObjectKey() != dynamicHostKey ||
-				values[2].GetFormatString().GetTextFormatSource().GetInlineString() != "%FILTER_STATE("+outerSNIKey+":PLAIN)%" ||
+				values[2].GetFormatString().
+					GetTextFormatSource().
+					GetInlineString() !=
+					"%FILTER_STATE("+outerSNIKey+":PLAIN)%" ||
 				values[3].GetObjectKey() != dynamicPortKey ||
 				values[3].GetFormatString().GetTextFormatSource().GetInlineString() != originalPortFormat {
 				t.Fatal("TCP must resolve the outer SNI on the original port")

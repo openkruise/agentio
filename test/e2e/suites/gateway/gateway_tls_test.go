@@ -37,8 +37,6 @@ import (
 )
 
 const (
-	connectProxyHost          = "connect-proxy.test"
-	invalidConnectProxyHost   = "invalid-connect-proxy.test"
 	connectProxyHTTPNodePort  = 32128
 	connectProxyHTTPSNodePort = 32129
 	connectTargetHTTPSPort    = 8443
@@ -387,10 +385,12 @@ data:
 
 func TestSandboxForwardHTTPConnect(t *testing.T) {
 	environment, scope := rig.BeginScenario(t)
+	systemNamespace := resolvedAgentioConfig.Namespace
+	connectProxyHost := "forward-http-connect-proxy." + systemNamespace + ".svc.cluster.local"
+	invalidConnectProxyHost := "invalid-forward-http-connect-proxy." + systemNamespace + ".svc.cluster.local"
 	applyGatewayTLSTerminationProfile(t, scope, connectProxyHost, invalidConnectProxyHost)
 	proxyKey, proxyCertChain, proxyCA := generateConnectProxyCertificate(t, connectProxyHost)
 	bootstrap := forwardproxy.Bootstrap()
-	systemNamespace := resolvedAgentioConfig.Namespace
 
 	e2econfig.New(scope).Eval(systemNamespace, map[string]any{
 		"EnvoyYAML":         bootstrap,
@@ -444,13 +444,25 @@ spec:
     app: forward-http-connect-proxy
   ports:
   - name: http-connect
-    port: 3128
+    port: 32128
     targetPort: 3128
     nodePort: 32128
   - name: https-connect
-    port: 4128
+    port: 32129
     targetPort: 4128
     nodePort: 32129
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: invalid-forward-http-connect-proxy
+spec:
+  selector:
+    app: forward-http-connect-proxy
+  ports:
+  - name: https-connect
+    port: 32129
+    targetPort: 4128
 ---
 apiVersion: v1
 kind: Secret
@@ -513,6 +525,7 @@ data:
 
 	curlThroughProxy := func(proxyHost, scheme string, proxyPort int) (string, string, error) {
 		proxyURL := fmt.Sprintf("%s://%s:%d", scheme, proxyHost, proxyPort)
+		// Client --resolve reaches the NodePort; gateway SNI resolution reaches the Service on the same port.
 		resolve := fmt.Sprintf("%s:%d:%s", proxyHost, proxyPort, nodeIP)
 		ctx, cancel := e2e.Context(t, 25*time.Second)
 		defer cancel()
