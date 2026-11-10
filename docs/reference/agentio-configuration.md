@@ -265,11 +265,42 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
+| `tcpPassthrough` | `TcpPassthroughMatch[]` | Empty | Forward matching original destination CIDRs/ports as TCP without HTTP/TLS inspection. |
 | `connectRateLimit` | `LocalRateLimitSettings` | Unset | Local token-bucket limit for new HTTP/2 CONNECT streams. |
 | `connectConcurrencyLimit` | `ConnectConcurrencyLimitSettings` | Unset | Shared limits on active TCP CONNECT streams, grouped by trusted filter state. |
 | `bandwidthLimit` | `BandwidthLimitSettings` | Unset | Per-filter-state TCP byte shaping on CONNECT, shared across connections and workers in one gateway process. |
 | `serviceEntries` | `EgressServiceEntry[]` | Empty | Static upstream endpoints that override DNS resolution for exact destination hosts at this gateway. |
 | `accessLogFormat` | `AccessLogFormat` | Built-in JSON | Format of the built-in `envoy` access-log provider on stdout for this gateway. See below. |
+
+### TCP passthrough
+
+Use `egressGateways[].tcpPassthrough` for database connections, custom protocols,
+or server-first protocols that must connect upstream before sending client data.
+Matching connections go directly to the original CONNECT destination as TCP.
+The gateway does not inspect HTTP/TLS, terminate application TLS, resolve SNI/Host,
+or execute SecurityProfile application rules on this path.
+
+```yaml
+egressGateways:
+- name: agentio-egress
+  namespace: agentio-system
+  tcpPassthrough:
+  - cidrs: ["10.20.0.0/16"]
+    ports: [3306, 5432]
+  - cidrs: ["192.168.10.20/32"]
+  - ports: [6379]
+```
+
+Entries are ORed. Within an entry, CIDRs and ports are ANDed; values within each
+list are ORed. CIDRs match the original destination IPv4/IPv6 address without DNS.
+An omitted dimension matches any value; an empty entry (`{}`) selects all TCP
+connections. An omitted or empty `tcpPassthrough` list preserves existing inspection.
+The setting applies to every workload using this gateway and is also available in
+the Gateway API parametersRef configuration.
+
+TCP passthrough selects processing, not permission: Sandbox-side TrafficPolicy,
+CONNECT identity checks, admission limits, TCP timeouts and access logging remain
+in effect. CONNECT-UDP keeps its existing path.
 
 ### HTTP protocol
 

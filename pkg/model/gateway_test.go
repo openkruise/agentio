@@ -100,6 +100,33 @@ func TestGatewayValidateForUseAllowsExtProcDisable(t *testing.T) {
 	}
 }
 
+func TestGatewayTCPPassthroughValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		match   *configv1.TcpPassthroughMatch
+		wantErr bool
+	}{
+		{name: "all TCP", match: &configv1.TcpPassthroughMatch{}},
+		{name: "CIDRs and ports", match: &configv1.TcpPassthroughMatch{Cidrs: []string{"10.20.1.2/16", "2001:db8::/32"}, Ports: []uint32{1, 65535}}},
+		{name: "nil entry", wantErr: true},
+		{name: "invalid CIDR", match: &configv1.TcpPassthroughMatch{Cidrs: []string{"example.com"}}, wantErr: true},
+		{name: "invalid IPv6 prefix", match: &configv1.TcpPassthroughMatch{Cidrs: []string{"::/129"}}, wantErr: true},
+		{name: "zero port", match: &configv1.TcpPassthroughMatch{Ports: []uint32{0}}, wantErr: true},
+		{name: "port overflow", match: &configv1.TcpPassthroughMatch{Ports: []uint32{65536}}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := Gateway{
+				Namespace: "demo",
+				Name:      "egress",
+				Config:    &configv1.EgressGateway{TcpPassthrough: []*configv1.TcpPassthroughMatch{tc.match}},
+			}
+			if err := gateway.ValidateForUse(); (err != nil) != tc.wantErr {
+				t.Fatalf("ValidateForUse()=%v, wantErr=%t", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestGatewaysFromAgentioConfigMarksDuplicateIdentityAsConflict(t *testing.T) {
 	gateways := GatewaysFromAgentioConfig(&configv1.AgentioConfig{
 		EgressGateways: []*configv1.EgressGateway{

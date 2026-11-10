@@ -40,6 +40,7 @@ const (
 	ConnectTerminate        = "connect_terminate"
 	MainInternal            = "main_internal"
 	MainForward             = "main_forward"
+	TCPPassthrough          = "tcp_passthrough"
 	PassthroughCluster      = "PassthroughCluster"
 	BlackHoleCluster        = "BlackHoleCluster"
 	HTTPDynamicForwardProxy = "http_dynamic_forward_proxy"

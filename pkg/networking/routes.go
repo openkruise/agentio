@@ -17,14 +17,18 @@ package networking
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/openkruise/agentio/pkg/util/protoutil"
 
+	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	previoushostsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/retry/host/previous_hosts/v3"
 	previousprioritiesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/retry/priority/previous_priorities/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -94,6 +98,42 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 			tcp.TypedPerFilterConfig[name] = b.pack(&routev3.FilterConfig{Config: &anypb.Any{}})
 		}
 	}
+	var passthroughRoutes []*routev3.Route
+	for index, match := range gateway.GetTcpPassthrough() {
+		route := proto.Clone(tcp).(*routev3.Route)
+		route.Name = fmt.Sprintf("tcp-passthrough-%d", index)
+		route.GetRoute().ClusterSpecifier = &routev3.RouteAction_Cluster{Cluster: TCPPassthrough}
+		if len(match.GetCidrs()) > 0 {
+			addresses := &matcherv3.AddressMatcher{}
+			for _, cidr := range match.GetCidrs() {
+				prefix := netip.MustParsePrefix(cidr).Masked()
+				addresses.Ranges = append(addresses.Ranges, &xdscorev3.CidrRange{
+					AddressPrefix: prefix.Addr().String(),
+					PrefixLen:     wrapperspb.UInt32(uint32(prefix.Bits())),
+				})
+			}
+			route.Match.FilterState = []*matcherv3.FilterStateMatcher{{
+				Key:     "envoy.filters.listener.original_dst.local_ip",
+				Matcher: &matcherv3.FilterStateMatcher_AddressMatch{AddressMatch: addresses},
+			}}
+		}
+		if len(match.GetPorts()) > 0 {
+			ports := make([]string, 0, len(match.GetPorts()))
+			for _, port := range match.GetPorts() {
+				ports = append(ports, strconv.FormatUint(uint64(port), 10))
+			}
+			route.Match.Headers = []*routev3.HeaderMatcher{{
+				Name: ":authority",
+				HeaderMatchSpecifier: &routev3.HeaderMatcher_StringMatch{StringMatch: &matcherv3.StringMatcher{
+					MatchPattern: &matcherv3.StringMatcher_SafeRegex{SafeRegex: &matcherv3.RegexMatcher{
+						Regex: ".*:0*(" + strings.Join(ports, "|") + ")",
+					}},
+				}},
+			}}
+		}
+		passthroughRoutes = append(passthroughRoutes, route)
+	}
+	connect.VirtualHosts[0].Routes = append(passthroughRoutes, connect.VirtualHosts[0].Routes...)
 	if features.EnableUDPProxy {
 		vhost := connect.VirtualHosts[0]
 		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)
