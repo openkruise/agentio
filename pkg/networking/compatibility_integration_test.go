@@ -322,9 +322,10 @@ func runCompatibilityEnvoy(t *testing.T, binary, config string) (string, string)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(listing.Statuses) == 1 {
-			socket := listing.Statuses[0].Address.Socket
-			return net.JoinHostPort(socket.Address, strconv.Itoa(socket.Port)), admin
+		for _, status := range listing.Statuses {
+			if socket := status.Address.Socket; socket.Port > 0 {
+				return net.JoinHostPort(socket.Address, strconv.Itoa(socket.Port)), admin
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

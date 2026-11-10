@@ -119,6 +119,13 @@ message EgressGateway {
   // Additional CA sources for destination and HTTPS proxy TLS verification.
   // The built-in public CA package is always retained.
   UpstreamTrustBundle upstream_trust_bundle = 13;
+
+  // Connections matching any entry are forwarded to the original CONNECT
+  // destination as TCP, without HTTP/TLS inspection or application processing.
+  // CIDRs and ports are ANDed; entries within each list are ORed. An omitted
+  // dimension matches any value. Empty entries match every TCP connection.
+  // Existing transport access controls and CONNECT admission limits still apply.
+  repeated TcpPassthroughMatch tcp_passthrough = 14;
 }
 
 // Configures the gateway's upstream CA union, independently of client trust.
@@ -520,4 +527,11 @@ message GatewayTlsSettings {
   // TLS settings for connections to destinations and HTTPS proxies.
   // Omitted fields use the built-in upstream defaults.
   UpstreamTlsSettings origination = 1;
+}
+
+message TcpPassthroughMatch {
+  // Original destination IPv4/IPv6 CIDRs; no DNS resolution is performed.
+  repeated string cidrs = 1;
+  // Original destination ports in the range 1-65535.
+  repeated uint32 ports = 2;
 }

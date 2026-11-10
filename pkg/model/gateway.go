@@ -91,6 +91,27 @@ func (g Gateway) ValidateForUse() error {
 	if err := ValidateAccessLogFormat(g.Config.GetAccessLogFormat()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
+	for index, match := range g.Config.GetTcpPassthrough() {
+		if match == nil {
+			return fmt.Errorf("gateway %s tcpPassthrough[%d] must not be nil", g.ResourceName(), index)
+		}
+		for _, cidr := range match.GetCidrs() {
+			if _, err := netip.ParsePrefix(cidr); err != nil {
+				return fmt.Errorf(
+					"gateway %s tcpPassthrough[%d] has invalid CIDR %q: %w",
+					g.ResourceName(),
+					index,
+					cidr,
+					err,
+				)
+			}
+		}
+		for _, port := range match.GetPorts() {
+			if port == 0 || port > 65535 {
+				return fmt.Errorf("gateway %s tcpPassthrough[%d] has invalid port %d", g.ResourceName(), index, port)
+			}
+		}
+	}
 	overrideHosts := make(map[string]bool)
 	for _, override := range g.Config.GetHttp().GetRouting().GetHostOverrides() {
 		for _, host := range override.GetHosts() {

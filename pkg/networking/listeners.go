@@ -358,7 +358,22 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		ListenerFiltersTimeout:           durationpb.New(time.Second),
 		ContinueOnListenerFiltersTimeout: false,
 	}
-	for _, listener := range []*listenerv3.Listener{connect, mainInternal, mainForward} {
+	listeners := []*listenerv3.Listener{connect, mainInternal, mainForward}
+	if len(config.gateway.GetTcpPassthrough()) > 0 {
+		listeners = append(listeners, &listenerv3.Listener{
+			Name: TCPPassthrough,
+			ListenerSpecifier: &listenerv3.Listener_InternalListener{
+				InternalListener: &listenerv3.Listener_InternalListenerConfig{},
+			},
+			TrafficDirection: corev3.TrafficDirection_INBOUND,
+			ListenerFilters:  []*listenerv3.ListenerFilter{originalDstFilter},
+			FilterChains: []*listenerv3.FilterChain{{
+				Name:    forwardTCPChain,
+				Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, tcpSettings),
+			}},
+		})
+	}
+	for _, listener := range listeners {
 		if config.telemetry != nil {
 			for _, accessLog := range config.telemetry.ListenerAccessLogs {
 				listener.AccessLog = append(listener.AccessLog, proto.Clone(accessLog).(*accesslogv3.AccessLog))
@@ -368,7 +383,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 			return nil, fmt.Errorf("validate listener %s: %w", listener.GetName(), err)
 		}
 	}
-	return []*listenerv3.Listener{connect, mainInternal, mainForward}, nil
+	return listeners, nil
 }
 
 func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpConnectionManager, error) {
@@ -380,6 +395,16 @@ func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpCo
 			authority = legacyConnectAuthorityWithAction
 		}
 		filters = []*hcmv3.HttpFilter{legacyPeerMetadataFilter, authority}
+	}
+	if len(gateway.GetTcpPassthrough()) > 0 {
+		// CIDR routes depend on the original address captured by this filter.
+		index := len(filters) - 1
+		capture := &setstatehttpv3.Config{}
+		if err := filters[index].GetTypedConfig().UnmarshalTo(capture); err != nil {
+			return nil, fmt.Errorf("decode CONNECT address capture: %w", err)
+		}
+		capture.ClearRouteCache = true
+		filters[index] = httpFilter(filters[index].Name, b.pack(capture))
 	}
 	if !b.legacyGateway {
 		filters = append(filters, b.connectExtProcFilter(), connectWorkloadFilter())

@@ -17,14 +17,21 @@ package networking
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/openkruise/agentio/pkg/util/protoutil"
 
+	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	matchinginputv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
+	ipmatcherv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/input_matchers/ip/v3"
 	previoushostsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/retry/host/previous_hosts/v3"
 	previousprioritiesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/retry/priority/previous_priorities/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -97,6 +104,108 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 	if features.EnableUDPProxy {
 		vhost := connect.VirtualHosts[0]
 		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)
+	}
+	if len(gateway.GetTcpPassthrough()) > 0 {
+		vhost := connect.VirtualHosts[0]
+		matches := &xdsmatcherv3.Matcher_MatcherList{}
+		connectMethod := &xdsmatcherv3.Matcher_MatcherList_Predicate{
+			MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
+				SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
+					Input: typedExtension(
+						"request-headers",
+						b.pack(&matcherv3.HttpRequestHeaderMatchInput{HeaderName: ":method"}),
+					),
+					Matcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
+						ValueMatch: &xdsmatcherv3.StringMatcher{
+							MatchPattern: &xdsmatcherv3.StringMatcher_Exact{Exact: "CONNECT"},
+						},
+					},
+				},
+			},
+		}
+		for index, match := range gateway.GetTcpPassthrough() {
+			predicates := []*xdsmatcherv3.Matcher_MatcherList_Predicate{connectMethod}
+			if len(match.GetCidrs()) > 0 {
+				addresses := &ipmatcherv3.Ip{StatPrefix: TCPPassthrough}
+				for _, cidr := range match.GetCidrs() {
+					prefix := netip.MustParsePrefix(cidr).Masked()
+					addresses.CidrRanges = append(addresses.CidrRanges, &corev3.CidrRange{
+						AddressPrefix: prefix.Addr().String(),
+						PrefixLen:     wrapperspb.UInt32(uint32(prefix.Bits())),
+					})
+				}
+				predicates = append(predicates, &xdsmatcherv3.Matcher_MatcherList_Predicate{
+					MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
+						SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
+							Input: typedExtension(
+								"envoy.matching.inputs.filter_state",
+								b.pack(&matchinginputv3.FilterStateInput{
+									Key:   "envoy.filters.listener.original_dst.local_ip",
+									Field: "ip",
+								}),
+							),
+							Matcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_CustomMatch{
+								CustomMatch: typedExtension("envoy.matching.matchers.ip", b.pack(addresses)),
+							},
+						},
+					},
+				})
+			}
+			if len(match.GetPorts()) > 0 {
+				ports := &xdsmatcherv3.Matcher_MatcherList_Predicate_PredicateList{}
+				input := typedExtension("envoy.matching.inputs.filter_state", b.pack(&matchinginputv3.FilterStateInput{
+					Key:   "envoy.filters.listener.original_dst.local_ip",
+					Field: "port",
+				}))
+				for _, port := range match.GetPorts() {
+					ports.Predicate = append(ports.Predicate, &xdsmatcherv3.Matcher_MatcherList_Predicate{
+						MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
+							SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
+								Input: input,
+								Matcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
+									ValueMatch: &xdsmatcherv3.StringMatcher{
+										MatchPattern: &xdsmatcherv3.StringMatcher_Exact{
+											Exact: strconv.FormatUint(uint64(port), 10),
+										},
+									},
+								},
+							},
+						},
+					})
+				}
+				portMatch := ports.Predicate[0]
+				if len(ports.Predicate) > 1 {
+					portMatch = &xdsmatcherv3.Matcher_MatcherList_Predicate{
+						MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_OrMatcher{OrMatcher: ports},
+					}
+				}
+				predicates = append(predicates, portMatch)
+			}
+			predicate := predicates[0]
+			if len(predicates) > 1 {
+				predicate = &xdsmatcherv3.Matcher_MatcherList_Predicate{
+					MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_AndMatcher{
+						AndMatcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_PredicateList{Predicate: predicates},
+					},
+				}
+			}
+			route := proto.Clone(tcp).(*routev3.Route)
+			route.Name = fmt.Sprintf("tcp-passthrough-%d", index)
+			route.GetRoute().ClusterSpecifier = &routev3.RouteAction_Cluster{Cluster: TCPPassthrough}
+			matches.Matchers = append(matches.Matchers, &xdsmatcherv3.Matcher_MatcherList_FieldMatcher{
+				Predicate: predicate,
+				OnMatch: &xdsmatcherv3.Matcher_OnMatch{OnMatch: &xdsmatcherv3.Matcher_OnMatch_Action{
+					Action: typedExtension(route.Name, b.pack(route)),
+				}},
+			})
+		}
+		vhost.Matcher = &xdsmatcherv3.Matcher{
+			MatcherType: &xdsmatcherv3.Matcher_MatcherList_{MatcherList: matches},
+			OnNoMatch: &xdsmatcherv3.Matcher_OnMatch{OnMatch: &xdsmatcherv3.Matcher_OnMatch_Action{
+				Action: typedExtension("default-connect", b.pack(&routev3.RouteList{Routes: vhost.Routes})),
+			}},
+		}
+		vhost.Routes = nil
 	}
 	http := b.buildForwardRoute(HTTPDynamicForwardProxy, gateway)
 	tls := b.buildForwardRoute(TLSConnectOriginate, gateway)

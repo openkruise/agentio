@@ -60,6 +60,9 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildDFPCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
 		b.buildTLSProxyOriginateCluster(config.gateway.GetTls().GetOrigination()),
 	}
+	if len(config.gateway.GetTcpPassthrough()) > 0 {
+		result = append(result, b.buildInternalCluster(TCPPassthrough))
+	}
 	if !b.legacyGateway {
 		cluster := b.buildExtProcCluster(&configv1.ExtProcProvider{Service: "127.0.0.1", Port: 9002}, PorterCluster)
 		cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC}
