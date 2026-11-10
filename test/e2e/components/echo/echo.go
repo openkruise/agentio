@@ -68,6 +68,7 @@ type Port struct {
 	ServicePort  int
 	WorkloadPort int
 	TLS          bool
+	ServerFirst  bool
 }
 
 var defaultPorts = []Port{
@@ -98,6 +99,7 @@ type CallOptions struct {
 	Headers         map[string]string
 	FollowRedirects bool
 	ServerName      string
+	ServerFirst     bool
 	Retry           retry.Policy
 	Check           Checker
 }
@@ -164,7 +166,9 @@ func (i Instance) CallOptions(portName string) (CallOptions, error) {
 	if !found {
 		return CallOptions{}, fmt.Errorf("echo %s has no port %q", i.Name(), portName)
 	}
-	return CallOptionsForAddress(port.Protocol, i.Address(), port.ServicePort), nil
+	options := CallOptionsForAddress(port.Protocol, i.Address(), port.ServicePort)
+	options.ServerFirst = port.ServerFirst
+	return options, nil
 }
 
 func (i Instance) CallOptionsOrFail(t testing.TB, portName string) CallOptions {
@@ -484,6 +488,9 @@ func commandArgs(options CallOptions) ([]string, error) {
 	case TCP:
 		if port == 0 {
 			port = 9090
+		}
+		if options.ServerFirst {
+			extra = append(extra, "--server-first")
 		}
 	case UDP:
 		if port == 0 {

@@ -63,6 +63,9 @@ func manifests(input Config) ([]*unstructured.Unstructured, error) {
 			serverArgs = append(serverArgs, fmt.Sprintf("--grpc=%d", port.WorkloadPort))
 		case TCP:
 			serverArgs = append(serverArgs, fmt.Sprintf("--tcp=%d", port.WorkloadPort))
+			if port.ServerFirst {
+				serverArgs = append(serverArgs, fmt.Sprintf("--server-first=%d", port.WorkloadPort))
+			}
 		case UDP:
 			transport = "UDP"
 			serverArgs = append(serverArgs, fmt.Sprintf("--udp=%d", port.WorkloadPort))

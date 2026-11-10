@@ -162,6 +162,46 @@ func TestManifestsUseCustomPortsInsteadOfDefaults(t *testing.T) {
 	}
 }
 
+func TestServerFirstTCP(t *testing.T) {
+	objects, err := manifests(Config{
+		Name:      "server-first",
+		Namespace: "sandbox",
+		Ports: []Port{{
+			Name:         "tcp",
+			Protocol:     TCP,
+			ServicePort:  9092,
+			WorkloadPort: 19092,
+			ServerFirst:  true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := objectByKind(t, objects, "Deployment")
+	containers, _, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := stringSlice(t, containers[0].(map[string]any)["args"])
+	if !strings.Contains(strings.Join(args, " "), "--server-first=19092") {
+		t.Fatalf("server-first port was not enabled: %v", args)
+	}
+	instance := Instance{config: Config{
+		Ports: []Port{{Name: "tcp", Protocol: TCP, ServicePort: 9092, ServerFirst: true}},
+	}}
+	options, err := instance.CallOptions("tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err = commandArgs(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, " "), "--server-first") {
+		t.Fatalf("client must wait for the server before sending: %v", args)
+	}
+}
+
 func TestManifestsRejectInvalidPortModels(t *testing.T) {
 	tests := []struct {
 		name  string
