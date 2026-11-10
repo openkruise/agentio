@@ -53,16 +53,13 @@ const AnnotationSecurityRules = "agents.kruise.io/security-rules"
 // The returned profile is not yet projected: the caller must call Project
 // before it can be bound, exactly as for a CRD profile.
 //
-// Unknown JSON fields fail the compile: the annotation is a server artifact
-// and anything unrecognized means the writer and reader disagree about the
-// schema, which must not degrade into silently dropped rules.
+// Unknown JSON fields are ignored so newer writers can add fields independently.
 func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 	raw := sandbox.GetAnnotations()[AnnotationSecurityRules]
 	if raw == "" {
 		return nil, nil
 	}
 	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
-	dec.DisallowUnknownFields()
 	var specRules []v1alpha1.SecurityRule
 	if err := dec.Decode(&specRules); err != nil {
 		return nil, fmt.Errorf("decode %s annotation: %w", AnnotationSecurityRules, err)

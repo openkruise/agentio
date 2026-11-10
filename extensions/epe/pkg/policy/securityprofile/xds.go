@@ -33,7 +33,6 @@ import (
 func FromXDS(value *securityv1.SecurityProfile, sandboxUID string, regs []filter.Registration) (*Profile, error) {
 	var config *model.HTTPPolicy
 	decoder := json.NewDecoder(bytes.NewReader(value.PolicyJson))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode HTTP policy: %w", err)
 	}

@@ -111,7 +111,7 @@ func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 	if err != nil || first[0].Inputs["settings"].(map[string]string)["value"] != "first" {
 		t.Fatal("resolved inputs missing", err)
 	}
-	body.PolicyJson = []byte(`{"unsupported":true}`)
+	body.PolicyJson = []byte(`{"inputs":[{"name":"settings"}]}`)
 	if err := publish(); err == nil {
 		t.Fatal("invalid version admitted")
 	}

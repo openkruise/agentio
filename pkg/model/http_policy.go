@@ -14,11 +14,32 @@
 
 package model
 
-import agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+import (
+	"encoding/json"
+
+	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+)
 
 // HTTPPolicy is the configuration carried in SecurityProfile.policy_json.
 type HTTPPolicy struct {
 	Rules  []agentsv1alpha1.SecurityRule         `json:"rules,omitempty"`
 	Audit  []agentsv1alpha1.AuditAction          `json:"audit,omitempty"`
 	Inputs []agentsv1alpha1.SecurityProfileInput `json:"inputs,omitempty"`
+}
+
+// MarshalJSON preserves an empty inline input as a declared source.
+func (p HTTPPolicy) MarshalJSON() ([]byte, error) {
+	type input struct {
+		agentsv1alpha1.SecurityProfileInput
+		Inline map[string]string `json:"inline,omitzero"`
+	}
+	inputs := make([]input, len(p.Inputs))
+	for i, declared := range p.Inputs {
+		inputs[i] = input{SecurityProfileInput: declared, Inline: declared.Inline}
+	}
+	type plain HTTPPolicy
+	return json.Marshal(struct {
+		plain
+		Inputs []input `json:"inputs,omitempty"`
+	}{plain: plain(p), Inputs: inputs})
 }

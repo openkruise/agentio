@@ -195,8 +195,6 @@ func decodeSandboxProfiles(value *anypb.Any, regs []filter.Registration) (*sandb
 			if err := extension.UnmarshalTo(&extensionsv1.SniTrafficPolicy{}); err != nil {
 				return nil, err
 			}
-		default:
-			return nil, fmt.Errorf("unsupported Sandbox extension %q", extension.GetTypeUrl())
 		}
 	}
 	return result, nil

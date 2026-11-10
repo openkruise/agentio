@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
@@ -86,10 +87,6 @@ func TestProfileAdmissionAndOrderedDemand(t *testing.T) {
 	for _, raw := range []string{
 		`{`,
 		`null`,
-		`{"metadata":{"name":"policy"}}`,
-		`{"selector":{}}`,
-		`{"priority":100}`,
-		`{"rules":[{"actions":{"newAction":{}}}]}`,
 		`{"rules":[{"match":[{"domains":["*"],"paths":[{"type":"Regex","value":"["}]}]}]}`,
 		`{"rules":[{"match":[{"domains":["*"],"paths":[{"type":"FutureMatch","value":"/"}]}]}]}`,
 		`{"rules":[{"match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-test","value":"{{"}]}}}]}`,
@@ -99,6 +96,20 @@ func TestProfileAdmissionAndOrderedDemand(t *testing.T) {
 		bad.PolicyJson = []byte(raw)
 		if _, err := securityprofile.FromXDS(bad, "", regs); err == nil {
 			t.Fatalf("invalid config accepted: %s", raw)
+		}
+	}
+	for _, raw := range []string{
+		`{"metadata":{"name":"ignored"},"selector":{},"priority":100,"future":true,"rules":[{"name":"block","match":[{"domains":["*"],"futureMatch":true}],"actions":{"block":{},"newAction":{}}}]}`,
+		`{"rules":[{"name":"block","match":[{"domains":["*"]}],"actions":{"block":{"future":true}}}]}`,
+	} {
+		wire := proto.Clone(local).(*securityv1.SecurityProfile)
+		wire.PolicyJson = []byte(raw)
+		compiled, err := securityprofile.FromXDS(wire, "", regs)
+		if err != nil {
+			t.Fatalf("unknown fields rejected: %v", err)
+		}
+		if len(compiled.Rules) != 1 || compiled.Rules[0].Name != "block" || compiled.Rules[0].Actions.Block == nil {
+			t.Fatal("unknown fields changed the known rule", compiled.Rules)
 		}
 	}
 	wrongName := proto.Clone(local).(*securityv1.SecurityProfile)
@@ -190,9 +201,15 @@ func TestSandboxProfilesAreAtomicAndHostBound(t *testing.T) {
 	if _, err := decodeSandboxProfiles(packed(manifest), regs); err == nil {
 		t.Fatal("duplicate Sandbox profile accepted")
 	}
-	manifest.Extensions = []*anypb.Any{packed(body), {TypeUrl: "unsupported"}}
-	if _, err := decodeSandboxProfiles(packed(manifest), regs); err == nil {
-		t.Fatal("unsupported Sandbox extension accepted")
+	manifest.Extensions = []*anypb.Any{{TypeUrl: "unsupported", Value: []byte("opaque")}, packed(body)}
+	decoded, err = decodeSandboxProfiles(packed(manifest), regs)
+	if err != nil || decoded.profile == nil || decoded.profile.Meta.Name != body.Name {
+		t.Fatalf("unknown extension rejected or displaced the profile: %v", err)
+	}
+	manifest.Extensions = []*anypb.Any{packed(&extensionsv1.PolicyReference{TypeUrl: model.SecurityProfileType})}
+	decoded, err = decodeSandboxProfiles(packed(manifest), regs)
+	if err != nil || decoded.profile != nil {
+		t.Fatalf("legacy reference extension rejected: %v", err)
 	}
 	manifest.Extensions = nil
 	decoded, err = decodeSandboxProfiles(packed(manifest), regs)

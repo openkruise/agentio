@@ -140,7 +140,6 @@ func sandboxSecurityRules(sandbox *agentsv1alpha1.Sandbox) ([]agentsv1alpha1.Sec
 		return nil, nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
 	var rules []agentsv1alpha1.SecurityRule
 	if err := decoder.Decode(&rules); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", agentsv1alpha1.AnnotationSecurityRules, err)

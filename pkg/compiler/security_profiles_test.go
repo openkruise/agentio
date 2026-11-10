@@ -37,7 +37,7 @@ func TestSecurityProfileJSONPreservesSpecAndSourceIdentity(t *testing.T) {
 	source := model.SecurityProfile{UID: "source-uid", Name: "policy", Namespace: "ns"}
 	if err := json.Unmarshal(
 		[]byte(
-			`{"selector":{},"inputs":[{"name":"settings","configMap":{"name":"settings"}}],"rules":[{"name":"block","match":[{"domains":["example.com"]}],"actions":{"block":{}}}]}`,
+			`{"selector":{},"inputs":[{"name":"settings","configMap":{"name":"settings"}},{"name":"empty","inline":{}},{"name":"inline","inline":{"value":"kept"}}],"rules":[{"name":"block","match":[{"domains":["example.com"]}],"actions":{"block":{}}}]}`,
 		),
 		&source.Spec,
 	); err != nil {
@@ -64,6 +64,10 @@ func TestSecurityProfileJSONPreservesSpecAndSourceIdentity(t *testing.T) {
 		!reflect.DeepEqual(document.Rules, source.Spec.Rules) ||
 		!reflect.DeepEqual(document.Inputs, source.Spec.Inputs) {
 		t.Fatalf("profile spec or identity changed: %+v", document)
+	}
+	compiled, err := securityprofile.FromXDS(wire, "", nil)
+	if err != nil || !reflect.DeepEqual(compiled.Spec.Inputs, source.Spec.Inputs) {
+		t.Fatalf("input declarations did not survive xDS admission: %v", err)
 	}
 	cms.UpdateObject(
 		&corev1.ConfigMap{
