@@ -269,7 +269,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `connectRateLimit` | `LocalRateLimitSettings` | Unset | Local token-bucket limit for new HTTP/2 CONNECT streams. |
 | `connectConcurrencyLimit` | `ConnectConcurrencyLimitSettings` | Unset | Shared limits on active TCP CONNECT streams, grouped by trusted filter state. |
 | `bandwidthLimit` | `BandwidthLimitSettings` | Unset | Per-filter-state TCP byte shaping on CONNECT, shared across connections and workers in one gateway process. |
-| `serviceEntries` | `EgressServiceEntry[]` | Empty | Static upstream endpoints that override DNS resolution for exact destination hosts at this gateway. |
+| `serviceEntries` | `EgressServiceEntry[]` | Empty | Endpoint IPs and allowed host identities. Envoy retains a matching original destination without resolving its hostname again. |
 | `accessLogFormat` | `AccessLogFormat` | Built-in JSON | Format of the built-in `envoy` access-log provider on stdout for this gateway. See below. |
 
 ### TCP passthrough
@@ -642,20 +642,24 @@ Behavior:
 
 ### Static service entries
 
-A `serviceEntries` entry binds one or more destination hosts to static upstream endpoints at that gateway. When a request's HTTP Host or `:authority` matches a configured host, the gateway skips DNS resolution and connects to a configured endpoint instead. Only the upstream address is replaced; the request's original destination port and detected protocol are preserved.
+For Envoy-backed gateways, a `serviceEntries` entry binds allowed host identities to endpoint IP addresses. The gateway matches the original destination IP restored from HBONE. For a matching IP, it validates HTTP Host / `:authority` or TLS SNI against the corresponding hosts, then retains the original IP and port without resolving the hostname again. This supports Pods using `hostAliases`: the Pod selects the endpoint, and the gateway keeps that choice.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `hosts` | `string[]` | Empty | Exact FQDNs matched against the HTTP Host / `:authority` and TLS SNI identities. Wildcards are not supported. At least one host is required, and a host must not repeat across the `serviceEntries` of one gateway. |
-| `endpoints[].address` | String | Empty | IPv4 address of the upstream endpoint. At least one endpoint is required, and addresses must be unique within one entry. Requests are distributed evenly across the endpoints. |
+| `endpoints[].address` | String | Empty | IPv4 address matched against the original destination. At least one endpoint is required, and addresses must be unique within one entry. The client-selected endpoint is preserved. If several entries share an IP, their allowed hosts are combined. |
 
-ServiceEntry selection occurs before EPE processing. When EPE target authorization is enabled, EPE checks the selected endpoint against TrafficPolicy and pins the authorized address. A denied endpoint returns HTTP 403 without trying another endpoint, the original destination, or DNS; mixed allowed/denied endpoints can therefore produce partial request failures. Selecting a target alone does not authorize it.
+Host validation and target capture occur before EPE processing. When EPE target authorization is enabled, EPE checks the original endpoint against TrafficPolicy without DNS. A denied endpoint returns HTTP 403 without trying another endpoint or DNS. Endpoint matching does not authorize a request by itself.
+
+An IP match with an unrelated HTTP Host returns HTTP 403. An unrelated or absent TLS SNI closes the connection. These failures do not fall back to normal forwarding. Opaque TCP addressed to a configured endpoint is rejected because it has no HTTP Host or TLS SNI to validate. If the IP does not match any entry, ordinary forwarding and authorization apply; a matching hostname alone does not select a static endpoint.
 
 For enforcement, keep the EPE provider's request header mode as `SEND` (the default) and `failureModeAllow: false`. Upgrade the gateway and EPE together: an older gateway does not supply the ServiceEntry candidate, and an older EPE does not authorize it.
 
-Static entries apply to ordinary HTTP requests, including HTTPS selected for TLS termination. Application-level CONNECT requests are forwarded to the original upstream proxy through a separate route and do not use these entries. A routed HTTPS connection that is not terminated stays on the TCP forwarding chain and still uses DNS resolution.
+Entries cover ordinary HTTP, decrypted HTTPS, and TLS passthrough. SNI validation does not bypass the existing TLS termination/passthrough/deny policy. Passthrough cannot inspect the encrypted HTTP Host; terminate TLS if Host/SNI consistency must also be enforced. Application-level CONNECT requests retain their separate upstream-proxy route and do not capture a ServiceEntry target; when carried over TLS, the outer SNI is still checked against the proxy's endpoint binding.
 
-Hosts are normalized to lowercase without a trailing dot. Route settings still follow the [HTTP routing rules](#http-routing-and-tcp-timeouts): the most specific `http.routing.hostOverrides` host pattern matching a static host supplies its `timeout` and `retries`, otherwise `http.routing.fallback` applies. An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer.
+Hosts are normalized to lowercase without a trailing dot; requests accept equivalent case and a trailing dot. Timeout and retry settings continue to follow the ordinary [HTTP routing rules](#http-routing-and-tcp-timeouts). An invalid entry — an empty host or endpoint list, a non-IPv4 address, a wildcard or duplicate host — rejects that configuration layer.
+
+**Migration:** Envoy no longer selects or balances static endpoints by HTTP Host. Configure application DNS or `hostAliases` to send traffic to one of the declared endpoint IPs. The separate [agentgateway backend](../tasks/deploy-agentgateway.md) retains its documented host-based static routing behavior.
 
 ```yaml
 egressGateways:

@@ -196,7 +196,7 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 			"specific.overlap.test",
 		},
 		ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
-	})
+	}, forwardTCPChain)
 	if b.err != nil {
 		t.Fatal(b.err)
 	}
@@ -323,7 +323,8 @@ func runCompatibilityEnvoy(t *testing.T, binary, config string) (string, string)
 			t.Fatal(err)
 		}
 		for _, status := range listing.Statuses {
-			if socket := status.Address.Socket; socket.Port > 0 {
+			socket := status.Address.Socket
+			if socket.Port > 0 {
 				return net.JoinHostPort(socket.Address, strconv.Itoa(socket.Port)), admin
 			}
 		}

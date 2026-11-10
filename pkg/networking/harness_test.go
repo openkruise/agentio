@@ -20,10 +20,8 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
-	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -36,25 +34,6 @@ func testGateway(config *configv1.EgressGateway) model.Gateway {
 		Namespace: "agentio-system",
 		Name:      "egress",
 		Config:    config,
-	}
-}
-
-func assertStaticEndpointState(t *testing.T, typedConfig map[string]*anypb.Any, wantAddress string) {
-	t.Helper()
-	candidate := &setstatehttpv3.Config{}
-	if err := typedConfig[staticEndpointCandidateFilter].UnmarshalTo(candidate); err != nil {
-		t.Fatal(err)
-	}
-	candidateValue := candidate.GetOnRequestHeaders()[0]
-	if candidateValue.GetObjectKey() != model.FilterStateRouteUpstream || !candidateValue.ReadOnly ||
-		candidateValue.GetFactoryKey() != "envoy.string" {
-		t.Fatalf("unexpected candidate state: %v", candidateValue)
-	}
-	if got, want := candidateValue.GetFormatString().
-		GetTextFormatSource().
-		GetInlineString(),
-		wantAddress+":%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:FIELD:port)%"; got != want {
-		t.Fatalf("candidate = %q, want %q", got, want)
 	}
 }
 

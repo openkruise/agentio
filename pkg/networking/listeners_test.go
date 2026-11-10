@@ -348,12 +348,12 @@ func TestBuildWithoutSNITrafficPolicyUsesProtocolMatcher(t *testing.T) {
 	for _, chain := range internal.GetFilterChains() {
 		gotChains = append(gotChains, chain.GetName())
 	}
-	if want := []string{forwardHTTPChain, forwardTCPChain}; !equalStrings(gotChains, want) {
+	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain}; !equalStrings(gotChains, want) {
 		t.Fatalf("MainInternal filter chains = %v, want %v without SNI policy runtime", gotChains, want)
 	}
 	tls := internal.GetFilterChainMatcher().GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
-	if got := tls.GetAction().GetName(); got != forwardTCPChain {
-		t.Fatalf("TLS fallback chain = %q, want %q without SNI policy runtime", got, forwardTCPChain)
+	if got := tls.GetAction().GetName(); got != forwardTLSChain {
+		t.Fatalf("TLS fallback chain = %q, want %q without SNI policy runtime", got, forwardTLSChain)
 	}
 }
 

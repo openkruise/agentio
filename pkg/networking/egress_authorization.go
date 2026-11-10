@@ -18,9 +18,6 @@ import (
 	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	"github.com/openkruise/agentio/pkg/model"
 )
 
 // Empty EPE targets leave existing filter state intact, allowing normal DFP
@@ -57,16 +54,4 @@ func (b *resourceBuilder) routeUpstreamFilter() *hcm.HttpFilter {
 		},
 		SkipIfEmpty: true,
 	}}}))
-}
-
-// Capture the selected endpoint before EPE can invalidate Envoy's route cache.
-func (b *resourceBuilder) staticEndpointCandidateConfig(address string) *anypb.Any {
-	return b.pack(&state.Config{OnRequestHeaders: []*common.FilterStateValue{{
-		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateRouteUpstream},
-		FactoryKey: "envoy.string",
-		Value: &common.FilterStateValue_FormatString{FormatString: formatString(
-			address + ":%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:FIELD:port)%",
-		)},
-		ReadOnly: true,
-	}}})
 }

@@ -103,7 +103,7 @@ func TestLegacyTLSActionHeaderSelectsChainBeforeGatewayPolicy(t *testing.T) {
 
 func TestLegacyTLSActionWithoutGatewayExclusions(t *testing.T) {
 	b := &resourceBuilder{legacyGateway: true}
-	matcher := b.sniTrafficPolicyMatcher(nil)
+	matcher := b.sniTrafficPolicyMatcher(nil, forwardTCPChain)
 	input := &matchinginputv3.FilterStateInput{}
 	if err := matcher.GetMatcherTree().GetInput().GetTypedConfig().UnmarshalTo(input); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestStaticSNIOverlapExcludesWin(t *testing.T) {
 	before := proto.Clone(config)
 	for _, legacy := range []bool{false, true} {
 		b := &resourceBuilder{legacyGateway: legacy}
-		matcher := b.staticSNIMatcher(config)
+		matcher := b.staticSNIMatcher(config, forwardTCPChain)
 		if b.err != nil {
 			t.Fatal(b.err)
 		}

@@ -35,7 +35,7 @@ docker run --rm --platform linux/amd64 --user 1337:1337 \
   "$image" -test.v -test.timeout=90s \
   -test.run='TestGatewayAgentLifecycle|TestCommunityEnvoyWasmECDS|TestADSDetectsSilentBlackhole|TestEnvoyConfiguredBootstrap|TestCommunityEnvoyDynamicMetrics|TestCommunityEnvoyInternalConnect|TestCommunityEnvoyHTTPMetrics'
 
-# Exercise post-TLS TCP forwarding and HTTP/CONNECT ALPN against real Envoy.
+# Exercise endpoint/Host/SNI binding, EPE authorization, and post-TLS forwarding against real Envoy.
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$artifacts/networking.test" ./pkg/networking
 chmod 755 "$artifacts/networking.test"
 docker run --rm --platform linux/amd64 --user 1337:1337 \
@@ -43,7 +43,7 @@ docker run --rm --platform linux/amd64 --user 1337:1337 \
   --mount "type=bind,src=$artifacts/networking.test,dst=/tests/networking.test,readonly" \
   -e AGENTIO_TEST_ENVOY_BINARY=/usr/local/bin/envoy \
   "$image" -test.v -test.timeout=90s \
-  -test.run='^(TestEnvoyPostTLSForwarding|TestEnvoyStaticSNIOverlap|TestEnvoyTCPPassthroughServerFirst)$'
+  -test.run='^(TestEnvoyEndpointServiceEntry|TestEnvoyPostTLSForwarding|TestEnvoyStaticSNIOverlap|TestEnvoyTCPPassthroughServerFirst)$'
 
 # Exercise production MITM signing and Delta SDS against real Envoy, including
 # an ADS outage that spans X.509 expiry. The large load run remains opt-in.

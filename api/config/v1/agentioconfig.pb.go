@@ -1369,14 +1369,14 @@ func (x *UpstreamTlsSettings) GetCipherSuites() []string {
 	return nil
 }
 
-// EgressServiceEntry binds one or more HTTP host identities to static upstream
-// endpoints. Hosts are exact FQDNs; wildcard matching is intentionally not
-// supported for static endpoints.
+// EgressServiceEntry binds host identities to upstream endpoint addresses.
+// Envoy matches the original destination IP, validates HTTP Host or TLS SNI,
+// and retains the original IP and port without resolving the hostname again.
 type EgressServiceEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// HTTP Host / :authority and TLS SNI identities for this service.
+	// Allowed HTTP Host / :authority and TLS SNI identities. Exact FQDNs only.
 	Hosts []string `protobuf:"bytes,1,rep,name=hosts,proto3" json:"hosts,omitempty"`
-	// Static upstream endpoints. Requests are distributed evenly across them.
+	// Endpoint addresses. Envoy preserves the endpoint chosen by the client.
 	// At least one endpoint is required.
 	Endpoints     []*EgressServiceEntryEndpoint `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
 	unknownFields protoimpl.UnknownFields
