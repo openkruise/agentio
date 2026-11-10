@@ -396,13 +396,19 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	forwardCompatible := resource(
 		model.SecurityProfileType,
 		"global/policy",
-		&sec.SecurityProfile{Name: "policy", PolicyJson: []byte(`{"future":true,"rules":[{"name":"compatible","match":[{"domains":["*"]}],"actions":{"futureAction":{}}}]}`)},
+		&sec.SecurityProfile{
+			Name: "policy",
+			PolicyJson: []byte(
+				`{"future":true,"rules":[{"name":"compatible","match":[{"domains":["*"]}],"actions":{"futureAction":{}}}]}`,
+			),
+		},
 		model.ResourceFacts{},
 	)
 	apply(model.ResourceChange{Key: forwardCompatible.Key, New: &forwardCompatible})
 	await(func() bool {
 		profiles, err := profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
-		return err == nil && len(profiles) == 1 && len(profiles[0].Rules) == 1 && profiles[0].Rules[0].Name == "compatible"
+		return err == nil && len(profiles) == 1 && len(profiles[0].Rules) == 1 &&
+			profiles[0].Rules[0].Name == "compatible"
 	})
 	if rejected.Load() || metricValue("epe_profile_compile_failures_total") != beforeFailures {
 		t.Fatal("unknown fields rejected the update")

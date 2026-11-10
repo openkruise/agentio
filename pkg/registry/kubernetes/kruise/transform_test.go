@@ -199,7 +199,8 @@ func TestSandboxSecurityRulesRejectInvalidAnnotation(t *testing.T) {
 
 func TestSandboxSecurityRulesIgnoreUnknownFields(t *testing.T) {
 	sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-		Annotations: map[string]string{agentsv1alpha1.AnnotationSecurityRules: `[{"name":"r","unknown":true,"match":[{"domains":["api.example"],"unknown":true}],"actions":{"block":{},"futureAction":{}}}]`,
+		Annotations: map[string]string{
+			agentsv1alpha1.AnnotationSecurityRules: `[{"name":"r","unknown":true,"match":[{"domains":["api.example"],"unknown":true}],"actions":{"block":{},"futureAction":{}}}]`,
 		},
 	}}
 	rules, err := sandboxSecurityRules(sandbox)
