@@ -196,7 +196,7 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 			"specific.overlap.test",
 		},
 		ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
-	}, forwardTCPChain)
+	}, forwardTLSChain)
 	if b.err != nil {
 		t.Fatal(b.err)
 	}
