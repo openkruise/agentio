@@ -77,7 +77,7 @@ data:
 
 func TestSandboxSNIRejectsPortOverride(t *testing.T) {
 	environment, scope := rig.BeginScenario(t)
-	src, dst := trafficFixture.Client, trafficFixture.Server
+	src := trafficFixture.Client
 	const gatewayConfig = `
 apiVersion: v1
 kind: ConfigMap
@@ -103,16 +103,18 @@ data:
 		"Exclude":   false,
 	}, gatewayConfig)
 	// Both destinations must be healthy so a failed attack cannot be attributed to an unreachable port.
-	for _, port := range []int{443, 9443} {
-		src.CallOrFail(t, echo.CallOptions{
-			Protocol:   echo.HTTPS,
-			Address:    dst.Address(),
-			Port:       port,
-			ServerName: dst.Address(),
-			Count:      1,
-			Check:      check.OK(),
-			Retry:      harness.FixedRetry(2*time.Minute, time.Second),
-		})
+	for _, dst := range []echo.Instance{trafficFixture.Server, trafficFixture.AnotherServer} {
+		for _, port := range []int{443, 9443} {
+			src.CallOrFail(t, echo.CallOptions{
+				Protocol:   echo.HTTPS,
+				Address:    dst.Address(),
+				Port:       port,
+				ServerName: dst.Address(),
+				Count:      1,
+				Check:      check.OK(),
+				Retry:      harness.FixedRetry(2*time.Minute, time.Second),
+			})
+		}
 	}
 	e2econfig.New(scope).Eval(src.Namespace(), nil, `
 apiVersion: agents.kruise.io/v1alpha1
@@ -133,7 +135,10 @@ spec:
 `).ApplyOrFail(t, kube.CreateOnly)
 	for _, excluded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("excluded=%v", excluded), func(t *testing.T) {
+			dst := trafficFixture.Server
 			if excluded {
+				// Distinct hosts keep denial logs independent after Envoy normalizes SNI case.
+				dst = trafficFixture.AnotherServer
 				rig.ApplyConfig(t, scope, map[string]any{
 					"Namespace": resolvedAgentioConfig.Namespace,
 					"Exclude":   true,
@@ -163,10 +168,6 @@ spec:
 				Retry:      harness.FixedRetry(2*time.Minute, time.Second),
 			})
 			malformed := net.JoinHostPort(dst.Address(), "9443")
-			if excluded {
-				// DNS is case-insensitive; distinct SNI prevents reusing the previous case's denial log.
-				malformed = strings.ToUpper(malformed)
-			}
 			src.CallOrFail(t, echo.CallOptions{
 				Protocol:   echo.HTTPS,
 				Address:    dst.Address(),
