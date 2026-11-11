@@ -23,6 +23,7 @@ import (
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	matching "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	networkstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
 
@@ -61,7 +62,7 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 			func() *listener.Listener { return &listener.Listener{} },
 		)
 		internal := listeners[MainInternal]
-		endpoints := internal.FilterChainMatcher.GetMatcherTree().GetExactMatchMap().GetMap()
+		endpoints := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()
 		if len(endpoints) != 2 {
 			t.Fatalf("endpoint matches = %d, want 2 distinct IPs", len(endpoints))
 		}
@@ -108,6 +109,32 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 					state.GetFormatString().GetTextFormatSource().GetInlineString() != "%DOWNSTREAM_LOCAL_ADDRESS%" {
 					t.Fatal("endpoint target must retain the authenticated original IP:port")
 				}
+				if !legacy && name == MainForward {
+					identity := &matching.ExtensionWithMatcher{}
+					if err := manager.HttpFilters[slices.Index(names, connectProxyTLSIdentityFilter)].
+						GetTypedConfig().UnmarshalTo(identity); err != nil {
+						t.Fatal(err)
+					}
+					settings := &httpstate.Config{}
+					if err := identity.ExtensionConfig.GetTypedConfig().UnmarshalTo(settings); err != nil {
+						t.Fatal(err)
+					}
+					if settings.OnRequestHeaders[2].GetFormatString().GetTextFormatSource().GetInlineString() !=
+						"%DOWNSTREAM_LOCAL_ADDRESS%" {
+						t.Fatal("CONNECT must preserve the bound proxy endpoint")
+					}
+				}
+			}
+			if !legacy {
+				chain := findFilterChain(t, listeners[MainForward], "service-entry|"+ip+"|tcp")
+				state := &networkstate.Config{}
+				if err := chain.Filters[1].GetTypedConfig().UnmarshalTo(state); err != nil {
+					t.Fatal(err)
+				}
+				if state.OnNewConnection[0].GetFormatString().GetTextFormatSource().GetInlineString() !=
+					"%DOWNSTREAM_LOCAL_ADDRESS%" {
+					t.Fatal("post-TLS TCP must preserve the bound endpoint")
+				}
 			}
 		}
 		// Ordinary Host routing settings remain independent of ServiceEntry identity.
@@ -134,8 +161,8 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 			func() *listener.Listener { return &listener.Listener{} },
 		)
 		if !proto.Equal(
-			internal.FilterChainMatcher.GetOnNoMatch().GetMatcher(),
-			baselineListeners[MainInternal].FilterChainMatcher,
+			routingMatcher(internal).GetOnNoMatch().GetMatcher(),
+			routingMatcher(baselineListeners[MainInternal]),
 		) {
 			t.Fatal("unmatched IP changed ordinary routing/policy behavior")
 		}

@@ -29,7 +29,6 @@ import (
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	networkstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
-	snidfp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	input "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	matcher "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"google.golang.org/protobuf/proto"
@@ -54,7 +53,7 @@ func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrou
 
 // The SNI and HTTP filters share the DFP cache and explicit-target convention.
 func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*listener.Filter) []*listener.Filter {
-	state := networkFilter("agentio.route_upstream", b.pack(&networkstate.Config{
+	state := &networkstate.Config{
 		OnNewConnection: []*common.FilterStateValue{
 			{
 				Key: &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
@@ -75,16 +74,22 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 				Value: &common.FilterStateValue_FormatString{FormatString: formatString("%DOWNSTREAM_LOCAL_PORT%")},
 			},
 		},
-	}))
+	}
+	stateName, cluster := "agentio.route_upstream", HTTPDynamicForwardProxy
+	if !b.legacyGateway {
+		stateName, cluster = "envoy.filters.network.set_filter_state", TLSPassthrough
+		values := tlsDestinationState("%REQUESTED_SERVER_NAME%")
+		if len(config.gateway.GetServiceEntries()) > 0 {
+			values = append(values, state.OnNewConnection[1])
+		}
+		state.OnNewConnection = values
+	}
 	filters := append(
 		slices.Clone(prefix),
-		state,
-		networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&snidfp.FilterConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
-			PortSpecifier:  &snidfp.FilterConfig_PortValue{PortValue: 443},
-		})),
+		networkFilter(stateName, b.pack(state)),
+		b.sniDFPFilter(),
 	)
-	return b.applicationTCPFilters(config, filters, HTTPDynamicForwardProxy, config.gateway.GetTcp())
+	return b.applicationTCPFilters(config, filters, cluster, config.gateway.GetTcp())
 }
 
 // Each address accepts the union of names from entries sharing that endpoint.
@@ -111,7 +116,7 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 			Filters: []*listener.Filter{
 				networkFilter(
 					"envoy.filters.network.http_connection_manager",
-					b.pack(b.serviceEntryHCM(manager, hosts)),
+					b.pack(b.serviceEntryHCM(manager, hosts, terminated)),
 				),
 			},
 		})
@@ -123,6 +128,19 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 		if terminated {
 			// Non-HTTP bytes keep the TLS identity and original destination chosen upstream.
 			http.OnNoMatch = b.toChain(forwardTCPChain)
+			if !b.legacyGateway {
+				l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+					Name: name + "|tcp",
+					Filters: b.applicationTCPFilters(config, []*listener.Filter{
+						outerTLSIdentityFilter,
+						networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
+							OnNewConnection: tlsDestinationState("%DOWNSTREAM_LOCAL_ADDRESS%"),
+						})),
+						b.sniDFPFilter(),
+					}, TLSProxyOriginate, config.gateway.GetTcp()),
+				})
+				http.OnNoMatch = b.toChain(name + "|tcp")
+			}
 			addresses[ip] = toMatcher(http)
 			continue
 		}
@@ -182,8 +200,19 @@ func serviceEntryTarget() *common.FilterStateValue {
 func (b *resourceBuilder) serviceEntryHCM(
 	manager *hcm.HttpConnectionManager,
 	hosts []string,
+	terminated bool,
 ) *hcm.HttpConnectionManager {
 	manager = proto.Clone(manager).(*hcm.HttpConnectionManager)
+	if terminated && !b.legacyGateway {
+		for i, filter := range manager.HttpFilters {
+			if filter.GetName() == connectProxyTLSIdentityFilter {
+				manager.HttpFilters[i] = buildConnectProxyTLSIdentityHTTPFilter(
+					outerSNIKey,
+					"%DOWNSTREAM_LOCAL_ADDRESS%",
+				)
+			}
+		}
+	}
 	names := make([]string, 0, len(hosts)*2)
 	for _, host := range hosts {
 		names = append(names, strconv.Quote(host), strconv.Quote(host+"."))

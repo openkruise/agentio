@@ -15,6 +15,7 @@
 package networking
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	extensionmatchingv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
 	localratelimitv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
@@ -29,6 +31,7 @@ import (
 	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
+	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	rlexprv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/rate_limit_descriptors/expr/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -76,7 +79,7 @@ func TestGatewayHTTP10(t *testing.T) {
 					return &listenerv3.Listener{}
 				})
 				for _, name := range []string{MainInternal, MainForward} {
-					matcher := listeners[name].GetFilterChainMatcher()
+					matcher := routingMatcher(listeners[name])
 					if name == MainInternal {
 						matcher = matcher.GetOnNoMatch().GetMatcher()
 					}
@@ -174,10 +177,10 @@ func TestGatewayForwardProxyConnectSemantics(t *testing.T) {
 	if proxyTLS == nil {
 		t.Fatal("TLS proxy origination cluster not found")
 	}
-	if proxyTLS.GetType() != clusterv3.Cluster_ORIGINAL_DST ||
+	if proxyTLS.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
 		proxyTLS.GetLbPolicy() != clusterv3.Cluster_CLUSTER_PROVIDED {
 		t.Fatalf(
-			"TLS proxy cluster type/lb = %v/%v, want ORIGINAL_DST/CLUSTER_PROVIDED",
+			"TLS proxy cluster type/lb = %v/%v, want DFP/CLUSTER_PROVIDED",
 			proxyTLS.GetType(),
 			proxyTLS.GetLbPolicy(),
 		)
@@ -273,8 +276,11 @@ func TestGatewayForwardProxyConnectSemantics(t *testing.T) {
 		t.Fatalf("decode TLS identity set-filter-state: %v", err)
 	}
 	values := setState.GetOnRequestHeaders()
-	if len(values) != 2 || values[0].GetObjectKey() != "envoy.network.upstream_server_name" ||
-		values[1].GetObjectKey() != "envoy.network.upstream_subject_alt_names" {
+	if len(values) != 3 || values[0].GetObjectKey() != "envoy.network.upstream_server_name" ||
+		values[1].GetObjectKey() != "envoy.network.upstream_subject_alt_names" ||
+		values[2].GetObjectKey() != dynamicHostKey ||
+		values[2].GetFormatString().GetTextFormatSource().GetInlineString() !=
+			"%FILTER_STATE("+outerSNIKey+":PLAIN)%:"+originalPortFormat {
 		t.Fatalf("TLS identity values = %+v", values)
 	}
 }
@@ -352,7 +358,7 @@ func TestBuildWithoutSNITrafficPolicyUsesProtocolMatcher(t *testing.T) {
 	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain}; !equalStrings(gotChains, want) {
 		t.Fatalf("MainInternal filter chains = %v, want %v without SNI policy runtime", gotChains, want)
 	}
-	tls := internal.GetFilterChainMatcher().GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
+	tls := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
 	if got := tls.GetAction().GetName(); got != forwardTLSChain {
 		t.Fatalf("TLS fallback chain = %q, want %q without SNI policy runtime", got, forwardTLSChain)
 	}
@@ -378,7 +384,7 @@ func TestBuildStaticSNIMatcherOmitsEmptyHostGroups(t *testing.T) {
 		func() *listenerv3.Listener { return &listenerv3.Listener{} },
 	)
 	domains := &xdsmatcherv3.ServerNameMatcher{}
-	if err := listeners[MainInternal].GetFilterChainMatcher().
+	if err := routingMatcher(listeners[MainInternal]).
 		GetMatcherTree().
 		GetCustomMatch().
 		GetTypedConfig().
@@ -392,7 +398,62 @@ func TestBuildStaticSNIMatcherOmitsEmptyHostGroups(t *testing.T) {
 	}
 }
 
-func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
+func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
+	resources := buildGatewayGraph(t, false)
+	listeners := messagesOf(
+		t,
+		resources,
+		model.ListenerType,
+		func() *listenerv3.Listener { return &listenerv3.Listener{} },
+	)
+	chain := findFilterChain(t, listeners[MainInternal], forwardTLSChain)
+	want := []string{
+		"envoy.filters.network.set_filter_state",
+		"envoy.filters.network.sni_dynamic_forward_proxy",
+		"envoy.filters.network.tcp_proxy",
+	}
+	if !equalStrings(networkFilterNames(chain), want) {
+		t.Fatalf("TLS passthrough filters = %v", networkFilterNames(chain))
+	}
+	state := &setstatenetworkv3.Config{}
+	if err := chain.Filters[0].GetTypedConfig().UnmarshalTo(state); err != nil {
+		t.Fatal(err)
+	}
+	values := state.GetOnNewConnection()
+	if len(values) != 2 || values[0].GetObjectKey() != dynamicHostKey || values[0].SkipIfEmpty ||
+		values[0].GetFormatString().GetTextFormatSource().GetInlineString() != "%REQUESTED_SERVER_NAME%" ||
+		values[1].GetObjectKey() != dynamicPortKey ||
+		values[1].GetFormatString().GetTextFormatSource().GetInlineString() != originalPortFormat {
+		t.Fatalf("TLS destination must use actual SNI and original port, without an empty-name fallback: %v", values)
+	}
+	filter := &dfpnetworkv3.FilterConfig{}
+	if err := chain.Filters[1].GetTypedConfig().UnmarshalTo(filter); err != nil {
+		t.Fatal(err)
+	}
+	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
+	cluster := clusters[TLSPassthrough]
+	if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
+		cluster.TransportSocket != nil || len(cluster.TypedExtensionProtocolOptions) != 0 {
+		t.Fatalf("TLS passthrough must use a raw DFP cluster: %v", cluster)
+	}
+	cfg := &dfpclusterv3.ClusterConfig{}
+	if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(filter.GetDnsCacheConfig(), cfg.GetDnsCacheConfig()) ||
+		!proto.Equal(cfg.GetDnsCacheConfig(), dnsCacheConfig(false)) {
+		t.Fatal("TLS passthrough must share the complete filtered gateway DNS cache")
+	}
+	proxy := &tcpproxyv3.TcpProxy{}
+	if err := chain.Filters[2].GetTypedConfig().UnmarshalTo(proxy); err != nil {
+		t.Fatal(err)
+	}
+	if proxy.GetCluster() != TLSPassthrough {
+		t.Fatalf("TLS proxy cluster = %q", proxy.GetCluster())
+	}
+}
+
+func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		resources := buildGatewayGraph(t, legacy)
 		listeners := messagesOf(
@@ -414,9 +475,19 @@ func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
 			t.Errorf("legacy=%v: post-TLS inspectors = %v, want %v", legacy, inspectors, want)
 		}
 		chain := findFilterChain(t, forward, forwardTCPChain)
+		wantFilters := []string{"envoy.filters.network.set_filter_state", "envoy.filters.network.tcp_proxy"}
+		wantValues := 2
+		if !legacy {
+			wantFilters = []string{
+				"envoy.filters.network.set_filter_state",
+				"envoy.filters.network.sni_dynamic_forward_proxy",
+				"envoy.filters.network.tcp_proxy",
+			}
+			wantValues = 4
+		}
 		if !equalStrings(
 			networkFilterNames(chain),
-			[]string{"envoy.filters.network.set_filter_state", "envoy.filters.network.tcp_proxy"},
+			wantFilters,
 		) {
 			t.Errorf(
 				"legacy=%v: TCP filters = %v, want outer TLS identity and TCP proxy",
@@ -430,7 +501,7 @@ func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
 			t.Fatal(err)
 		}
 		values := identity.GetOnNewConnection()
-		if len(values) != 2 {
+		if len(values) != wantValues {
 			t.Fatalf("TCP TLS identity = %v, want SNI and SAN", values)
 		}
 		wantSNIKey := outerSNIKey
@@ -444,7 +515,7 @@ func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
 			}
 		}
 		proxy := &tcpproxyv3.TcpProxy{}
-		if err := chain.GetFilters()[1].GetTypedConfig().UnmarshalTo(proxy); err != nil {
+		if err := chain.GetFilters()[len(wantFilters)-1].GetTypedConfig().UnmarshalTo(proxy); err != nil {
 			t.Fatal(err)
 		}
 		if proxy.GetCluster() != TLSProxyOriginate {
@@ -457,8 +528,21 @@ func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
 			func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
 		)
 		cluster := clusters[TLSProxyOriginate]
-		if cluster.GetType() != clusterv3.Cluster_ORIGINAL_DST {
-			t.Fatal("TCP must preserve the original destination address and port")
+		if legacy {
+			if cluster.GetType() != clusterv3.Cluster_ORIGINAL_DST {
+				t.Fatal("legacy TCP must preserve the original destination")
+			}
+		} else {
+			if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
+				values[2].GetObjectKey() != dynamicHostKey ||
+				values[2].GetFormatString().
+					GetTextFormatSource().
+					GetInlineString() !=
+					"%FILTER_STATE("+outerSNIKey+":PLAIN)%" ||
+				values[3].GetObjectKey() != dynamicPortKey ||
+				values[3].GetFormatString().GetTextFormatSource().GetInlineString() != originalPortFormat {
+				t.Fatal("TCP must resolve the outer SNI on the original port")
+			}
 		}
 		context := &tlsv3.UpstreamTlsContext{}
 		if err := cluster.GetTransportSocket().GetTypedConfig().UnmarshalTo(context); err != nil {
@@ -612,7 +696,7 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 					t.Errorf("%s must close the connection when inspection times out", name)
 				}
 				// Non-HTTP traffic that completes inspection retains TCP forwarding.
-				fallback := listener.GetFilterChainMatcher().GetOnNoMatch()
+				fallback := routingMatcher(listener).GetOnNoMatch()
 				for fallback.GetMatcher() != nil {
 					fallback = fallback.GetMatcher().GetOnNoMatch()
 				}
@@ -625,5 +709,68 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func routingMatcher(listener *listenerv3.Listener) *xdsmatcherv3.Matcher {
+	matcher := listener.GetFilterChainMatcher()
+	if matcher.GetMatcherList() != nil {
+		return matcher.GetMatcherList().GetMatchers()[0].GetOnMatch().GetMatcher()
+	}
+	return matcher
+}
+
+func TestSNIHostnameMatcher(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		test.SetForTest(t, &features.EnableSNITrafficPolicy, enabled)
+		for _, legacy := range []bool{false, true} {
+			resources, err := Build(Inputs{
+				LegacyGateway:    legacy,
+				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
+				TrustDomain:      "cluster.local",
+				Gateway: testGateway(&configv1.EgressGateway{TlsTermination: &configv1.TlsTerminationConfig{
+					IncludeHosts: []string{"*"},
+					ExcludeHosts: []string{"*"},
+				}}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener {
+				return &listenerv3.Listener{}
+			})
+			matcher := listeners[MainInternal].GetFilterChainMatcher()
+			if legacy {
+				if matcher.GetMatcherList() != nil {
+					t.Fatal("legacy matcher must remain unchanged")
+				}
+				continue
+			}
+			if matcher.OnNoMatch != nil || len(matcher.GetMatcherList().GetMatchers()) != 1 {
+				t.Fatal("invalid SNI must have no filter-chain fallback")
+			}
+			predicates := matcher.GetMatcherList().GetMatchers()[0].GetPredicate().GetOrMatcher().GetPredicate()
+			if len(predicates) != 2 ||
+				!proto.Equal(predicates[0].GetNotMatcher().GetSinglePredicate().GetInput(), transportProtocolInput) ||
+				predicates[0].GetNotMatcher().GetSinglePredicate().GetValueMatch().GetExact() != "tls" ||
+				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) {
+				t.Fatal("only cleartext or a valid TLS hostname may reach the routing matcher")
+			}
+			pattern := predicates[1].GetSinglePredicate().GetValueMatch().GetSafeRegex().GetRegex()
+			// Envoy StringMatcher uses a full match; anchor the Go equivalent.
+			hostname := regexp.MustCompile("^(?:" + pattern + ")$")
+			for _, name := range []string{"api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
+				if !hostname.MatchString(name) {
+					t.Errorf("valid SNI %q rejected", name)
+				}
+			}
+			for _, name := range []string{"", "api.example.com:8443", "api.example.com:443", "[::1]:443",
+				"user@api.example.com", "api.example.com/path", "*.example.com", "a..example", "-api.example",
+				"api-.example", "api_example.com", "é.example"} {
+				if hostname.MatchString(name) {
+					t.Errorf("invalid SNI %q accepted", name)
+				}
+			}
+		}
 	}
 }

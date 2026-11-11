@@ -123,7 +123,7 @@ func TestStaticFiltersConcurrentBuildAndPatch(t *testing.T) {
 					patchedValues = len(identity.GetOnNewConnection())
 				}
 			}
-			if patchedValues != 3 {
+			if patchedValues != 5 {
 				t.Fatal("network filter patch was not applied")
 			}
 			got, err := Build(inputs)

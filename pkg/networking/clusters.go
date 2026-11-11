@@ -64,6 +64,9 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		result = append(result, b.buildInternalCluster(TCPPassthrough))
 	}
 	if !b.legacyGateway {
+		passthrough := b.buildDFPCluster(TLSPassthrough, true, false, nil)
+		passthrough.TypedExtensionProtocolOptions = nil
+		result = append(result, passthrough)
 		cluster := b.buildExtProcCluster(&configv1.ExtProcProvider{Service: "127.0.0.1", Port: 9002}, PorterCluster)
 		cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC}
 		result = append(result, cluster)
@@ -142,10 +145,14 @@ func (b *resourceBuilder) buildPassthroughCluster() *clusterv3.Cluster {
 	}
 }
 
-// buildTLSProxyOriginateCluster reconnects to the original TLS destination for
-// application CONNECT and non-HTTP payloads. Filter state supplies the outer SNI and SAN.
+// Filter state supplies the outer TLS destination and certificate identity for
+// application CONNECT and non-HTTP payloads.
 func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.UpstreamTlsSettings) *clusterv3.Cluster {
 	cluster := b.buildPassthroughCluster()
+	if !b.legacyGateway {
+		// TLS identity is set explicitly; HTTP auto-SNI would use the inner CONNECT authority.
+		cluster = b.buildDFPCluster(TLSProxyOriginate, true, false, nil)
+	}
 	cluster.Name = TLSProxyOriginate
 	cluster.AltStatName = delimitedStatsPrefix(TLSProxyOriginate)
 	options := b.pack(&httpupstreamv3.HttpProtocolOptions{
