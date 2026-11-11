@@ -62,6 +62,7 @@ async fn workload_and_sandbox_share_connect_deadline() {
     .unwrap();
     let client = client(100, Duration::from_secs(60));
     let processor = Processor {
+        authenticator: Arc::new(crate::identity::Native),
         gateway: crate::processor::Gateway::AgentioEgress,
         client: client.clone(),
         cluster_id: "Kubernetes".into(),
@@ -475,6 +476,7 @@ async fn matches_wire_contract_corpus() {
             drop(lease);
         }
         let p = Processor {
+            authenticator: Arc::new(crate::identity::Native),
             gateway: crate::processor::Gateway::AgentioEgress,
             client: c.clone(),
             cluster_id: "Kubernetes".into(),

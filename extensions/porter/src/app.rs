@@ -47,6 +47,7 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
     let metrics = Metrics::new();
     let client = Client::new(config.cache, metrics.clone());
     let processor = Processor {
+        authenticator: Arc::new(agentio_porter::identity::Native),
         gateway: config.gateway,
         client: client.clone(),
         cluster_id: config.cluster_id,

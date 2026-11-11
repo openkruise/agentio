@@ -96,6 +96,7 @@ fn seed(c: &Arc<Client>, kind: ResourceKind, name: &str, body: Any) {
 
 fn processor() -> Processor {
     Processor {
+        authenticator: Arc::new(crate::identity::Native),
         gateway: crate::processor::Gateway::AgentioEgress,
         client: Client::new(CacheConfig::default(), Metrics::new()),
         cluster_id: "Kubernetes".into(),
@@ -150,6 +151,126 @@ fn allowed(response: extproc::ProcessingResponse) -> bool {
         response.response,
         Some(extproc::processing_response::Response::RequestHeaders(_))
     )
+}
+
+struct RuntimeIdentity {
+    delay: Duration,
+    failure: Option<tonic::Code>,
+}
+
+#[tonic::async_trait]
+impl crate::identity::Authenticator for RuntimeIdentity {
+    async fn authenticate(
+        &self,
+        _evidence: crate::identity::Evidence<'_>,
+        deadline: tokio::time::Instant,
+    ) -> Result<crate::identity::ConnectionIdentity, tonic::Status> {
+        assert!(deadline > tokio::time::Instant::now());
+        tokio::time::sleep(self.delay).await;
+        if let Some(code) = self.failure {
+            return Err(tonic::Status::new(code, "runtime authentication failed"));
+        }
+        Ok(crate::identity::ConnectionIdentity {
+            workload: crate::identity::WorkloadIdentity::Instance("runtime-instance".into()),
+            sandbox_id: "runtime-sandbox".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn runtime_identity_reuses_binding_and_policy_checks() {
+    let mut p = processor();
+    p.authenticator = Arc::new(RuntimeIdentity {
+        delay: Duration::ZERO,
+        failure: None,
+    });
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "runtime-instance",
+        workload(Some(&["policy"])),
+    );
+    let mut sandbox = Sandbox {
+        uid: "runtime-sandbox".into(),
+        attester: Some(Attester {
+            workload_uid: UID.into(),
+        }),
+        ..Default::default()
+    };
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        "runtime-sandbox",
+        any(view::SANDBOX, sandbox.clone()),
+    );
+    seed(
+        &p.client,
+        ResourceKind::TrafficPolicy,
+        "policy",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Deny)),
+    );
+    assert!(!allowed(
+        p.handle(request("forged-sandbox", false)).await.unwrap()
+    ));
+    seed(
+        &p.client,
+        ResourceKind::TrafficPolicy,
+        "policy",
+        any(view::TRAFFIC_POLICY, policy(proto::Action::Allow)),
+    );
+    let response = p.handle(request("forged-sandbox", false)).await.unwrap();
+    assert!(allowed(response.clone()));
+    let agentio = response.dynamic_metadata.unwrap().fields["agentio"].clone();
+    let Some(prost_types::value::Kind::StructValue(agentio)) = agentio.kind else {
+        panic!("expected identity metadata");
+    };
+    assert_eq!(
+        agentio.fields["sandbox"],
+        view::object([("id".into(), view::string("runtime-sandbox"))])
+    );
+    sandbox.attester.as_mut().unwrap().workload_uid = "different-workload".into();
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        "runtime-sandbox",
+        any(view::SANDBOX, sandbox),
+    );
+    assert!(!allowed(p.handle(request("", false)).await.unwrap()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn runtime_authentication_shares_deadline_and_never_falls_back() {
+    let mut p = processor();
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        "/10.0.0.1",
+        workload(Some(&[])),
+    );
+    assert!(allowed(p.handle(request("", false)).await.unwrap()));
+    for (failure, expected) in [
+        (tonic::Code::PermissionDenied, None),
+        (tonic::Code::Unavailable, Some(tonic::Code::Unavailable)),
+    ] {
+        p.authenticator = Arc::new(RuntimeIdentity {
+            delay: Duration::ZERO,
+            failure: Some(failure),
+        });
+        match expected {
+            None => assert!(!allowed(p.handle(request("", false)).await.unwrap())),
+            Some(code) => assert_eq!(p.handle(request("", false)).await.unwrap_err().code(), code),
+        }
+    }
+    p.authenticator = Arc::new(RuntimeIdentity {
+        delay: p.timeout * 2,
+        failure: None,
+    });
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        p.handle(request("", false)).await.unwrap_err().code(),
+        tonic::Code::Unavailable
+    );
+    assert_eq!(started.elapsed(), p.timeout);
 }
 
 #[tokio::test]
@@ -339,6 +460,49 @@ fn http_request(address: &str, port: f64) -> extproc::ProcessingRequest {
         ..Default::default()
     });
     req
+}
+
+#[tokio::test]
+async fn agentgateway_rejects_runtime_derived_sandbox() {
+    for enforce_policy in [false, true] {
+        let mut p = processor();
+        p.gateway = crate::processor::Gateway::Agentgateway;
+        p.enable_traffic_policy = enforce_policy;
+        p.authenticator = Arc::new(RuntimeIdentity {
+            delay: Duration::ZERO,
+            failure: None,
+        });
+        seed(
+            &p.client,
+            ResourceKind::Workload,
+            "runtime-instance",
+            workload(Some(&[])),
+        );
+        seed(
+            &p.client,
+            ResourceKind::Sandbox,
+            "runtime-sandbox",
+            any(
+                view::SANDBOX,
+                Sandbox {
+                    uid: "runtime-sandbox".into(),
+                    attester: Some(Attester {
+                        workload_uid: UID.into(),
+                    }),
+                    ..Default::default()
+                },
+            ),
+        );
+        let error = p
+            .handle(http_request("192.0.2.1", 443.0))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "agentgateway does not support Sandbox identity"
+        );
+    }
 }
 
 #[tokio::test]
