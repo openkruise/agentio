@@ -17,12 +17,75 @@ package networklimits
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/openkruise/agentio/bench/connect/fixture"
 )
+
+func TestEnvoyInspectionConfigValidation(t *testing.T) {
+	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
+	if binary == "" {
+		t.Skip("set AGENTIO_TEST_ENVOY_BINARY to run against real Envoy")
+	}
+	module := os.Getenv("AGENTIO_TEST_NETWORK_LIMITS_MODULE")
+	if module == "" {
+		module = "/usr/local/lib/libenvoy_agentio_network_limits.so"
+	}
+	for _, tc := range []struct {
+		name       string
+		filename   string
+		filterName string
+		wantError  string
+	}{
+		{name: "valid", filename: module, filterName: "envoy_agentio_inspection_deadline"},
+		{name: "missing module", filename: "/missing-inspection-module.so", filterName: "envoy_agentio_inspection_deadline", wantError: "/missing-inspection-module.so"},
+		{name: "rejected config", filename: module, filterName: "unknown_inspection_filter", wantError: "Failed to initialize dynamic module listener filter config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var bootstrap object
+			must(t, json.Unmarshal(fixture.Bootstrap, &bootstrap))
+			listener := obj(nested(bootstrap, "static_resources")["listeners"].([]any)[0])
+			nested(filters(listener)[1], "typed_config", "value", "dynamic_module_config", "module", "local")["filename"] = module
+			listener["listener_filters_timeout"] = "0s"
+			listener["listener_filters"] = []any{object{
+				"name": "envoy.filters.listener.dynamic_modules",
+				"typed_config": object{
+					"@type": "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+					"dynamic_module_config": object{
+						"name":         "envoy_agentio_network_limits",
+						"do_not_close": true,
+						"module":       object{"local": object{"filename": tc.filename}},
+					},
+					"filter_name": tc.filterName,
+				},
+			}}
+			path := filepath.Join(t.TempDir(), "envoy.json")
+			writeJSON(t, path, bootstrap)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			output, err := exec.CommandContext(ctx, binary, "--mode", "validate", "-c", path).CombinedOutput()
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("valid inspection config rejected: %v\n%s", err, output)
+				}
+				return
+			}
+			var exitError *exec.ExitError
+			if ctx.Err() != nil || !errors.As(err, &exitError) || !bytes.Contains(output, []byte(tc.wantError)) {
+				t.Fatalf("want config rejection containing %q, got %v\n%s", tc.wantError, err, output)
+			}
+		})
+	}
+}
 
 // Keep the byte limiter on CONNECT and the inspectors on an internal connection,
 // as in the production gateway. A direct TCP origin misses the timeout conflict.

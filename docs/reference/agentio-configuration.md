@@ -293,6 +293,10 @@ egressGateways:
 
 Entries are ORed. Within an entry, CIDRs and ports are ANDed; values within each
 list are ORed. CIDRs match the original destination IPv4/IPv6 address without DNS.
+The first matching entry selects passthrough; all entries use the same forwarding
+behavior, so their order does not change which destinations bypass inspection.
+CIDRs with host bits are normalized to their network prefix (`10.20.1.2/16` matches
+`10.20.0.0/16`).
 An omitted dimension matches any value; an empty entry (`{}`) selects all TCP
 connections. An omitted or empty `tcpPassthrough` list preserves existing inspection.
 The setting applies to every workload using this gateway and is also available in

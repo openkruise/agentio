@@ -10,6 +10,8 @@ The gateway image includes `libenvoy_agentio_network_limits.so`. Enable it with 
 
 This controller requires the matching gateway image with Envoy 1.40.2 and these updated modules, even when limits are disabled. Upgrade gateway images before rolling out the controller; older modules cannot parse the generated configuration.
 
+If the inspection module cannot load or rejects its configuration, Envoy rejects the listener configuration instead of skipping the filter. A missing pacing clock uses the ordinary one-second deadline; a present clock reference that cannot be resolved closes the connection. Removing the inspection filter itself while leaving the native timeout disabled removes this protection, so custom GatewayPatches must preserve the filter.
+
 Upgrading from the previous always-instantiated filters changes the HCM defaults once and follows Envoy's normal listener update/drain behavior. Subsequent policy enable/disable operations keep HCM unchanged.
 
 The native gateway keeps fixed ECDS filter entries in HCM with `disabled: true`. RDS enables each entry on the TCP CONNECT route only when its corresponding public setting is present. With a setting absent, Envoy creates no instance of that filter for a new stream: there is no module stream registration or body callback. ECDS providers and module configuration still exist. Enabling or disabling a limit updates RDS and ECDS without replacing the listener or draining HTTP/2 connections; new CONNECT streams on an existing HTTP/2 connection use the updated route. All accounting remains local to one Envoy process.

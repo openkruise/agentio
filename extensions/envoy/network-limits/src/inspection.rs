@@ -260,6 +260,46 @@ mod tests {
     }
 
     #[test]
+    fn dropping_pacing_resumes_a_live_inspectors_deadline() {
+        let timer = Timer::shared().unwrap();
+        let pacing = Pacing::new(timer.id());
+        pacing.pause(true);
+        let mut scheduler = MockEnvoyListenerFilterScheduler::new();
+        scheduler
+            .expect_commit()
+            .withf(|id| *id == 0)
+            .times(1)
+            .return_const(());
+        let scheduler: Arc<dyn EnvoyListenerFilterScheduler> = Arc::new(scheduler);
+        let mut guard = Inspector {
+            id: timer.id(),
+            timer,
+            clock: pacing.clock.clone(),
+            start: Instant::now(),
+            initial_stopped: Duration::ZERO,
+            scheduler: Some(scheduler.clone()),
+        };
+        guard
+            .clock
+            .lock()
+            .unwrap()
+            .inspectors
+            .insert(guard.id, scheduler);
+        let id = pacing.id;
+        drop(pacing);
+        assert!(!clocks().lock().unwrap().contains_key(&id));
+        assert!(guard.clock.lock().unwrap().paused.is_none());
+        guard.start -= TIMEOUT + Duration::from_secs(1);
+        let mut envoy = MockEnvoyListenerFilter::new();
+        envoy
+            .expect_close_socket()
+            .withf(|detail| *detail == Some("agentio_protocol_inspection_timeout"))
+            .times(1)
+            .return_const(());
+        guard.check(&mut envoy);
+    }
+
+    #[test]
     fn pacing_registry_lifetime_matches_the_connect_filter() {
         let id = Timer::shared().unwrap().id();
         let pacing = Pacing::new(id);
