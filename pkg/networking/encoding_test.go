@@ -62,16 +62,6 @@ func TestClusterEncodingFailureDiscardsResources(t *testing.T) {
 	}
 }
 
-func TestRouteEncodingFailureDiscardsResources(t *testing.T) {
-	routes, err := (&resourceBuilder{}).routes(&configv1.EgressGateway{ServiceEntries: []*configv1.EgressServiceEntry{{
-		Hosts:     []string{"example.com"},
-		Endpoints: []*configv1.EgressServiceEntryEndpoint{{Address: string([]byte{0xff})}},
-	}}})
-	if routes != nil || err == nil || !strings.Contains(err.Error(), "marshal gateway extension") {
-		t.Fatalf("encoding failure must discard routes: routes=%v error=%v", routes, err)
-	}
-}
-
 func TestGatewayEncodingIsDeterministic(t *testing.T) {
 	test.SetForTest(t, &features.EnableSNITrafficPolicy, true)
 	inputs := Inputs{Gateway: testGateway(&configv1.EgressGateway{}), DiscoveryAddress: "agentiod.agentio-system.svc:15012", TrustDomain: "cluster.local"}

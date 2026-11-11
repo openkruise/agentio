@@ -217,8 +217,6 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 	return []*routev3.RouteConfiguration{connect, http, tls}, nil
 }
 
-// buildForwardRoute keeps the existing DFP cluster for static routes and
-// replaces only the route-selected host and original port state.
 func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.EgressGateway) *routev3.RouteConfiguration {
 	result := &routev3.RouteConfiguration{
 		Name:                     name,
@@ -227,28 +225,6 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 	}
 	settings := gateway.GetHttp().GetRouting()
 	defaultSettings := settings.GetFallback()
-	staticDomains := make(map[string]struct{})
-	for serviceIndex, service := range gateway.GetServiceEntries() {
-		addresses := make([]string, 0, len(service.GetEndpoints()))
-		for _, endpoint := range service.GetEndpoints() {
-			addresses = append(addresses, endpoint.GetAddress())
-		}
-		for hostIndex, host := range service.GetHosts() {
-			domains := []string{host, host + ":*"}
-			for _, domain := range domains {
-				staticDomains[strings.ToLower(domain)] = struct{}{}
-			}
-			result.VirtualHosts = append(result.VirtualHosts, &routev3.VirtualHost{
-				Name:    fmt.Sprintf("sandbox|service-entry|%d|%d", serviceIndex, hostIndex),
-				Domains: domains,
-				Routes: []*routev3.Route{b.staticEndpointRoute(
-					name,
-					routeSettingsForHost(settings, host),
-					addresses,
-				)},
-			})
-		}
-	}
 	for index, override := range settings.GetHostOverrides() {
 		domains := make([]string, 0, len(override.GetHosts()))
 		for _, domain := range override.GetHosts() {
@@ -256,9 +232,7 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 				defaultSettings = override.GetSettings()
 				continue
 			}
-			if _, found := staticDomains[strings.ToLower(domain)]; !found {
-				domains = append(domains, domain)
-			}
+			domains = append(domains, domain)
 		}
 		if len(domains) == 0 {
 			continue
@@ -301,71 +275,6 @@ func forwardProxyConnectRoute(cluster string) *routev3.Route {
 			}},
 		}},
 	}
-}
-
-func (b *resourceBuilder) staticEndpointRoute(
-	cluster string,
-	settings *configv1.HttpRouteSettings,
-	addresses []string,
-) *routev3.Route {
-	result := forwardRoute(cluster, settings)
-	if len(addresses) == 1 {
-		result.TypedPerFilterConfig = map[string]*anypb.Any{
-			staticEndpointCandidateFilter: b.staticEndpointCandidateConfig(addresses[0]),
-		}
-		return result
-	}
-	weighted := make([]*routev3.WeightedCluster_ClusterWeight, 0, len(addresses))
-	for _, address := range addresses {
-		weighted = append(weighted, &routev3.WeightedCluster_ClusterWeight{
-			Name:   cluster,
-			Weight: wrapperspb.UInt32(1),
-			TypedPerFilterConfig: map[string]*anypb.Any{
-				staticEndpointCandidateFilter: b.staticEndpointCandidateConfig(address),
-			},
-		})
-	}
-	result.GetRoute().ClusterSpecifier = &routev3.RouteAction_WeightedClusters{
-		WeightedClusters: &routev3.WeightedCluster{Clusters: weighted},
-	}
-	return result
-}
-
-func routeSettingsForHost(settings *configv1.HttpRoutingSettings, host string) *configv1.HttpRouteSettings {
-	result := settings.GetFallback()
-	bestRank, bestLength := -1, -1
-	for _, override := range settings.GetHostOverrides() {
-		for _, pattern := range override.GetHosts() {
-			rank, length, matched := domainMatchSpecificity(pattern, host)
-			if matched && (rank > bestRank || rank == bestRank && length > bestLength) {
-				result = override.GetSettings()
-				bestRank, bestLength = rank, length
-			}
-		}
-	}
-	return result
-}
-
-// domainMatchSpecificity mirrors Envoy VirtualHost domain precedence: exact,
-// suffix wildcard, prefix wildcard, then the catch-all wildcard.
-func domainMatchSpecificity(pattern, value string) (rank int, length int, matched bool) {
-	pattern = strings.ToLower(pattern)
-	value = strings.ToLower(value)
-	if pattern == value {
-		return 3, len(pattern), true
-	}
-	if pattern == "*" {
-		return 0, 1, value != ""
-	}
-	if strings.HasPrefix(pattern, "*") {
-		suffix := pattern[1:]
-		return 2, len(pattern), len(value) > len(suffix) && strings.HasSuffix(value, suffix)
-	}
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		return 1, len(pattern), len(value) > len(prefix) && strings.HasPrefix(value, prefix)
-	}
-	return 0, 0, false
 }
 
 func forwardRoute(cluster string, settings *configv1.HttpRouteSettings) *routev3.Route {

@@ -10,7 +10,7 @@ A client that delays its first HTTP request or TLS ClientHello beyond this windo
 
 After TLS termination, the gateway detects HTTP only. Non-HTTP payloads, including another TLS stream, are forwarded unchanged to the original destination IP and port over a new TLS connection. Upstream SNI and certificate name validation use the outer TLS SNI; an inner ClientHello never selects a new destination. HTTP requests retain their existing routing and policy processing.
 
-The TCP path does not run HTTP request-level EPE authorization or ServiceEntry selection. Allowing TLS termination is not equivalent to authorizing an HTTP request. TCP forwarding does not advertise HTTP ALPN upstream; protocols that require a custom ALPN are not supported by this termination path.
+The TCP path does not run HTTP request-level EPE authorization. Configured ServiceEntry endpoint IPs require a matching TLS SNI before passthrough or termination; plain opaque TCP cannot satisfy that binding. Native TLS passthrough uses SNI DFP, retaining the original port and using the original IP when the endpoint binding matches. Allowing TLS termination is not equivalent to authorizing an HTTP request. TCP forwarding after termination does not advertise HTTP ALPN upstream; protocols that require a custom ALPN are not supported by this termination path.
 
 ## Destination restrictions (dynamic forward proxy)
 
@@ -24,6 +24,6 @@ The native `agentio-egress` gateway's dynamic forward proxy (DFP) filters destin
 
 Equivalent IPv4-mapped IPv6 addresses are also filtered. Private service networks and Alibaba Cloud metadata at `100.100.100.200` remain allowed by this default.
 
-The filter is enabled for HTTP and TLS origination DFP even without EPE. It applies to IP literals and DNS results, including destinations selected through DFP filter state. Envoy removes matching addresses before adding them to the DNS cache. If none remain on the first resolution, forwarding fails; if a refresh returns only denied addresses, Envoy retains the previously allowed address. Filtered addresses increment `dns_cache.agentio_dns_cache.dns_address_filter_out`.
+The filter is enabled for HTTP, native TLS passthrough, and TLS origination DFP even without EPE. It applies to IP literals and DNS results, including destinations selected through DFP filter state. Envoy removes matching addresses before adding them to the DNS cache. If none remain on the first resolution, forwarding fails; if a refresh returns only denied addresses, Envoy retains the previously allowed address. Filtered addresses increment `dns_cache.agentio_dns_cache.dns_address_filter_out`.
 
 This requires Envoy 1.39 or later; the bundled gateway image satisfies that requirement. Custom native gateway images must also support `resolved_address_filter` in the DNS cache configuration. Legacy waypoint gateways retain their existing configuration without this filter. These restrictions cover DFP only; original-destination TCP/UDP forwarding and explicit upstream proxy connections use other clusters. Operator-added `EPEConfig.egressAuthorization.deniedCIDRs` remain EPE-only and are not copied to the gateway's DNS cache.

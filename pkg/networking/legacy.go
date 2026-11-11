@@ -54,8 +54,9 @@ var (
 	legacyOuterTLSIdentityFilter            = buildOuterTLSIdentityFilter(legacyOuterSNIKey)
 	legacyConnectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(legacyOuterSNIKey)
 	legacySNIDenialReasonFilter             = buildSNIDenialReasonFilter("io.kruise.egress_denial_reason")
-	legacySNIHostMatchRBACFilter            = buildSNIHostMatchRBACFilter(
+	legacySNIHostMatchRBACFilter            = buildHostMatchRBACFilter(
 		mustParseCEL(strings.ReplaceAll(sniHostMismatchExprText, outerSNIKey, legacyOuterSNIKey)),
+		"deny-sni-host-mismatch",
 	)
 	legacyRelayDownstream = buildRelayDownstreamFilter(
 		"istio.hashable_string",
@@ -79,10 +80,10 @@ func buildDownstreamPeerMetadataFilter() *hcmv3.HttpFilter {
 	}))
 }
 
-func (b *resourceBuilder) legacySNIPolicyMatcher() *xdsmatcherv3.Matcher {
+func (b *resourceBuilder) legacySNIPolicyMatcher(passthrough string) *xdsmatcherv3.Matcher {
 	fields := b.structure(map[string]any{
 		"on_tls_termination": chainActionFields(tlsTerminateChain),
-		"on_passthrough":     chainActionFields(forwardTCPChain),
+		"on_passthrough":     chainActionFields(passthrough),
 		"on_deny":            chainActionFields(sniDenyChain),
 		"failure_mode_allow": map[string]any{
 			"runtime_key":   "kruise.sni_traffic_policy.failure_mode_allow",
@@ -98,7 +99,7 @@ func (b *resourceBuilder) legacySNIPolicyMatcher() *xdsmatcherv3.Matcher {
 				TypedConfig: config,
 			}},
 		}},
-		OnNoMatch: b.toChain(forwardTCPChain),
+		OnNoMatch: b.toChain(passthrough),
 	}
 }
 

@@ -104,7 +104,9 @@ func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 	}
 	listeners := messagesOf(t, resources, model.ListenerType, func() *listener.Listener { return &listener.Listener{} })
 	for _, name := range []string{MainInternal, MainForward} {
-		h := findHCM(t, listeners[name])
+		h := findHCM(t, &listener.Listener{FilterChains: []*listener.FilterChain{
+			findFilterChain(t, listeners[name], "service-entry|192.0.2.1|http"),
+		}})
 		names := []string{}
 		for _, f := range h.HttpFilters {
 			names = append(names, f.Name)
@@ -139,8 +141,8 @@ func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 				}
 			}
 		}
-		if slices.Index(names, staticEndpointCandidateFilter) < 0 ||
-			slices.Index(names, staticEndpointCandidateFilter) >= slices.Index(names, "envoy.filters.http.ext_proc") {
+		if slices.Index(names, "agentio.endpoint_upstream") < 0 ||
+			slices.Index(names, "agentio.endpoint_upstream") >= slices.Index(names, "envoy.filters.http.ext_proc") {
 			t.Fatalf("candidate must precede EPE: %v", names)
 		}
 		if slices.Index(names, "agentio.route_upstream") <= slices.Index(names, "envoy.filters.http.ext_proc") ||

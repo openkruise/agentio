@@ -66,6 +66,7 @@ import (
 const (
 	forwardHTTPChain              = "forward-http"
 	forwardTCPChain               = "forward-tcp"
+	forwardTLSChain               = "forward-tls"
 	tlsTerminateChain             = "tls-terminate"
 	sniDenyChain                  = "sni-traffic-policy-deny"
 	tlsActionKey                  = "agentio.tls.action"
@@ -78,7 +79,6 @@ const (
 	connectAuthorityKey           = "io.istio.connect_authority"
 	dynamicHostKey                = "envoy.upstream.dynamic_host"
 	dynamicPortKey                = "envoy.upstream.dynamic_port"
-	staticEndpointCandidateFilter = "agentio.static_endpoint_candidate"
 
 	sniPolicyMetadataFormat = "%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":sni:policy)%"
 	fqdnDialHostFormat      = `%CEL(request.method != 'CONNECT' ? ` +
@@ -109,7 +109,7 @@ var (
 
 	sniHostMismatchExpr = mustParseCEL(sniHostMismatchExprText)
 
-	sniHostMatchRBACFilter = buildSNIHostMatchRBACFilter(sniHostMismatchExpr)
+	sniHostMatchRBACFilter = buildHostMatchRBACFilter(sniHostMismatchExpr, "deny-sni-host-mismatch")
 
 	// Normalize dialing and TLS names independently of the original HTTP authority.
 	fqdnUpstreamHTTPFilter = httpFilter("agentio.fqdn_upstream", mustPack(&setstatehttpv3.Config{
@@ -170,11 +170,11 @@ var (
 	inspectorsHTTPFirst = []*listenerv3.ListenerFilter{originalDstFilter, httpInspectorFilter, tlsInspectorFilter}
 )
 
-func buildSNIHostMatchRBACFilter(expression *exprpb.Expr) *hcmv3.HttpFilter {
+func buildHostMatchRBACFilter(expression *exprpb.Expr, policy string) *hcmv3.HttpFilter {
 	return httpFilter("envoy.filters.http.rbac", mustPack(&rbachttpv3.RBAC{Rules: &rbacv3.RBAC{
 		Action: rbacv3.RBAC_DENY,
 		Policies: map[string]*rbacv3.Policy{
-			"deny-sni-host-mismatch": {
+			policy: {
 				Permissions: []*rbacv3.Permission{{Rule: &rbacv3.Permission_Any{Any: true}}},
 				Principals:  []*rbacv3.Principal{{Identifier: &rbacv3.Principal_Any{Any: true}}},
 				Condition:   expression,
@@ -276,7 +276,14 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		},
 		{Name: forwardTCPChain, Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, tcpSettings)},
 	}
-	internalChainMatcher := b.protocolMatcher(b.toChain(forwardTCPChain))
+	passthrough := forwardTCPChain
+	if !b.legacyGateway {
+		passthrough = forwardTLSChain
+		internalChains = append(internalChains, &listenerv3.FilterChain{
+			Name:    forwardTLSChain,
+			Filters: b.sniForwardFilters(config, nil),
+		})
+	}
 	if features.EnableSNITrafficPolicy {
 		denyProxy := &tcpproxyv3.TcpProxy{
 			StatPrefix:       sniDenyChain,
@@ -303,12 +310,8 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 				Filters: denyFilters,
 			},
 		)
-		internalChainMatcher = b.protocolMatcher(toMatcher(
-			b.sniTrafficPolicyMatcher(config.gateway.GetTlsTermination().GetExcludeHosts()),
-		))
 	} else if tlsTermination := config.gateway.GetTlsTermination(); tlsTermination != nil {
 		internalChains = append(internalChains, b.buildTLSTerminateChain(tcpSettings))
-		internalChainMatcher = b.staticSNIMatcher(tlsTermination)
 	}
 	mainInternal := &listenerv3.Listener{
 		Name: MainInternal,
@@ -318,7 +321,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		TrafficDirection:   corev3.TrafficDirection_INBOUND,
 		ListenerFilters:    inspectorsHTTPFirst,
 		FilterChains:       internalChains,
-		FilterChainMatcher: internalChainMatcher,
+		FilterChainMatcher: b.internalChainMatcher(config, passthrough),
 		// Close on timeout so delayed client bytes cannot bypass inspection.
 		ListenerFiltersTimeout:           durationpb.New(time.Second),
 		ContinueOnListenerFiltersTimeout: false,
@@ -358,6 +361,8 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		ListenerFiltersTimeout:           durationpb.New(time.Second),
 		ContinueOnListenerFiltersTimeout: false,
 	}
+	b.bindServiceEntryEndpoints(mainInternal, config, httpInternal, false)
+	b.bindServiceEntryEndpoints(mainForward, config, httpForward, true)
 	listeners := []*listenerv3.Listener{connect, mainInternal, mainForward}
 	if len(config.gateway.GetTcpPassthrough()) > 0 {
 		listeners = append(listeners, &listenerv3.Listener{
@@ -484,9 +489,6 @@ func (b *resourceBuilder) buildForwardHCM(
 			guard = legacySNIHostMatchRBACFilter
 		}
 		filters = append(filters, guard)
-	}
-	if len(config.gateway.GetServiceEntries()) > 0 {
-		filters = append(filters, httpFilter(staticEndpointCandidateFilter, b.pack(&setstatehttpv3.Config{})))
 	}
 	if config.extProc != nil {
 		filter, err := b.extProcFilter(config, config.extProc, "envoy.filters.http.ext_proc", ExtProcCluster)
@@ -1210,18 +1212,18 @@ func (b *resourceBuilder) applicationTCPFilters(
 
 // sniTrafficPolicyMatcher preserves gateway exclusions before consulting the
 // listener module decision. Legacy proxies retain their policy-runtime fallback.
-func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string) *xdsmatcherv3.Matcher {
+func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string, passthrough string) *xdsmatcherv3.Matcher {
 	fallback := b.toChain(sniDenyChain)
 	if b.legacyGateway {
-		fallback = toMatcher(b.legacySNIPolicyMatcher())
+		fallback = toMatcher(b.legacySNIPolicyMatcher(passthrough))
 	}
-	policy := b.tlsActionMatcher(fallback)
+	policy := b.tlsActionMatcher(fallback, passthrough)
 	if len(excludeHosts) == 0 {
 		return policy
 	}
 	domains := &xdsmatcherv3.ServerNameMatcher{DomainMatchers: []*xdsmatcherv3.ServerNameMatcher_DomainMatcher{{
 		Domains: excludeHosts,
-		OnMatch: b.toChain(forwardTCPChain),
+		OnMatch: b.toChain(passthrough),
 	}}}
 	return &xdsmatcherv3.Matcher{
 		MatcherType: &xdsmatcherv3.Matcher_MatcherTree_{MatcherTree: &xdsmatcherv3.Matcher_MatcherTree{
@@ -1234,14 +1236,17 @@ func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string) *xdsmat
 	}
 }
 
-func (b *resourceBuilder) staticSNIMatcher(config *configv1.TlsTerminationConfig) *xdsmatcherv3.Matcher {
+func (b *resourceBuilder) staticSNIMatcher(
+	config *configv1.TlsTerminationConfig,
+	passthrough string,
+) *xdsmatcherv3.Matcher {
 	domainMatchers := make([]*xdsmatcherv3.ServerNameMatcher_DomainMatcher, 0, 2)
 	seen := make(map[string]bool)
 	for _, match := range []struct {
 		domains []string
 		onMatch *xdsmatcherv3.Matcher_OnMatch
 	}{
-		{domains: config.GetExcludeHosts(), onMatch: b.toChain(forwardTCPChain)},
+		{domains: config.GetExcludeHosts(), onMatch: b.toChain(passthrough)},
 		{domains: config.GetIncludeHosts(), onMatch: b.toChain(tlsTerminateChain)},
 	} {
 		// Exclusions come first; Envoy rejects a domain registered more than once.
@@ -1270,7 +1275,7 @@ func (b *resourceBuilder) staticSNIMatcher(config *configv1.TlsTerminationConfig
 				TypedConfig: typedConfig,
 			}},
 		}},
-		OnNoMatch: toMatcher(b.protocolMatcher(b.toChain(forwardTCPChain))),
+		OnNoMatch: toMatcher(b.protocolMatcher(b.toChain(passthrough))),
 	}
 }
 
@@ -1291,11 +1296,14 @@ func (b *resourceBuilder) applicationMatcher() *xdsmatcherv3.Matcher {
 	}, b.toChain(forwardTCPChain))
 }
 
-func (b *resourceBuilder) tlsActionMatcher(gatewayDecision *xdsmatcherv3.Matcher_OnMatch) *xdsmatcherv3.Matcher {
+func (b *resourceBuilder) tlsActionMatcher(
+	gatewayDecision *xdsmatcherv3.Matcher_OnMatch,
+	passthrough string,
+) *xdsmatcherv3.Matcher {
 	return exactMatcher(typedExtension("tls-action", b.pack(&matchinginputv3.FilterStateInput{Key: tlsActionKey})),
 		map[string]*xdsmatcherv3.Matcher_OnMatch{
 			"terminate":   b.toChain(tlsTerminateChain),
-			"passthrough": b.toChain(forwardTCPChain),
+			"passthrough": b.toChain(passthrough),
 			"deny":        b.toChain(sniDenyChain),
 		}, gatewayDecision)
 }

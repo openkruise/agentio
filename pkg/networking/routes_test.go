@@ -30,42 +30,6 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-func TestRouteSettingsForStaticHostUsesEnvoyDomainPrecedence(t *testing.T) {
-	settings := &configv1.HttpRoutingSettings{
-		Fallback: &configv1.HttpRouteSettings{Timeout: durationpb.New(time.Second)},
-		HostOverrides: []*configv1.HttpRouteOverride{
-			{Hosts: []string{"*"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(2 * time.Second)}},
-			{Hosts: []string{"api.*"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(3 * time.Second)}},
-			{Hosts: []string{"*.com"}, Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(4 * time.Second)}},
-			{
-				Hosts:    []string{"*.example.com"},
-				Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(5 * time.Second)},
-			},
-			{
-				Hosts:    []string{"api.example.com"},
-				Settings: &configv1.HttpRouteSettings{Timeout: durationpb.New(6 * time.Second)},
-			},
-		},
-	}
-	tests := []struct {
-		host string
-		want time.Duration
-	}{
-		{host: "unmatched.org", want: 2 * time.Second},
-		{host: "api.other.org", want: 3 * time.Second},
-		{host: "www.example.com", want: 5 * time.Second},
-		{host: "API.EXAMPLE.COM", want: 6 * time.Second},
-	}
-	for _, tc := range tests {
-		t.Run(tc.host, func(t *testing.T) {
-			got := routeSettingsForHost(settings, tc.host).GetTimeout().AsDuration()
-			if got != tc.want {
-				t.Fatalf("route settings timeout = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestGatewayRouteOverridesUseOneWildcardAndIgnoreRequestPort(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		resources, err := Build(Inputs{

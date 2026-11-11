@@ -333,13 +333,13 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	}{
 		"MainInternal excluded SNI",
 		excludes.GetDomainMatchers()[0].GetOnMatch().GetAction().GetName(),
-		forwardTCPChain,
+		forwardTLSChain,
 	})
 	policyMatcher := excludeMatcher.GetOnNoMatch().GetMatcher()
 	if policyMatcher.GetOnNoMatch().GetAction().GetName() != sniDenyChain {
 		t.Fatal("missing native module output must deny")
 	}
-	for action, chain := range map[string]string{"terminate": tlsTerminateChain, "passthrough": forwardTCPChain, "deny": sniDenyChain} {
+	for action, chain := range map[string]string{"terminate": tlsTerminateChain, "passthrough": forwardTLSChain, "deny": sniDenyChain} {
 		decisions = append(
 			decisions,
 			struct {
