@@ -161,18 +161,6 @@
     },
     {
       "type_url": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-      "name": "BlackHoleCluster",
-      "resource": {
-        "name": "BlackHoleCluster",
-        "type": "STATIC",
-        "connectTimeout": "1s",
-        "loadAssignment": {
-          "clusterName": "BlackHoleCluster"
-        }
-      }
-    },
-    {
-      "type_url": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
       "name": "http_dynamic_forward_proxy",
       "resource": {
         "name": "http_dynamic_forward_proxy",
@@ -1859,11 +1847,28 @@
           {
             "filters": [
               {
-                "name": "envoy.filters.network.tcp_proxy",
+                "name": "envoy.filters.network.set_filter_state",
                 "typedConfig": {
-                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
-                  "statPrefix": "sni-traffic-policy-deny",
-                  "cluster": "BlackHoleCluster"
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.set_filter_state.v3.Config",
+                  "onNewConnection": [
+                    {
+                      "objectKey": "agentio.egress.denial_reason",
+                      "factoryKey": "envoy.string",
+                      "formatString": {
+                        "textFormatSource": {
+                          "inlineString": "sni_policy_denied"
+                        },
+                        "omitEmptyValues": true
+                      },
+                      "readOnly": true
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "envoy.filters.network.direct_response",
+                "typedConfig": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.direct_response.v3.Config"
                 }
               }
             ],

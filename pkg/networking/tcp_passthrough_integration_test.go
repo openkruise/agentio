@@ -139,7 +139,7 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 							InternalListener: &listenerv3.Listener_InternalListenerConfig{},
 						},
 						FilterChains: []*listenerv3.FilterChain{
-							{Filters: b.applicationTCPFilters(settings, nil, BlackHoleCluster, nil)},
+							b.buildTCPDenyChain("fallback-deny", "test_fallback_denied"),
 						},
 					}
 					cfg := &bootstrapv3.Bootstrap{
@@ -154,7 +154,6 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 							Clusters: []*clusterv3.Cluster{
 								b.buildInternalCluster(MainInternal),
 								b.buildPassthroughCluster(),
-								buildBlackHoleCluster(),
 							},
 						},
 						Admin: &bootstrapv3.Admin{Address: socketAddress("127.0.0.1", 0)},

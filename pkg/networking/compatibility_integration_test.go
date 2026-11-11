@@ -267,6 +267,8 @@ func runCompatibilityEnvoy(t *testing.T, binary, config string) (string, string)
 		"--concurrency",
 		"2",
 		"--disable-hot-restart",
+		"--file-flush-interval-msec",
+		"10",
 		"--admin-address-path",
 		adminPath,
 		"--log-level",

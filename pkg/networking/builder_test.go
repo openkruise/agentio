@@ -34,6 +34,7 @@ import (
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	directresponsev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/direct_response/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
@@ -81,7 +82,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 	}
 
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
-	for _, name := range []string{MainInternal, MainForward, PassthroughCluster, BlackHoleCluster,
+	for _, name := range []string{MainInternal, MainForward, PassthroughCluster,
 		HTTPDynamicForwardProxy, TLSConnectOriginate, ExtProcCluster} {
 		cluster := clusters[name]
 		if cluster == nil {
@@ -387,8 +388,9 @@ func TestBuildInstallsNoRouteListenerAccessLogs(t *testing.T) {
 			continue
 		}
 		filters := logs[0].GetFilter().GetAndFilter().GetFilters()
-		if len(filters) != 2 || !slices.Equal(filters[0].GetResponseFlagFilter().GetFlags(), []string{"NR"}) {
-			t.Errorf("listener %s access-log filter = %v, want NR AND CEL", name, logs[0].GetFilter())
+		if len(filters) != 2 ||
+			!slices.Equal(filters[0].GetOrFilter().GetFilters()[0].GetResponseFlagFilter().GetFlags(), []string{"NR"}) {
+			t.Errorf("listener %s access-log filter = %v, want (NR OR deny) AND CEL", name, logs[0].GetFilter())
 			continue
 		}
 		extension := filters[1].GetExtensionFilter()
@@ -807,11 +809,13 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 	expression := "connection.requested_server_name != 'skip.example.com'"
 	for _, tc := range []struct {
 		name     string
+		legacy   bool
 		disabled bool
 		filter   *string
 		want     int
 	}{
 		{name: "default", want: 1},
+		{name: "legacy", legacy: true, want: 1},
 		{name: "filtered", filter: &expression, want: 1},
 		{name: "disabled", disabled: true},
 	} {
@@ -831,6 +835,7 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 				policies = append(policies, policy)
 			}
 			resources, err := Build(Inputs{
+				LegacyGateway:    tc.legacy,
 				DiscoveryAddress: "agentiod.agentio-system.svc:15012", TrustDomain: "cluster.local",
 				Gateway: testGateway(nil), TelemetryRootNamespace: "agentio-system", Telemetry: policies,
 			})
@@ -844,19 +849,20 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 				func() *listenerv3.Listener { return &listenerv3.Listener{} },
 			)
 			chain := findFilterChain(t, listeners[MainInternal], sniDenyChain)
-			deny := &tcpproxyv3.TcpProxy{}
+			deny := &directresponsev3.Config{}
 			filters := chain.GetFilters()
-			if len(filters) != tc.want+1 {
-				t.Fatalf("deny chain filters = %d, want %d", len(filters), tc.want+1)
+			if len(filters) != 2 {
+				t.Fatalf("deny chain filters = %d, want 2", len(filters))
 			}
 			if err := filters[len(filters)-1].GetTypedConfig().UnmarshalTo(deny); err != nil {
 				t.Fatal(err)
 			}
-			if chain.GetTransportSocket() != nil || deny.GetCluster() != BlackHoleCluster {
-				t.Fatal("denial must remain a raw black-hole connection")
+			if chain.GetTransportSocket() != nil || deny.GetResponse() != nil {
+				t.Fatal("denial must close without a TLS handshake or response")
 			}
-			if len(deny.GetAccessLog()) != tc.want {
-				t.Fatalf("deny logs = %d, want %d", len(deny.GetAccessLog()), tc.want)
+			logs := listeners[MainInternal].AccessLog
+			if len(logs) != tc.want {
+				t.Fatalf("deny listener logs = %d, want %d", len(logs), tc.want)
 			}
 			if tc.want == 0 {
 				return
@@ -869,26 +875,30 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 				t.Fatal(err)
 			}
 			values := state.GetOnNewConnection()
-			if len(values) != 1 || values[0].GetObjectKey() != telemetry.DenialReasonFilterStateKey ||
+			key := telemetry.DenialReasonFilterStateKey
+			if tc.legacy {
+				key = "io.kruise.egress_denial_reason"
+			}
+			if len(values) != 1 || values[0].GetObjectKey() != key ||
 				values[0].GetFactoryKey() != "envoy.string" || !values[0].GetReadOnly() ||
 				values[0].GetSharedWithUpstream() != 0 ||
 				values[0].GetFormatString().GetTextFormatSource().GetInlineString() != "sni_policy_denied" {
-				t.Fatalf("denial reason must be set locally before the proxy: %v", values)
+				t.Fatalf("denial reason must be set locally before closing: %v", values)
 			}
 			fileLog := &fileaccesslogv3.FileAccessLog{}
-			if err := deny.AccessLog[0].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
+			if err := logs[0].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
 				t.Fatal(err)
 			}
 			if got := fileLog.GetLogFormat().GetJsonFormat().GetFields()["denial_reason"].GetStringValue(); got != "%FILTER_STATE("+values[0].GetObjectKey()+":PLAIN)%" {
 				t.Fatalf("denial log does not read the captured reason: %q", got)
 			}
 			if tc.filter == nil {
-				if deny.AccessLog[0].GetFilter() != nil {
-					t.Fatal("default deny log must not be restricted to NR")
+				if len(logs[0].GetFilter().GetOrFilter().GetFilters()) != 2 {
+					t.Fatal("default listener log must include both NR and direct denials")
 				}
 			} else {
 				filter := &celv3.ExpressionFilter{}
-				if err := deny.AccessLog[0].GetFilter().
+				if err := logs[0].GetFilter().GetAndFilter().GetFilters()[1].
 					GetExtensionFilter().
 					GetTypedConfig().
 					UnmarshalTo(filter); err != nil {

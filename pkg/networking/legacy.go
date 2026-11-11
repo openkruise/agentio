@@ -53,7 +53,6 @@ var (
 	legacyCaptureSNI                        = buildCaptureSNIFilter("istio.hashable_string", legacyOuterSNIKey)
 	legacyOuterTLSIdentityFilter            = buildOuterTLSIdentityFilter(legacyOuterSNIKey)
 	legacyConnectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(legacyOuterSNIKey, "")
-	legacySNIDenialReasonFilter             = buildSNIDenialReasonFilter("io.kruise.egress_denial_reason")
 	legacySNIHostMatchRBACFilter            = buildHostMatchRBACFilter(
 		mustParseCEL(strings.ReplaceAll(sniHostMismatchExprText, outerSNIKey, legacyOuterSNIKey)),
 		"deny-sni-host-mismatch",

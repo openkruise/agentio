@@ -39,6 +39,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	directresponsev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/direct_response/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	_ "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
@@ -140,8 +141,6 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			delete(want, key)
 		}
 	}
-	// Retained as a fail-closed default-route cluster.
-	delete(got, gatewayResourceKey(model.ClusterType, BlackHoleCluster))
 	delete(got, gatewayResourceKey(model.ClusterType, PorterCluster))
 	// Native SNI routing is covered by the gateway golden and TLS forwarding tests.
 	delete(got, gatewayResourceKey(model.ClusterType, TLSPassthrough))
@@ -435,23 +434,16 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 		}
 	}
 
-	blackHole := clusters[BlackHoleCluster]
-	if blackHole == nil {
-		t.Fatal("BlackHole cluster is missing")
+	if clusters["BlackHoleCluster"] != nil {
+		t.Fatal("direct denial must not generate an upstream black-hole cluster")
 	}
-	if got := blackHole.GetType(); got != clusterv3.Cluster_STATIC {
-		t.Errorf("BlackHole cluster type = %v, want STATIC", got)
-	}
-	if endpoints := blackHole.GetLoadAssignment().GetEndpoints(); len(endpoints) != 0 {
-		t.Errorf("BlackHole cluster endpoints = %v, want none", endpoints)
-	}
-	denyProxy := &tcpproxyv3.TcpProxy{}
+	deny := &directresponsev3.Config{}
 	denyChain := findFilterChain(t, listeners[MainInternal], sniDenyChain)
-	if err := denyChain.GetFilters()[0].GetTypedConfig().UnmarshalTo(denyProxy); err != nil {
-		t.Fatalf("decode SNI deny TCP proxy: %v", err)
+	if err := denyChain.GetFilters()[1].GetTypedConfig().UnmarshalTo(deny); err != nil {
+		t.Fatalf("decode direct SNI denial: %v", err)
 	}
-	if got := denyProxy.GetCluster(); got != BlackHoleCluster {
-		t.Errorf("SNI deny chain cluster = %q, want %q", got, BlackHoleCluster)
+	if deny.Response != nil {
+		t.Fatal("SNI denial must not write application data")
 	}
 }
 
@@ -918,6 +910,16 @@ func displayGatewayResourceKey(key string) string {
 func TestLegacyGatewayGraphParity(t *testing.T) {
 	got := normalizeGatewayResources(buildGatewayGraph(t, true))
 	want := readNormalizedGatewayGolden(t, "testdata/agentio-supported-gateway.json")
+	delete(want, gatewayResourceKey(model.ClusterType, "BlackHoleCluster"))
+	denyListener := want[gatewayResourceKey(model.ListenerType, MainInternal)].(*listenerv3.Listener)
+	for index, chain := range denyListener.FilterChains {
+		if chain.Name == sniDenyChain {
+			denyListener.FilterChains[index] = (&resourceBuilder{legacyGateway: true}).buildTCPDenyChain(
+				sniDenyChain,
+				"sni_policy_denied",
+			)
+		}
+	}
 	// Generated proxy headers are now suppressed in both gateway modes.
 	for _, resource := range want {
 		listener, ok := resource.(*listenerv3.Listener)
