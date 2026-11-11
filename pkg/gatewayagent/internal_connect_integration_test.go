@@ -162,7 +162,7 @@ func TestCommunityEnvoyInternalConnect(t *testing.T) {
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(certificateServer.Certificate())
-	for _, path := range []string{"small", "large", "cancel"} {
+	for _, path := range []string{"small", "large", "cancel", "silent"} {
 		t.Run(path, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
@@ -177,6 +177,15 @@ func TestCommunityEnvoyInternalConnect(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeResource(response.Body)
+			if path == "silent" {
+				started := time.Now()
+				_, err := bufio.NewReader(response.Body).ReadByte()
+				elapsed := time.Since(started)
+				if !errors.Is(err, io.EOF) || elapsed < 700*time.Millisecond || elapsed > 2500*time.Millisecond {
+					t.Fatalf("unshaped silent CONNECT: err=%v elapsed=%s, want EOF after 1s", err, elapsed)
+				}
+				return
+			}
 			tunnel := tls.Client(
 				internalConnectConn{Conn: connection, reader: response.Body, writer: writer},
 				&tls.Config{

@@ -107,7 +107,7 @@ func TestStaticFiltersConcurrentBuildAndPatch(t *testing.T) {
 				func() *listenerv3.Listener { return &listenerv3.Listener{} },
 			)
 			inspector := &tlsinspectorv3.TlsInspector{}
-			if err := listeners[MainInternal].ListenerFilters[2].GetTypedConfig().UnmarshalTo(inspector); err != nil {
+			if err := listeners[MainInternal].ListenerFilters[3].GetTypedConfig().UnmarshalTo(inspector); err != nil {
 				t.Fatal(err)
 			}
 			if inspector.GetInitialReadBufferSize().GetValue() != 32768 {

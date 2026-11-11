@@ -175,6 +175,33 @@ func TestEnvoyBandwidthBurst(t *testing.T) {
 	}
 }
 
+func TestEnvoyOversizedBatchDebt(t *testing.T) {
+	if os.Getenv("AGENTIO_TEST_ENVOY_BINARY") == "" {
+		t.Skip("real Envoy test; run bin/test_network_limits.sh")
+	}
+	origin := startOrigin(t, false)
+	r := startEnvoy(t, origin.port(), freePort(t), func(l object) {
+		limit := nested(policy(filters(l)[1])["descriptors"].([]any)[0], "bandwidth_limit")
+		limit["upload_burst_bytes"] = 4096
+		limit["download_burst_bytes"] = 4096
+	})
+	for _, direction := range []string{"U", "D"} {
+		t.Run(direction, func(t *testing.T) {
+			started := time.Now()
+			for range 3 {
+				// Each transfer uses a fresh H2 connection; oversized callbacks must
+				// be charged in full and leave their unpaid debt for the next one.
+				multiplex(t, r.port, []transfer{{"oversized", direction, direction, size / 2}})
+			}
+			elapsed := time.Since(started)
+			durationBetween(t, elapsed, 5, 12)
+			t.Logf("768 KiB across three reconnects at 128 KiB/s: %s", elapsed)
+			independent := multiplex(t, r.port, []transfer{{"oversized", direction + "-other", direction, 32768}})
+			durationBetween(t, independent[0], 0, 1.5)
+		})
+	}
+}
+
 func TestEnvoyBandwidth(t *testing.T) {
 	if os.Getenv("AGENTIO_TEST_ENVOY_BINARY") == "" {
 		t.Skip("real Envoy test; run bin/test_network_limits.sh")

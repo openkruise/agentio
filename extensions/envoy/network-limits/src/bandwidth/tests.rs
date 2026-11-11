@@ -382,6 +382,7 @@ fn filter() -> Filter {
     Filter {
         budget,
         id: timer.id(),
+        pacing: Pacing::new(timer.id()),
         timer,
         scheduler: Arc::new(MockEnvoyHttpFilterScheduler::new()),
         keys: RefCell::new(Vec::new()),
@@ -396,6 +397,7 @@ fn filter() -> Filter {
 fn callbacks_count_buffered_bytes_once_and_stop_trailers() {
     let filter = filter();
     let mut envoy = MockEnvoyHttpFilter::new();
+    envoy.expect_set_filter_state_value().return_const(true);
     envoy.expect_get_request_header_value().returning(|_| None);
     envoy
         .expect_get_filter_state_bytes()

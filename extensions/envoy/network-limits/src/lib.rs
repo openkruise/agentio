@@ -4,14 +4,15 @@
 mod bandwidth;
 mod concurrency;
 mod descriptor;
+mod inspection;
 mod streams;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
-    EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig, declare_init_functions,
+    EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig, declare_all_init_functions,
     envoy_log_error,
 };
 
-declare_init_functions!(init, new_config);
+declare_all_init_functions!(init, http: new_config, listener: inspection::new_config);
 
 fn init() -> bool {
     true

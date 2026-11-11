@@ -36,6 +36,7 @@ import (
 	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"istio.io/istio/pkg/test"
 
@@ -405,11 +406,12 @@ func TestPostTLSForwardingPreservesOuterDestination(t *testing.T) {
 		for _, filter := range forward.GetListenerFilters() {
 			inspectors = append(inspectors, filter.GetName())
 		}
-		if !equalStrings(
-			inspectors,
-			[]string{"envoy.filters.listener.original_dst", "envoy.filters.listener.http_inspector"},
-		) {
-			t.Errorf("legacy=%v: post-TLS inspectors = %v, want original_dst and HTTP only", legacy, inspectors)
+		want := []string{"envoy.filters.listener.original_dst", "envoy.filters.listener.http_inspector"}
+		if !legacy {
+			want = []string{want[0], "envoy.filters.listener.dynamic_modules", want[1]}
+		}
+		if !equalStrings(inspectors, want) {
+			t.Errorf("legacy=%v: post-TLS inspectors = %v, want %v", legacy, inspectors, want)
 		}
 		chain := findFilterChain(t, forward, forwardTCPChain)
 		if !equalStrings(
@@ -486,8 +488,8 @@ func TestGatewayListenersUseSupportedAgentioSemantics(t *testing.T) {
 	)
 
 	for name, want := range map[string][]string{
-		MainInternal: {"envoy.filters.listener.original_dst", "envoy.filters.listener.http_inspector", "envoy.filters.listener.tls_inspector", "envoy.filters.listener.dynamic_modules"},
-		MainForward:  {"envoy.filters.listener.original_dst", "envoy.filters.listener.http_inspector"},
+		MainInternal: {"envoy.filters.listener.original_dst", "envoy.filters.listener.dynamic_modules", "envoy.filters.listener.http_inspector", "envoy.filters.listener.tls_inspector", "envoy.filters.listener.dynamic_modules"},
+		MainForward:  {"envoy.filters.listener.original_dst", "envoy.filters.listener.dynamic_modules", "envoy.filters.listener.http_inspector"},
 	} {
 		listener := listeners[name]
 		got := make([]string, 0, len(listener.GetListenerFilters()))
@@ -594,9 +596,17 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 			)
 			for _, name := range []string{MainInternal, MainForward} {
 				listener := listeners[name]
+				wantTimeout := time.Second
+				if !tc.legacyGateway {
+					wantTimeout = 0
+				}
 				if timeout := listener.GetListenerFiltersTimeout(); timeout == nil ||
-					timeout.AsDuration() != time.Second {
-					t.Errorf("%s inspection timeout = %v, want 1s", name, timeout)
+					timeout.AsDuration() != wantTimeout {
+					t.Errorf("%s inspection timeout = %v, want %s", name, timeout, wantTimeout)
+				}
+				if !tc.legacyGateway &&
+					(len(listener.ListenerFilters) < 2 || !proto.Equal(listener.ListenerFilters[1], inspectionDeadlineFilter)) {
+					t.Errorf("%s is missing the pacing-aware inspection deadline", name)
 				}
 				if listener.GetContinueOnListenerFiltersTimeout() {
 					t.Errorf("%s must close the connection when inspection times out", name)

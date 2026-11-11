@@ -1921,6 +1921,21 @@
             }
           },
           {
+            "name": "envoy.filters.listener.dynamic_modules",
+            "typedConfig": {
+              "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+              "typeUrl": "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+              "value": {
+                "dynamic_module_config": {
+                  "do_not_close": true,
+                  "module": {"local": {"filename": "/usr/local/lib/libenvoy_agentio_network_limits.so"}},
+                  "name": "envoy_agentio_network_limits"
+                },
+                "filter_name": "envoy_agentio_inspection_deadline"
+              }
+            }
+          },
+          {
             "name": "envoy.filters.listener.http_inspector",
             "typedConfig": {
               "@type": "type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector"
@@ -1952,7 +1967,7 @@
             }
           }
         ],
-        "listenerFiltersTimeout": "1s",
+        "listenerFiltersTimeout": "0s",
         "trafficDirection": "INBOUND",
         "internalListener": {}
       }
@@ -2643,13 +2658,28 @@
             }
           },
           {
+            "name": "envoy.filters.listener.dynamic_modules",
+            "typedConfig": {
+              "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+              "typeUrl": "type.googleapis.com/envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
+              "value": {
+                "dynamic_module_config": {
+                  "do_not_close": true,
+                  "module": {"local": {"filename": "/usr/local/lib/libenvoy_agentio_network_limits.so"}},
+                  "name": "envoy_agentio_network_limits"
+                },
+                "filter_name": "envoy_agentio_inspection_deadline"
+              }
+            }
+          },
+          {
             "name": "envoy.filters.listener.http_inspector",
             "typedConfig": {
               "@type": "type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector"
             }
           }
         ],
-        "listenerFiltersTimeout": "1s",
+        "listenerFiltersTimeout": "0s",
         "trafficDirection": "INBOUND",
         "internalListener": {}
       }
