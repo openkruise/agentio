@@ -55,7 +55,6 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildInternalCluster(MainInternal),
 		b.buildInternalCluster(MainForward),
 		b.buildPassthroughCluster(),
-		buildBlackHoleCluster(),
 		b.buildDFPCluster(HTTPDynamicForwardProxy, true, false, nil),
 		b.buildDFPCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
 		b.buildTLSProxyOriginateCluster(config.gateway.GetTls().GetOrigination()),
@@ -182,16 +181,6 @@ func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.Upstr
 		ConfigType: &corev3.TransportSocket_TypedConfig{TypedConfig: tlsConfig},
 	}
 	return cluster
-}
-
-func buildBlackHoleCluster() *clusterv3.Cluster {
-	return &clusterv3.Cluster{
-		Name:                 BlackHoleCluster,
-		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
-		ConnectTimeout:       durationpb.New(time.Second),
-		LbPolicy:             clusterv3.Cluster_ROUND_ROBIN,
-		LoadAssignment:       &endpointv3.ClusterLoadAssignment{ClusterName: BlackHoleCluster},
-	}
 }
 
 func (b *resourceBuilder) buildDFPCluster(

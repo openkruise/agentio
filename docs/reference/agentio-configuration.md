@@ -354,7 +354,9 @@ The JSON object replaces the complete default format; its fields are not merged 
 
 `scheme` distinguishes HTTP from terminated HTTPS; `protocol` is the HTTP version. The SNI expression preserves the original ClientHello name after TLS termination and falls back to the current connection's SNI for passthrough TLS. HTTP authority remains a separate field. TCP logs have no HTTP scheme or request headers.
 
-The default format includes `denial_reason: "sni_policy_denied"` for connections rejected by SNI policy. The reason is unset on other paths; HTTP errors and connection failures continue to use their existing response and transport fields. Custom formats can retain this reason with the `denial_reason` entry shown above.
+The default format includes `denial_reason: "sni_policy_denied"` for connections rejected by SNI policy and `"service_entry_denied"` for ServiceEntry TLS identity mismatches or unsupported opaque TCP. These connections close directly without an upstream connection or application response. Listener access logs record the denial using the configured TCP log provider, format, and filter. HTTP errors and connection failures continue to use their existing response and transport fields. Custom formats can retain the reason with the `denial_reason` entry shown above.
+
+TCP denial logs report `response_code_details: "direct_response"` instead of an upstream failure and have no upstream cluster or address. The old deny TCP proxy counters and `BlackHoleCluster` are no longer generated; use `denial_reason` to identify policy rejections.
 
 Internal upstream cluster and filter-chain names are omitted from the default format. For debugging, add these entries to your custom `accessLogFormat.json` object:
 

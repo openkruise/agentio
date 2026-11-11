@@ -40,6 +40,7 @@ import (
 	httpinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/http_inspector/v3"
 	originaldstv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/original_dst/v3"
 	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
+	directresponsev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/direct_response/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
@@ -158,8 +159,6 @@ var (
 		model.FilterStateLocalPrincipal,
 	)
 
-	sniDenialReasonFilter = buildSNIDenialReasonFilter(telemetry.DenialReasonFilterStateKey)
-
 	// Shared state must be Hashable to isolate internal connections by outer SNI.
 	captureSNIFilter       = buildCaptureSNIFilter("envoy.hashable_string", outerSNIKey)
 	outerTLSIdentityFilter = buildOuterTLSIdentityFilter(outerSNIKey)
@@ -200,22 +199,31 @@ func buildHostMatchRBACFilter(expression *exprpb.Expr, policy string) *hcmv3.Htt
 	}}))
 }
 
-func buildSNIDenialReasonFilter(key string) *listenerv3.Filter {
-	return networkFilter(
-		"envoy.filters.network.set_filter_state",
-		mustPack(&setstatenetworkv3.Config{OnNewConnection: []*setstatecommonv3.FilterStateValue{
-			{
-				Key: &setstatecommonv3.FilterStateValue_ObjectKey{
-					ObjectKey: key,
+func (b *resourceBuilder) buildTCPDenyChain(name, reason string) *listenerv3.FilterChain {
+	key := telemetry.DenialReasonFilterStateKey
+	if b.legacyGateway {
+		key = "io.kruise.egress_denial_reason"
+	}
+	return &listenerv3.FilterChain{
+		Name: name,
+		Filters: []*listenerv3.Filter{
+			networkFilter("envoy.filters.network.set_filter_state", b.pack(&setstatenetworkv3.Config{
+				OnNewConnection: []*setstatecommonv3.FilterStateValue{
+					{
+						Key: &setstatecommonv3.FilterStateValue_ObjectKey{
+							ObjectKey: key,
+						},
+						FactoryKey: "envoy.string",
+						Value: &setstatecommonv3.FilterStateValue_FormatString{
+							FormatString: formatString(reason),
+						},
+						ReadOnly: true,
+					},
 				},
-				FactoryKey: "envoy.string",
-				Value: &setstatecommonv3.FilterStateValue_FormatString{
-					FormatString: formatString("sni_policy_denied"),
-				},
-				ReadOnly: true,
-			},
-		}}),
-	)
+			})),
+			networkFilter("envoy.filters.network.direct_response", b.pack(&directresponsev3.Config{})),
+		},
+	}
 }
 
 // TCP payload cannot supply a new TLS identity after termination.
@@ -265,9 +273,9 @@ func (b *resourceBuilder) sniDFPFilter() *listenerv3.Filter {
 }
 
 func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain string) ([]*listenerv3.Listener, error) {
-	denialReasonFilter, tcpTLSIdentityFilter := sniDenialReasonFilter, outerTLSIdentityFilter
+	tcpTLSIdentityFilter := outerTLSIdentityFilter
 	if b.legacyGateway {
-		denialReasonFilter, tcpTLSIdentityFilter = legacySNIDenialReasonFilter, legacyOuterTLSIdentityFilter
+		tcpTLSIdentityFilter = legacyOuterTLSIdentityFilter
 	}
 	connectHCM, err := b.buildConnectHCM(config)
 	if err != nil {
@@ -323,30 +331,9 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		})
 	}
 	if features.EnableSNITrafficPolicy {
-		denyProxy := &tcpproxyv3.TcpProxy{
-			StatPrefix:       sniDenyChain,
-			ClusterSpecifier: &tcpproxyv3.TcpProxy_Cluster{Cluster: BlackHoleCluster},
-		}
-		// A policy denial matched a chain, so the listener's NR-only log cannot
-		// record it. Honor the same providers and filters as application TCP.
-		if config.telemetry != nil {
-			for _, accessLog := range config.telemetry.TCPAccessLogs {
-				denyProxy.AccessLog = append(denyProxy.AccessLog, proto.Clone(accessLog).(*accesslogv3.AccessLog))
-			}
-		}
-		var denyFilters []*listenerv3.Filter
-		if len(denyProxy.AccessLog) > 0 {
-			// Capture the policy decision before the black-hole proxy closes the
-			// connection, so logs need not expose internal cluster or chain names.
-			denyFilters = append(denyFilters, denialReasonFilter)
-		}
-		denyFilters = append(denyFilters, networkFilter("envoy.filters.network.tcp_proxy", b.pack(denyProxy)))
 		internalChains = append(internalChains,
 			b.buildTLSTerminateChain(tcpSettings),
-			&listenerv3.FilterChain{
-				Name:    sniDenyChain,
-				Filters: denyFilters,
-			},
+			b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied"),
 		)
 	} else if tlsTermination := config.gateway.GetTlsTermination(); tlsTermination != nil {
 		internalChains = append(internalChains, b.buildTLSTerminateChain(tcpSettings))

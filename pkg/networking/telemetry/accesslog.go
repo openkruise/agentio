@@ -57,15 +57,22 @@ func buildConnectAccessLog(template *accesslogv3.AccessLog, filter *string) (*ac
 	return buildAccessLogWithBaseFilter(template, filter, status), nil
 }
 
-// buildListenerAccessLog mirrors release-0.1 listenerAccessLogFilter: listener
-// logs exist only for connections that fail to match a filter chain (NR).
+// Listener logs cover filter-chain misses and direct TCP denials; forwarded
+// connections are logged by their HTTP manager or TCP proxy instead.
 func buildListenerAccessLog(template *accesslogv3.AccessLog, filter *string) (*accesslogv3.AccessLog, error) {
 	noRoute := &accesslogv3.AccessLogFilter{
 		FilterSpecifier: &accesslogv3.AccessLogFilter_ResponseFlagFilter{
 			ResponseFlagFilter: &accesslogv3.ResponseFlagFilter{Flags: []string{"NR"}},
 		},
 	}
-	return buildAccessLogWithBaseFilter(template, filter, noRoute), nil
+	denied := "'" + DenialReasonFilterStateKey + "' in filter_state || 'io.kruise.egress_denial_reason' in filter_state"
+	return buildAccessLogWithBaseFilter(template, filter, &accesslogv3.AccessLogFilter{
+		FilterSpecifier: &accesslogv3.AccessLogFilter_OrFilter{
+			OrFilter: &accesslogv3.OrFilter{
+				Filters: []*accesslogv3.AccessLogFilter{noRoute, celAccessLogFilter(&denied)},
+			},
+		},
+	}), nil
 }
 
 func buildAccessLogWithBaseFilter(

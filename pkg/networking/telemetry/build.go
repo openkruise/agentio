@@ -42,8 +42,8 @@ type Output struct {
 	// ConnectHTTPAccessLogs mirror release-0.1 HBONE termination access logs:
 	// attached to the CONNECT termination HCM, filtered to status >= 400.
 	ConnectHTTPAccessLogs []*accesslogv3.AccessLog
-	// ListenerAccessLogs are attached to listeners and filtered to NR so they
-	// cover filter-chain misses without duplicating application access logs.
+	// ListenerAccessLogs cover filter-chain misses and direct TCP denials
+	// without duplicating application access logs.
 	ListenerAccessLogs []*accesslogv3.AccessLog
 	TCPAccessLogs      []*accesslogv3.AccessLog
 	Tracing            *hcmv3.HttpConnectionManager_Tracing

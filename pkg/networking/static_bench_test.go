@@ -40,7 +40,6 @@ func BenchmarkStaticFilters(b *testing.B) {
 		{"SNIHostRBAC", func() proto.Message { return sniHostMatchRBACFilter }},
 		{"ConnectTLSIdentity", func() proto.Message { return connectProxyTLSIdentityHTTPFilter }},
 		{"RelayDownstream", func() proto.Message { return relayDownstreamFilter }},
-		{"SNIDenialReason", func() proto.Message { return sniDenialReasonFilter }},
 		{"CaptureSNI", func() proto.Message { return captureSNIFilter }},
 		{"OuterTLSIdentity", func() proto.Message { return outerTLSIdentityFilter }},
 	} {

@@ -114,7 +114,8 @@ func TestBuildGatewayAccessLogFormat(t *testing.T) {
 							filters[0].GetStatusCodeFilter().GetComparison().GetValue().GetDefaultValue() != 400 {
 							t.Fatal("CONNECT failure filter was lost")
 						}
-						if path == "listener" && filters[0].GetResponseFlagFilter().GetFlags()[0] != "NR" {
+						if path == "listener" &&
+							filters[0].GetOrFilter().GetFilters()[0].GetResponseFlagFilter().GetFlags()[0] != "NR" {
 							t.Fatal("listener failure filter was lost")
 						}
 					}

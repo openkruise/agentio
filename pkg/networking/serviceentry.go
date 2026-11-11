@@ -177,10 +177,7 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 			),
 		)
 	}
-	l.FilterChains = append(l.FilterChains, &listener.FilterChain{
-		Name:    serviceEntryDenyChain,
-		Filters: b.applicationTCPFilters(config, nil, BlackHoleCluster, config.gateway.GetTcp()),
-	})
+	l.FilterChains = append(l.FilterChains, b.buildTCPDenyChain(serviceEntryDenyChain, "service_entry_denied"))
 	l.FilterChainMatcher = exactMatcher(
 		typedExtension("destination-ip", b.pack(&input.DestinationIPInput{})),
 		addresses,

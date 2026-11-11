@@ -42,7 +42,6 @@ const (
 	MainForward             = "main_forward"
 	TCPPassthrough          = "tcp_passthrough"
 	PassthroughCluster      = "PassthroughCluster"
-	BlackHoleCluster        = "BlackHoleCluster"
 	HTTPDynamicForwardProxy = "http_dynamic_forward_proxy"
 	TLSConnectOriginate     = "tls_connect_originate"
 	TLSProxyOriginate       = "tls_proxy_originate"
