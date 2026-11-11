@@ -29,7 +29,6 @@ import (
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	networkstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
-	snidfp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	input "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	matcher "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"google.golang.org/protobuf/proto"
@@ -54,7 +53,7 @@ func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrou
 
 // The SNI and HTTP filters share the DFP cache and explicit-target convention.
 func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*listener.Filter) []*listener.Filter {
-	state := networkFilter("agentio.route_upstream", b.pack(&networkstate.Config{
+	state := &networkstate.Config{
 		OnNewConnection: []*common.FilterStateValue{
 			{
 				Key: &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
@@ -75,31 +74,20 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 				Value: &common.FilterStateValue_FormatString{FormatString: formatString("%DOWNSTREAM_LOCAL_PORT%")},
 			},
 		},
-	}))
-	cluster := HTTPDynamicForwardProxy
+	}
+	stateName, cluster := "agentio.route_upstream", HTTPDynamicForwardProxy
 	if !b.legacyGateway {
-		cluster = TLSPassthrough
+		stateName, cluster = "envoy.filters.network.set_filter_state", TLSPassthrough
 		values := tlsDestinationState("%REQUESTED_SERVER_NAME%")
 		if len(config.gateway.GetServiceEntries()) > 0 {
-			values = append(values, &common.FilterStateValue{
-				Key: &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-				Value: &common.FilterStateValue_FormatString{FormatString: formatString(
-					"%FILTER_STATE(agentio.route.upstream:PLAIN)%",
-				)},
-				SkipIfEmpty: true,
-			})
+			values = append(values, state.OnNewConnection[1])
 		}
-		state = networkFilter("envoy.filters.network.set_filter_state", b.pack(&networkstate.Config{
-			OnNewConnection: values,
-		}))
+		state.OnNewConnection = values
 	}
 	filters := append(
 		slices.Clone(prefix),
-		state,
-		networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&snidfp.FilterConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
-			PortSpecifier:  &snidfp.FilterConfig_PortValue{PortValue: 443},
-		})),
+		networkFilter(stateName, b.pack(state)),
+		b.sniDFPFilter(),
 	)
 	return b.applicationTCPFilters(config, filters, cluster, config.gateway.GetTcp())
 }
@@ -218,7 +206,10 @@ func (b *resourceBuilder) serviceEntryHCM(
 	if terminated && !b.legacyGateway {
 		for i, filter := range manager.HttpFilters {
 			if filter.GetName() == connectProxyTLSIdentityFilter {
-				manager.HttpFilters[i] = buildConnectProxyTLSIdentityHTTPFilter(outerSNIKey, "%DOWNSTREAM_LOCAL_ADDRESS%")
+				manager.HttpFilters[i] = buildConnectProxyTLSIdentityHTTPFilter(
+					outerSNIKey,
+					"%DOWNSTREAM_LOCAL_ADDRESS%",
+				)
 			}
 		}
 	}

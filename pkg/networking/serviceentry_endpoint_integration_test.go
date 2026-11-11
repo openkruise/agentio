@@ -263,7 +263,7 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 				cases[2].status, cases[3].status = 200, 200
 				cases = append(
 					cases,
-					trafficCase{"unmatched_ip_without_sni", "127.0.0.3", "", "unrelated.invalid", "/", 200},
+					trafficCase{"unmatched_ip_without_sni", "127.0.0.3", "", "unrelated.invalid", "/", 0},
 				)
 			}
 			cases = append(cases, trafficCase{"opaque", "127.0.0.1", "", "", "/", 0})
@@ -273,6 +273,9 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 					trafficCase{"sni_for_other_endpoint", "127.0.0.1", "other.invalid", "other.invalid", "/", 0},
 					trafficCase{"missing_sni", "127.0.0.1", "", "allowed.invalid", "/", 0},
 				)
+				if !isPassthrough {
+					cases = append(cases, trafficCase{"post_tls_tcp", "127.0.0.1", "allowed.invalid", "", "/", 200})
+				}
 			}
 			if epePort != 0 {
 				cases = append(
@@ -374,6 +377,23 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 							t.Fatal(err)
 						}
 						conn = client
+					}
+					if tc.name == "post_tls_tcp" {
+						if _, err := conn.Write([]byte("\x00opaque\r\n\r\n")); err != nil {
+							t.Fatal(err)
+						}
+						response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := response.Body.Close(); err != nil {
+							t.Fatal(err)
+						}
+						if response.StatusCode != 400 || originHandshakes.Load() != handshakes+1 ||
+							dnsQueries.Load() != 0 {
+							t.Fatalf("opaque TLS did not reach the bound endpoint without DNS: %s", response.Status)
+						}
+						return
 					}
 					method, path := http.MethodGet, tc.path
 					if tc.name == "connect" {
