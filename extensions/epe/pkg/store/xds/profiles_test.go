@@ -21,6 +21,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"istio.io/istio/pkg/test"
+
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
@@ -31,7 +33,6 @@ import (
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
-	"istio.io/istio/pkg/test"
 )
 
 func profilePayload(namespace string) *securityv1.SecurityProfile {
@@ -230,7 +231,10 @@ func TestWorkloadModeDoesNotDiscoverSandboxProfiles(t *testing.T) {
 	f := testSource()
 	s := New(f)
 	subj := subject.Subject{Workload: subject.Workload{
-		UID: "host", Namespace: "ns", Name: "pod", SecurityProfileReferences: []string{},
+		UID:                       "host",
+		Namespace:                 "ns",
+		Name:                      "pod",
+		SecurityProfileReferences: []string{},
 	}}
 	if refs, err := profileReferences(t, s, subj); err != nil || len(refs) != 0 {
 		t.Fatalf("ordinary Workload resolution: %v %v", refs, err)

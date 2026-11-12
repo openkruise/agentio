@@ -26,6 +26,8 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/pkg/krt"
 
+	"istio.io/istio/pkg/test"
+
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
@@ -33,7 +35,6 @@ import (
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
-	"istio.io/istio/pkg/test"
 )
 
 // Immutable publications isolate request-side adaptation and cache maintenance

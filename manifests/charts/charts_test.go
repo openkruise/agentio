@@ -280,7 +280,14 @@ func TestSandboxModePropagation(t *testing.T) {
 	for _, profile := range []string{"sidecar", "ambient"} {
 		for _, mode := range []string{"default", "false", "true"} {
 			t.Run(profile+"/"+mode, func(t *testing.T) {
-				args := []string{"--set", "profile=" + profile, "--set", "epe.mode=managed", "--set", "egressGateway.enabled=true"}
+				args := []string{
+					"--set",
+					"profile=" + profile,
+					"--set",
+					"epe.mode=managed",
+					"--set",
+					"egressGateway.enabled=true",
+				}
 				want := "false"
 				if mode != "default" {
 					args = append(args, "--set", "sandbox.enabled="+mode)

@@ -18,11 +18,12 @@ import (
 	"flag"
 	"testing"
 
+	"istio.io/istio/pkg/test"
+
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
-	"istio.io/istio/pkg/test"
 )
 
 func TestSecurityProfileSourceWatches(t *testing.T) {
@@ -44,7 +45,8 @@ func TestSecurityProfileSourceWatches(t *testing.T) {
 			if !found[model.WorkloadType] || !found[model.TrafficPolicyType] {
 				t.Fatal("native workload discovery is required in both modes")
 			}
-			if found[model.SecurityProfileType] != (source == "xds") || found[model.SandboxType] != (source == "xds" && sandboxMode) {
+			if found[model.SecurityProfileType] != (source == "xds") ||
+				found[model.SandboxType] != (source == "xds" && sandboxMode) {
 				t.Fatalf("%s selected unexpected policy watches: %v", source, found)
 			}
 		}
