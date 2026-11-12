@@ -90,9 +90,14 @@ func setupAdmissionWebhooks(
 	injectionSynced := func() bool { return true }
 	if options.EnableInjection {
 		nodes := kclient.NewFiltered[*corev1.Node](client, kclient.Filter{})
+		var namespaces kclient.StartableInformer[*corev1.Namespace]
+		if options.EnableClientTrust {
+			namespaces = kclient.NewFiltered[*corev1.Namespace](client, kclient.Filter{})
+		}
 		injectionWebhook, err := inject.NewWebhook(inject.WebhookParameters{
 			EnableClientTrust: options.EnableClientTrust,
 			Nodes:             nodes,
+			Namespaces:        namespaces,
 			KrtOptions:        krt.NewOptionsBuilder(ctx.Done(), "", nil),
 			NativeSidecarMode: inject.NativeSidecarMode(options.NativeSidecarMode),
 			Mux:               webhookMux,
@@ -139,7 +144,12 @@ func setupAdmissionWebhooks(
 		}
 
 		nodes.Start(ctx.Done())
-		injectionSynced = nodes.HasSynced
+		if namespaces != nil {
+			namespaces.Start(ctx.Done())
+		}
+		injectionSynced = func() bool {
+			return nodes.HasSynced() && (namespaces == nil || namespaces.HasSynced())
+		}
 	}
 	if options.ValidationWebhookConfigName != "" {
 		validation.Register(webhookMux)
@@ -168,10 +178,8 @@ func setupAdmissionWebhooks(
 		shutdownHTTP(webhookServer, 5*time.Second)
 	}()
 	serve := func() error {
-		// Native-sidecar auto-detection reads the node cache; an empty
-		// unsynced cache would report support on clusters without it, so the
-		// listener waits for the initial node sync before accepting.
-		if !kube.WaitForCacheSync("injection node cache", ctx.Done(), injectionSynced) {
+		// Admission decisions need populated node and namespace caches.
+		if !kube.WaitForCacheSync("injection caches", ctx.Done(), injectionSynced) {
 			return nil
 		}
 		if err := webhookServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {

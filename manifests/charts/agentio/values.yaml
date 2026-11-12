@@ -124,7 +124,9 @@ agentiod:
   injector:
     clientTrust:
       # Master switch for client CA distribution and injection.
-      # Pod annotations can opt out, but cannot enable this feature when disabled here.
+      # Namespace/Pod client-trust.agentio.kruise.io/inject labels override CA injection.
+      # Without labels, CA injection follows ztunnel sidecars; Pod labels take precedence.
+      # Labels and legacy Pod annotations cannot bypass this master switch.
       # Independent of Gateway TLS termination and SNI traffic policy configuration.
       enabled: false
       containers:

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -80,6 +81,7 @@ type Webhook struct {
 	trustConfig       krt.StaticSingleton[clienttrust.Settings]
 	enableClientTrust bool
 	nodes             kclient.Reader[*corev1.Node]
+	namespaces        kclient.Reader[*corev1.Namespace]
 	nativeSidecarMode NativeSidecarMode
 }
 
@@ -91,6 +93,8 @@ type WebhookParameters struct {
 	// Nodes optionally provides cached Node reads for native-sidecar
 	// auto-detection. Nil disables detection: auto behaves as disabled.
 	Nodes kclient.Reader[*corev1.Node]
+	// Namespaces supplies cached namespace labels for CA and sidecar selection.
+	Namespaces kclient.Reader[*corev1.Namespace]
 
 	NativeSidecarMode NativeSidecarMode
 
@@ -117,6 +121,7 @@ func NewWebhook(p WebhookParameters) (*Webhook, error) {
 	wh := &Webhook{
 		enableClientTrust: p.EnableClientTrust,
 		nodes:             p.Nodes,
+		namespaces:        p.Namespaces,
 		trustConfig:       krt.NewStatic[clienttrust.Settings](nil, true, p.KrtOptions.WithName("Client_Trust_Config")...),
 		nativeSidecarMode: mode,
 		discoveryAddress:  p.DiscoveryAddress,
@@ -180,8 +185,7 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 		requestLogger.Error("injection configuration has not been loaded")
 		return toAdmissionResponse(fmt.Errorf("injection config not ready"))
 	}
-	if !injectRequired(IgnoredNamespaces.UnsortedList(), wh.config, &pod.Spec, pod.ObjectMeta) {
-		requestLogger.Info("skipping injection due to policy check")
+	if IgnoredNamespaces.Contains(pod.Namespace) {
 		wh.mu.RUnlock()
 		return &admissionv1.AdmissionResponse{
 			Allowed: true,
@@ -192,6 +196,7 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 
 	params := InjectionParameters{
 		pod:                 &pod,
+		injectSidecar:       injectRequired(IgnoredNamespaces.UnsortedList(), wh.config, &pod.Spec, pod.ObjectMeta),
 		deployMeta:          deploy,
 		typeMeta:            typeMeta,
 		templates:           wh.config.Templates,
@@ -203,9 +208,37 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 		proxyEnvs:           parseInjectEnvs(path),
 	}
 
-	params.nativeSidecar = detectNativeSidecar(wh.nodes, wh.nativeSidecarMode, pod.Spec.NodeName)
-
 	wh.mu.RUnlock()
+
+	var namespaceLabels map[string]string
+	if wh.enableClientTrust && wh.namespaces != nil {
+		namespace := wh.namespaces.Get(pod.Namespace, "")
+		if namespace == nil {
+			return toAdmissionResponse(fmt.Errorf("namespace %s is not in the injection cache", pod.Namespace))
+		}
+		namespaceLabels = namespace.Labels
+		mode := namespaceLabels[dataplaneModeLabel]
+		// CA-selected Pods must still satisfy the sidecar webhook's selection rules.
+		if mode != dataplaneModeSidecar && (mode != "" || pod.Labels[dataplaneModeLabel] != dataplaneModeSidecar) {
+			params.injectSidecar = false
+		}
+	}
+	defaultTrust := params.injectSidecar && slices.Contains(selectTemplates(params), "ztunnel")
+	var err error
+	params.injectClientTrust, err = params.settings.ClientTrust.Client.EnabledFor(
+		pod.ObjectMeta,
+		namespaceLabels,
+		defaultTrust,
+	)
+	if err != nil {
+		return toAdmissionResponse(err)
+	}
+	if !params.injectSidecar && !params.injectClientTrust {
+		return &admissionv1.AdmissionResponse{Allowed: true}
+	}
+	if params.injectSidecar {
+		params.nativeSidecar = detectNativeSidecar(wh.nodes, wh.nativeSidecarMode, pod.Spec.NodeName)
+	}
 
 	result, err := injectPod(params)
 	if err != nil {

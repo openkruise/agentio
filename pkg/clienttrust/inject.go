@@ -26,13 +26,9 @@ import (
 	"istio.io/istio/pkg/util/sets"
 )
 
-// Apply augments selected original business containers in an already injected Pod.
+// Apply augments selected original business containers after enablement is resolved.
 // It never changes the original Pod or the configuration snapshot.
 func Apply(original, pod *corev1.Pod, s Settings, excluded func(string) bool) ([]string, error) {
-	enabled, err := s.Client.EnabledFor(original.Annotations)
-	if err != nil || !enabled {
-		return nil, err
-	}
 	selected, warnings, err := selectContainers(original, s.Client.Containers, excluded)
 	if err != nil || len(selected) == 0 {
 		return warnings, err

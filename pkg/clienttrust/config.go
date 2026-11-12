@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
@@ -31,6 +32,7 @@ import (
 
 // Keys and paths used for client trust injection and discovery.
 const (
+	InjectLabel       = "client-trust.agentio.kruise.io/inject"
 	EnableAnnotation  = "sidecar.agentio.kruise.io/client-trust"
 	IncludeAnnotation = "sidecar.agentio.kruise.io/client-trust-containers"
 	ExcludeAnnotation = "sidecar.agentio.kruise.io/client-trust-exclude-containers"
@@ -384,13 +386,32 @@ func Matches(patterns []string, name string) bool {
 	return false
 }
 
-// EnabledFor allows Pod opt-out while preserving the global feature gate.
-func (c Config) EnabledFor(annotations map[string]string) (bool, error) {
-	if v, ok := annotations[EnableAnnotation]; ok {
+// EnabledFor resolves Pod and namespace overrides without bypassing the global gate.
+// The legacy annotation retains its opt-out semantics.
+func (c Config) EnabledFor(
+	pod metav1.ObjectMeta,
+	namespaceLabels map[string]string,
+	defaultEnabled bool,
+) (bool, error) {
+	if v, ok := pod.Labels[InjectLabel]; ok {
 		if v != "true" && v != "false" {
-			return false, fmt.Errorf("%s must be true or false", EnableAnnotation)
+			return false, fmt.Errorf("%s must be true or false", InjectLabel)
 		}
 		return c.Enabled && v == "true", nil
 	}
-	return c.Enabled, nil
+	if v, ok := pod.Annotations[EnableAnnotation]; ok {
+		if v != "true" && v != "false" {
+			return false, fmt.Errorf("%s must be true or false", EnableAnnotation)
+		}
+		if v == "false" {
+			return false, nil
+		}
+	}
+	if v, ok := namespaceLabels[InjectLabel]; ok {
+		if v != "true" && v != "false" {
+			return false, fmt.Errorf("namespace %s must be true or false", InjectLabel)
+		}
+		return c.Enabled && v == "true", nil
+	}
+	return c.Enabled && defaultEnabled, nil
 }
