@@ -147,11 +147,22 @@ webhooks:
     namespaceSelector:
       matchLabels:
         agentio.kruise.io/dataplane-mode: sidecar
+      {{- if .Values.agentiod.injector.clientTrust.enabled }}
+      matchExpressions:
+        - key: client-trust.agentio.kruise.io/inject
+          operator: NotIn
+          values: ["true"]
+      {{- end }}
     objectSelector:
       matchExpressions:
         - key: agentio.kruise.io/dataplane-mode
           operator: NotIn
           values: [none, ambient]
+        {{- if .Values.agentiod.injector.clientTrust.enabled }}
+        - key: client-trust.agentio.kruise.io/inject
+          operator: NotIn
+          values: ["true"]
+        {{- end }}
     rules:
       - operations: [CREATE]
         apiGroups: [""]
@@ -173,13 +184,73 @@ webhooks:
       matchExpressions:
         - key: agentio.kruise.io/dataplane-mode
           operator: DoesNotExist
+        {{- if .Values.agentiod.injector.clientTrust.enabled }}
+        - key: client-trust.agentio.kruise.io/inject
+          operator: NotIn
+          values: ["true"]
+        {{- end }}
     objectSelector:
       matchLabels:
         agentio.kruise.io/dataplane-mode: sidecar
+      {{- if .Values.agentiod.injector.clientTrust.enabled }}
+      matchExpressions:
+        - key: client-trust.agentio.kruise.io/inject
+          operator: NotIn
+          values: ["true"]
+      {{- end }}
     rules:
       - operations: [CREATE]
         apiGroups: [""]
         apiVersions: [v1]
         resources: [pods]
+  {{- if .Values.agentiod.injector.clientTrust.enabled }}
+  # These selectors partition CA-selected Pods from the sidecar entries above.
+  - name: namespace.client-trust-injector.agentio.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: {{ .Values.agentiod.injector.failurePolicy }}
+    reinvocationPolicy: {{ .Values.agentiod.injector.reinvocationPolicy }}
+    clientConfig:
+      caBundle: ""
+      service:
+        name: {{ include "agentiod.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /inject
+        port: 443
+    namespaceSelector:
+      matchLabels:
+        client-trust.agentio.kruise.io/inject: "true"
+    objectSelector: {}
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+  - name: object.client-trust-injector.agentio.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: {{ .Values.agentiod.injector.failurePolicy }}
+    reinvocationPolicy: {{ .Values.agentiod.injector.reinvocationPolicy }}
+    clientConfig:
+      caBundle: ""
+      service:
+        name: {{ include "agentiod.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /inject
+        port: 443
+    namespaceSelector:
+      matchExpressions:
+        - key: client-trust.agentio.kruise.io/inject
+          operator: NotIn
+          values: ["true"]
+    objectSelector:
+      matchLabels:
+        client-trust.agentio.kruise.io/inject: "true"
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+  {{- end }}
 {{- end }}
 {{- end }}

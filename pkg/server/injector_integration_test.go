@@ -131,7 +131,10 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 			ObjectMeta: metav1.ObjectMeta{Name: "validator"},
 			Webhooks:   []admissionregistrationv1.ValidatingWebhook{{Name: "validation.agentio.kruise.io"}},
 		},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "demo"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "demo",
+			Labels: map[string]string{"agentio.kruise.io/dataplane-mode": "sidecar"},
+		}},
 	)
 	coreClient := client.Kube()
 
@@ -246,6 +249,45 @@ func testSidecarInjectorEndToEnd(t *testing.T, enableClientTrust bool) {
 	}
 	if got := injected.Labels[clienttrust.ManagedLabel] == "true"; got != enableClientTrust {
 		t.Fatalf("client trust injected=%v, process gate=%v", got, enableClientTrust)
+	}
+	caReview := buildReview(t, "demo", "ca-only")
+	var caPod corev1.Pod
+	if err := json.Unmarshal(caReview.Request.Object.Raw, &caPod); err != nil {
+		t.Fatal(err)
+	}
+	caPod.Labels = map[string]string{
+		"agentio.kruise.io/dataplane-mode": "none",
+		clienttrust.InjectLabel:            "true",
+	}
+	caReview.Request.Object.Raw, err = json.Marshal(&caPod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caResponse, err := postReview(t, httpClient, url, caReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caResponse.Allowed {
+		t.Fatalf("CA-only admission denied: %+v", caResponse.Result)
+	}
+	if enableClientTrust {
+		caPatch, err := jsonpatch.DecodePatch(caResponse.Patch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caJSON, err := caPatch.Apply(caReview.Request.Object.Raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(caJSON, &caPod); err != nil {
+			t.Fatal(err)
+		}
+		if len(caPod.Spec.Containers) != 1 || len(caPod.Spec.InitContainers) != 0 ||
+			caPod.Labels[clienttrust.ManagedLabel] != "true" || len(caPod.Spec.Containers[0].VolumeMounts) != 1 {
+			t.Fatalf("CA-only admission did not preserve the application without a sidecar: %+v", caPod.Spec)
+		}
+	} else if caResponse.Patch != nil {
+		t.Fatalf("disabled CA-only admission returned a patch: %s", caResponse.Patch)
 	}
 	if enableClientTrust {
 		testutil.Eventually(t, func() bool {

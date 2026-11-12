@@ -47,6 +47,8 @@ func (p ParsedContainers) AllContainers() []corev1.Container {
 // InjectionParameters holds the Pod, templates, and settings for one injection.
 type InjectionParameters struct {
 	pod                 *corev1.Pod
+	injectSidecar       bool
+	injectClientTrust   bool
 	deployMeta          types.NamespacedName
 	nativeSidecar       bool
 	typeMeta            metav1.TypeMeta
@@ -106,33 +108,35 @@ func isClientTrustExcludedContainer(name string) bool {
 // template, as well as some inputs to the injection template, and produces a
 // JSON patch.
 func injectPod(req InjectionParameters) (InjectionResult, error) {
-	checkPreconditions(req)
-
 	// The patch will be built relative to the initial pod, capture its current state
 	originalPodSpec, err := json.Marshal(req.pod)
 	if err != nil {
 		return InjectionResult{}, err
 	}
 
-	// Run the injection template, giving us a partial pod spec
-	mergedPod, injectedPodData, err := RunTemplate(req)
-	if err != nil {
-		return InjectionResult{}, fmt.Errorf("failed to run injection template: %w", err)
-	}
+	mergedPod := req.pod.DeepCopy()
+	if req.injectSidecar {
+		checkPreconditions(req)
+		// Run the injection template, giving us a partial pod spec.
+		var injectedPodData *corev1.Pod
+		mergedPod, injectedPodData, err = RunTemplate(req)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("failed to run injection template: %w", err)
+		}
 
-	mergedPod, err = reapplyOverwrittenContainers(mergedPod, req.pod, injectedPodData, &req.settings.Proxy)
-	if err != nil {
-		return InjectionResult{}, fmt.Errorf("failed to re apply container: %w", err)
-	}
+		mergedPod, err = reapplyOverwrittenContainers(mergedPod, req.pod, injectedPodData, &req.settings.Proxy)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("failed to re apply container: %w", err)
+		}
 
-	// Apply some additional transformations to the pod
-	if err := postProcessPod(mergedPod, *injectedPodData, req); err != nil {
-		return InjectionResult{}, fmt.Errorf("failed to process pod: %w", err)
+		// Apply some additional transformations to the pod.
+		if err := postProcessPod(mergedPod, *injectedPodData, req); err != nil {
+			return InjectionResult{}, fmt.Errorf("failed to process pod: %w", err)
+		}
 	}
 
 	var warnings []string
-	// Only ztunnel supports client trust injection. Template aliases are already expanded.
-	if slices.Contains(selectTemplates(req), "ztunnel") {
+	if req.injectClientTrust {
 		var trustErr error
 		warnings, trustErr = clienttrust.Apply(req.pod, mergedPod, req.settings.ClientTrust, isClientTrustExcludedContainer)
 		if trustErr != nil {

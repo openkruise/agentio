@@ -23,14 +23,90 @@ import (
 	"strings"
 	"testing"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/yaml"
 
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/inject"
 )
+
+func TestClientTrustWebhookSelection(t *testing.T) {
+	const dataplaneLabel = "agentio.kruise.io/dataplane-mode"
+	for _, enabled := range []bool{false, true} {
+		manifest := renderAgentio(
+			t,
+			"--set", "profile=sidecar",
+			"--set", "agentiod.injector.clientTrust.enabled="+strconv.FormatBool(enabled),
+		)
+		var webhooks []admissionregistrationv1.MutatingWebhook
+		for document := range strings.SplitSeq(manifest, "\n---") {
+			var configuration admissionregistrationv1.MutatingWebhookConfiguration
+			if err := yaml.Unmarshal([]byte(document), &configuration); err != nil {
+				t.Fatal(err)
+			}
+			if configuration.Kind == "MutatingWebhookConfiguration" {
+				webhooks = configuration.Webhooks
+			}
+		}
+		wantWebhooks := 2
+		if enabled {
+			wantWebhooks = 4
+		}
+		if len(webhooks) != wantWebhooks {
+			t.Fatalf("enabled=%v: %d webhooks, want %d", enabled, len(webhooks), wantWebhooks)
+		}
+		for _, namespaceMode := range []string{"", "sidecar", "ambient", "none"} {
+			for _, podMode := range []string{"", "sidecar", "ambient", "none"} {
+				for _, namespaceCA := range []string{"", "true", "false"} {
+					for _, podCA := range []string{"", "true", "false"} {
+						namespace, pod := labels.Set{}, labels.Set{}
+						for key, value := range map[string]string{dataplaneLabel: namespaceMode, clienttrust.InjectLabel: namespaceCA} {
+							if value != "" {
+								namespace[key] = value
+							}
+						}
+						for key, value := range map[string]string{dataplaneLabel: podMode, clienttrust.InjectLabel: podCA} {
+							if value != "" {
+								pod[key] = value
+							}
+						}
+						matches := 0
+						for _, webhook := range webhooks {
+							nsSelector, err := metav1.LabelSelectorAsSelector(webhook.NamespaceSelector)
+							if err != nil {
+								t.Fatal(err)
+							}
+							podSelector, err := metav1.LabelSelectorAsSelector(webhook.ObjectSelector)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if nsSelector.Matches(namespace) && podSelector.Matches(pod) {
+								matches++
+							}
+						}
+						want := 0
+						sidecar := namespaceMode == "sidecar" && podMode != "none" && podMode != "ambient" ||
+							namespaceMode == "" && podMode == "sidecar"
+						if sidecar || enabled && (namespaceCA == "true" || podCA == "true") {
+							want = 1
+						}
+						if matches != want {
+							t.Fatalf(
+								"enabled=%v, namespace=%v, pod=%v: matched %d webhooks, want %d",
+								enabled, namespace, pod, matches, want,
+							)
+						}
+					}
+				}
+			}
+		}
+	}
+}
 
 func TestClientTrustChartContract(t *testing.T) {
 	manifest := renderAgentio(t, "--set", "profile=sidecar", "--set", "agentiod.injector.clientTrust.enabled=true")

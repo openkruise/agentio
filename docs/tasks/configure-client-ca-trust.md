@@ -32,17 +32,35 @@ agentiod:
 
 Empty `include` selects all business containers. Patterns match the complete container name and support only `*`; exclusion wins. Agentio proxy and init containers are always excluded; business init containers are opt-in.
 
-With the feature enabled, Pod annotations control opt-out and container selection:
+With the feature enabled in a `profile: sidecar` installation, set `client-trust.agentio.kruise.io/inject: "true"` on a Namespace or Pod to inject CA mounts and client environment variables independently of sidecar injection. Use `"false"` to disable CA injection. Pod labels override Namespace labels; neither can bypass the global `enabled: false` switch. Without either label, CA injection continues to follow the `ztunnel` sidecar template.
+
+For example, this Namespace enables CA injection without opting into a sidecar:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clients
+  labels:
+    client-trust.agentio.kruise.io/inject: "true"
+```
+
+On a Deployment, put the label under `spec.template.metadata.labels`. An explicitly enabled Pod also receives CA configuration when its dataplane mode is `none` or `ambient`. CA-only injection does not add proxy or init containers, rewrite probes, or change traffic routing. Changing labels affects newly created Pods; recreate existing Pods to apply the change.
+
+Pod annotations continue to control container selection:
 
 ```yaml
 metadata:
+  labels:
+    client-trust.agentio.kruise.io/inject: "true"
   annotations:
-    sidecar.agentio.kruise.io/client-trust: "false"
     sidecar.agentio.kruise.io/client-trust-containers: "app-*,worker"
     sidecar.agentio.kruise.io/client-trust-exclude-containers: "*-metrics"
 ```
 
-`"false"` opts out; `"true"` cannot bypass a globally disabled feature. The two lists replace (not append to) their global counterparts.
+The two container lists replace (not append to) their global counterparts. The legacy Pod annotation `sidecar.agentio.kruise.io/client-trust: "false"` still opts out, including in a CA-enabled Namespace, unless an explicit Pod injection label overrides it. Its `"true"` value retains the default behavior and does not independently enable CA-only injection.
+
+The webhook selectors are mutually exclusive: each selected Pod reaches the injector once, even when both CA and sidecar injection are enabled. Agentiod waits for its namespace cache to synchronize before accepting injection requests. CA bundle distribution remains independent of Namespace/Pod injection labels and opt-outs.
 
 ## Add public and private CA sources
 
@@ -119,7 +137,7 @@ Default variables:
 
 The conflict policy applies to `AGENTIO_TRUST_BUNDLE` too. `Preserve` keeps application-defined variables and warns on different values; `Overwrite` replaces the complete variable.
 
-Client trust injection currently supports only the `ztunnel` template.
+Explicit Namespace or Pod injection labels enable client trust regardless of the selected proxy template. Without labels, only the `ztunnel` template receives client trust by default.
 
 ## Verify
 

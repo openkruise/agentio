@@ -306,26 +306,55 @@ func TestSelectionOverridesAndNativeSidecar(t *testing.T) {
 		t.Fatal("non-idempotent apply")
 	}
 }
-func TestEnablementAndNoMatch(t *testing.T) {
+func TestEnablement(t *testing.T) {
 	for _, tc := range []struct {
+		name       string
 		enabled    bool
+		fallback   bool
+		pod        string
+		namespace  string
 		annotation string
 		want       bool
-	}{{false, "", false}, {true, "", true}, {false, "true", false}, {true, "false", false}} {
-		s := parsed(t)
-		s.Client.Enabled = tc.enabled
-		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
-		if tc.annotation != "" {
-			p.Annotations[EnableAnnotation] = tc.annotation
-		}
-		out := p.DeepCopy()
-		if _, err := Apply(p, out, s, excludeProxy); err != nil {
-			t.Fatal(err)
-		}
-		if (len(out.Spec.Volumes) > 0) != tc.want || (env(out.Spec.Containers[0], BundleEnvName) != nil) != tc.want {
-			t.Fatalf("enablement %+v", tc)
-		}
+		wantError  bool
+	}{
+		{name: "default-disabled"},
+		{name: "legacy-sidecar-default", enabled: true, fallback: true, want: true},
+		{name: "no-sidecar-default", enabled: true},
+		{name: "namespace-enable", enabled: true, namespace: "true", want: true},
+		{name: "namespace-disable", enabled: true, fallback: true, namespace: "false"},
+		{name: "pod-enable", enabled: true, pod: "true", namespace: "false", want: true},
+		{name: "pod-disable", enabled: true, pod: "false", namespace: "true"},
+		{name: "master-disabled", pod: "true", namespace: "true"},
+		{name: "legacy-opt-out", enabled: true, fallback: true, namespace: "true", annotation: "false"},
+		{name: "label-over-annotation", enabled: true, pod: "true", annotation: "false", want: true},
+		{name: "legacy-true-follows-default", enabled: true, fallback: true, annotation: "true", want: true},
+		{name: "legacy-true-does-not-opt-in", enabled: true, annotation: "true"},
+		{name: "legacy-true-follows-namespace", enabled: true, namespace: "false", annotation: "true"},
+		{name: "invalid-pod-label", enabled: true, pod: "typo", wantError: true},
+		{name: "invalid-namespace-label", enabled: true, namespace: "typo", wantError: true},
+		{name: "invalid-annotation", enabled: true, annotation: "typo", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := metav1.ObjectMeta{Labels: map[string]string{}, Annotations: map[string]string{}}
+			namespace := map[string]string{}
+			if tc.pod != "" {
+				pod.Labels[InjectLabel] = tc.pod
+			}
+			if tc.namespace != "" {
+				namespace[InjectLabel] = tc.namespace
+			}
+			if tc.annotation != "" {
+				pod.Annotations[EnableAnnotation] = tc.annotation
+			}
+			got, err := (Config{Enabled: tc.enabled}).EnabledFor(pod, namespace, tc.fallback)
+			if got != tc.want || (err != nil) != tc.wantError {
+				t.Fatalf("enabled=%v, error=%v; want enabled=%v, error=%v", got, err, tc.want, tc.wantError)
+			}
+		})
 	}
+}
+
+func TestNoMatch(t *testing.T) {
 	p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
 	s := parsed(t)
 	s.Client.Containers.Include = []string{"worker-*"}

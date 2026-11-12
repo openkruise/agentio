@@ -17,12 +17,115 @@ package inject
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openkruise/agentio/pkg/clienttrust"
+	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
+
+func TestClientTrustLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		namespaceMode string
+		podMode       string
+		namespace     string
+		pod           string
+		annotation    string
+		disabled      bool
+		hostNetwork   bool
+		wantCA        bool
+		wantSidecar   bool
+	}{
+		{name: "pod-ca-only", pod: "true", wantCA: true},
+		{name: "namespace-ca-only", namespace: "true", wantCA: true},
+		{name: "pod-none", namespaceMode: "sidecar", podMode: "none", pod: "true", wantCA: true},
+		{name: "pod-ambient", namespaceMode: "sidecar", podMode: "ambient", namespace: "true", wantCA: true},
+		{name: "namespace-ambient", namespaceMode: "ambient", pod: "true", wantCA: true},
+		{name: "namespace-none", namespaceMode: "none", namespace: "true", wantCA: true},
+		{name: "ambient-retains-sidecar-opt-out", namespaceMode: "ambient", podMode: "sidecar", pod: "true", wantCA: true},
+		{name: "both-namespace", namespaceMode: "sidecar", namespace: "true", wantCA: true, wantSidecar: true},
+		{name: "both-pod", podMode: "sidecar", pod: "true", wantCA: true, wantSidecar: true},
+		{name: "pod-ca-overrides-namespace", namespace: "false", pod: "true", wantCA: true},
+		{name: "pod-ca-opt-out", namespaceMode: "sidecar", namespace: "true", pod: "false", wantSidecar: true},
+		{name: "namespace-ca-opt-out", namespaceMode: "sidecar", namespace: "false", wantSidecar: true},
+		{name: "legacy-opt-out", namespace: "true", annotation: "false"},
+		{name: "label-over-legacy-opt-out", pod: "true", annotation: "false", wantCA: true},
+		{name: "legacy-default", namespaceMode: "sidecar", wantCA: true, wantSidecar: true},
+		{name: "unselected"},
+		{name: "master-disabled", namespaceMode: "sidecar", pod: "true", disabled: true, wantSidecar: true},
+		{name: "ca-only-disabled", pod: "true", disabled: true},
+		{name: "host-network-ca-only", namespaceMode: "sidecar", pod: "true", hostNetwork: true, wantCA: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "demo", Labels: map[string]string{}}}
+			if tc.namespaceMode != "" {
+				ns.Labels[dataplaneModeLabel] = tc.namespaceMode
+			}
+			if tc.namespace != "" {
+				ns.Labels[clienttrust.InjectLabel] = tc.namespace
+			}
+			client := kube.NewFakeClient(ns)
+			namespaces := kclient.NewFiltered[*corev1.Namespace](client, kclient.Filter{})
+			namespaces.Start(t.Context().Done())
+			if !kube.WaitForCacheSync("test namespaces", t.Context().Done(), namespaces.HasSynced) {
+				t.Fatal("namespace cache did not sync")
+			}
+			wh := newTestWebhook(t, NativeSidecarModeDisabled)
+			wh.namespaces = namespaces
+			setClientTrustEnabled(t, wh, !tc.disabled)
+			pod := testPod()
+			pod.Spec.HostNetwork = tc.hostNetwork
+			if tc.podMode != "" {
+				pod.Labels[dataplaneModeLabel] = tc.podMode
+			}
+			if tc.pod != "" {
+				pod.Labels[clienttrust.InjectLabel] = tc.pod
+			}
+			pod.Annotations = map[string]string{}
+			if tc.annotation != "" {
+				pod.Annotations[clienttrust.EnableAnnotation] = tc.annotation
+			}
+			before := pod.DeepCopy()
+			out := injectTestPod(t, wh, pod)
+			if got := len(out.Spec.Containers) > len(pod.Spec.Containers); got != tc.wantSidecar {
+				t.Fatalf("sidecar=%v, want %v", got, tc.wantSidecar)
+			}
+			if got := out.Labels[clienttrust.ManagedLabel] == "true"; got != tc.wantCA {
+				t.Fatalf("CA=%v, want %v", got, tc.wantCA)
+			}
+			app := FindContainer("hello", out.Spec.Containers)
+			count := 0
+			for _, variable := range app.Env {
+				if variable.Name == clienttrust.BundleEnvName {
+					count++
+				}
+			}
+			if (count == 1) != tc.wantCA || count > 1 {
+				t.Fatalf("CA environment variable count=%d", count)
+			}
+			if !tc.wantSidecar {
+				withoutCA := out.DeepCopy()
+				withoutCA.Spec.Volumes = before.Spec.Volumes
+				withoutCA.Spec.Containers[0].Env = before.Spec.Containers[0].Env
+				withoutCA.Spec.Containers[0].VolumeMounts = before.Spec.Containers[0].VolumeMounts
+				if !reflect.DeepEqual(withoutCA.Spec, before.Spec) {
+					t.Fatal("CA-only injection changed the Pod beyond CA volumes, mounts and environment")
+				}
+				if again := injectTestPod(t, wh, out); !reflect.DeepEqual(again, out) {
+					t.Fatal("CA-only injection is not idempotent")
+				}
+			}
+			if !reflect.DeepEqual(pod, before) {
+				t.Fatal("mutated the input Pod")
+			}
+		})
+	}
+}
 
 func TestClientTrustAdmission(t *testing.T) {
 	for _, mode := range []NativeSidecarMode{NativeSidecarModeEnabled, NativeSidecarModeDisabled} {
@@ -53,6 +156,31 @@ func TestClientTrustAdmission(t *testing.T) {
 			response, _ = admitTestPod(t, wh, pod)
 			if response.Allowed {
 				t.Fatal("invalid pattern accepted")
+			}
+		})
+	}
+}
+
+func TestClientTrustInvalidEnablementDiagnostics(t *testing.T) {
+	wh := newTestWebhook(t, NativeSidecarModeDisabled)
+	setClientTrustEnabled(t, wh, true)
+	for _, tc := range []struct {
+		name        string
+		labels      map[string]string
+		annotations map[string]string
+	}{
+		{name: "legacy-annotation", annotations: map[string]string{clienttrust.EnableAnnotation: "maybe"}},
+		{name: "pod-label", labels: map[string]string{clienttrust.InjectLabel: "maybe"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := testPod()
+			pod.Labels = tc.labels
+			pod.Annotations = tc.annotations
+			response, _ := admitTestPod(t, wh, pod)
+			if response.Allowed || response.Result == nil ||
+				!strings.Contains(response.Result.Message, "client trust injection: ") ||
+				!strings.Contains(response.Result.Message, "must be true or false") {
+				t.Fatalf("invalid client trust setting lost its admission error context: %+v", response)
 			}
 		})
 	}
@@ -131,19 +259,23 @@ func TestClientTrustSupportedTemplates(t *testing.T) {
 		selected    string
 		podOverride string
 		want        bool
+		label       bool
 	}{
-		{"ztunnel-default", []string{"ztunnel"}, "", "", true},
-		{"ztunnel-pod-selection", []string{"custom-proxy"}, "ztunnel", "", true},
-		{"alias", []string{"client"}, "", "", true},
-		{"selected-alias", []string{"custom-proxy"}, "client", "", true},
-		{"multiple-templates", []string{"ztunnel", "extra"}, "", "", true},
-		{"selected-multiple-templates", []string{"custom-proxy"}, "extra,ztunnel", "", true},
-		{"custom-default", []string{"custom-proxy"}, "", "true", false},
-		{"custom-pod-selection", []string{"ztunnel"}, "custom-proxy", "true", false},
-		{"custom-alias", []string{"custom-client"}, "", "true", false},
-		{"gateway", []string{"egress-gateway"}, "", "true", false},
-		{"agentgateway", []string{"agentgateway"}, "", "true", false},
-		{"pod-opt-out", []string{"ztunnel"}, "", "false", false},
+		{"ztunnel-default", []string{"ztunnel"}, "", "", true, false},
+		{"ztunnel-pod-selection", []string{"custom-proxy"}, "ztunnel", "", true, false},
+		{"alias", []string{"client"}, "", "", true, false},
+		{"selected-alias", []string{"custom-proxy"}, "client", "", true, false},
+		{"multiple-templates", []string{"ztunnel", "extra"}, "", "", true, false},
+		{"selected-multiple-templates", []string{"custom-proxy"}, "extra,ztunnel", "", true, false},
+		{"custom-default", []string{"custom-proxy"}, "", "true", false, false},
+		{"custom-pod-selection", []string{"ztunnel"}, "custom-proxy", "true", false, false},
+		{"custom-alias", []string{"custom-client"}, "", "true", false, false},
+		{"gateway", []string{"egress-gateway"}, "", "true", false, false},
+		{"agentgateway", []string{"agentgateway"}, "", "true", false, false},
+		{"pod-opt-out", []string{"ztunnel"}, "", "false", false, false},
+		{"custom-label", []string{"custom-proxy"}, "", "", true, true},
+		{"gateway-label", []string{"egress-gateway"}, "", "", true, true},
+		{"agentgateway-label", []string{"agentgateway"}, "", "", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wh := newTestWebhook(t, NativeSidecarModeDisabled)
@@ -176,6 +308,9 @@ func TestClientTrustSupportedTemplates(t *testing.T) {
 			}
 			if tc.podOverride != "" {
 				pod.Annotations[clienttrust.EnableAnnotation] = tc.podOverride
+			}
+			if tc.label {
+				pod.Labels[clienttrust.InjectLabel] = "true"
 			}
 			out := injectTestPod(t, wh, pod)
 			app := FindContainer("hello", out.Spec.Containers)
