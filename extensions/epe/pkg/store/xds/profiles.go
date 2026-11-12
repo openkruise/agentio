@@ -150,7 +150,9 @@ func (s *ProfileSource) Watches(regs []filter.Registration) []xdsclient.Watch {
 			},
 			OnChange: func(name string, current *xdsclient.Resource, err error) { s.changed(name, false, current, err) },
 		},
-		{
+	}
+	if features.SandboxMode {
+		watches = append(watches, xdsclient.Watch{
 			TypeURL:        model.SandboxType,
 			ReconnectGrace: 5 * time.Second,
 			OnDelete:       func(string) xdsclient.DeleteAction { return xdsclient.KeepSubscription },
@@ -165,10 +167,7 @@ func (s *ProfileSource) Watches(regs []filter.Registration) []xdsclient.Watch {
 				return compiled, nil
 			},
 			OnChange: func(name string, current *xdsclient.Resource, err error) { s.changed(name, true, current, err) },
-		},
-	}
-	if !features.SandboxMode {
-		return watches[:1]
+		})
 	}
 	return watches
 }
