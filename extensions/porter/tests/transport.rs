@@ -219,6 +219,7 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
             idle_ttl: Duration::from_millis(50),
         },
         Metrics::new(),
+        true,
     );
     let mut health = c.readiness();
     let transport = TransportConfig {
@@ -364,7 +365,7 @@ async fn unknown_type_is_nacked_without_reconnecting_or_dropping_cache() {
                 server_stop.cancelled_owned(),
             ),
     );
-    let c = Client::new(CacheConfig::default(), Metrics::new());
+    let c = Client::new(CacheConfig::default(), Metrics::new(), true);
     let mut health = c.readiness();
     let client = tokio::spawn(c.clone().run(
         TransportConfig {
@@ -472,7 +473,7 @@ async fn reconnect_keeps_grace_cache_during_rpc_handshake_without_replaying_it()
                     server_stop.cancelled_owned(),
                 ),
         );
-        let c = Client::new(CacheConfig::default(), Metrics::new());
+        let c = Client::new(CacheConfig::default(), Metrics::new(), true);
         let mut health = c.readiness();
         let client = tokio::spawn(c.clone().run(
             TransportConfig {
@@ -608,7 +609,7 @@ async fn slow_failed_reconnects_do_not_reset_backoff_using_cached_sync_state() {
                     server_stop.cancelled_owned(),
                 ),
         );
-        let c = Client::new(CacheConfig::default(), Metrics::new());
+        let c = Client::new(CacheConfig::default(), Metrics::new(), true);
         let mut health = c.readiness();
         let client = tokio::spawn(c.clone().run(
             TransportConfig {

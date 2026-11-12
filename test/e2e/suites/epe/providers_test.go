@@ -370,6 +370,7 @@ spec:
       valueFrom: {fieldRef: {fieldPath: status.podIP}}
     - {name: IDENTITY_PROVIDER_URL, value: {{ .EnvironmentURL | printf "%q" }}}
     - {name: CREDENTIAL_PROVIDER_MTLS_SOURCE, value: none}
+    - {name: AGENTIO_SANDBOX_MODE, value: "true"}
     volumeMounts:
     - {name: roots, mountPath: /var/run/xds-root, readOnly: true}
     - {name: token, mountPath: /var/run/xds-token, readOnly: true}

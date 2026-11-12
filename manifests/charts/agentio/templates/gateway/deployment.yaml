@@ -136,6 +136,8 @@ spec:
             - --xds-cache-idle-ttl={{ .Values.egressGateway.porter.cache.idleTTL }}
             - --xds-cache-max-entries={{ .Values.egressGateway.porter.cache.maxEntries }}
           env:
+            - name: AGENTIO_SANDBOX_MODE
+              value: {{ .Values.sandbox.enabled | quote }}
             - name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY
               value: {{ .Values.agentiod.enableSNITrafficPolicy | quote }}
             - name: POD_NAME

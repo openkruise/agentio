@@ -16,6 +16,7 @@ fn client(max: usize, ttl: Duration) -> Arc<Client> {
             idle_ttl: ttl,
         },
         Metrics::new(),
+        true,
     )
 }
 
@@ -119,6 +120,35 @@ async fn workload_and_sandbox_share_connect_deadline() {
     let error = response.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Unavailable);
     assert!(error.message().contains("deadline exceeded"));
+}
+
+#[test]
+fn workload_mode_skips_sandbox_on_initial_connection_and_reconnect() {
+    let c = Client::new(CacheConfig::default(), Metrics::new(), false);
+    for _ in 0..2 {
+        let initial = c.initial(&Node::default(), &mut Default::default());
+        assert_eq!(initial.len(), 2);
+        assert!(
+            initial
+                .iter()
+                .all(|request| request.type_url != ResourceKind::Sandbox.type_url())
+        );
+        c.established();
+        assert!(!*c.readiness().borrow());
+        c.apply(ResourceKind::Workload, &response(vec![], &[]))
+            .unwrap();
+        assert!(!*c.readiness().borrow());
+        c.apply(
+            ResourceKind::TrafficPolicy,
+            &Response {
+                type_url: ResourceKind::TrafficPolicy.type_url().into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(*c.readiness().borrow());
+        c.disconnected();
+    }
 }
 
 #[tokio::test]

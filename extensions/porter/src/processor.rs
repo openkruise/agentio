@@ -318,6 +318,7 @@ mod tests {
                         idle_ttl: Duration::from_secs(60),
                     },
                     metrics.clone(),
+                    true,
                 ),
                 cluster_id: "Kubernetes".into(),
                 timeout: Duration::from_secs(1),

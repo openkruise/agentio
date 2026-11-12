@@ -22,16 +22,20 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"istio.io/istio/pkg/test"
+
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/internal/testutil"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
 
 func TestSandboxReplacementRetainsNewProfile(t *testing.T) {
+	test.SetForTest(t, &features.SandboxMode, true)
 	source := NewProfileSource(profilestore.NewXDSStore().ObserveAdmission, t.Context().Done())
 	cms := krt.NewMutableCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(t.Context().Done()))
 	collection := source.Collection(cms.AsCollection(), krt.WithStop(t.Context().Done()))

@@ -18,8 +18,11 @@ import (
 	"flag"
 	"testing"
 
+	"istio.io/istio/pkg/test"
+
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -27,21 +30,25 @@ func TestSecurityProfileSourceWatches(t *testing.T) {
 	if flag.Lookup("security-profile-source").DefValue != "kubernetes" {
 		t.Fatal("default must preserve informer policy discovery")
 	}
-	for _, source := range []string{"kubernetes", "xds"} {
-		profiles := xdsstore.NewProfileSource(profilestore.NewXDSStore().ObserveAdmission, t.Context().Done())
-		watches := epeWatches(source, nil, profiles)
-		found := map[string]bool{}
-		for _, watch := range watches {
-			if watch.Wildcard {
-				t.Fatal("policy discovery must start with named-only watches")
+	for _, sandboxMode := range []bool{false, true} {
+		test.SetForTest(t, &features.SandboxMode, sandboxMode)
+		for _, source := range []string{"kubernetes", "xds"} {
+			profiles := xdsstore.NewProfileSource(profilestore.NewXDSStore().ObserveAdmission, t.Context().Done())
+			watches := epeWatches(source, nil, profiles)
+			found := map[string]bool{}
+			for _, watch := range watches {
+				if watch.Wildcard {
+					t.Fatal("policy discovery must start with named-only watches")
+				}
+				found[watch.TypeURL] = true
 			}
-			found[watch.TypeURL] = true
-		}
-		if !found[model.WorkloadType] || !found[model.TrafficPolicyType] {
-			t.Fatal("native workload discovery is required in both modes")
-		}
-		if found[model.SecurityProfileType] != (source == "xds") || found[model.SandboxType] != (source == "xds") {
-			t.Fatalf("%s selected unexpected policy watches: %v", source, found)
+			if !found[model.WorkloadType] || !found[model.TrafficPolicyType] {
+				t.Fatal("native workload discovery is required in both modes")
+			}
+			if found[model.SecurityProfileType] != (source == "xds") ||
+				found[model.SandboxType] != (source == "xds" && sandboxMode) {
+				t.Fatalf("%s selected unexpected policy watches: %v", source, found)
+			}
 		}
 	}
 }

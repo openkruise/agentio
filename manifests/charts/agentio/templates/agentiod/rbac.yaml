@@ -19,8 +19,13 @@ rules:
     resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["agents.kruise.io"]
-    resources: ["sandboxes", "trafficpolicies", "globaltrafficpolicies", "securityprofiles", "globalsecurityprofiles"]
+    resources: ["trafficpolicies", "globaltrafficpolicies", "securityprofiles", "globalsecurityprofiles"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.sandbox.enabled }}
+  - apiGroups: ["agents.kruise.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   - apiGroups: ["agents.kruise.io"]
     resources: ["securityprofiles/status", "globalsecurityprofiles/status", "trafficpolicies/status", "globaltrafficpolicies/status"]
     verbs: ["patch"]

@@ -27,6 +27,7 @@ pub struct Config {
     pub logging: telemetry::Config,
     pub enable_traffic_policy: bool,
     pub enable_sni_traffic_policy: bool,
+    pub sandbox_mode: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -112,6 +113,11 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         .transpose()
         .context("invalid AGENTIO_ENABLE_SNI_TRAFFIC_POLICY: expected true or false")?
         .unwrap_or(false);
+    let sandbox_mode = read_env("AGENTIO_SANDBOX_MODE")?
+        .map(|value| value.parse::<bool>())
+        .transpose()
+        .context("invalid AGENTIO_SANDBOX_MODE: expected true or false")?
+        .unwrap_or(false);
     let logging = telemetry::Config::new(
         read_env("AGENTIO_LOG_LEVEL")?.as_deref().unwrap_or("info"),
         read_env("AGENTIO_LOG_FORMAT")?.as_deref().unwrap_or("text"),
@@ -161,6 +167,7 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         logging,
         enable_traffic_policy,
         enable_sni_traffic_policy,
+        sandbox_mode,
     })
 }
 
@@ -240,6 +247,23 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.to_string().contains("ENABLE_TRAFFIC_POLICY"));
+    }
+
+    #[test]
+    fn sandbox_mode_requires_explicit_opt_in() {
+        assert!(!config(&[], &[]).unwrap().sandbox_mode);
+        for (value, expected) in [("false", false), ("true", true)] {
+            assert_eq!(
+                config(&[], &[("AGENTIO_SANDBOX_MODE", value)])
+                    .unwrap()
+                    .sandbox_mode,
+                expected
+            );
+        }
+        let error = config(&[], &[("AGENTIO_SANDBOX_MODE", "invalid")])
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("AGENTIO_SANDBOX_MODE"));
     }
 
     #[test]

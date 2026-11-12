@@ -36,6 +36,7 @@ import (
 
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
 	"github.com/openkruise/agentio/pkg/model"
@@ -403,6 +404,9 @@ func (s *store) ProfilesFor(subject subject.Subject) []*securityprofile.Profile 
 // ResolveProfiles waits only for the Sandbox's first usable publication.
 // Later updates of the same UID may use the last known-good version.
 func (s *store) ResolveProfiles(ctx context.Context, subject subject.Subject) ([]*securityprofile.Profile, error) {
+	if !features.SandboxMode && subject.Sandbox != nil {
+		return nil, fmt.Errorf("Sandbox identity requires AGENTIO_SANDBOX_MODE=true")
+	}
 	w := subject.Workload
 	if subject.Sandbox != nil && (w.Namespace == "" || w.Name == "") {
 		return nil, fmt.Errorf("local profile lookup requires workload namespace and name")

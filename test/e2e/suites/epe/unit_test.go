@@ -126,3 +126,35 @@ func TestEgressEPEFixtureXDSArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestCredentialProviderFixtureSandboxMode(t *testing.T) {
+	manifest := template.Must(template.New("provider").Option("missingkey=error").Parse(providerFixturesYAML))
+	var rendered bytes.Buffer
+	if err := manifest.Execute(&rendered, map[string]any{
+		"Name":           "epe-provider-watch",
+		"Namespace":      "agentio-system",
+		"EPEImage":       "registry.example/epe:test",
+		"ProviderImage":  "registry.example/provider:test",
+		"EnvironmentURL": "http://credential-provider:8080/credentials/environment",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := kube.DecodeYAML(&rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range objects {
+		if object.GetKind() != "Pod" || object.GetName() != "epe-provider-watch" {
+			continue
+		}
+		var pod corev1.Pod
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, &pod); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "AGENTIO_SANDBOX_MODE", Value: "true"}) {
+			t.Fatal("credential-provider EPE must enable Sandbox mode for its Sandbox caller")
+		}
+		return
+	}
+	t.Fatal("fixture did not render the credential-provider EPE Pod")
+}

@@ -363,6 +363,15 @@ func TestProfileCollectionSandboxMode(t *testing.T) {
 			if listed != enabled {
 				t.Fatalf("Sandbox discovery started = %v, want %v", listed, enabled)
 			}
+			if !enabled {
+				_, err := store.ResolveProfiles(t.Context(), subject.Subject{
+					Workload: subject.Workload{Namespace: "ns-a", Name: "pod", SecurityProfileReferences: []string{}},
+					Sandbox:  &subject.Sandbox{UID: "kruise:one"},
+				})
+				if err == nil {
+					t.Fatal("workload mode accepted explicit Sandbox identity")
+				}
+			}
 		})
 	}
 }
