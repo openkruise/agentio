@@ -167,6 +167,7 @@ impl Default for CacheConfig {
 }
 
 pub struct Client {
+    pub(crate) sandbox_mode: bool,
     state: Mutex<State>,
     epoch: AtomicU64,
     invalidated: watch::Sender<u64>,
@@ -178,8 +179,9 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(config: CacheConfig, metrics: Arc<Metrics>) -> Arc<Self> {
+    pub fn new(config: CacheConfig, metrics: Arc<Metrics>, sandbox_mode: bool) -> Arc<Self> {
         Arc::new(Self {
+            sandbox_mode,
             state: Mutex::new(State {
                 types: Default::default(),
                 idle: LruCache::unbounded(),
@@ -593,6 +595,7 @@ impl Client {
         let mut state = self.state.lock().unwrap();
         ResourceKind::ALL
             .into_iter()
+            .filter(|kind| *kind != ResourceKind::Sandbox || self.sandbox_mode)
             .map(|kind| {
                 let type_state = &mut state.types[kind.index()];
                 let mut request = Request {
@@ -806,7 +809,10 @@ impl Client {
             self.remove(&mut state, &ResourceKey { kind, name });
         }
         self.publish_size(&state);
-        let ready = state.types.iter().all(|type_state| type_state.synced);
+        let ready = ResourceKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != ResourceKind::Sandbox || self.sandbox_mode)
+            .all(|kind| state.types[kind.index()].synced);
         self.ready.send_if_modified(|old| {
             if *old == ready {
                 false

@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"istio.io/istio/pkg/test"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -46,6 +47,7 @@ import (
 	xdsbackend "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/demandcache"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	controlxds "github.com/openkruise/agentio/pkg/xds"
@@ -62,14 +64,19 @@ func (demandAuthenticator) Authenticate(context.Context) (model.PeerIdentity, er
 // Exercise the EPE resolver through the real client, ADS generators and publication
 // store: a cold request must discover both its Workload and its policy dependencies.
 func TestDemandDiscovery(t *testing.T) {
-	testDemandDiscovery(t, 64)
+	testDemandDiscovery(t, 64, true)
+}
+
+func TestWorkloadDemandDiscovery(t *testing.T) {
+	testDemandDiscovery(t, 64, false)
 }
 
 func TestDemandCacheSmallCapacity(t *testing.T) {
-	testDemandDiscovery(t, 1)
+	testDemandDiscovery(t, 1, true)
 }
 
-func testDemandDiscovery(t *testing.T, capacity int) {
+func testDemandDiscovery(t *testing.T, capacity int, sandboxMode bool) {
+	test.SetForTest(t, &features.SandboxMode, sandboxMode)
 	const clusterID = "edge"
 	const uid = "edge//Pod/ns/pod"
 	pack := func(value proto.Message) *anypb.Any {
@@ -485,6 +492,12 @@ func testDemandDiscovery(t *testing.T, capacity int) {
 	profiles, err = profileStore.ResolveProfiles(ctx, subject.Subject{Workload: resolved})
 	if err != nil || len(profiles) != 1 || profiles[0].Meta.Name != "unused" {
 		t.Fatalf("updated SecurityProfile binding: %v %v", profiles, err)
+	}
+	if !sandboxMode {
+		if _, found := client.Snapshot().Synced[model.SandboxType]; found {
+			t.Fatal("workload mode started Sandbox discovery")
+		}
+		return
 	}
 	sandbox := resource(model.SandboxType, "kruise:delivery", &sandboxv1.Sandbox{
 		Uid:      "kruise:delivery",

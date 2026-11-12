@@ -309,7 +309,7 @@ func TestRenderIgnoresProxyImageAnnotation(t *testing.T) {
 	}
 }
 
-func TestRenderPassesSNIPolicyFlagToPorter(t *testing.T) {
+func TestRenderPassesFeatureFlagsToPorter(t *testing.T) {
 	gw := gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "egress", Namespace: "demo", UID: "uid-egress"},
 		Spec: gatewayv1.GatewaySpec{
@@ -324,6 +324,7 @@ func TestRenderPassesSNIPolicyFlagToPorter(t *testing.T) {
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
 			overlay := mergeMaps(parityValuesOverlay(), map[string]any{
 				"agentio": map[string]any{"env": map[string]any{
+					"AGENTIO_SANDBOX_MODE":              enabled,
 					"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY": enabled,
 				}},
 			})
@@ -336,6 +337,7 @@ func TestRenderPassesSNIPolicyFlagToPorter(t *testing.T) {
 			for _, want := range []string{
 				"name: agentio-porter",
 				"--grpc-port=9002",
+				"- name: AGENTIO_SANDBOX_MODE\n            value: " + strconv.Quote(strconv.FormatBool(enabled)),
 				"- name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY\n            value: " + strconv.Quote(strconv.FormatBool(enabled)),
 			} {
 				if !strings.Contains(got, want) {

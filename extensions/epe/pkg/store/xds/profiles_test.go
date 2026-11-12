@@ -28,8 +28,10 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
+	"istio.io/istio/pkg/test"
 )
 
 func profilePayload(namespace string) *securityv1.SecurityProfile {
@@ -131,6 +133,7 @@ func TestProfileAdmissionAndOrderedDemand(t *testing.T) {
 }
 
 func TestSandboxProfilesAreAtomicAndHostBound(t *testing.T) {
+	test.SetForTest(t, &features.SandboxMode, true)
 	regs, err := wiring.BuildValidationFilters()
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +222,25 @@ func TestSandboxProfilesAreAtomicAndHostBound(t *testing.T) {
 	f.snapshot.Resources[model.SandboxType][manifest.Uid] = &xdsclient.Resource{Value: decoded}
 	if got, err := profileReferences(t, s, subj); err != nil || len(got) != 0 {
 		t.Fatalf("removed inline policy retained: %v %v", got, err)
+	}
+}
+
+func TestWorkloadModeDoesNotDiscoverSandboxProfiles(t *testing.T) {
+	test.SetForTest(t, &features.SandboxMode, false)
+	f := testSource()
+	s := New(f)
+	subj := subject.Subject{Workload: subject.Workload{
+		UID: "host", Namespace: "ns", Name: "pod", SecurityProfileReferences: []string{},
+	}}
+	if refs, err := profileReferences(t, s, subj); err != nil || len(refs) != 0 {
+		t.Fatalf("ordinary Workload resolution: %v %v", refs, err)
+	}
+	subj.Sandbox = &subject.Sandbox{UID: "kruise:one"}
+	if _, err := profileReferences(t, s, subj); err == nil {
+		t.Fatal("workload mode accepted explicit Sandbox identity")
+	}
+	if f.demands != 0 {
+		t.Fatalf("workload mode made %d resource demands", f.demands)
 	}
 }
 

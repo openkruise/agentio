@@ -300,6 +300,7 @@ async fn connect_traffic_policy_benchmark() {
                 idle_ttl: Duration::from_secs(600),
             },
             Metrics::new(),
+            true,
         );
         let discovery = tokio::spawn(client.clone().run(
             TransportConfig {

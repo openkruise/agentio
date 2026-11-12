@@ -66,6 +66,10 @@ impl Resolver<'_> {
                     }
                     _ => ResolveError::Authentication(status),
                 })?;
+            if !self.client.sandbox_mode && !identity.sandbox_id.is_empty() {
+                debug!(reason = "sandbox_mode_disabled", "request denied");
+                return Err(ResolveError::Denied);
+            }
             let mut invalidated = self.client.invalidations();
             loop {
                 let epoch = *invalidated.borrow_and_update();

@@ -114,6 +114,7 @@ data:
       seccompProfile: {}
     agentio:
       env:
+        AGENTIO_SANDBOX_MODE: {{ .Values.sandbox.enabled }}
         AGENTIO_ENABLE_SNI_TRAFFIC_POLICY: {{ .Values.agentiod.enableSNITrafficPolicy }}
     pilot:
       cni:

@@ -98,7 +98,7 @@ fn processor() -> Processor {
     Processor {
         authenticator: Arc::new(crate::identity::Native),
         gateway: crate::processor::Gateway::AgentioEgress,
-        client: Client::new(CacheConfig::default(), Metrics::new()),
+        client: Client::new(CacheConfig::default(), Metrics::new(), true),
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
         enable_traffic_policy: true,
@@ -236,6 +236,35 @@ async fn runtime_identity_reuses_binding_and_policy_checks() {
         any(view::SANDBOX, sandbox),
     );
     assert!(!allowed(p.handle(request("", false)).await.unwrap()));
+}
+
+#[tokio::test]
+async fn workload_mode_rejects_sandbox_without_discovery() {
+    for enforce_policy in [false, true] {
+        let mut p = processor();
+        p.client = Client::new(CacheConfig::default(), Metrics::new(), false);
+        p.enable_traffic_policy = enforce_policy;
+        seed(
+            &p.client,
+            ResourceKind::Workload,
+            "/10.0.0.1",
+            workload(Some(&[])),
+        );
+        for udp in [false, true] {
+            assert!(allowed(p.handle(request("", udp)).await.unwrap()));
+            assert!(!allowed(p.handle(request("sandbox", udp)).await.unwrap()));
+        }
+        p.authenticator = Arc::new(RuntimeIdentity {
+            delay: Duration::ZERO,
+            failure: None,
+        });
+        assert!(!allowed(p.handle(request("", false)).await.unwrap()));
+        assert!(
+            p.client.state.lock().unwrap().types[ResourceKind::Sandbox.index()]
+                .entries
+                .is_empty()
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1427,6 +1456,7 @@ async fn hot_dependency_batch_preserves_order_metrics_ttl_and_invalidation() {
             idle_ttl: Duration::from_secs(1),
         },
         Metrics::new(),
+        true,
     );
     let names = vec!["deny".into(), "allow".into()];
     seed(
@@ -1769,6 +1799,7 @@ async fn snapshot_pins_dependencies_exceeding_idle_cache_capacity() {
             ..CacheConfig::default()
         },
         Metrics::new(),
+        true,
     );
     seed(
         &p.client,
@@ -1838,6 +1869,7 @@ async fn processor_hot_policy_reads_count_hits_and_refresh_ttl() {
             max_entries: 10,
         },
         Metrics::new(),
+        true,
     );
     seed(
         &p.client,

@@ -32,6 +32,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
@@ -130,7 +131,7 @@ func (s *ProfileSource) changed(name string, sandbox bool, current *xdsclient.Re
 
 // Watches validates and compiles policies before the xDS client ACKs.
 func (s *ProfileSource) Watches(regs []filter.Registration) []xdsclient.Watch {
-	return []xdsclient.Watch{
+	watches := []xdsclient.Watch{
 		{
 			TypeURL:        model.SecurityProfileType,
 			ReconnectGrace: 5 * time.Second,
@@ -166,6 +167,10 @@ func (s *ProfileSource) Watches(regs []filter.Registration) []xdsclient.Watch {
 			OnChange: func(name string, current *xdsclient.Resource, err error) { s.changed(name, true, current, err) },
 		},
 	}
+	if !features.SandboxMode {
+		return watches[:1]
+	}
+	return watches
 }
 
 func decodeSandboxProfiles(value *anypb.Any, regs []filter.Registration) (*sandboxProfiles, error) {
@@ -220,11 +225,14 @@ func (s *Store) AcquireProfileReferences(
 	}
 	sandboxName := ""
 	if subj.Sandbox != nil {
+		if !features.SandboxMode {
+			return nil, nil, fmt.Errorf("Sandbox identity requires AGENTIO_SANDBOX_MODE=true")
+		}
 		sandboxName = subj.Sandbox.UID
 		if sandboxName == "" {
 			return nil, nil, fmt.Errorf("empty Sandbox identity")
 		}
-	} else if subj.Workload.Namespace != "" && subj.Workload.Name != "" {
+	} else if features.SandboxMode && subj.Workload.Namespace != "" && subj.Workload.Name != "" {
 		sandboxName = subj.Workload.Namespace + "/" + subj.Workload.Name
 	}
 	if sandboxName != "" {

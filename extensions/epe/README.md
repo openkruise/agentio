@@ -22,6 +22,8 @@ Every EPE deployment must supply `--xds-address` and ADS trust/token settings. U
 
 Set `--xds-cluster-id` to Agentiod's `--cluster-id` when it differs from the default `Kubernetes`. Native gateways supply the canonical Workload UID. For legacy gateways supplying only Pod name and namespace, EPE uses the registry's Pod-to-Workload UID mapping.
 
+`AGENTIO_SANDBOX_MODE=false` (the default) disables Sandbox informer and xDS discovery, including implicit Pod namespace/name lookups. Workload SecurityProfile bindings remain active; explicit Sandbox identities are rejected. Set it to `true` to add Sandbox rules in either policy source mode. Helm propagates `sandbox.enabled` to managed EPE.
+
 ## OAuth protocol capability
 
 `pkg/filters/oauth2` provides a policy-neutral filter for device authorization,

@@ -280,7 +280,7 @@ func TestSandboxModePropagation(t *testing.T) {
 	for _, profile := range []string{"sidecar", "ambient"} {
 		for _, mode := range []string{"default", "false", "true"} {
 			t.Run(profile+"/"+mode, func(t *testing.T) {
-				args := []string{"--set", "profile=" + profile, "--set", "epe.mode=managed"}
+				args := []string{"--set", "profile=" + profile, "--set", "epe.mode=managed", "--set", "egressGateway.enabled=true"}
 				want := "false"
 				if mode != "default" {
 					args = append(args, "--set", "sandbox.enabled="+mode)
@@ -294,8 +294,8 @@ func TestSandboxModePropagation(t *testing.T) {
 				if strings.Contains(manifest, "name: AGENTIO_SANDBOX_RUNTIMES") {
 					t.Fatal("chart still emits the removed Sandbox runtimes setting")
 				}
-				// agentiod, managed EPE, and (for ambient) the node ztunnel agree.
-				count := 2
+				// agentiod, managed EPE, Porter, and (for ambient) the node ztunnel agree.
+				count := 3
 				if profile == "ambient" {
 					count++
 				}
@@ -305,6 +305,9 @@ func TestSandboxModePropagation(t *testing.T) {
 				}
 				if profile == "sidecar" {
 					requireContains(t, manifest, "sandboxMode: "+fmt.Sprintf("%q", want))
+				}
+				if strings.Contains(manifest, `resources: ["sandboxes"]`) != (want == "true") {
+					t.Fatal("Sandbox RBAC does not follow sandbox.enabled")
 				}
 			})
 		}

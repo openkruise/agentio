@@ -180,6 +180,8 @@ spec:
           - --xds-cache-idle-ttl=10m
           - --xds-cache-max-entries=0
         env:
+          - name: AGENTIO_SANDBOX_MODE
+            value: "false"
           - name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY
             value: "false"
           - name: POD_NAME

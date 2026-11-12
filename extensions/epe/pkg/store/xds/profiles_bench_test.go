@@ -30,8 +30,10 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/demandcache"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
+	"istio.io/istio/pkg/test"
 )
 
 // Immutable publications isolate request-side adaptation and cache maintenance
@@ -76,6 +78,7 @@ func (s profileBenchLease) Demand(context.Context) (*xdsclient.Resource, error) 
 }
 
 func BenchmarkResolveProfilesHot(b *testing.B) {
+	test.SetForTest(b, &features.SandboxMode, true)
 	for _, shared := range []int{0, 2} {
 		b.Run(fmt.Sprintf("Shared%d", shared), func(b *testing.B) {
 			source := &profileBenchSource{fakeSource: testSource(), done: make(chan struct{})}
