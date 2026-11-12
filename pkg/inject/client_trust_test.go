@@ -17,6 +17,7 @@ package inject
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -155,6 +156,31 @@ func TestClientTrustAdmission(t *testing.T) {
 			response, _ = admitTestPod(t, wh, pod)
 			if response.Allowed {
 				t.Fatal("invalid pattern accepted")
+			}
+		})
+	}
+}
+
+func TestClientTrustInvalidEnablementDiagnostics(t *testing.T) {
+	wh := newTestWebhook(t, NativeSidecarModeDisabled)
+	setClientTrustEnabled(t, wh, true)
+	for _, tc := range []struct {
+		name        string
+		labels      map[string]string
+		annotations map[string]string
+	}{
+		{name: "legacy-annotation", annotations: map[string]string{clienttrust.EnableAnnotation: "maybe"}},
+		{name: "pod-label", labels: map[string]string{clienttrust.InjectLabel: "maybe"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := testPod()
+			pod.Labels = tc.labels
+			pod.Annotations = tc.annotations
+			response, _ := admitTestPod(t, wh, pod)
+			if response.Allowed || response.Result == nil ||
+				!strings.Contains(response.Result.Message, "client trust injection: ") ||
+				!strings.Contains(response.Result.Message, "must be true or false") {
+				t.Fatalf("invalid client trust setting lost its admission error context: %+v", response)
 			}
 		})
 	}

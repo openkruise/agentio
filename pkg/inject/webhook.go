@@ -231,7 +231,7 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 		defaultTrust,
 	)
 	if err != nil {
-		return toAdmissionResponse(err)
+		return toAdmissionResponse(fmt.Errorf("client trust injection: %w", err))
 	}
 	if !params.injectSidecar && !params.injectClientTrust {
 		return &admissionv1.AdmissionResponse{Allowed: true}
