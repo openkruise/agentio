@@ -803,6 +803,97 @@
                       }
                     },
                     {
+                      "name": "agentio.egress_authorization",
+                      "typedConfig": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC",
+                        "rulesStatPrefix": "egress_authorization",
+                        "matcher": {
+                          "matcherList": {
+                            "matchers": [
+                              {
+                                "predicate": {
+                                  "singlePredicate": {
+                                    "input": {
+                                      "name": "envoy.matching.inputs.filter_state",
+                                      "typedConfig": {
+                                        "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput",
+                                        "key": "envoy.filters.listener.original_dst.local_ip",
+                                        "field": "ip"
+                                      }
+                                    },
+                                    "customMatch": {
+                                      "name": "envoy.matching.matchers.ip",
+                                      "typedConfig": {
+                                        "@type": "type.googleapis.com/envoy.extensions.matching.input_matchers.ip.v3.Ip",
+                                        "cidrRanges": [
+                                          {
+                                            "addressPrefix": "127.0.0.0",
+                                            "prefixLen": 8
+                                          },
+                                          {
+                                            "addressPrefix": "::ffff:127.0.0.0",
+                                            "prefixLen": 104
+                                          },
+                                          {
+                                            "addressPrefix": "::1",
+                                            "prefixLen": 128
+                                          },
+                                          {
+                                            "addressPrefix": "0.0.0.0",
+                                            "prefixLen": 32
+                                          },
+                                          {
+                                            "addressPrefix": "::ffff:0.0.0.0",
+                                            "prefixLen": 128
+                                          },
+                                          {
+                                            "addressPrefix": "::",
+                                            "prefixLen": 128
+                                          },
+                                          {
+                                            "addressPrefix": "169.254.0.0",
+                                            "prefixLen": 16
+                                          },
+                                          {
+                                            "addressPrefix": "::ffff:169.254.0.0",
+                                            "prefixLen": 112
+                                          },
+                                          {
+                                            "addressPrefix": "fe80::",
+                                            "prefixLen": 10
+                                          }
+                                        ],
+                                        "statPrefix": "egress_authorization"
+                                      }
+                                    }
+                                  }
+                                },
+                                "onMatch": {
+                                  "action": {
+                                    "name": "deny",
+                                    "typedConfig": {
+                                      "@type": "type.googleapis.com/envoy.config.rbac.v3.Action",
+                                      "name": "agentio_egress_denied",
+                                      "action": "DENY"
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "onNoMatch": {
+                            "action": {
+                              "name": "allow",
+                              "typedConfig": {
+                                "@type": "type.googleapis.com/envoy.config.rbac.v3.Action",
+                                "name": "allowed_destination"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
                       "name": "envoy.filters.http.ext_proc",
                       "typedConfig": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor",
@@ -1178,12 +1269,12 @@
                               "condition": {
                                 "id": "15",
                                 "callExpr": {
-                                  "function": "_&&_",
+                                  "function": "_\u0026\u0026_",
                                   "args": [
                                     {
                                       "id": "8",
                                       "callExpr": {
-                                        "function": "_&&_",
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "3",
@@ -1237,7 +1328,7 @@
                                     {
                                       "id": "38",
                                       "callExpr": {
-                                        "function": "_&&_",
+                                        "function": "_\u0026\u0026_",
                                         "args": [
                                           {
                                             "id": "13",
@@ -2172,7 +2263,14 @@
                     "filter_config": {
                       "@type": "type.googleapis.com/google.protobuf.Struct",
                       "value": {
-                        "deniedCidrs": [],
+                        "deniedCidrs": [
+                          "127.0.0.0/8",
+                          "::1/128",
+                          "0.0.0.0/32",
+                          "::/128",
+                          "169.254.0.0/16",
+                          "fe80::/10"
+                        ],
                         "resolveSni": false,
                         "skipMatchedProfile": false
                       }

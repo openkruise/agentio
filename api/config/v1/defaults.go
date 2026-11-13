@@ -14,8 +14,39 @@
 
 package configv1
 
+import (
+	"fmt"
+	"net/netip"
+	"slices"
+)
+
+// Validate checks operator-supplied destination CIDRs.
+func (x *EgressAuthorization) Validate() error {
+	for _, raw := range x.GetDeniedCidrs() {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix.Addr().Is4In6() {
+			return fmt.Errorf("egressAuthorization.deniedCIDRs: invalid or IPv4-mapped CIDR %q", raw)
+		}
+	}
+	return nil
+}
+
+// EffectiveDeniedCIDRs requires validated configuration and retains mandatory restrictions.
+func (x *EgressAuthorization) EffectiveDeniedCIDRs() []string {
+	denied := MandatoryEgressDeniedCIDRs()
+	var additional []string
+	for _, raw := range x.GetDeniedCidrs() {
+		cidr := netip.MustParsePrefix(raw).Masked().String()
+		if !slices.Contains(denied, cidr) {
+			additional = append(additional, cidr)
+		}
+	}
+	slices.Sort(additional)
+	return append(denied, slices.Compact(additional)...)
+}
+
 // MandatoryEgressDeniedCIDRs returns the destination restrictions shared by EPE
-// and the gateway's dynamic forward proxy. Private service networks remain
+// and native gateway forwarding. Private service networks remain
 // operator-owned. Each caller receives its own slice.
 func MandatoryEgressDeniedCIDRs() []string {
 	return []string{

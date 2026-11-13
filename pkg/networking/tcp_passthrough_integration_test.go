@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	bootstrapv3 "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -34,6 +35,7 @@ import (
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -177,6 +179,19 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 					}
 					for _, listener := range listeners {
 						if listener.Name == TCPPassthrough {
+							// This routing fixture uses loopback origins; production restrictions
+							// are exercised separately by TestEnvoyEgressAuthorizationCONNECT.
+							for _, filter := range listener.FilterChains[0].Filters {
+								if filter.Name == "agentio.tcp_policy" {
+									module := new(udpatypev1.TypedStruct)
+									if err := filter.GetTypedConfig().UnmarshalTo(module); err != nil {
+										t.Fatal(err)
+									}
+									settings := module.Value.GetFields()["filter_config"].GetStructValue().GetFields()["value"].GetStructValue()
+									settings.Fields["deniedCidrs"] = structpb.NewListValue(&structpb.ListValue{})
+									filter.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: b.pack(module)}
+								}
+							}
 							cfg.StaticResources.Listeners = append(cfg.StaticResources.Listeners, listener)
 							cfg.StaticResources.Clusters = append(
 								cfg.StaticResources.Clusters,

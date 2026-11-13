@@ -94,6 +94,38 @@ func TestAgentioConfigTrustedEPEIdentities(t *testing.T) {
 	}
 }
 
+func TestAgentioConfigEgressAuthorizationOverlay(t *testing.T) {
+	base, err := applyAgentioConfig("egressAuthorization: {deniedCIDRs: [100.100.100.200/32]}", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		content string
+		count   int
+		invalid bool
+	}{
+		{"{}", 1, false},
+		{"egressAuthorization: null", 1, false},
+		{"egressAuthorization: {deniedCIDRs: []}", 0, false},
+		{"egressAuthorization: {deniedCIDRs: [192.0.2.0/24]}", 1, false},
+		{"egressAuthorization: {deniedCIDRs: [invalid]}", 0, true},
+		{"egressAuthorization: {deniedCIDRs: ['::ffff:192.0.2.0/120']}", 0, true},
+	} {
+		t.Run(tc.content, func(t *testing.T) {
+			got, err := applyAgentioConfig(tc.content, base)
+			if (err != nil) != tc.invalid {
+				t.Fatalf("error=%v, want invalid=%v", err, tc.invalid)
+			}
+			if err == nil && len(got.GetEgressAuthorization().GetDeniedCidrs()) != tc.count {
+				t.Fatalf("unexpected overlay: %v", got)
+			}
+			if base.GetEgressAuthorization().GetDeniedCidrs()[0] != "100.100.100.200/32" {
+				t.Fatal("overlay mutated base")
+			}
+		})
+	}
+}
+
 func TestAgentioConfigMapNamesAreConfigurable(t *testing.T) {
 	ctx := t.Context()
 	objects := []runtime.Object{

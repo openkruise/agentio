@@ -26,6 +26,7 @@ import (
 	dfpcommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	dfpsniv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	"google.golang.org/protobuf/proto"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -35,13 +36,24 @@ import (
 // Every consumer of a named cache must receive the same configuration, including
 // gateways without an EPE provider.
 func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+	for _, tc := range []struct {
+		legacy bool
+		custom bool
+	}{{}, {custom: true}, {legacy: true}} {
+		legacy := tc.legacy
+		t.Run(fmt.Sprintf("legacy=%t/custom=%t", legacy, tc.custom), func(t *testing.T) {
+			var authorization *configv1.EgressAuthorization
+			if tc.custom {
+				authorization = &configv1.EgressAuthorization{
+					DeniedCidrs: []string{"100.100.100.200/32", "2001:db8::/64"},
+				}
+			}
 			resources, err := Build(Inputs{
-				Gateway:          testGateway(&configv1.EgressGateway{}),
-				LegacyGateway:    legacy,
-				DiscoveryAddress: "agentiod:15012",
-				TrustDomain:      "cluster.local",
+				EgressAuthorization: authorization,
+				Gateway:             testGateway(&configv1.EgressGateway{}),
+				LegacyGateway:       legacy,
+				DiscoveryAddress:    "agentiod:15012",
+				TrustDomain:         "cluster.local",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -53,7 +65,11 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 				model.ClusterType,
 				func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
 			)
-			for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+			names := []string{HTTPDynamicForwardProxy, TLSConnectOriginate}
+			if !legacy {
+				names = append(names, TLSProxyOriginate, TLSPassthrough)
+			}
+			for _, name := range names {
 				cfg := &dfpclusterv3.ClusterConfig{}
 				if err := clusters[name].GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
 					t.Fatal(err)
@@ -71,6 +87,12 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 					for _, filter := range chain.GetFilters() {
 						key := name + "/" + chain.GetName() + "/" + filter.GetName()
 						switch filter.GetName() {
+						case "envoy.filters.network.sni_dynamic_forward_proxy":
+							cfg := &dfpsniv3.FilterConfig{}
+							if err := filter.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+								t.Fatal(err)
+							}
+							caches[key] = cfg.GetDnsCacheConfig()
 						case "envoy.filters.network.http_connection_manager":
 							hcm := &hcmv3.HttpConnectionManager{}
 							if err := filter.GetTypedConfig().UnmarshalTo(hcm); err != nil {
@@ -121,6 +143,12 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 						"127.0.0.0/8", "::1/128", "0.0.0.0/32", "::/128", "169.254.0.0/16", "fe80::/10",
 						"::ffff:127.0.0.0/104", "::ffff:0.0.0.0/128", "::ffff:169.254.0.0/112",
 					}
+					if tc.custom {
+						want = append(want, "100.100.100.200/32", "::ffff:100.100.100.200/128", "2001:db8::/64")
+						if cache.GetName() == DNSCacheName {
+							t.Fatal("changed restrictions must not reuse an existing DNS cache")
+						}
+					}
 					slices.Sort(ranges)
 					slices.Sort(want)
 					if !slices.Equal(ranges, want) {
@@ -129,5 +157,32 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestEgressAuthorizationCacheIdentity(t *testing.T) {
+	name := func(cidrs ...string) string {
+		return (&resourceBuilder{egressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: cidrs}}).dnsCacheConfig().Name
+	}
+	if name("192.0.2.1/24", "2001:db8::/64") != name("2001:db8::1/64", "192.0.2.0/24", "192.0.2.0/24") {
+		t.Fatal("equivalent restrictions must reuse the cache")
+	}
+	if name("192.0.2.0/24") == name("192.0.3.0/24") || name() != DNSCacheName {
+		t.Fatal("cache identity does not follow effective restrictions")
+	}
+	if name("127.0.0.0/8") != name() {
+		t.Fatal("repeating a built-in restriction changes the cache")
+	}
+	for _, tc := range []struct {
+		legacy bool
+		cidr   string
+	}{{false, "invalid"}, {true, "192.0.2.0/24"}} {
+		_, err := Build(Inputs{
+			Gateway:             testGateway(nil),
+			LegacyGateway:       tc.legacy,
+			EgressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: []string{tc.cidr}}})
+		if err == nil {
+			t.Fatalf("accepted unsupported authorization: %+v", tc)
+		}
 	}
 }

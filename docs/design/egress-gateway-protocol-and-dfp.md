@@ -12,9 +12,9 @@ After TLS termination, the gateway detects HTTP only. Non-HTTP payloads, includi
 
 The TCP path does not run HTTP request-level EPE authorization. Configured ServiceEntry endpoint IPs require a matching TLS SNI before passthrough or termination; plain opaque TCP cannot satisfy that binding. Native TLS passthrough uses SNI DFP, retaining the original port and using the original IP when the endpoint binding matches. Allowing TLS termination is not equivalent to authorizing an HTTP request. TCP forwarding after termination does not advertise HTTP ALPN upstream; protocols that require a custom ALPN are not supported by this termination path.
 
-## Destination restrictions (dynamic forward proxy)
+## Destination restrictions
 
-The native `agentio-egress` gateway's dynamic forward proxy (DFP) filters destination IPs using the same built-in restrictions as EPE egress authorization:
+The native `agentio-egress` gateway checks original TCP/UDP destinations and dynamic forward proxy (DFP) targets using `AgentioConfig.egressAuthorization.deniedCIDRs` plus the same mandatory restrictions as EPE:
 
 | Destination | Denied ranges |
 | --- | --- |
@@ -24,6 +24,10 @@ The native `agentio-egress` gateway's dynamic forward proxy (DFP) filters destin
 
 Equivalent IPv4-mapped IPv6 addresses are also filtered. Private service networks and Alibaba Cloud metadata at `100.100.100.200` remain allowed by this default.
 
-The filter is enabled for HTTP, native TLS passthrough, and TLS origination DFP even without EPE. It applies to IP literals and DNS results, including destinations selected through DFP filter state. Envoy removes matching addresses before adding them to the DNS cache. If none remain on the first resolution, forwarding fails; if a refresh returns only denied addresses, Envoy retains the previously allowed address. Filtered addresses increment `dns_cache.agentio_dns_cache.dns_address_filter_out`.
+CONNECT admission checks the original numeric target before opening TCP or UDP forwarding. TCP policy filters also check their selected target, including original-destination paths after TLS termination. DFP filtering is enabled for HTTP, native TLS passthrough, and TLS origination even without EPE. It applies to IP literals and DNS results, including ServiceEntry and EPE targets selected through filter state. An explicit denied target fails without falling back to another IP. An upstream proxy's actual endpoint is checked; the external proxy's subsequent connections are outside the gateway's control. Internal Porter, EPE, and xDS connections are excluded.
 
-This requires Envoy 1.39 or later; the bundled gateway image satisfies that requirement. Custom native gateway images must also support `resolved_address_filter` in the DNS cache configuration. Legacy waypoint gateways retain their existing configuration without this filter. These restrictions cover DFP only; original-destination TCP/UDP forwarding and explicit upstream proxy connections use other clusters. Operator-added `EPEConfig.egressAuthorization.deniedCIDRs` remain EPE-only and are not copied to the gateway's DNS cache.
+Envoy removes matching addresses before adding them to the DNS cache. If none remain on the first resolution, forwarding fails; if a refresh returns only denied addresses under the same policy, Envoy retains the previously allowed address. Filtered addresses increment `dns_cache.<cache-name>.dns_address_filter_out`. The default cache name is `agentio_dns_cache`; custom lists append the canonical effective CIDRs. Every DFP consumer uses the same name and settings. Changing the list creates a separate cache, allowing old and new CDS/LDS resources to coexist during updates without reusing stale allowed entries. Updates do not revoke established connections. Envoy retains superseded caches until restart.
+
+DFP filtering requires Envoy 1.39 or later; the bundled gateway image satisfies that requirement. Custom native gateway images must also support `resolved_address_filter`. Legacy waypoint gateways retain their existing behavior when no custom list is supplied; a custom list suppresses their resource variant because they cannot enforce it.
+
+`EPEConfig.egressAuthorization.deniedCIDRs` and `AgentioConfig.egressAuthorization.deniedCIDRs` are independent. The gateway checks EPE's selected address, but does not send its restrictions to EPE. Matching custom lists allow EPE to exclude forbidden DNS candidates before pinning an address, avoiding rejection when a different candidate would have been allowed.

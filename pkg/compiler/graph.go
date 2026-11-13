@@ -63,7 +63,7 @@ func buildGraph(inputs Inputs, failures *failureRecorder, builder krt.OptionsBui
 		newSecurityProfileResources(policies.securityProfiles, failures, collectionOptions),
 		workloadResources,
 		newServiceResources(inputs, gateways, failures, collectionOptions),
-		newGatewayResources(inputs, base, gatewayGlobalExtProc, gateways, failures, collectionOptions),
+		newGatewayResources(inputs, base, gatewayGlobalExtProc, configuration, gateways, failures, collectionOptions),
 	}, append(collectionOptions("resources"), krt.WithJoinUnchecked())...)
 
 	return &graph{

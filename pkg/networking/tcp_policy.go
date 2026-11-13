@@ -17,16 +17,12 @@ package networking
 import (
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
-
-	configv1 "github.com/openkruise/agentio/api/config/v1"
 )
 
 func (b *resourceBuilder) tcpPolicyFilter(resolveSNI, skipMatchedProfile bool) *listenerv3.Filter {
 	denied := make([]any, 0)
-	if resolveSNI {
-		for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
-			denied = append(denied, cidr)
-		}
+	for _, cidr := range b.egressAuthorization.EffectiveDeniedCIDRs() {
+		denied = append(denied, cidr)
 	}
 	return networkFilter("agentio.tcp_policy", b.pack(&udpatypev1.TypedStruct{
 		TypeUrl: "type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter",

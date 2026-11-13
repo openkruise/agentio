@@ -15,12 +15,14 @@
 package networking
 
 import (
+	"slices"
 	"testing"
 
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	tcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -62,6 +64,13 @@ func TestTCPPolicyRunsBeforeProxy(t *testing.T) {
 			settings := module.Value.GetFields()["filter_config"].GetStructValue().GetFields()["value"].GetStructValue()
 			if settings.GetFields()["resolveSni"].GetBoolValue() != tc.resolveSNI {
 				t.Fatalf("resolveSni=%v, want %v", settings.GetFields()["resolveSni"], tc.resolveSNI)
+			}
+			var denied []string
+			for _, cidr := range settings.GetFields()["deniedCidrs"].GetListValue().GetValues() {
+				denied = append(denied, cidr.GetStringValue())
+			}
+			if !slices.Equal(denied, configv1.MandatoryEgressDeniedCIDRs()) {
+				t.Fatalf("TCP destination restrictions = %v", denied)
 			}
 			proxy := new(tcpv3.TcpProxy)
 			if err := chain.Filters[len(chain.Filters)-1].GetTypedConfig().UnmarshalTo(proxy); err != nil {

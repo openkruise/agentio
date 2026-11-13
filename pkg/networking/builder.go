@@ -58,6 +58,7 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	EgressAuthorization        *configv1.EgressAuthorization
 	Services                   []model.Service
 	Endpoints                  []model.Endpoint
 	GatewayPatches             []model.GatewayPatch
@@ -106,6 +107,12 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 //
 //nolint:gocyclo,funlen // Keep gateway assembly and accepted EDS bindings together.
 func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
+	if err := inputs.EgressAuthorization.Validate(); err != nil {
+		return nil, err
+	}
+	if inputs.LegacyGateway && len(inputs.EgressAuthorization.GetDeniedCidrs()) > 0 {
+		return nil, fmt.Errorf("egressAuthorization requires a native Envoy gateway; legacy proxyv2 is unsupported")
+	}
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
 	}
@@ -159,7 +166,11 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 			return nil, fmt.Errorf("build Gateway Telemetry: %w", err)
 		}
 	}
-	b := &resourceBuilder{legacyGateway: inputs.LegacyGateway, upstreamTrustBundle: inputs.UpstreamTrustBundle}
+	b := &resourceBuilder{
+		legacyGateway:       inputs.LegacyGateway,
+		upstreamTrustBundle: inputs.UpstreamTrustBundle,
+		egressAuthorization: inputs.EgressAuthorization,
+	}
 	clusters, err := b.clusters(effective)
 	if err != nil {
 		return nil, err

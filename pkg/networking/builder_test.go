@@ -136,6 +136,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 	}
 	if got, want := httpFilterNames(connectHCM), []string{
 		"agentio.connect_authority",
+		"agentio.egress_authorization",
 		"envoy.filters.http.ext_proc",
 		"agentio.connect_workload",
 		"agentio.connection_policy_store",

@@ -537,7 +537,7 @@ func endpointServiceEntryConfig(
 			Filters: []*listener.Filter{networkFilter("envoy.filters.network.http_connection_manager", b.pack(outer))},
 		}},
 	}
-	cache := dnsCacheConfig(true) // Loopback origins are a harness-only exception to native DFP restrictions.
+	cache := (&resourceBuilder{legacyGateway: true}).dnsCacheConfig() // Loopback origins are a harness-only exception to native DFP restrictions.
 	cache.TypedDnsResolverConfig = typedCoreExtension(
 		"envoy.network.dns_resolver.cares",
 		b.pack(&cares.CaresDnsResolverConfig{

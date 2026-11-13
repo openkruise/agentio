@@ -52,6 +52,9 @@ func defaultAgentioConfiguration() *configv1.AgentioConfig {
 }
 
 func validateAgentioConfig(value *configv1.AgentioConfig) error {
+	if err := value.GetEgressAuthorization().Validate(); err != nil {
+		return err
+	}
 	for i, id := range value.GetTrustedEpeIdentities() {
 		uri, err := model.ParseSPIFFEID(id)
 		if err != nil {

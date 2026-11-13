@@ -270,7 +270,7 @@ func tlsDestinationState(host string) []*setstatecommonv3.FilterStateValue {
 
 func (b *resourceBuilder) sniDFPFilter() *listenerv3.Filter {
 	return networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&dfpnetworkv3.FilterConfig{
-		DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		DnsCacheConfig: b.dnsCacheConfig(),
 		PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
 	}))
 }
@@ -454,6 +454,7 @@ func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpCo
 		filters[index] = httpFilter(filters[index].Name, b.pack(capture))
 	}
 	if !b.legacyGateway {
+		filters = append(filters, b.egressAuthorizationFilter())
 		filters = append(filters, b.connectExtProcFilter(), connectWorkloadFilter())
 		filters = append(filters, b.connectPolicyFilters()...)
 	}
@@ -559,7 +560,7 @@ func (b *resourceBuilder) buildForwardHCM(
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
 		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+			DnsCacheConfig: b.dnsCacheConfig(),
 		},
 		AllowDynamicHostFromFilterState: true,
 	})))
