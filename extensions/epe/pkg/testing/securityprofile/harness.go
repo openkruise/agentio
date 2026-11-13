@@ -99,7 +99,7 @@ func New(t testing.TB, opts Options) *Harness {
 		auditSink = opts.AuditRouter
 	}
 	core := enginetest.New(t, enginetest.Options{
-		Resolve:                policysecurityprofile.NewResolver(fixture.Store, regs, auditSink),
+		Resolve:                policysecurityprofile.NewResolver(fixture.Store, regs, auditSink, nil),
 		Registrations:          regs,
 		AuthorizeRequest:       opts.AuthorizeRequest,
 		StreamLoggers:          opts.StreamLoggers,

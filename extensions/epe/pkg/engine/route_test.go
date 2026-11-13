@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 )
 
 type routeTestFilter struct {
@@ -105,6 +106,52 @@ func TestRouteMutationHeaders(t *testing.T) {
 				t.Fatal("result aliased filter data")
 			}
 		})
+	}
+}
+
+func TestRequestCheckpointSeesEffectiveTargetAndRetainsEarlierBodyWork(t *testing.T) {
+	pin := routeMutation("203.0.113.8:443", false)
+	e, units := routeTestEngine(t, &routeTestFilter{
+		headers: filter.NeedBody(filter.SetHeader("host", "api.example.com")),
+		body:    filter.Continue(filter.SetHeader("x-body", "checked")),
+	})
+	units = append(units, Unit{
+		ID:   filter.UnitID{Scope: "ns/p", Name: "checkpoint", Ordinal: 1},
+		Cfgs: make([]any, len(e.regs)),
+		CheckRequest: func(_ context.Context, stream *filter.Stream) (filter.Action, error) {
+			if stream.Request.Host != "api.example.com" || stream.Request.Port != 443 ||
+				stream.Request.OriginalDestination.IsValid() {
+				t.Fatalf("checkpoint target=%+v", stream.Request)
+			}
+			return filter.Bypass(pin), nil
+		},
+	})
+	stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
+		Host:                "old.example.com",
+		Port:                443,
+		OriginalDestination: netip.MustParseAddrPort("192.0.2.1:443"),
+		Headers:             map[string]string{":authority": "old.example.com", ":scheme": "https", ":method": "POST"},
+	}}}
+	headers, err := e.EvalRequestHeaders(t.Context(), stream, units)
+	if err != nil || headers.Disposition != DispositionBypassed || !headers.NeedsBody() {
+		t.Fatalf("headers=%+v err=%v", headers, err)
+	}
+	if stream.Request.Host != "old.example.com" {
+		t.Fatal("checkpoint changed the original matching input")
+	}
+	body, err := e.EvalRequestBody(t.Context(), stream, headers, filter.Body{Complete: true})
+	if err != nil || body.Disposition != DispositionBypassed || body.Route == nil ||
+		*body.Route.Upstream.Address != *pin.Route.Upstream.Address {
+		t.Fatalf("body=%+v err=%v", body, err)
+	}
+	found := false
+	for _, op := range body.HeaderOps {
+		if op.Name == "x-body" && op.Value == "checked" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("TCP allow dropped an earlier body callback")
 	}
 }
 

@@ -191,3 +191,41 @@ func securitySpec(priority *int32, selector map[string]string) agentsv1alpha1.Se
 		},
 	}
 }
+
+func TestCompileSNIRulesMergesAdjacentActionsWithoutChangingPrecedence(t *testing.T) {
+	rule := func(domain string, ports []int32, action agentsv1alpha1.TLSActionType) agentsv1alpha1.SecurityRule {
+		return agentsv1alpha1.SecurityRule{
+			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{domain}, Ports: ports}},
+			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: action}},
+		}
+	}
+	got, err := CompileSNIRules([]agentsv1alpha1.SecurityRule{
+		rule("A.Example.com.", []int32{8443, 443, 443}, agentsv1alpha1.TLSActionPassthrough),
+		rule("a.example.com", []int32{443, 8443}, agentsv1alpha1.TLSActionPassthrough),
+		rule("c.example.com", []int32{443, 8443}, agentsv1alpha1.TLSActionPassthrough),
+		rule("*.example.com", nil, agentsv1alpha1.TLSActionDeny),
+		rule("b.example.com", []int32{443, 8443}, agentsv1alpha1.TLSActionPassthrough),
+		rule("d.example.com", []int32{9443}, agentsv1alpha1.TLSActionPassthrough),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"a.example.com", "c.example.com"}, Ports: []uint32{443, 8443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+		},
+		{Match: &extensionsv1.SniMatch{Sni: []string{"*.example.com"}}, Action: extensionsv1.SniAction_SNI_ACTION_DENY},
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"b.example.com"}, Ports: []uint32{443, 8443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+		},
+		{
+			Match:  &extensionsv1.SniMatch{Sni: []string{"d.example.com"}, Ports: []uint32{9443}},
+			Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+		},
+	}}
+	if !proto.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

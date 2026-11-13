@@ -41,16 +41,7 @@ import (
 func TestAuthorizationDenialHasCorrelatedJSONResponse(t *testing.T) {
 	audit := &capturedAuditLogger{}
 	client := dns.NewClient(nil, time.Second)
-	cfg := egressauthz.Config{
-		Policies: []egressauthz.Policy{
-			{
-				Name: "sandbox/deny-test",
-				Rules: []egressauthz.Rule{
-					{Action: egressauthz.Deny, CIDRs: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")}},
-				},
-			},
-		},
-	}
+	cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")}}
 	server := NewServer(
 		ServerDeps{
 			AuditLogger: audit,
@@ -88,7 +79,7 @@ func TestAuthorizationDenialHasCorrelatedJSONResponse(t *testing.T) {
 	decision := entry.Authorization
 	if decision == nil || decision.Action != "deny" || decision.Reason != filter.AuthorizationReasonPolicyDenied ||
 		decision.Destination != "1.1.1.1:80" ||
-		decision.Policy != "sandbox/deny-test" ||
+		decision.Policy != "EPEConfig/egressAuthorization" ||
 		decision.RuleIndex == nil ||
 		*decision.RuleIndex != 0 {
 		t.Fatalf("decision: %+v", decision)

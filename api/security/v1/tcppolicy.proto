@@ -1,0 +1,37 @@
+// Copyright 2026 The Kruise Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package agentio.security;
+option go_package = "github.com/openkruise/agentio/api/security/v1;securityv1";
+
+// TCPPolicy is the ordered SecurityProfile destination fallthrough chain.
+// It is embedded in the compiled SecurityProfile, not discovered separately.
+message TCPPolicy {
+  repeated TCPRule rules = 1;
+}
+message TCPRule {
+  string name = 1;
+  repeated TCPMatch match = 2;
+  TCPAction action = 3;
+}
+message TCPMatch {
+  repeated string cidrs = 1;
+  repeated uint32 ports = 2;
+}
+enum TCPAction {
+  TCP_ACTION_UNSPECIFIED = 0;
+  TCP_ACTION_ALLOW = 1;
+  TCP_ACTION_DENY = 2;
+}

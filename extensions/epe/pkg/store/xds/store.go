@@ -25,7 +25,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/anypb"
 
-	sec "github.com/openkruise/agentio/api/security/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	"github.com/openkruise/agentio/pkg/demandcache"
@@ -43,15 +42,6 @@ func Watches() []xdsclient.Watch {
 			Transform: func(v *anypb.Any) (any, error) {
 				w := &workload.Workload{}
 				return w, v.UnmarshalTo(w)
-			},
-		},
-		{
-			TypeURL:        model.TrafficPolicyType,
-			ReconnectGrace: 5 * time.Second,
-			OnDelete:       func(string) xdsclient.DeleteAction { return xdsclient.ReleaseSubscription },
-			Transform: func(v *anypb.Any) (any, error) {
-				p := &sec.TrafficPolicy{}
-				return p, v.UnmarshalTo(p)
 			},
 		},
 	}
@@ -124,12 +114,12 @@ func (s *Store) CacheEntries() int { return s.cache.Len() }
 
 // Types lists the native models served by this backend.
 func (s *Store) Types() []store.Type {
-	return []store.Type{store.Workload, store.TrafficPolicy}
+	return []store.Type{store.Workload}
 }
 
 // Status observes synchronization and changes without copying or decoding resources.
 func (s *Store) Status() store.Status {
-	changed, ready := s.source.Observe(model.WorkloadType, model.TrafficPolicyType)
+	changed, ready := s.source.Observe(model.WorkloadType)
 	return store.Status{Ready: ready, Changed: changed}
 }
 
@@ -142,7 +132,7 @@ func (s *Store) snapshot() xdsclient.Snapshot {
 }
 
 func (s *Store) snapshotLocked() xdsclient.Snapshot {
-	changed, _ := s.source.Observe(model.WorkloadType, model.TrafficPolicyType)
+	changed, _ := s.source.Observe(model.WorkloadType)
 	if s.cached.Resources == nil || s.cached.Changed != changed {
 		s.cached = s.source.Snapshot()
 	}
@@ -326,8 +316,6 @@ func wireType(typ store.Type) string {
 	switch typ {
 	case store.Workload:
 		return model.WorkloadType
-	case store.TrafficPolicy:
-		return model.TrafficPolicyType
 	case store.SecurityProfile:
 		return model.SecurityProfileType
 	case store.Sandbox:

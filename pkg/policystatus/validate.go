@@ -25,10 +25,10 @@ import (
 
 func (c *Controller) compileProfile(s source) *compiledProfile {
 	err := c.validateProfile(s)
-	accepted := condition("Accepted", metav1.ConditionTrue, "Accepted",
-		"SecurityProfile API static validation passed", s.Metadata.Generation)
+	accepted := condition(conditionAccepted, metav1.ConditionTrue, reasonAccepted,
+		messageAccepted, s.Metadata.Generation)
 	if err != nil {
-		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, "InvalidConfiguration", err.Error()
+		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, reasonInvalidConfiguration, err.Error()
 	}
 	return &compiledProfile{Source: s,
 		Accepted: accepted}
@@ -56,33 +56,33 @@ func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {
 	if err == nil {
 		_, err = policy.TrafficPolicyAsAuthorizations(*compiled, p, c.namespace)
 	}
-	accepted := condition("Accepted", metav1.ConditionTrue, "Accepted",
-		"Traffic rules and binding metadata compiled successfully", s.Metadata.Generation)
-	resolved := condition("ResolvedRefs", metav1.ConditionUnknown, "NotChecked",
-		"Reference checks require a valid configuration", s.Metadata.Generation)
+	accepted := condition(conditionAccepted, metav1.ConditionTrue, reasonAccepted,
+		messageAccepted, s.Metadata.Generation)
+	resolved := condition(conditionResolvedRefs, metav1.ConditionUnknown, reasonNotChecked,
+		messageReferencesNotChecked, s.Metadata.Generation)
 	programmed := accepted
-	programmed.Type = "Programmed"
+	programmed.Type = conditionProgrammed
 	if err != nil {
-		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, "InvalidConfiguration", err.Error()
+		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, reasonInvalidConfiguration, err.Error()
 		programmed.Status, programmed.Reason, programmed.Message = accepted.Status, accepted.Reason, accepted.Message
 	} else {
 		resolved = c.trafficRefs(ctx, s)
-		programmed.Reason = "Programmed"
-		programmed.Message = "Configuration compiled successfully and is eligible for data-plane distribution"
+		programmed.Reason = reasonProgrammed
+		programmed.Message = messageProgrammed
 	}
 	return &result{Source: s,
 		Conditions: []metav1.Condition{accepted, resolved, programmed}}
 }
 
 func (c *Controller) profileStatus(ctx krt.HandlerContext, p compiledProfile) *result {
-	resolved := condition("ResolvedRefs", metav1.ConditionUnknown, "NotChecked",
-		"Reference checks require a valid configuration", p.Source.Metadata.Generation)
+	resolved := condition(conditionResolvedRefs, metav1.ConditionUnknown, reasonNotChecked,
+		messageReferencesNotChecked, p.Source.Metadata.Generation)
 	programmed := p.Accepted
-	programmed.Type = "Programmed"
+	programmed.Type = conditionProgrammed
 	if p.Accepted.Status == metav1.ConditionTrue {
 		resolved = c.profileRefs(ctx, p.Source)
-		programmed.Reason = "Programmed"
-		programmed.Message = "Configuration compiled successfully and is eligible for data-plane distribution"
+		programmed.Reason = reasonProgrammed
+		programmed.Message = messageProgrammed
 	}
 	return &result{Source: p.Source,
 		Conditions: []metav1.Condition{p.Accepted, resolved, programmed}}

@@ -119,7 +119,7 @@ func TestCompilerOptionalSandboxInputs(t *testing.T) {
 					t.Fatal("Workload missing")
 				}
 				address := new(workloadv1.Address)
-				if err := resource.Value.UnmarshalTo(address); err != nil {
+				if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 					t.Fatal(err)
 				}
 				wire := address.GetWorkload()
@@ -280,7 +280,7 @@ func TestSandboxLifecyclePreservesWorkloadPolicies(t *testing.T) {
 					return false
 				}
 				wire := new(workloadv1.Address)
-				if r.Value.UnmarshalTo(wire) != nil {
+				if resourceValue(t, r).UnmarshalTo(wire) != nil {
 					return false
 				}
 				binding := fixture.compiler.Bindings().GetKey(workload.UID)

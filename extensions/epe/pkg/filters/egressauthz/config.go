@@ -19,63 +19,48 @@ import (
 	"net/netip"
 )
 
-// Config is an immutable, caller-owned snapshot for one authorization scope.
-// The caller validates and orders Policies before publishing a new Config.
-// Each authorizer filters its candidate set against one immutable configuration.
-// Slices and nested rules must not be mutated after publication.
+// Config is an immutable snapshot of platform destination restrictions.
+// DeniedCIDRs must not be mutated after publication.
 type Config struct {
-	// DeniedCIDRs are global restrictions checked before workload policies.
 	DeniedCIDRs []netip.Prefix
-	Policies    []Policy
 }
 
-// Validate checks the complete snapshot without modifying or sorting it.
-// The zero Config is valid and imposes no policy restriction.
+// Action is a platform destination decision.
+type Action string
+
+const (
+	// Allow permits the destination.
+	Allow Action = "Allow"
+	// Deny rejects the destination.
+	Deny Action = "Deny"
+)
+
+// Decision attributes a denial to its configured CIDR. Default decisions have
+// no policy name and a RuleIndex of -1.
+type Decision struct {
+	Action     Action
+	PolicyName string
+	RuleIndex  int
+}
+
 func (c Config) Validate() error {
 	for _, prefix := range c.DeniedCIDRs {
 		if !prefix.IsValid() || prefix.Addr().Is4In6() {
 			return fmt.Errorf("invalid or IPv4-mapped denied CIDR: %s", prefix)
 		}
 	}
-	names := make(map[string]struct{}, len(c.Policies))
-	for _, policy := range c.Policies {
-		if _, exists := names[policy.Name]; exists {
-			return fmt.Errorf("duplicate policy name: %q", policy.Name)
-		}
-		if err := policy.Validate(); err != nil {
-			return err
-		}
-		names[policy.Name] = struct{}{}
-	}
 	return nil
 }
 
-// Evaluate traverses a validated snapshot in policy order and then rule order.
-// Global denies take precedence. Otherwise the first policy match decides.
-// No policies means allow; otherwise no match means deny.
+// Evaluate denies invalid targets and configured CIDRs; all other targets pass.
 func (c Config) Evaluate(address netip.AddrPort) Decision {
-	unmatched := Decision{Action: Deny, RuleIndex: -1}
 	if !address.IsValid() || address.Port() == 0 || address.Addr().Zone() != "" {
-		return unmatched
+		return Decision{Action: Deny, RuleIndex: -1}
 	}
-	ip, port := address.Addr().Unmap(), address.Port()
 	for i, prefix := range c.DeniedCIDRs {
-		if prefix.Contains(ip) {
+		if prefix.Contains(address.Addr().Unmap()) {
 			return Decision{Action: Deny, PolicyName: "EPEConfig/egressAuthorization", RuleIndex: i}
 		}
 	}
-	if len(c.Policies) == 0 {
-		return Decision{Action: Allow, RuleIndex: -1}
-	}
-	for _, policy := range c.Policies {
-		for i, rule := range policy.Rules {
-			if rule.matches(ip, port) {
-				if rule.SourceIndex != nil {
-					i = *rule.SourceIndex
-				}
-				return Decision{Action: rule.Action, PolicyName: policy.Name, RuleIndex: i}
-			}
-		}
-	}
-	return unmatched
+	return Decision{Action: Allow, RuleIndex: -1}
 }

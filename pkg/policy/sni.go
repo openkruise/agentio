@@ -16,7 +16,10 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"istio.io/istio/pkg/util/sets"
@@ -76,6 +79,19 @@ func CompileSNIRules(rules []agentsv1alpha1.SecurityRule) (*extensionsv1.SniTraf
 			}
 			if result == nil {
 				result = &extensionsv1.SniTrafficPolicy{}
+			}
+			slices.Sort(matched.Ports)
+			matched.Ports = slices.Compact(matched.Ports)
+			if n := len(result.Rules); n > 0 {
+				last := result.Rules[n-1]
+				if last.Action == action && slices.Equal(last.Match.Ports, matched.Ports) {
+					for _, domain := range matched.Sni {
+						if !slices.Contains(last.Match.Sni, domain) {
+							last.Match.Sni = append(last.Match.Sni, domain)
+						}
+					}
+					continue
+				}
 			}
 			result.Rules = append(result.Rules, &extensionsv1.SniRule{Match: matched, Action: action})
 		}
@@ -147,4 +163,19 @@ func NormalizeDomain(value string) (string, error) {
 		return "", fmt.Errorf("invalid DNS name %q: %s", value, strings.Join(problems, "; "))
 	}
 	return normalized, nil
+}
+
+// ProjectSNIPolicy adapts the legacy WDS projection to the SecurityProfile wire type.
+func ProjectSNIPolicy(legacy *extensionsv1.SniTrafficPolicy) *securityv1.SNIPolicy {
+	if legacy == nil {
+		return nil
+	}
+	result := &securityv1.SNIPolicy{}
+	for _, rule := range legacy.Rules {
+		result.Rules = append(result.Rules, &securityv1.SniRule{
+			Match:  &securityv1.SniMatch{Sni: rule.Match.Sni, Ports: rule.Match.Ports},
+			Action: securityv1.SniAction(rule.Action),
+		})
+	}
+	return result
 }

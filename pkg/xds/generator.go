@@ -230,8 +230,8 @@ func generateIncremental(
 	if len(delta.Resources) != selectedCount {
 		sortResources()
 	}
-	// Direct Workload versions are compared after Address projection.
-	if request.TypeURL != model.WorkloadType {
+	// WDS versions are compared after client-specific generation.
+	if request.TypeURL != model.WorkloadType && request.TypeURL != model.AddressType {
 		delta.Resources = unsentResources(request.Subscription, delta.Resources)
 	}
 	return delta

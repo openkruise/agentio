@@ -42,7 +42,7 @@ func TestSecurityProfileSourceWatches(t *testing.T) {
 				}
 				found[watch.TypeURL] = true
 			}
-			if !found[model.WorkloadType] || !found[model.TrafficPolicyType] {
+			if !found[model.WorkloadType] || found[model.TrafficPolicyType] {
 				t.Fatal("native workload discovery is required in both modes")
 			}
 			if found[model.SecurityProfileType] != (source == "xds") ||

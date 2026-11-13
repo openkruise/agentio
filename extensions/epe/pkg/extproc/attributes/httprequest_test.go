@@ -16,6 +16,7 @@ package attributes
 import (
 	"context"
 	"net/netip"
+	"reflect"
 
 	"testing"
 
@@ -231,6 +232,25 @@ func TestInferPortFromScheme(t *testing.T) {
 	for in, want := range tests {
 		if got := inferPortFromScheme(in); got != want {
 			t.Errorf("inferPortFromScheme(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestConnectionPolicyMetadataDoesNotChangeHTTPRequest(t *testing.T) {
+	headers := makeHTTPHeaders(
+		map[string]string{
+			":method":                "GET",
+			":authority":             "example.com",
+			":scheme":                "https",
+			"x-agentio-policy-start": "forged",
+		},
+	)
+	_, want := Extract(t.Context(), headers, makeAttrs(t, nil))
+	for _, uid := range []string{"", "profile-b", "deleted-profile"} {
+		attrs := makeAttrs(t, map[string]any{"filter_state['agentio.policy.start']": uid})
+		_, got := Extract(t.Context(), headers, attrs)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("connection policy metadata %q changed HTTP request: got %+v, want %+v", uid, got, want)
 		}
 	}
 }

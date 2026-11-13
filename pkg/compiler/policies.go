@@ -113,9 +113,13 @@ func newPolicyCollections(
 					current := inputs.SecurityProfiles.GetKey(profile.ResourceName())
 					return current != nil && current.Equals(profile)
 				})
-				// Retain binding metadata and SNI together on invalid updates.
+				// Retain the last good profile; first failures keep only binding metadata.
 				ctx.DiscardResult()
-				return nil
+				attachment, bindingErr := policy.SecurityProfileAttachment(profile)
+				if bindingErr != nil {
+					return nil
+				}
+				return &policy.CompiledSecurityProfile{Name: profile.ResourceName(), Attachment: attachment}
 			}
 			failures.clear("SecurityProfile", profile.ResourceName())
 			return compiled
@@ -176,7 +180,7 @@ func authorizationResource(authorization policy.CompiledAuthorization) (model.Re
 		model.ResourceKey{
 			TypeURL: model.WorkloadAuthorizationType,
 			Name:    authorization.ResourceName(),
-		}, "", value, nil, facts)
+		}, "", model.Prebuilt(value), nil, facts)
 }
 
 // Shared policy bodies are serialized independently of Workload bindings.
@@ -217,7 +221,7 @@ func trafficPolicyResources(compiled policy.CompiledTrafficPolicy) ([]model.Reso
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: compiled.Name},
 		"",
-		value,
+		model.Prebuilt(value),
 		nil,
 		model.ResourceFacts{},
 	)

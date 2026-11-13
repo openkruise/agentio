@@ -277,6 +277,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	rawTCP := findFilterChain(t, listeners[MainForward], forwardTCPChain)
 	if got, want := networkFilterNames(rawTCP), []string{
 		"envoy.filters.network.set_filter_state",
+		"agentio.tcp_policy",
 		"envoy.filters.network.sni_dynamic_forward_proxy",
 		"envoy.filters.network.tcp_proxy",
 	}; !equalStrings(got, want) {

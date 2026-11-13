@@ -35,7 +35,7 @@ import (
 // Run without TrafficPolicy authorization so neither TrafficPolicy nor ztunnel
 // authorization can account for a rejection from the global EPE configuration.
 func TestEPEGlobalDeniedCIDRs(t *testing.T) {
-	fixture, scope := newEgressEPE(t, false)
+	fixture, scope := newEgressEPE(t)
 	serverIP := trafficFixture.Server.ServiceIPOrFail(t)
 	clientIP := trafficFixture.Client.ServiceIPOrFail(t)
 	target := net.JoinHostPort(serverIP, "80")
@@ -197,7 +197,7 @@ data:
 // Headless Services provide controlled A/AAAA records in the cluster DNS. No
 // external DNS service or IPv6 connectivity is needed: IPv6 is never dialed.
 func TestEPEIPv4OnlyDNS(t *testing.T) {
-	fixture, scope := newEgressEPE(t, false)
+	fixture, scope := newEgressEPE(t)
 	namespace := trafficFixture.Namespace.Name()
 	v4 := []string{
 		trafficFixture.Server.WorkloadsOrFail(t)[0].Address,

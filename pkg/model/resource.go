@@ -23,8 +23,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -192,17 +192,21 @@ type ResourceChange struct {
 	New *Resource
 }
 
-// Resource is an immutable, pre-hashed xDS resource; Value is shared by reference and must not be mutated.
+// Resource holds immutable source identity, version and client-specific generation.
+// Value is shared by reference and must not be mutated.
 type Resource struct {
-	Key ResourceKey
+	ResourceGenerator `json:"-"`
+	Key               ResourceKey
 	// XDSName is the name exposed on the xDS wire. It may differ from Key.Name
 	// when gateway-scoped resources share an Envoy name but not their contents.
 	// Empty means Key.Name.
 	XDSName string
-	Value   *anypb.Any
-	Aliases []string
-	Hash    string
-	Facts   ResourceFacts
+	// Value is populated for prebuilt resources and encoded outputs; lazy sources leave it nil.
+	Value    *anypb.Any
+	versions *resourceVersions
+	Aliases  []string
+	Hash     string
+	Facts    ResourceFacts
 }
 
 // ResourceName makes Resource usable as a krt collection member. Type URL and
@@ -213,29 +217,108 @@ func (r Resource) ResourceName() string {
 }
 
 // Equals reports whether two resources are interchangeable. Hash covers the type
-// URL, both names, the encoded value, the aliases, and the selection facts, so hash
+// URL, both names, complete source contents, aliases, and selection facts, so hash
 // equality is full equality and krt can use it to suppress no-op events.
 func (r Resource) Equals(other Resource) bool {
 	return r.Hash == other.Hash
 }
 
-// NewResource validates and hashes a resource once, at construction. Producers
-// should build resources through this function so that assembling a snapshot
-// never has to re-encode or re-hash anything.
+// NewResource normalizes identity and selection facts, then versions the complete source.
+// It takes ownership of the generator; Workload wire contents remain lazy.
 func NewResource(
 	key ResourceKey,
 	xdsName string,
-	value *anypb.Any,
+	source ResourceGenerator,
 	aliases []string,
 	facts ResourceFacts,
 ) (Resource, error) {
-	return normalizeResource(Resource{
-		Key:     key,
-		XDSName: xdsName,
-		Value:   value,
-		Aliases: aliases,
-		Facts:   facts,
-	})
+	resource := Resource{
+		ResourceGenerator: source,
+		Key:               key,
+		XDSName:           xdsName,
+		Aliases:           append([]string(nil), aliases...),
+		Facts:             cloneResourceFacts(facts),
+	}
+	if resource.XDSName == "" {
+		resource.XDSName = key.Name
+	}
+	sort.Strings(resource.Aliases)
+	normalizeResourceFacts(&resource.Facts)
+	if source == nil {
+		return Resource{}, fmt.Errorf("resource %s has no generator", key)
+	}
+	contentHash, err := source.Hash()
+	if err != nil {
+		return Resource{}, fmt.Errorf("hash resource %s: %w", key, err)
+	}
+	if prebuilt, ok := source.(*prebuiltResource); ok {
+		resource.Value = prebuilt.encoded.Value
+	}
+	if err := validateResource(resource); err != nil {
+		return Resource{}, err
+	}
+	hasher := sha256.New()
+	for _, part := range []string{key.TypeURL, key.Name, resource.XDSName} {
+		hasher.Write([]byte(part))
+		hasher.Write([]byte{0})
+	}
+	for _, alias := range resource.Aliases {
+		hasher.Write([]byte(alias))
+		hasher.Write([]byte{0})
+	}
+	var wirePrefix string
+	if resource.Value == nil {
+		wirePrefix = hex.EncodeToString(hasher.Sum(nil))
+	}
+	hashResourceFacts(hasher, resource.Facts)
+	hasher.Write([]byte(contentHash))
+	resource.Hash = hex.EncodeToString(hasher.Sum(nil))
+	if resource.Value == nil {
+		resource.versions = &resourceVersions{prefix: wirePrefix}
+	}
+	return resource, nil
+}
+
+// Each source has fixed metadata; cache its combined versions across clients.
+type resourceVersions struct {
+	mu      sync.Mutex
+	prefix  string
+	outputs map[string]string
+}
+
+func (v *resourceVersions) version(contentHash string) string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if version, ok := v.outputs[contentHash]; ok {
+		return version
+	}
+	if v.outputs == nil {
+		v.outputs = make(map[string]string)
+	}
+	version := resourceVersion(v.prefix, contentHash)
+	v.outputs[contentHash] = version
+	return version
+}
+
+func resourceVersion(metadataHash, contentHash string) string {
+	sum := sha256.Sum256([]byte(metadataHash + contentHash))
+	return hex.EncodeToString(sum[:])
+}
+
+// Encode attaches resource identity and selection metadata to a client-specific payload.
+func (r Resource) Encode(scope ClientScope, typeURL string) (Resource, error) {
+	if r.versions == nil && typeURL == r.Key.TypeURL {
+		return r, nil
+	}
+	encoded, err := r.ResourceGenerator.Generate(scope, typeURL)
+	if err != nil {
+		return Resource{}, err
+	}
+	r.Key.TypeURL = typeURL
+	r.Value = encoded.Value
+	// Wire identity and aliases contribute to the sent version; selection facts do not.
+	r.Hash = r.versions.version(encoded.Hash)
+	return r, nil
 }
 
 func validateResource(resource Resource) error {
@@ -245,10 +328,10 @@ func validateResource(resource Resource) error {
 	if strings.TrimSpace(resource.Key.Name) == "" {
 		return fmt.Errorf("resource name is required")
 	}
-	if resource.Value == nil {
-		return fmt.Errorf("resource %s/%s has no value", resource.Key.TypeURL, resource.Key.Name)
+	if resource.Value == nil && resource.ResourceGenerator == nil {
+		return fmt.Errorf("resource %s/%s has no contents", resource.Key.TypeURL, resource.Key.Name)
 	}
-	if resource.Value.TypeUrl != resource.Key.TypeURL {
+	if resource.Value != nil && resource.Value.TypeUrl != resource.Key.TypeURL {
 		return fmt.Errorf(
 			"resource %s/%s value type URL %q does not match key",
 			resource.Key.TypeURL, resource.Key.Name, resource.Value.TypeUrl,
@@ -541,44 +624,4 @@ func (facts ResourceFacts) Equal(other ResourceFacts) bool {
 		return false
 	}
 	return facts.Authorization == nil || *facts.Authorization == *other.Authorization
-}
-
-func normalizeResource(resource Resource) (Resource, error) {
-	if err := validateResource(resource); err != nil {
-		return Resource{}, err
-	}
-
-	// The single defensive copy in the lifetime of a resource: from here on the
-	// value belongs to the Resource and is shared with every reader.
-	cloned := Resource{
-		Key:     resource.Key,
-		XDSName: resource.XDSName,
-		Value:   proto.Clone(resource.Value).(*anypb.Any),
-		Aliases: append([]string(nil), resource.Aliases...),
-		Facts:   cloneResourceFacts(resource.Facts),
-	}
-	if cloned.XDSName == "" {
-		cloned.XDSName = cloned.Key.Name
-	}
-	sort.Strings(cloned.Aliases)
-	normalizeResourceFacts(&cloned.Facts)
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(cloned.Value)
-	if err != nil {
-		return Resource{}, fmt.Errorf("marshal resource %s/%s: %w", resource.Key.TypeURL, resource.Key.Name, err)
-	}
-	hasher := sha256.New()
-	hasher.Write([]byte(cloned.Key.TypeURL))
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(cloned.Key.Name))
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(cloned.XDSName))
-	hasher.Write([]byte{0})
-	hasher.Write(encoded)
-	for _, alias := range cloned.Aliases {
-		hasher.Write([]byte{0})
-		hasher.Write([]byte(alias))
-	}
-	hashResourceFacts(hasher, cloned.Facts)
-	cloned.Hash = hex.EncodeToString(hasher.Sum(nil))
-	return cloned, nil
 }

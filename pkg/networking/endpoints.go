@@ -47,7 +47,7 @@ func (b EndpointBinding) BuildResource(services []model.Service, endpoints []mod
 	if err != nil {
 		return model.Resource{}, err
 	}
-	return model.NewResource(b.Key, b.XDSName, value, nil, model.ResourceFacts{
+	return model.NewResource(b.Key, b.XDSName, model.Prebuilt(value), nil, model.ResourceFacts{
 		GatewayOwner:  b.GatewayOwner,
 		AgentioEgress: b.AgentioEgress,
 	})

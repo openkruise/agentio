@@ -33,7 +33,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/trafficpolicy"
 	"github.com/openkruise/agentio/pkg/dns"
 )
 
@@ -382,12 +381,7 @@ func TestServiceEntryTargetAuthorization(t *testing.T) {
 			}
 			if !tc.disabled {
 				deps.AuthorizeRequest = func(ctx context.Context, st *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
-					cfg := egressauthz.Config{Policies: []egressauthz.Policy{{
-						Name: "allow",
-						Rules: []egressauthz.Rule{{
-							Action: egressauthz.Allow,
-							CIDRs:  []netip.Prefix{netip.MustParsePrefix("192.0.2.0/30")},
-						}}}}}
+					cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.99/32")}}
 					return egressauthz.NewAggregate(nil, cfg).Authorize(ctx, st)
 				}
 			}
@@ -473,74 +467,5 @@ func TestStaticAuthorizationWithoutIdentityAndWithBypass(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestXDSAuthorizerHandlesMissingIdentity(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		host       string
-		failClosed bool
-		details    string
-		reason     string
-		policy     string
-	}{
-		{
-			name:    "global rule still runs first",
-			host:    "127.0.0.1:15000",
-			details: "epe_egress_denied",
-			reason:  filter.AuthorizationReasonPolicyDenied,
-			policy:  "EPEConfig/egressAuthorization",
-		},
-		{
-			name:    "xDS rejects missing identity after global allow",
-			host:    "203.0.113.7:443",
-			details: "epe_egress_denied",
-			reason:  filter.AuthorizationReasonMissingIdentity,
-		},
-		{
-			name:       "explicit identity flag rejects before authorization",
-			host:       "127.0.0.1:15000",
-			failClosed: true,
-			details:    missingIdentityDetails,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			server := NewServer(ServerDeps{
-				Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
-					t.Fatal("profile resolution must not run without identity")
-					return engine.Resolution{}, nil
-				},
-				FailClosedOnMissingIdentity: tc.failClosed,
-				AuthorizeRequest: egressauthz.NewAggregate(
-					dns.NewClient(nil, 0),
-					egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}},
-					// Missing identity must not require an xDS resource store.
-					trafficpolicy.NewAuthorizer(),
-				).Authorize,
-			})
-			state := newStreamState()
-			responses, err := server.HandleRequestHeaders(
-				t.Context(),
-				makeRequestHeaders(tc.host, "/", "GET"),
-				nil,
-				state,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			reply := responses[0].GetImmediateResponse()
-			if reply.GetStatus().GetCode() != 403 || reply.GetDetails() != tc.details {
-				t.Fatalf("responses=%v", responses)
-			}
-			audit := state.stream.Info.Authorization
-			if tc.failClosed {
-				if audit != nil {
-					t.Fatalf("authorizer ran despite request-boundary rejection: %+v", audit)
-				}
-			} else if audit == nil || audit.Action != "deny" || audit.Reason != tc.reason || audit.Policy != tc.policy {
-				t.Fatalf("audit=%+v", audit)
-			}
-		})
 	}
 }

@@ -73,12 +73,18 @@ func TestNewSandboxProfile(t *testing.T) {
 
 // A Sandbox without the annotation carries no inline rules.
 func TestNewInlineProfileNoAnnotation(t *testing.T) {
-	p, err := NewSandboxProfile(&v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "ns"}})
-	if err != nil {
-		t.Fatalf("NewInlineProfile: %v", err)
-	}
-	if p != nil {
-		t.Fatalf("profile = %+v, want nil for a Sandbox without the annotation", p)
+	for _, annotations := range []map[string]string{nil, {"agents.kruise.io/tcp-rules": "not a supported annotation"}} {
+		p, err := NewSandboxProfile(&v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
+			Name:        "sbx",
+			Namespace:   "ns",
+			Annotations: annotations,
+		}})
+		if err != nil {
+			t.Fatalf("NewInlineProfile: %v", err)
+		}
+		if p != nil {
+			t.Fatalf("profile = %+v, want nil for a Sandbox without security rules", p)
+		}
 	}
 }
 
@@ -223,8 +229,8 @@ func TestInlineHeaderManipulationBindsThroughRealFilter(t *testing.T) {
 	if err := inline.Project(regs); err != nil {
 		t.Fatalf("Project: %v", err)
 	}
-	b := newBinder(regs)
-	units, err := b.bind(
+	b := newBinder(regs, nil)
+	bound, err := b.bind(
 		[]*Profile{inline},
 		testRequest("example.com"),
 		inputs.Workload{Name: "sbx-1", Namespace: "ns"},
@@ -232,6 +238,7 @@ func TestInlineHeaderManipulationBindsThroughRealFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	if len(units) != 1 {
 		t.Fatalf("units = %d, want 1", len(units))
 	}
@@ -291,7 +298,7 @@ func TestResolverInlineProfilesEvaluateAfterSelectorProfiles(t *testing.T) {
 	}
 
 	store := inlineStore{selector: []*Profile{selectorProfile}, inline: []*Profile{inlineProfile}}
-	resolve := NewResolver(store, regs, nil)
+	resolve := NewResolver(store, regs, nil, nil)
 	res, err := resolve(
 		context.Background(),
 		subject.Subject{Workload: subject.Workload{Name: "sbx-1", Namespace: "ns"}},
@@ -316,7 +323,7 @@ func TestResolverInlineProfilesEvaluateAfterSelectorProfiles(t *testing.T) {
 func TestResolverWithoutInlineProfilesIsUnchanged(t *testing.T) {
 	regs := claimAll(t, nil)
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
-	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil)
+	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil, nil)
 	res, err := resolve(
 		context.Background(),
 		subject.Subject{Workload: subject.Workload{Name: "sbx-1", Namespace: "ns"}},

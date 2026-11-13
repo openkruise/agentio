@@ -53,7 +53,7 @@ func sandboxResourceWithAttester(
 	r, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.SandboxType, Name: uid},
 		"",
-		value,
+		testResourceContents(value),
 		nil,
 		model.ResourceFacts{Sandbox: &model.SandboxResourceFacts{AttesterWorkloadUID: workloadUID}},
 	)
@@ -69,7 +69,13 @@ func workerResource(t *testing.T, source string) model.Resource {
 	facts := *r.Facts.Workload
 	facts.WorkloadUID = "worker"
 	facts.Source = model.SourceRef{Registry: "kubernetes/test", Key: source}
-	r, err := model.NewResource(r.Key, r.XDSName, r.Value, r.Aliases, model.ResourceFacts{Workload: &facts})
+	r, err := model.NewResource(
+		r.Key,
+		r.XDSName,
+		testResourceContents(testResourceValue(r)),
+		r.Aliases,
+		model.ResourceFacts{Workload: &facts},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +135,7 @@ func TestSandboxNamespaceNameDemand(t *testing.T) {
 	resource, err := model.NewResource(
 		resource.Key,
 		resource.XDSName,
-		resource.Value,
+		testResourceContents(testResourceValue(resource)),
 		[]string{"ns/worker"},
 		resource.Facts,
 	)

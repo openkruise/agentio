@@ -73,7 +73,13 @@ func TestGatewayVariantsRemainIsolatedAcrossSnapshotUpdates(t *testing.T) {
 	agentio := gatewayResource(t, "demo/egress", "shared", "agentio")
 	agentio.Key.Name = "demo/egress|agentio-egress|shared"
 	agentio.Facts.AgentioEgress = true
-	agentio, err := model.NewResource(agentio.Key, agentio.XDSName, agentio.Value, nil, agentio.Facts)
+	agentio, err := model.NewResource(
+		agentio.Key,
+		agentio.XDSName,
+		testResourceContents(testResourceValue(agentio)),
+		nil,
+		agentio.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

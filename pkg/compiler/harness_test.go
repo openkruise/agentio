@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/anypb"
+
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"istio.io/istio/pkg/util/sets"
@@ -182,7 +184,7 @@ func compiledWorkloadMetadataLabels(
 		t.Fatalf("workload Address %q not found", workloadUID)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 		t.Fatalf("unmarshal workload Address %q: %v", workloadUID, err)
 	}
 	for _, extension := range address.GetWorkload().GetExtensions() {
@@ -379,7 +381,7 @@ func compiledWorkload(t testing.TB, compiler *Compiler, workloadInput model.Work
 		t.Fatalf("workload resource %s missing", workloadInput.UID)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 		t.Fatalf("unmarshal workload %s: %v", workloadInput.UID, err)
 	}
 	return address.GetWorkload()
@@ -484,7 +486,7 @@ func compileWorkloadsAndHashesForService(
 			t.Fatalf("workload %q missing", workloadInput.UID)
 		}
 		address := &workloadv1.Address{}
-		if err := resource.Value.UnmarshalTo(address); err != nil {
+		if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 			t.Fatalf("unmarshal workload %q: %v", workloadInput.UID, err)
 		}
 		workloads[workloadInput.Name] = address.GetWorkload()
@@ -649,4 +651,16 @@ func compileSynced(t testing.TB, compiler *Compiler) model.ResourceSet {
 		t.Fatalf("objects failed to compile: %v", failures)
 	}
 	return snapshot
+}
+
+func resourceValue(t testing.TB, resource model.Resource) *anypb.Any {
+	t.Helper()
+	if resource.Value != nil {
+		return resource.Value
+	}
+	encoded, err := resource.Generate(model.ClientScope{Class: model.ClientEgressGateway}, resource.Key.TypeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Value
 }

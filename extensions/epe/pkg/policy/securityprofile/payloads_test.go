@@ -237,7 +237,7 @@ func TestProjectRecordsFailuresPerRule(t *testing.T) {
 // filter's configuration.
 func TestBindRefusesUnprojectedProfile(t *testing.T) {
 	regs := claimAll(t, nil)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	unprojected := compile(t, nil, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
 	unprojected.Projections = nil
@@ -286,7 +286,7 @@ func TestBindRefusesUnprojectedProfile(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	swapped := compile(t, reordered, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
-	twoFilterBinder := newBinder(otherChain)
+	twoFilterBinder := newBinder(otherChain, nil)
 	if _, err := twoFilterBinder.bind([]*Profile{swapped}, testRequest("example.com"), inputs.Workload{}); err == nil ||
 		!strings.Contains(err.Error(), "different filter chain") {
 		t.Fatalf("bind(reordered chain) = %v, want a chain-mismatch error", err)

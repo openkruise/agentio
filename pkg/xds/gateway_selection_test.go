@@ -24,7 +24,13 @@ import (
 func TestGatewayIndexedSelectionPreservesNamesAndScope(t *testing.T) {
 	own := gatewayResource(t, "demo/egress", "shared", "own")
 	var err error
-	own, err = model.NewResource(own.Key, own.XDSName, own.Value, []string{"alias"}, own.Facts)
+	own, err = model.NewResource(
+		own.Key,
+		own.XDSName,
+		testResourceContents(testResourceValue(own)),
+		[]string{"alias"},
+		own.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +53,13 @@ func TestGatewayIncrementalOwnerChangeWithdrawsOldScope(t *testing.T) {
 	old := gatewayResource(t, "demo/egress", "shared", "before")
 	other := gatewayResource(t, "demo/other", "shared", "after")
 	// Retain the storage key: visibility must use the old identity's facts.
-	next, err := model.NewResource(old.Key, other.XDSName, other.Value, nil, other.Facts)
+	next, err := model.NewResource(
+		old.Key,
+		other.XDSName,
+		testResourceContents(testResourceValue(other)),
+		nil,
+		other.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

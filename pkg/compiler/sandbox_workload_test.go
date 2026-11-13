@@ -42,7 +42,7 @@ func compatibilityWorkload(
 		return nil, model.Resource{}
 	}
 	a := &workloadv1.Address{}
-	if err := r.Value.UnmarshalTo(a); err != nil {
+	if err := resourceValue(t, r).UnmarshalTo(a); err != nil {
 		t.Fatal(err)
 	}
 	return a.GetWorkload(), r

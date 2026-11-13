@@ -15,9 +15,7 @@ package attributes
 
 import (
 	"context"
-	"maps"
 	"net/url"
-	"strconv"
 	"strings"
 
 	log "sigs.k8s.io/controller-runtime/pkg/log"
@@ -27,43 +25,8 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
 )
 
-// splitHostPort extracts (host, port) from a request authority. IPv6
-// authorities in bracket form (e.g. "[::1]:8080") are returned without the
-// brackets and the trailing port. A non-numeric or out-of-range port is
-// returned as 0 (no match for any non-empty Ports list).
-func splitHostPort(authority string) (string, int32) {
-	if authority == "" {
-		return "", 0
-	}
-	if authority[0] == '[' {
-		end := strings.IndexByte(authority, ']')
-		if end <= 0 {
-			return authority, 0
-		}
-		host := authority[1:end]
-		if end+1 < len(authority) && authority[end+1] == ':' {
-			return host, parsePort(authority[end+2:])
-		}
-		return host, 0
-	}
-	if idx := strings.IndexByte(authority, ':'); idx >= 0 {
-		return authority[:idx], parsePort(authority[idx+1:])
-	}
-	return authority, 0
-}
-
-// parsePort returns the port number, or 0 when the input is empty,
-// non-numeric, or out of the [1, 65535] range.
-func parsePort(s string) int32 {
-	if s == "" {
-		return 0
-	}
-	v, err := strconv.Atoi(s)
-	if err != nil || v <= 0 || v > 65535 {
-		return 0
-	}
-	return int32(v)
-}
+func splitHostPort(authority string) (string, int32) { return httpreq.SplitHostPort(authority) }
+func inferPortFromScheme(scheme string) int32        { return httpreq.InferPortFromScheme(scheme) }
 
 // splitPathAndQuery separates the "/path" and "query=string" halves of a
 // raw ":path" pseudo-header. The returned query is the verbatim text after
@@ -130,19 +93,6 @@ func parseHTTPRequest(ctx context.Context, headers map[string]string) httpreq.HT
 	return info
 }
 
-// inferPortFromScheme returns the conventional default port for the scheme,
-// or 0 when the scheme is empty or unrecognized.
-func inferPortFromScheme(scheme string) int32 {
-	switch strings.ToLower(scheme) {
-	case "http":
-		return 80
-	case "https":
-		return 443
-	default:
-		return 0
-	}
-}
-
 // RequestAfterMutations projects routing-header replacements for final target
 // authorization without changing the original request used for rule matching.
 func RequestAfterMutations(
@@ -150,34 +100,5 @@ func RequestAfterMutations(
 	request httpreq.HTTPRequest,
 	ops []filter.HeaderOp,
 ) httpreq.HTTPRequest {
-	var headers map[string]string
-	for _, op := range ops {
-		name := strings.ToLower(op.Name)
-		if name != ":authority" && name != "host" && name != ":scheme" && name != ":method" {
-			continue
-		}
-		// Routing headers cannot be removed. Appending is not a routing rewrite.
-		if op.Kind != filter.HeaderSet {
-			continue
-		}
-		if headers == nil {
-			headers = maps.Clone(request.Headers)
-			if headers == nil {
-				headers = make(map[string]string)
-			}
-		}
-		if name == "host" {
-			name = ":authority"
-		}
-		headers[name] = op.Value
-	}
-	if headers == nil {
-		return request
-	}
-	result := parseHTTPRequest(ctx, headers)
-	// A rewritten destination must not reuse the previous destination's IP.
-	if result.Host == request.Host && result.Port == request.Port {
-		result.OriginalDestination = request.OriginalDestination
-	}
-	return result
+	return filter.RequestAfterMutations(request, ops)
 }

@@ -85,7 +85,7 @@ agentio:
         drop: [ALL]
       readOnlyRootFilesystem: true
     tokenAudience: agentio-ca
-    kubernetesWorkloadAuthMode: tokenreview
+    kubernetesWorkloadAuthMode: local
     logging:
       level: info
       format: text
@@ -192,7 +192,7 @@ agentio:
     profileDeletionGracePeriod: 60s
     xdsCache:
       idleTTL: 10m
-      maxEntries: 10000
+      maxEntries: 0
     # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
     # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
     # null leaves the base externally managed; primary is always externally managed.

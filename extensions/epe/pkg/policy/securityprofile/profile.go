@@ -29,6 +29,8 @@ import (
 	"sort"
 	"strings"
 
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
+
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -401,10 +403,11 @@ func (m MatchMode) String() string {
 // GlobalSecurityProfile with its label selector, rule regexps, and audit
 // entries compiled once at write time.
 type Profile struct {
-	Meta     Meta
-	Selector labels.Selector
-	Rules    []Rule         // parallel to the source Spec.Rules
-	Audits   []*audit.Audit // spec-level compiled audit entries
+	TCPPolicy *securityv1.TCPPolicy `json:"-"`
+	Meta      Meta
+	Selector  labels.Selector
+	Rules     []Rule         // parallel to the source Spec.Rules
+	Audits    []*audit.Audit // spec-level compiled audit entries
 	// Spec retains the immutable administrator profile spec for inspection.
 	Spec *v1alpha1.SecurityProfileSpec `json:"-"`
 	// RawSandboxRules shares the source annotation; only full debug views decode it.
@@ -496,10 +499,15 @@ func newProfile(meta Meta, spec *v1alpha1.SecurityProfileSpec) (*Profile, error)
 	if err != nil {
 		return nil, err
 	}
+	tcp, err := policy.CompileTCPRules(spec.TCPRules)
+	if err != nil {
+		return nil, err
+	}
 	sp := &Profile{
-		Meta:  meta,
-		Spec:  spec,
-		Rules: rules,
+		TCPPolicy: tcp,
+		Meta:      meta,
+		Spec:      spec,
+		Rules:     rules,
 	}
 	if err := sp.compileAudits(spec); err != nil {
 		return nil, err

@@ -30,6 +30,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	internalv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/bootstrap/internal_listener/v3"
+	setstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"istio.io/istio/pkg/test"
@@ -120,10 +122,25 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					router := connectHCM.HttpFilters[len(connectHCM.HttpFilters)-1]
 					connectHCM.HttpFilters = []*hcmv3.HttpFilter{
 						connectHCM.HttpFilters[0],
-						connectHCM.HttpFilters[len(connectHCM.HttpFilters)-1],
+						httpFilter("test.connection_policy", b.pack(&setstatehttpv3.Config{
+							OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
+								{
+									Key: &setstatecommonv3.FilterStateValue_ObjectKey{
+										ObjectKey: "agentio.connection.policy_json",
+									},
+									FactoryKey: "envoy.string",
+									Value: &setstatecommonv3.FilterStateValue_FormatString{
+										FormatString: formatString(`{"profiles":[]}`),
+									},
+								},
+							},
+						})),
 					}
+					connectHCM.HttpFilters = append(connectHCM.HttpFilters, b.connectPolicyFilters()...)
+					connectHCM.HttpFilters = append(connectHCM.HttpFilters, router)
 					connectHCM.RouteSpecifier = &hcmv3.HttpConnectionManager_RouteConfig{RouteConfig: routes[0]}
 					outer := &listenerv3.Listener{
 						Name:    "connect",

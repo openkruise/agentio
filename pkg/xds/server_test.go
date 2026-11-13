@@ -505,7 +505,7 @@ func TestServerDispatchesGeneratorByTypeURL(t *testing.T) {
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.SecretType, Name: "demo/egress|api.example.com"},
 		"api.example.com",
-		mustAny(&tlsv3.Secret{Name: "api.example.com"}),
+		testResourceContents(mustAny(&tlsv3.Secret{Name: "api.example.com"})),
 		nil,
 		model.ResourceFacts{GatewayOwner: "demo/egress"},
 	)

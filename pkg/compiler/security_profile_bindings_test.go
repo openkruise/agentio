@@ -30,6 +30,7 @@ import (
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
@@ -49,7 +50,7 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 				return false
 			}
 			address := new(workloadv1.Address)
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 				t.Fatal(err)
 			}
 			got := new(extensionsv1.SniTrafficPolicy)
@@ -57,8 +58,25 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 			if !proto.Equal(got, want) {
 				return false
 			}
+			body, found := currentSnapshot(
+				t,
+				fixture.compiler,
+			).Get(model.ResourceKey{TypeURL: model.SecurityProfileType, Name: profile.ResourceName()})
+			if !found {
+				return false
+			}
+			payload := new(securityv1.SecurityProfile)
+			if err := body.Value.UnmarshalTo(payload); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(payload.SniPolicy, policy.ProjectSNIPolicy(want)) {
+				return false
+			}
 			manifest := manifestAt(t, fixture.compiler, sandbox.UID)
 			if manifest == nil {
+				return false
+			}
+			if !proto.Equal(inlineProfileAt(t, manifest).GetSniPolicy(), policy.ProjectSNIPolicy(want)) {
 				return false
 			}
 			for _, extension := range manifest.Extensions {
@@ -122,7 +140,7 @@ func securityReferencesAt(
 	switch key.TypeURL {
 	case model.AddressType:
 		address := &workloadv1.Address{}
-		if err := resource.Value.UnmarshalTo(address); err != nil {
+		if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 			t.Fatal(err)
 		}
 		for _, extension := range address.GetWorkload().GetExtensions() {
@@ -356,7 +374,7 @@ func TestSecurityProfileBindingDrivesSNIProjection(t *testing.T) {
 				return false
 			}
 			address := &workloadv1.Address{}
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 				t.Fatal(err)
 			}
 			sni := &extensionsv1.SniTrafficPolicy{}

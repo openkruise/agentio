@@ -47,6 +47,7 @@ var pushOrder = []string{
 	model.WorkloadType,
 	model.WorkloadAuthorizationType,
 	model.TrafficPolicyType,
+	model.SecurityProfileType,
 	model.SandboxType,
 	model.ProxyConfigType,
 }
@@ -349,7 +350,9 @@ func (s *Server) generateAndSend(
 		logPushFailure(connLog, "generate", request.TypeURL, started, err)
 		return err
 	}
-	if request.TypeURL == model.TrafficPolicyType && len(delta.Removed) > 0 && workloadWatch != nil &&
+	if (request.TypeURL == model.TrafficPolicyType || request.TypeURL == model.SecurityProfileType) &&
+		len(delta.Removed) > 0 &&
+		workloadWatch != nil &&
 		workloadWatch.started {
 		// A demand can overtake a queued push. Send current bindings before
 		// reporting a missing policy, using the same publication for both.

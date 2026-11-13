@@ -126,6 +126,7 @@ func TestEstablishedCapacityWaitPreservesStreamAndLatestConfiguration(t *testing
 		defer cancel()
 		old := gatewayResource(t, "demo/egress", "cluster", "old")
 		server := newTestServerWithScheduler(t, gatewayScope(), []model.Resource{old}, nil, NewPushScheduler(1))
+		server.server.flow.config.ackTimeout = 5 * time.Second
 		healthy, slow := newFakeStream(ctx, server.server.queueSize+8), newFakeStream(ctx, 8)
 		var done []<-chan error
 		for _, stream := range []*fakeStream{healthy, slow} {
@@ -206,7 +207,7 @@ func TestInitialAdmissionRejectsBeforeAuthenticationAndReleasesOnCancellation(t 
 		second := newFakeStream(t.Context(), 1)
 		second.send(nodeRequest(model.AddressType))
 		secondDone := server.start(second)
-		time.Sleep(time.Second)
+		time.Sleep(server.server.flow.config.admissionWait)
 		synctest.Wait()
 		if err := <-secondDone; status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("initial admission = %v, want ResourceExhausted", err)
@@ -586,6 +587,7 @@ func TestSessionContinuousAcknowledgementsKeepStreamAlive(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
+		server.server.flow.config.ackTimeout = 5 * time.Second
 		stream := newFakeStream(ctx, 4)
 		types := []string{model.ClusterType, model.ListenerType}
 		stream.send(nodeRequest(types[0]))
@@ -633,6 +635,7 @@ func TestSessionAcknowledgementProgressUsesSentNonces(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				server := newTestServerWithScheduler(t, gatewayScope(), nil, nil, NewPushScheduler(1))
+				server.server.flow.config.ackTimeout = 5 * time.Second
 				stream := newFakeStream(ctx, 4)
 				stream.send(nodeRequest(model.ClusterType))
 				done := server.start(stream)

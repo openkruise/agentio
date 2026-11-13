@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -398,6 +399,15 @@ func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Issued
 			forward = candidate
 		} else if candidate.GetName() == MainInternal {
 			internalListener = candidate
+		}
+	}
+	// This stock-Envoy fixture tests forwarding; policy authorization is covered by the module smoke tests.
+	for _, candidate := range listeners {
+		for _, chain := range candidate.FilterChains {
+			chain.Filters = slices.DeleteFunc(
+				chain.Filters,
+				func(f *listener.Filter) bool { return f.Name == "agentio.tcp_policy" },
+			)
 		}
 	}
 	manager := findHCM(t, forward)

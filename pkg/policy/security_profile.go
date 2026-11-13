@@ -22,24 +22,27 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// CompiledSecurityProfile contains one profile's binding metadata and SNI projection.
-// A nil SNI projection does not affect binding.
+// CompiledSecurityProfile contains binding metadata and the SNI/TCP projections.
+// A nil TCPPolicy means compilation failed; only the binding metadata is retained.
 type CompiledSecurityProfile struct {
 	Name       string
 	Attachment *PolicyAttachment
 	SNIPolicy  *extensionsv1.SniTrafficPolicy
+	TCPPolicy  *securityv1.TCPPolicy
 	Spec       agentsv1alpha1.SecurityProfileSpec
 }
 
 // ResourceName identifies the profile in the compiled collection.
 func (p CompiledSecurityProfile) ResourceName() string { return p.Name }
 
-// Equals includes binding metadata and the optional SNI projection.
+// Equals includes binding metadata and both connection-policy projections.
 func (p CompiledSecurityProfile) Equals(other CompiledSecurityProfile) bool {
-	if p.Name != other.Name || !reflect.DeepEqual(p.Spec, other.Spec) || !proto.Equal(p.SNIPolicy, other.SNIPolicy) {
+	if p.Name != other.Name || !reflect.DeepEqual(p.Spec, other.Spec) || !proto.Equal(p.SNIPolicy, other.SNIPolicy) ||
+		!proto.Equal(p.TCPPolicy, other.TCPPolicy) {
 		return false
 	}
 	if p.Attachment == nil || other.Attachment == nil {
@@ -48,10 +51,10 @@ func (p CompiledSecurityProfile) Equals(other CompiledSecurityProfile) bool {
 	return p.Attachment.Equals(*other.Attachment)
 }
 
-// PolicyAttachment exposes binding metadata independently of the SNI projection.
+// PolicyAttachment exposes binding metadata independently of the policy body.
 func (p CompiledSecurityProfile) PolicyAttachment() *PolicyAttachment { return p.Attachment }
 
-// CompileSecurityProfile validates binding metadata and projects SNI once per
+// CompileSecurityProfile validates binding metadata and projects SNI/TCP once per
 // source. Callers retain both outputs together when an update fails.
 func CompileSecurityProfile(profile model.SecurityProfile) (*CompiledSecurityProfile, error) {
 	attachment, err := SecurityProfileAttachment(profile)
@@ -62,10 +65,15 @@ func CompileSecurityProfile(profile model.SecurityProfile) (*CompiledSecurityPro
 	if err != nil {
 		return nil, fmt.Errorf("security profile %s: %w", profile.ResourceName(), err)
 	}
+	tcp, err := CompileTCPRules(profile.Spec.TCPRules)
+	if err != nil {
+		return nil, fmt.Errorf("security profile %s: %w", profile.ResourceName(), err)
+	}
 	return &CompiledSecurityProfile{
 		Name:       profile.ResourceName(),
 		Attachment: attachment,
 		SNIPolicy:  payload,
+		TCPPolicy:  tcp,
 		Spec:       profile.Spec,
 	}, nil
 }

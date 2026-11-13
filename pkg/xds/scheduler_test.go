@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/types/known/anypb"
+	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 
 	"github.com/openkruise/agentio/pkg/model"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
@@ -310,7 +310,7 @@ func TestSlowClientBurstConvergesFromFirstUnsentToFinalPublication(t *testing.T)
 	resource := func(payload string) model.Resource {
 		result, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: "workload-a"}, "",
-			&anypb.Any{TypeUrl: model.AddressType, Value: []byte(payload)}, nil,
+			testResourceContents(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{Uid: "workload-a", Name: payload}}}), nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: "workload-a",
 				NodeName:    "node-a",
@@ -374,7 +374,11 @@ func TestSlowClientBurstConvergesFromFirstUnsentToFinalPublication(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(delta.Resources) != 1 || delta.Resources[0].Hash != versions[3].Hash || len(delta.Removed) != 0 {
+	expected, err := versions[3].Encode(model.ClientScope{Class: model.ClientSharedZTunnel}, model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Resources) != 1 || delta.Resources[0].Hash != expected.Hash || len(delta.Removed) != 0 {
 		t.Fatalf("coalesced delta resources=%#v removed=%v, want only final version", delta.Resources, delta.Removed)
 	}
 }

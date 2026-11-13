@@ -21,11 +21,16 @@ import (
 	"time"
 
 	workload "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestObservedRevision(t *testing.T) {
 	resource := workloadResource(23456, 7)
-	value, err := observedWorkload(resource.Value)
+	encoded, err := resource.Encode(model.ClientScope{Class: model.ClientAgentioEgress}, model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := observedWorkload(encoded.Value)
 	if err != nil {
 		t.Fatal(err)
 	}

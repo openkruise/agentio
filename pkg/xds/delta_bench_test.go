@@ -585,7 +585,7 @@ func fanoutBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: name},
 			"",
-			&anypb.Any{TypeUrl: model.AddressType, Value: []byte("old")},
+			testResourceContents(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("old")}),
 			nil,
 			facts,
 		)
@@ -598,7 +598,7 @@ func fanoutBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource
 			variants[1], err = model.NewResource(
 				resource.Key,
 				"",
-				&anypb.Any{TypeUrl: model.AddressType, Value: []byte("new")},
+				testResourceContents(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("new")}),
 				nil,
 				facts,
 			)
@@ -702,12 +702,12 @@ func authorizationFanoutScenario(t testing.TB) ([]model.Resource, [2]xdsstore.Up
 		}}
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "",
-			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+			testResourceContents(mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
 				Uid:                   name,
 				Namespace:             "demo",
 				Node:                  node,
 				AuthorizationPolicies: policies,
-			}}}), nil,
+			}}})), nil,
 			facts,
 		)
 		if err != nil {

@@ -22,7 +22,7 @@ import (
 func TestResourceSetLookupIndexesRemainImmutableAcrossApply(t *testing.T) {
 	raw := testWorkloadResource(t, "canonical", "old", "sandbox-a", "", nil, nil)
 	oldResource, err := NewResource(
-		raw.Key, "wire-old", raw.Value, []string{"alias-old"}, raw.Facts,
+		raw.Key, "wire-old", Prebuilt(raw.Value), []string{"alias-old"}, raw.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestResourceSetLookupIndexesRemainImmutableAcrossApply(t *testing.T) {
 
 	updatedRaw := testWorkloadResource(t, "canonical", "new", "sandbox-b", "", nil, nil)
 	newResource, err := NewResource(
-		oldResource.Key, "wire-new", updatedRaw.Value, []string{"alias-new"}, updatedRaw.Facts,
+		oldResource.Key, "wire-new", Prebuilt(updatedRaw.Value), []string{"alias-new"}, updatedRaw.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestResourceSetHasWorkloadUsesExactIntersection(t *testing.T) {
 func TestResourceSetPayloadUpdateReusesUnchangedLookupMemberships(t *testing.T) {
 	raw := testWorkloadResource(t, "canonical", "old", "sandbox-a", "", []string{"demo/service"}, nil)
 	oldResource, err := NewResource(
-		raw.Key, "wire-name", raw.Value, []string{"alias"}, raw.Facts,
+		raw.Key, "wire-name", Prebuilt(raw.Value), []string{"alias"}, raw.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestResourceSetPayloadUpdateReusesUnchangedLookupMemberships(t *testing.T) 
 
 	newRaw := testWorkloadResource(t, "canonical", "new", "sandbox-a", "", []string{"demo/service"}, nil)
 	newResource, err := NewResource(
-		oldResource.Key, oldResource.XDSName, newRaw.Value, oldResource.Aliases, oldResource.Facts,
+		oldResource.Key, oldResource.XDSName, Prebuilt(newRaw.Value), oldResource.Aliases, oldResource.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)

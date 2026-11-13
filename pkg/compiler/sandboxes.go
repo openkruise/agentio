@@ -78,10 +78,14 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 		if policies.InputError != "" {
 			return nil, fmt.Errorf("sandbox policies: %s", policies.InputError)
 		}
-		if policies.SecurityRules != nil {
+		if policies.SecurityRules != nil || policies.TCPRules != nil {
 			sni, err := policy.CompileSNIRules(policies.SecurityRules)
 			if err != nil {
 				return nil, fmt.Errorf("sandbox security rules: %w", err)
+			}
+			tcp, err := policy.CompileTCPRules(policies.TCPRules)
+			if err != nil {
+				return nil, fmt.Errorf("sandbox TCP rules: %w", err)
 			}
 			name := sandbox.Name
 			if name == "" {
@@ -91,6 +95,8 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 				Name:      name,
 				Namespace: sandbox.Namespace,
 				Uid:       sandbox.SourceIdentity.UID,
+				SniPolicy: policy.ProjectSNIPolicy(sni),
+				TcpPolicy: tcp,
 			}, &agentsv1alpha1.SecurityProfileSpec{Rules: policies.SecurityRules})
 			if err != nil {
 				return nil, err
@@ -149,7 +155,7 @@ func newSandboxResources(
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.SandboxType, Name: sandbox.ResourceName()},
 			"",
-			value,
+			model.Prebuilt(value),
 			aliases,
 			model.ResourceFacts{
 				SourceIdentity: sandbox.SourceIdentity,

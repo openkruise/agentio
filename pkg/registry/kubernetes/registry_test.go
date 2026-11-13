@@ -220,6 +220,7 @@ func TestRegistrySandboxPolicies(t *testing.T) {
 				Labels:    map[string]string{agentsv1alpha1.LabelSandboxID: "sandbox-id"},
 				Annotations: map[string]string{
 					agentsv1alpha1.AnnotationSecurityRules: `[{"match":[{"domains":["inline.example"]}]}]`,
+					"agents.kruise.io/tcp-rules":           `not a supported annotation`,
 				},
 			}}
 			shared := &agentsv1alpha1.SecurityProfile{
@@ -264,7 +265,8 @@ func TestRegistrySandboxPolicies(t *testing.T) {
 			}
 			if current == nil || current.Policies == nil ||
 				len(current.Policies.SecurityRules) != 1 ||
-				current.Policies.SecurityRules[0].Match[0].Domains[0] != "inline.example" {
+				current.Policies.SecurityRules[0].Match[0].Domains[0] != "inline.example" ||
+				len(current.Policies.TCPRules) != 0 || current.Policies.InputError != "" {
 				t.Fatalf("inline rules missing from Sandbox: %+v", current)
 			}
 			if len(r.SecurityProfiles.List()) != 1 {

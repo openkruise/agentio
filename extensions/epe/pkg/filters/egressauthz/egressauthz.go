@@ -27,8 +27,8 @@ import (
 	"github.com/openkruise/agentio/pkg/dns"
 )
 
-// Authorize invokes each child once with the remaining candidates. An empty
-// result or an error stops the chain. Selection is random within the first
+// Authorize applies common restrictions, then the request-bound policy, and
+// pins a surviving address. Selection is random within the first
 // surviving candidate's address family; explicit and original targets stay fixed.
 func (a *Aggregate) Authorize(
 	ctx context.Context,
@@ -40,17 +40,19 @@ func (a *Aggregate) Authorize(
 	if stream == nil {
 		return nil, nil, fmt.Errorf("request stream is required")
 	}
-	candidates, err := resolveCandidates(ctx, a.client, stream)
+	candidates, err := a.Candidates(ctx, stream)
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, authorizer := range a.authorizers {
+	if len(candidates) == 0 {
+		return denied()
+	}
+	if authorizer := stream.Policies.DestinationAuthorizer; authorizer != nil {
 		candidates, err = authorizer.Authorize(ctx, stream, candidates)
 		if err != nil {
-			stream.Info.RecordAuthorization(filter.AuthorizationDecision{
-				Action: "error",
-				Reason: filter.AuthorizationReasonPolicyLoadFailed,
-			})
+			stream.Info.RecordAuthorization(
+				filter.AuthorizationDecision{Action: "error", Reason: filter.AuthorizationReasonPolicyLoadFailed},
+			)
 			return nil, nil, err
 		}
 		if len(candidates) == 0 {
@@ -63,6 +65,33 @@ func (a *Aggregate) Authorize(
 		return stream.Upstream, nil, nil
 	}
 	return &filter.UpstreamTarget{Address: &selected}, nil, nil
+}
+
+// Candidates resolves the current target and applies common restrictions.
+// It neither invokes the request-bound policy nor pins an address.
+func (a *Aggregate) Candidates(ctx context.Context, stream *filter.Stream) ([]netip.AddrPort, error) {
+	candidates, err := resolveCandidates(ctx, a.client, stream)
+	if err != nil {
+		return nil, err
+	}
+	for _, authorizer := range a.authorizers {
+		candidates, err = authorizer.Authorize(ctx, stream, candidates)
+		if err != nil {
+			stream.Info.RecordAuthorization(
+				filter.AuthorizationDecision{Action: "error", Reason: filter.AuthorizationReasonPolicyLoadFailed},
+			)
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			break
+		}
+	}
+	return candidates, nil
+}
+
+// SelectCandidate selects an address after authorization has removed denied candidates.
+func SelectCandidate(candidates []netip.AddrPort) netip.AddrPort {
+	return selectRandomCandidate(candidates)
 }
 
 // selectRandomCandidate selects uniformly within the first candidate's address

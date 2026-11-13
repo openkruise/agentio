@@ -426,6 +426,7 @@ func testGenerators(overrides map[string]ResourceGenerator) map[string]ResourceG
 		model.WorkloadType:              WorkloadGenerator{},
 		model.WorkloadAuthorizationType: AuthorizationGenerator{},
 		model.TrafficPolicyType:         TrafficPolicyGenerator{},
+		model.SecurityProfileType:       SecurityProfileGenerator{},
 		model.SandboxType:               SandboxGenerator{},
 	}
 	maps.Copy(result, overrides)
@@ -556,9 +557,9 @@ func addressResource(t testing.TB, name, payload string, aliases ...string) mode
 	t.Helper()
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.AddressType, Name: name}, "",
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{
+		testResourceContents(mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{
 			Workload: &workloadv1.Workload{Uid: name, Name: payload, Namespace: "demo"},
-		}}), aliases,
+		}})), aliases,
 		model.ResourceFacts{Workload: &model.WorkloadResourceFacts{Namespace: "demo",
 			WorkloadUID: "cluster//Pod/demo/client-pod",
 			Source:      model.SourceRef{Registry: "kubernetes/test", Key: "cluster//Pod/demo/client-pod"},
@@ -577,7 +578,7 @@ func gatewayResource(t testing.TB, gatewayKey, xdsName, payload string) model.Re
 	t.Helper()
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.ClusterType, Name: gatewayKey + "|" + xdsName}, xdsName,
-		mustAny(&clusterv3.Cluster{Name: xdsName, AltStatName: payload}), nil,
+		testResourceContents(mustAny(&clusterv3.Cluster{Name: xdsName, AltStatName: payload})), nil,
 		model.ResourceFacts{GatewayOwner: gatewayKey})
 	if err != nil {
 		t.Fatal(err)
@@ -589,7 +590,7 @@ func gatewayResourceOfType(t testing.TB, typeURL, gatewayKey, xdsName, payload s
 	t.Helper()
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: typeURL, Name: gatewayKey + "|" + xdsName}, xdsName,
-		&anypb.Any{TypeUrl: typeURL, Value: []byte(payload)}, nil,
+		testResourceContents(&anypb.Any{TypeUrl: typeURL, Value: []byte(payload)}), nil,
 		model.ResourceFacts{GatewayOwner: gatewayKey})
 	if err != nil {
 		t.Fatal(err)
@@ -753,13 +754,19 @@ func selectionWorkload(t *testing.T, uid, namespace, node, service, policyName s
 		facts.Workload.AuthorizationRefs = []string{policyName}
 	}
 	resource, err := model.NewResource(
-		model.ResourceKey{TypeURL: model.AddressType, Name: uid}, "",
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
-			Uid:                   uid,
-			Namespace:             namespace,
-			Node:                  node,
-			AuthorizationPolicies: authorizationPolicies,
-		}}}), nil, facts)
+		model.ResourceKey{TypeURL: model.AddressType, Name: uid},
+		"",
+		testResourceContents(
+			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+				Uid:                   uid,
+				Namespace:             namespace,
+				Node:                  node,
+				AuthorizationPolicies: authorizationPolicies,
+			}}}),
+		),
+		nil,
+		facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,9 +798,9 @@ func selectionService(t *testing.T, name string, aliases ...string) model.Resour
 	t.Helper()
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.AddressType, Name: name}, "",
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Service{Service: &workloadv1.Service{
+		testResourceContents(mustAny(&workloadv1.Address{Type: &workloadv1.Address_Service{Service: &workloadv1.Service{
 			Name: name,
-		}}}), aliases, model.ResourceFacts{Service: &model.ServiceResourceFacts{ServiceKey: name}})
+		}}})), aliases, model.ResourceFacts{Service: &model.ServiceResourceFacts{ServiceKey: name}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,7 +813,13 @@ func selectionWithGatewayReference(t *testing.T, resource model.Resource, gatewa
 	workload := *facts.Workload
 	workload.GatewayReferences = append(append([]string(nil), workload.GatewayReferences...), gatewayKey)
 	facts.Workload = &workload
-	updated, err := model.NewResource(resource.Key, resource.XDSName, resource.Value, resource.Aliases, facts)
+	updated, err := model.NewResource(
+		resource.Key,
+		resource.XDSName,
+		testResourceContents(testResourceValue(resource)),
+		resource.Aliases,
+		facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +830,13 @@ func selectionOwnedByGateway(t *testing.T, resource model.Resource, gatewayKey s
 	t.Helper()
 	facts := resource.Facts
 	facts.GatewayOwner = gatewayKey
-	updated, err := model.NewResource(resource.Key, resource.XDSName, resource.Value, resource.Aliases, facts)
+	updated, err := model.NewResource(
+		resource.Key,
+		resource.XDSName,
+		testResourceContents(testResourceValue(resource)),
+		resource.Aliases,
+		facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +852,7 @@ func selectionAuthorization(
 	t.Helper()
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.WorkloadAuthorizationType, Name: name}, "",
-		mustWireAny(model.WorkloadAuthorizationType, &securityv1.Authorization{Name: name}), nil,
+		testResourceContents(mustWireAny(model.WorkloadAuthorizationType, &securityv1.Authorization{Name: name})), nil,
 		model.ResourceFacts{Authorization: &model.AuthorizationResourceFacts{Scope: scope, Namespace: namespace}},
 	)
 	if err != nil {
@@ -855,22 +874,29 @@ func scaleWorkloadTransition(t testing.TB, resourceCount int) (
 	model.ResourceSet, model.ResourceSet, xdsstore.Update, model.Resource,
 ) {
 	t.Helper()
-	value := &anypb.Any{TypeUrl: model.AddressType, Value: []byte("address")}
 	resources := make([]model.Resource, 0, resourceCount)
 	for index := range resourceCount {
 		name := fmt.Sprintf("workload-%06d", index)
-		resources = append(resources, model.Resource{
-			Key:     model.ResourceKey{TypeURL: model.AddressType, Name: name},
-			XDSName: name,
-			Value:   value,
-			Hash:    name + "-old",
-			Facts: model.ResourceFacts{Workload: &model.WorkloadResourceFacts{Namespace: "demo",
+		resource, err := model.NewResource(
+			model.ResourceKey{TypeURL: model.AddressType, Name: name},
+			"",
+			testResourceContents(
+				&workloadv1.Address{
+					Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{Uid: name, Name: "old"}},
+				},
+			),
+			nil,
+			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{Namespace: "demo",
 				WorkloadUID: name,
 				Source:      model.SourceRef{Registry: "kubernetes/test", Key: name},
 				NodeName:    fmt.Sprintf("node-%03d", index%100),
 				Principal:   model.MustServiceAccountPrincipal("demo", "default"),
 			}},
-		})
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources = append(resources, resource)
 	}
 	before, err := model.NewResourceSet(resources)
 	if err != nil {
@@ -881,8 +907,20 @@ func scaleWorkloadTransition(t testing.TB, resourceCount int) (
 	if !found {
 		t.Fatalf("target Workload %q not found", targetKey.Name)
 	}
-	newTarget := oldTarget
-	newTarget.Hash = targetKey.Name + "-new"
+	newTarget, err := model.NewResource(
+		targetKey,
+		"",
+		testResourceContents(
+			&workloadv1.Address{
+				Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{Uid: targetKey.Name, Name: "new"}},
+			},
+		),
+		oldTarget.Aliases,
+		oldTarget.Facts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	after, changed, err := before.Apply([]model.ResourceChange{{Key: targetKey, New: &newTarget}})
 	if err != nil || !changed {
 		t.Fatalf("build Workload transition: changed=%v err=%v", changed, err)
@@ -921,3 +959,38 @@ func initializedSubscription(t testing.TB, generator ResourceGenerator, scope mo
 }
 
 func (*fakeSecrets) SignerGeneration() uint64 { return 0 }
+
+func testResourceContents(value proto.Message) model.ResourceGenerator {
+	address := new(workloadv1.Address)
+	switch typed := value.(type) {
+	case *workloadv1.Address:
+		address = proto.Clone(typed).(*workloadv1.Address)
+	case *anypb.Any:
+		if typed.GetTypeUrl() != model.AddressType {
+			return model.Prebuilt(value)
+		}
+		if err := typed.UnmarshalTo(address); err != nil {
+			panic(err)
+		}
+	default:
+		return model.Prebuilt(value)
+	}
+	workload := address.GetWorkload()
+	if workload == nil {
+		return model.Prebuilt(value)
+	}
+	extensions := workload.Extensions
+	workload.Extensions = nil
+	return model.WorkloadContents(workload, extensions)
+}
+
+func testResourceValue(resource model.Resource) *anypb.Any {
+	if resource.Value != nil {
+		return resource.Value
+	}
+	encoded, err := resource.Generate(model.ClientScope{Class: model.ClientEgressGateway}, resource.Key.TypeURL)
+	if err != nil {
+		panic(err)
+	}
+	return encoded.Value
+}

@@ -88,7 +88,7 @@ spec:
 	}
 	rn := runserver.New(runserver.Config{
 		Listener:      lis,
-		Resolve:       policysecurityprofile.NewResolver(fixture.Store, regs, nil),
+		Resolve:       policysecurityprofile.NewResolver(fixture.Store, regs, nil, nil),
 		Registrations: regs,
 	}, logr.Discard())
 

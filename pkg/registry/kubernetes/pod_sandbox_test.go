@@ -251,7 +251,14 @@ func TestPodPoliciesReachWorkloadsWithoutSandboxes(t *testing.T) {
 				w := &workloadv1.Address{}
 				resource, ok := snapshot().Get(model.ResourceKey{TypeURL: model.AddressType, Name: "test//Pod/demo/" + name})
 				if ok {
-					if err := resource.Value.UnmarshalTo(w); err != nil {
+					encoded, err := resource.Encode(
+						model.ClientScope{Class: model.ClientEgressGateway},
+						model.AddressType,
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := encoded.Value.UnmarshalTo(w); err != nil {
 						t.Fatal(err)
 					}
 				}

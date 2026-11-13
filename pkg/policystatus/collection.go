@@ -96,11 +96,3 @@ type compiledProfile struct {
 
 func (p compiledProfile) ResourceName() string              { return p.Source.ResourceName() }
 func (p compiledProfile) Equals(other compiledProfile) bool { return reflect.DeepEqual(p, other) }
-
-func condition(typ string, status metav1.ConditionStatus, reason, message string, generation int64) metav1.Condition {
-	return metav1.Condition{Type: typ,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: generation}
-}

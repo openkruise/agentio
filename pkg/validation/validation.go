@@ -30,6 +30,9 @@ func ValidateSecurityProfile(profile model.SecurityProfile) error {
 	if _, err := policy.SecurityProfileAttachment(profile); err != nil {
 		return err
 	}
+	if _, err := policy.CompileTCPRules(profile.Spec.TCPRules); err != nil {
+		return err
+	}
 	for _, input := range profile.Spec.Inputs {
 		if (input.Inline != nil) == (input.ConfigMap != nil) {
 			return fmt.Errorf("input %q must set exactly one source", input.Name)

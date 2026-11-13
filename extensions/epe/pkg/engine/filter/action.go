@@ -51,9 +51,9 @@ func Stop(r Reply) Action {
 	return Action{kind: KindStop, reply: r}
 }
 
-// Bypass skips all following actions and rules. Earlier mutations and side
-// effects are preserved.
-func Bypass() Action { return Action{kind: KindBypass} }
+// Bypass skips all following actions and rules, preserving earlier work and
+// applying the supplied mutations.
+func Bypass(m ...Mutation) Action { return Action{kind: KindBypass, mutations: m} }
 
 // NeedBody asks for the request or response body, optionally carrying
 // mutations accumulated so far.
@@ -62,7 +62,7 @@ func NeedBody(m ...Mutation) Action { return Action{kind: KindNeedBody, mutation
 // Kind reports what the filter decided.
 func (a Action) Kind() ActionKind { return a.kind }
 
-// Mutations returns the mutations carried by a Continue or NeedBody action.
+// Mutations returns the mutations carried by a Continue, Bypass or NeedBody action.
 func (a Action) Mutations() []Mutation { return a.mutations }
 
 // Reply returns the blocking reply and whether one is present.

@@ -85,7 +85,7 @@ func TestScenario_BlockRuleEnforcedWithUnavailableInputs(t *testing.T) {
 		`input "routing" from ConfigMap test-ns/missing: not found`)
 
 	h := enginetest.New(t, enginetest.Options{
-		Resolve:       policysecurityprofile.NewResolver(staticMatcher{compiled}, regs, nil),
+		Resolve:       policysecurityprofile.NewResolver(staticMatcher{compiled}, regs, nil, nil),
 		Registrations: regs,
 	})
 
@@ -137,7 +137,7 @@ func TestScenario_TokenTransformFailStrategyWithUnavailableInputs(t *testing.T) 
 		compiled := compileWithInputsError(t, transformProfile(failStrategy, valueTemplate), regs,
 			`input "routing" from ConfigMap test-ns/missing: not found`)
 		h := enginetest.New(t, enginetest.Options{
-			Resolve:       policysecurityprofile.NewResolver(staticMatcher{compiled}, regs, nil),
+			Resolve:       policysecurityprofile.NewResolver(staticMatcher{compiled}, regs, nil, nil),
 			Registrations: regs,
 		})
 		return h.Run(t, enginetest.NewRequest("GET", "api.example.com", "/v1").

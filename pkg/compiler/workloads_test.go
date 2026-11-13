@@ -343,7 +343,7 @@ func TestCompilerPublishesDiscoveryOnlyWorkload(t *testing.T) {
 		t.Fatalf("discovery-only WDS Address %q is missing; failures: %v", workload.UID, compiler.Failures())
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
 	if got := address.GetWorkload().GetNetworkMode(); got != workloadv1.NetworkMode_HOST_NETWORK {
@@ -695,7 +695,7 @@ func TestWorkloadInlineSNIPolicyLifecycle(t *testing.T) {
 			return nil
 		}
 		address := &workloadv1.Address{}
-		if err := resources[0].Value.UnmarshalTo(address); err != nil {
+		if err := resourceValue(t, resources[0]).UnmarshalTo(address); err != nil {
 			t.Fatal(err)
 		}
 		for _, extension := range address.GetWorkload().Extensions {

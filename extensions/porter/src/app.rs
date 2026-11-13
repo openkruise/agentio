@@ -37,7 +37,6 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
         health_address = %config.health_address,
         metrics_address = %config.metrics_address,
         worker_threads = config.worker_threads,
-        enable_traffic_policy = config.enable_traffic_policy,
         enable_sni_traffic_policy = config.enable_sni_traffic_policy,
         sandbox_mode = config.sandbox_mode,
         request_timeout_seconds = config.request_timeout.as_secs_f64(),
@@ -53,7 +52,6 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
         client: client.clone(),
         cluster_id: config.cluster_id,
         timeout: config.request_timeout,
-        enable_traffic_policy: config.enable_traffic_policy,
         enable_sni_traffic_policy: config.enable_sni_traffic_policy,
     };
     let stop = CancellationToken::new();

@@ -5,25 +5,27 @@
 | Condition | True | False | Unknown |
 | --- | --- | --- | --- |
 | `Accepted` | SecurityProfile passed API static validation, or TrafficPolicy passed the native traffic compiler. | Validation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed validation is available yet. |
-| `ResolvedRefs` | All references checked by agentiod are resolved. | A referenced object is absent from a synchronized, in-scope cache. | A cache is not synchronized, a reference is outside the watch scope, DNS has no addresses yet, or validation failed before reference checks. |
+| `ResolvedRefs` | Reference checks passed; see the check scope below. | A referenced resource was not found. | Reference checks are pending, a reference could not be verified, DNS has no addresses yet, or validation failed before reference checks. |
 | `Programmed` | SecurityProfile passed API static validation, or TrafficPolicy compiled successfully; the configuration is eligible for distribution. | API validation or native traffic compilation failed. | No completed validation is available yet. |
 
 A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also retain their existing `status.observedGeneration`; TrafficPolicies use the generation in each condition. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` changes only when the condition's True/False/Unknown value changes.
 
 For all four policy kinds, `Programmed` follows `Accepted`: successful validation reports both as `True`, and invalid configuration reports both as `False`. It does not wait for data-plane acknowledgements or verify a consumer's compilation or loading result. Reference checks remain separate: missing references checked by agentiod affect `ResolvedRefs`, not `Programmed`.
 
+Successful conditions use the same messages across all four policy kinds: `Configuration is valid`, `Reference checks passed`, and `Configuration is ready for distribution`. Error messages retain the affected resource name, rule or input name, and field path where available. `Reference checks are pending` indicates that checks are not ready to complete; `could not be verified` means the reference could not be checked, rather than that the resource is absent. The condition's `reason` provides the diagnostic category.
+
 The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on all four policy kinds. Other controllers may own separate condition types, but must not compete for these types.
 
 ## Enable or disable
 
-`ENABLE_POLICY_STATUS` defaults to `true`. Set it to `false` to disable the status controller, including its advisory validation, leader election and status writes. Existing status is retained; normal configuration compilation, distribution and EPE loading continue independently.
+`AGENTIO_ENABLE_POLICY_STATUS` defaults to `true`. Set it to `false` to disable the status controller, including its advisory validation, leader election and status writes. Existing status is retained; normal configuration compilation, distribution and EPE loading continue independently.
 
 The environment variable is read at process startup, so restart `agentiod` after changing it. With Helm, set:
 
 ```yaml
 agentiod:
   env:
-    ENABLE_POLICY_STATUS: "false"
+    AGENTIO_ENABLE_POLICY_STATUS: "false"
 ```
 
 ## Validation and reference scope

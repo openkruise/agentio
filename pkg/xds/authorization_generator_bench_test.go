@@ -33,12 +33,12 @@ func BenchmarkAuthorizationGeneratorIncremental(b *testing.B) {
 	workload := func(uid, node string, policies []string) model.Resource {
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: uid}, "",
-			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+			testResourceContents(mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
 				Uid:                   uid,
 				Namespace:             "demo",
 				Node:                  node,
 				AuthorizationPolicies: policies,
-			}}}), nil,
+			}}})), nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{Namespace: "demo",
 				WorkloadUID:       uid,
 				Source:            model.SourceRef{Registry: "kubernetes/test", Key: uid},

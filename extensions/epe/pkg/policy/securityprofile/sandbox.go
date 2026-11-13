@@ -59,8 +59,8 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 	var specRules []v1alpha1.SecurityRule
+	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 	if err := dec.Decode(&specRules); err != nil {
 		return nil, fmt.Errorf("decode %s annotation: %w", AnnotationSecurityRules, err)
 	}

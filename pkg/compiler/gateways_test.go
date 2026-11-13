@@ -880,7 +880,7 @@ func TestInitialInvalidEgressAndTLSGatewayDoNotCreateSandboxReference(t *testing
 				t.Fatalf("facts = %+v, unexpected gateway reference", resource.Facts)
 			}
 			address := &workloadv1.Address{}
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 				t.Fatal(err)
 			}
 			names := extensionNames(address.GetWorkload().GetExtensions())

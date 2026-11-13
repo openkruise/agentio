@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 )
 
 type Mode string
@@ -43,18 +44,31 @@ func (c *Client) Apply(ctx context.Context, desired *unstructured.Unstructured, 
 
 // ApplyInNamespace applies desired and assigns namespace only when the mapped
 // resource is namespaced and desired does not already name a namespace.
-func (c *Client) ApplyInNamespace(ctx context.Context, namespace string, desired *unstructured.Unstructured, mode Mode) (ResourceRecord, error) {
+func (c *Client) ApplyInNamespace(
+	ctx context.Context,
+	namespace string,
+	desired *unstructured.Unstructured,
+	mode Mode,
+) (ResourceRecord, error) {
 	return c.apply(ctx, namespace, desired, mode)
 }
 
-func (c *Client) apply(ctx context.Context, defaultNamespace string, desired *unstructured.Unstructured, mode Mode) (ResourceRecord, error) {
+func (c *Client) apply(
+	ctx context.Context,
+	defaultNamespace string,
+	desired *unstructured.Unstructured,
+	mode Mode,
+) (ResourceRecord, error) {
 	if desired == nil {
 		return ResourceRecord{}, errors.New("apply object is required")
 	}
 	object := desired.DeepCopy()
 	gvk := object.GroupVersionKind()
 	if gvk.Empty() || object.GetName() == "" {
-		return ResourceRecord{}, fmt.Errorf("apply object requires apiVersion, kind, and metadata.name: %s", object.GetName())
+		return ResourceRecord{}, fmt.Errorf(
+			"apply object requires apiVersion, kind, and metadata.name: %s",
+			object.GetName(),
+		)
 	}
 	mapping, err := c.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
@@ -78,45 +92,18 @@ func (c *Client) apply(ctx context.Context, defaultNamespace string, desired *un
 	resource := c.resource(mapping.Resource, object.GetNamespace(), namespaced)
 	manifest, err := json.Marshal(object.Object)
 	if err != nil {
-		return ResourceRecord{}, fmt.Errorf("marshal %s %s/%s: %w", gvk.Kind, object.GetNamespace(), object.GetName(), err)
+		return ResourceRecord{}, fmt.Errorf(
+			"marshal %s %s/%s: %w",
+			gvk.Kind,
+			object.GetNamespace(),
+			object.GetName(),
+			err,
+		)
 	}
 
-	var applied *unstructured.Unstructured
-	switch mode {
-	case CreateOnly:
-		applied, err = resource.Create(ctx, object, metav1.CreateOptions{})
-		if apierrors.IsAlreadyExists(err) {
-			return ResourceRecord{}, fmt.Errorf("%s %s/%s already exists: %w", gvk.Kind, object.GetNamespace(), object.GetName(), err)
-		}
-		if err != nil {
-			return ResourceRecord{}, fmt.Errorf("create %s %s/%s: %w", gvk.Kind, object.GetNamespace(), object.GetName(), err)
-		}
-	case ReconcileOwned:
-		live, getErr := resource.Get(ctx, object.GetName(), metav1.GetOptions{})
-		if getErr != nil {
-			return ResourceRecord{}, fmt.Errorf("get %s %s/%s before reconcile: %w", gvk.Kind, object.GetNamespace(), object.GetName(), getErr)
-		}
-		record, found := c.ledger.Find(mapping.Resource, object.GetNamespace(), object.GetName())
-		if !found {
-			return ResourceRecord{}, fmt.Errorf("reconcile %s %s/%s: object has no ownership ledger entry", gvk.Kind, object.GetNamespace(), object.GetName())
-		}
-		if err := c.validateOwnership(live, record); err != nil {
-			return ResourceRecord{}, fmt.Errorf("reconcile %s %s/%s: %w", gvk.Kind, object.GetNamespace(), object.GetName(), err)
-		}
-		if live.GetResourceVersion() == "" {
-			return ResourceRecord{}, fmt.Errorf("reconcile %s %s/%s: live object has no resourceVersion", gvk.Kind, object.GetNamespace(), object.GetName())
-		}
-		// CreateOnly deliberately uses an atomic create so it cannot mutate a
-		// pre-existing object. Once ownership is verified, use a full update so
-		// fields omitted by the desired manifest (notably policy list entries)
-		// are removed instead of remaining under the create field manager.
-		object.SetResourceVersion(live.GetResourceVersion())
-		applied, err = resource.Update(ctx, object, metav1.UpdateOptions{FieldManager: c.fieldManager})
-		if err != nil {
-			return ResourceRecord{}, fmt.Errorf("update owned %s %s/%s: %w", gvk.Kind, object.GetNamespace(), object.GetName(), err)
-		}
-	default:
-		return ResourceRecord{}, fmt.Errorf("unsupported apply mode %q", mode)
+	applied, err := c.applyObject(ctx, resource, mapping.Resource, object, mode)
+	if err != nil {
+		return ResourceRecord{}, err
 	}
 
 	hash := sha256.Sum256(manifest)
@@ -145,6 +132,82 @@ func (c *Client) apply(ctx context.Context, defaultNamespace string, desired *un
 	return record, nil
 }
 
+func (c *Client) applyObject(
+	ctx context.Context,
+	resource dynamic.ResourceInterface,
+	gvr schema.GroupVersionResource,
+	object *unstructured.Unstructured,
+	mode Mode,
+) (*unstructured.Unstructured, error) {
+	gvk := object.GroupVersionKind()
+	var applied *unstructured.Unstructured
+	var err error
+	switch mode {
+	case CreateOnly:
+		applied, err = resource.Create(ctx, object, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf(
+				"%s %s/%s already exists: %w",
+				gvk.Kind,
+				object.GetNamespace(),
+				object.GetName(),
+				err,
+			)
+		}
+		if err != nil {
+			return nil, fmt.Errorf(
+				"create %s %s/%s: %w",
+				gvk.Kind,
+				object.GetNamespace(),
+				object.GetName(),
+				err,
+			)
+		}
+	case ReconcileOwned:
+		record, found := c.ledger.Find(gvr, object.GetNamespace(), object.GetName())
+		if !found {
+			return nil, fmt.Errorf(
+				"reconcile %s %s/%s: object has no ownership ledger entry",
+				gvk.Kind,
+				object.GetNamespace(),
+				object.GetName(),
+			)
+		}
+		// CreateOnly deliberately uses an atomic create so it cannot mutate a
+		// pre-existing object. Once ownership is verified, use a full update so
+		// fields omitted by the desired manifest (notably policy list entries)
+		// are removed instead of remaining under the create field manager.
+		err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			live, getErr := resource.Get(ctx, object.GetName(), metav1.GetOptions{})
+			if getErr != nil {
+				return getErr
+			}
+			if err := c.validateOwnership(live, record); err != nil {
+				return err
+			}
+			if live.GetResourceVersion() == "" {
+				return fmt.Errorf("live object has no resourceVersion")
+			}
+			object.SetResourceVersion(live.GetResourceVersion())
+			applied, err = resource.Update(ctx, object, metav1.UpdateOptions{FieldManager: c.fieldManager})
+			return err
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"update owned %s %s/%s: %w",
+				gvk.Kind,
+				object.GetNamespace(),
+				object.GetName(),
+				err,
+			)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported apply mode %q", mode)
+	}
+
+	return applied, nil
+}
+
 func customResourceDefinitionEstablished(object *unstructured.Unstructured) (bool, error) {
 	rawConditions, found, err := unstructured.NestedFieldNoCopy(object.Object, "status", "conditions")
 	if err != nil || !found || rawConditions == nil {
@@ -164,7 +227,11 @@ func customResourceDefinitionEstablished(object *unstructured.Unstructured) (boo
 	return false, nil
 }
 
-func (c *Client) resource(gvr schema.GroupVersionResource, namespace string, namespaced bool) dynamic.ResourceInterface {
+func (c *Client) resource(
+	gvr schema.GroupVersionResource,
+	namespace string,
+	namespaced bool,
+) dynamic.ResourceInterface {
 	resource := c.dynamic.Resource(gvr)
 	if namespaced || namespace != "" {
 		return resource.Namespace(namespace)

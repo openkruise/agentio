@@ -42,7 +42,7 @@ func sharedTrafficResource(t testing.TB, name string, action securityv1.TrafficP
 	r, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: name},
 		"",
-		body,
+		testResourceContents(body),
 		nil,
 		model.ResourceFacts{},
 	)
@@ -55,7 +55,7 @@ func sharedTrafficResource(t testing.TB, name string, action securityv1.TrafficP
 func workloadWithTrafficRefs(t testing.TB, workload model.Resource, names ...string) model.Resource {
 	t.Helper()
 	address := new(workloadv1.Address)
-	if err := workload.Value.UnmarshalTo(address); err != nil {
+	if err := testResourceValue(workload).UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
 	reference, err := anypb.New(
@@ -72,7 +72,7 @@ func workloadWithTrafficRefs(t testing.TB, workload model.Resource, names ...str
 	}
 	facts := *workload.Facts.Workload
 	facts.TrafficPolicyRefs = names
-	result, err := model.NewResource(workload.Key, workload.XDSName, body, workload.Aliases,
+	result, err := model.NewResource(workload.Key, workload.XDSName, testResourceContents(body), workload.Aliases,
 		model.ResourceFacts{Workload: &facts})
 	if err != nil {
 		t.Fatal(err)

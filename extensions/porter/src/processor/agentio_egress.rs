@@ -10,7 +10,6 @@ use super::{
 };
 use crate::{
     metrics::{ConnectResult, Metrics, Protocol},
-    traffic::Target,
     view::{self, View},
     wire::extproc,
 };
@@ -18,7 +17,6 @@ use crate::{
 pub(super) fn parse<'a>(
     request_headers: Option<&extproc::HttpHeaders>,
     attributes: Option<&'a prost_types::Struct>,
-    enforce_policy: bool,
 ) -> Result<ParsedRequest<'a>, Status> {
     let headers = headers(request_headers)?;
     let udp = headers.method == "GET" && headers.upgrade.eq_ignore_ascii_case("connect-udp");
@@ -27,17 +25,19 @@ pub(super) fn parse<'a>(
             "unexpected method or missing request authority",
         ));
     }
-    let target = if enforce_policy {
-        Some(Target::parse(&headers.authority, udp).map_err(|error| {
-            Status::invalid_argument(format!("invalid CONNECT target: {error}"))
-        })?)
-    } else {
-        None
-    };
+    if !udp {
+        let target: std::net::SocketAddr = headers
+            .authority
+            .parse()
+            .map_err(|_| Status::invalid_argument("CONNECT target must be numeric IP:port"))?;
+        if target.port() == 0 {
+            return Err(Status::invalid_argument("invalid CONNECT port"));
+        }
+    }
     Ok(ParsedRequest {
         resolution: ResolveRequest {
             identity: identity(attributes),
-            target,
+            connection_policy: !udp,
         },
         protocol: if udp { "udp" } else { "tcp" },
     })
@@ -58,24 +58,29 @@ pub(super) fn encode(
             view::object([("id".into(), view::string(&sandbox.uid))]),
         );
     }
-    if enable_sni_traffic_policy && protocol == "tcp" {
-        let mut rules = Vec::new();
-        let View::Workload(workload) = resolved.workload.as_ref() else {
-            unreachable!("typed Workload watch")
-        };
-        rules.extend(view::project_rules(&workload.rules));
+    if protocol == "tcp" {
+        let mut profiles = Vec::new();
+        for resource in &resolved.profiles {
+            let View::SecurityProfile(profile) = resource.as_ref() else {
+                unreachable!("typed SecurityProfile watch")
+            };
+            profiles.push(profile.project_connection(enable_sni_traffic_policy));
+        }
         if let Some(sandbox) = &resolved.sandbox {
             let View::Sandbox(sandbox) = sandbox.as_ref() else {
                 unreachable!("typed Sandbox watch")
             };
-            rules.extend(view::project_rules(&sandbox.rules));
+            if let Some(profile) = &sandbox.profile {
+                profiles.push(profile.project_connection(enable_sni_traffic_policy));
+            }
         }
-        let policy = if rules.is_empty() {
-            view::object([])
-        } else {
-            view::object([("rules".into(), view::list(rules))])
-        };
-        metadata.insert("sni".into(), view::object([("policy".into(), policy)]));
+        metadata.insert(
+            "connection".into(),
+            view::object([(
+                "policy".into(),
+                view::object([("profiles".into(), view::list(profiles))]),
+            )]),
+        );
     }
     allowed(metadata)
 }

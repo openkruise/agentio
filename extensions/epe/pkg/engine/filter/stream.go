@@ -36,10 +36,10 @@ type RequestContext struct {
 	Policies  PolicySnapshot `json:"-"`
 }
 
-// PolicySnapshot keeps the native policy and SecurityProfile execution units together.
+// PolicySnapshot keeps destination authorization and rule execution on one request snapshot.
 // Each unit owns its Profile/Rule scope and references that profile's immutable inputs.
 type PolicySnapshot struct {
-	// Global static restrictions are applied separately from the request-bound policies.
+	// Global static restrictions run before this request-bound authorizer.
 	DestinationAuthorizer DestinationAuthorizer
 	FilterRules           []Unit
 	StreamLogger          StreamLogger

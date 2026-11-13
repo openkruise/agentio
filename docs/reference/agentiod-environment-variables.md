@@ -31,7 +31,7 @@ After an environment-variable change, Helm rolls the `agentiod` Deployment. Thes
 The `-print-env` output is the authoritative reference. Registered settings are grouped by prefix and purpose:
 
 - control-plane identity and config: `AGENTIO_SERVICE_NAME`, `AGENTIO_TOKEN_AUDIENCE`, `AGENTIO_TRUSTED_NODE_ACCOUNTS`, and `AGENTIO_*CONFIGMAP_NAME`;
-- advisory policy validation and status reporting: `ENABLE_POLICY_STATUS` (default `true`);
+- advisory policy validation and status reporting: `AGENTIO_ENABLE_POLICY_STATUS` (default `true`);
 - Kubernetes API client throttling: `AGENTIO_KUBERNETES_API_QPS` and `AGENTIO_KUBERNETES_API_BURST`;
 - workload CA and trust distribution: `AGENTIO_CA_*`, `AGENTIO_TRUST_BUNDLE_*`, and `AGENTIO_WORKLOAD_CERT_*`;
 - xDS and policy flow control: `AGENTIO_KRT_*`, `AGENTIO_PUSH_*`, `AGENTIO_CLIENT_QUEUE_SIZE`, and `AGENTIO_MAX_REQUESTS_PER_SECOND`;
@@ -85,6 +85,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection with the sidecar injector. |
 | <code>AGENTIO_ENABLE_DEBUG_ON_HTTP</code> | Boolean | <code>true</code> | Enable authenticated debug handlers on the monitoring HTTP listener. |
 | <code>AGENTIO_ENABLE_GATEWAY_DEPLOYER</code> | Boolean | <code>false</code> | If true, run the Agentio Gateway API deployment controller that provisions egress gateway Deployments. |
+| <code>AGENTIO_ENABLE_POLICY_STATUS</code> | Boolean | <code>true</code> | Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained. |
 | <code>AGENTIO_ENABLE_SIDECAR_INJECTOR</code> | Boolean | <code>false</code> | If true, serve the Agentio ztunnel injection webhook at the /inject endpoint. |
 | <code>AGENTIO_ENABLE_SNI_TRAFFIC_POLICY</code> | Boolean | <code>false</code> | If enabled, enforce SNI traffic policies in egress gateways, using HBONE TLS action headers when present. |
 | <code>AGENTIO_GATEWAY_CONNECT_TIMEOUT</code> | Duration | <code>10s</code> | Connect timeout for passthrough and dynamic-forward-proxy gateway clusters. |
@@ -100,7 +101,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_KRT_DEBOUNCE_MAX</code> | Duration | <code>1s</code> | Maximum wait for policy event distribution during continuous policy updates. |
 | <code>AGENTIO_KUBERNETES_API_BURST</code> | Integer | <code>160</code> | Client-side Kubernetes API request burst. Must be positive. |
 | <code>AGENTIO_KUBERNETES_API_QPS</code> | Floating-point | <code>80</code> | Client-side Kubernetes API requests per second. Must be finite and positive. |
-| <code>AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE</code> | String | <code>tokenreview</code> | Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings. |
+| <code>AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE</code> | String | <code>local</code> | Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings. |
 | <code>AGENTIO_LOG_FORMAT</code> | String | <code>text</code> | agentiod log encoding: text or json. |
 | <code>AGENTIO_LOG_LEVEL</code> | String | <code>info</code> | Minimum agentiod log level: debug, info, warn, error, or none. |
 | <code>AGENTIO_MAX_REQUESTS_PER_SECOND</code> | Floating-point | <code>0</code> | Maximum new xDS streams accepted per second across the process; does not throttle ACKs or server pushes. Zero automatically selects min(250 &#42; effective CPU budget, 1000); see AGENTIO&#95;XDS&#95;CPU&#95;BUDGET. |
@@ -132,13 +133,12 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_VALIDATION_WEBHOOK_CONFIG_NAME</code> | String | empty | Serve /validate and synchronize the caBundle of this ValidatingWebhookConfiguration; empty disables validation admission. |
 | <code>AGENTIO_WORKLOAD_CERT_LIFETIME</code> | Duration | <code>24h0m0s</code> | Validity of workload certificates and of the xDS server&#39;s own certificate. |
 | <code>AGENTIO_WORKLOAD_CERT_RENEW_BEFORE</code> | Duration | <code>8h0m0s</code> | How long before expiry the xDS server re-issues its own certificate. |
-| <code>AGENTIO_XDS_ACK_TIMEOUT</code> | String | <code>5s</code> | Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive. |
+| <code>AGENTIO_XDS_ACK_TIMEOUT</code> | String | <code>20s</code> | Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive. |
 | <code>AGENTIO_XDS_CPU_BUDGET</code> | String | empty | CPU budget for automatic new xDS stream admission, as a positive Kubernetes quantity (for example 500m or 2). The chart uses the CPU limit, falling back to the CPU request. Empty uses min(NumCPU, GOMAXPROCS); an explicit budget is also bounded by that runtime CPU count. |
-| <code>AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT</code> | String | <code>1s</code> | Maximum wait for a new stream initialization slot before authentication; must be positive. |
+| <code>AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT</code> | String | <code>10s</code> | Maximum wait for a new stream initialization slot before authentication; must be positive. |
 | <code>AGENTIO_XDS_MAX_POD_STREAMS</code> | String | <code>0</code> | Maximum live dedicated Pod ADS streams per process. Zero disables the limit; full replicas reject new Pod streams without closing established streams or consuming gateway/EPE capacity. |
-| <code>AGENTIO_XDS_RATE_LIMIT_TIMEOUT</code> | String | <code>1s</code> | Maximum wait for new-stream rate admission before authentication; must be positive. |
-| <code>AGENTIO_XDS_SEND_TIMEOUT</code> | String | <code>5s</code> | Maximum duration of one xDS response send before closing the stream; must be positive. |
-| <code>ENABLE_POLICY_STATUS</code> | Boolean | <code>true</code> | Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained. |
+| <code>AGENTIO_XDS_RATE_LIMIT_TIMEOUT</code> | String | <code>3s</code> | Maximum wait for new-stream rate admission before authentication; must be positive. |
+| <code>AGENTIO_XDS_SEND_TIMEOUT</code> | String | <code>15s</code> | Maximum duration of one xDS response send before closing the stream; must be positive. |
 
 <!-- END GENERATED ENVIRONMENT VARIABLES -->
 
@@ -151,10 +151,10 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | `AGENTIO_MAX_REQUESTS_PER_SECOND` | `min(250 * CPU budget, 1000)` | Maximum new xDS streams accepted per second; zero selects the automatic default. |
 | `AGENTIO_PUSH_CONCURRENCY` | `min(15 + 5 * GOMAXPROCS, 100)` | Concurrency limit for pushes and streams awaiting acknowledgements. |
 | `AGENTIO_XDS_CPU_BUDGET` | empty | CPU budget for the automatic stream-admission rate; empty uses `min(NumCPU, GOMAXPROCS)`. |
-| `AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT` | `1s` | Maximum wait for a new-stream initialization slot before authentication. |
-| `AGENTIO_XDS_RATE_LIMIT_TIMEOUT` | `1s` | Maximum wait for new-stream rate admission. |
-| `AGENTIO_XDS_SEND_TIMEOUT` | `5s` | Maximum duration of one response send. |
-| `AGENTIO_XDS_ACK_TIMEOUT` | `5s` | Maximum time a response may remain unacknowledged. |
+| `AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT` | `10s` | Maximum wait for a new-stream initialization slot before authentication. |
+| `AGENTIO_XDS_RATE_LIMIT_TIMEOUT` | `3s` | Maximum wait for new-stream rate admission. |
+| `AGENTIO_XDS_SEND_TIMEOUT` | `15s` | Maximum duration of one response send. |
+| `AGENTIO_XDS_ACK_TIMEOUT` | `20s` | Maximum time a response may remain unacknowledged. |
 | `AGENTIO_XDS_MAX_POD_STREAMS` | `0` | Optional per-process dedicated Pod ADS stream cap; zero disables it. |
 
 `AGENTIO_KUBERNETES_API_QPS` and `AGENTIO_KUBERNETES_API_BURST` configure client-side throttling only, not the API server's own limits. The stream-admission and push-concurrency settings bound new-stream acceptance and push concurrency. For recovery and capacity semantics, see [xDS connection limits](../design/xds-connection-limits.md).
@@ -166,7 +166,7 @@ agentiod:
   env:
     AGENTIO_KUBERNETES_API_QPS: "80"
     AGENTIO_KUBERNETES_API_BURST: "160"
-    AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT: "3s"
+    AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT: "10s"
     AGENTIO_XDS_RATE_LIMIT_TIMEOUT: "3s"
     AGENTIO_XDS_SEND_TIMEOUT: "15s"
     AGENTIO_XDS_ACK_TIMEOUT: "20s"
@@ -176,11 +176,11 @@ Longer send and ACK budgets retain slow clients and their response slots for lon
 
 ## Kubernetes workload authentication
 
-`AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE` selects the built-in authenticator for Kubernetes workloads at startup. The default, `tokenreview`, preserves Kubernetes TokenReview authentication and its existing successful-result cache. To enable local verification:
+`AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE` selects the built-in authenticator for Kubernetes workloads at startup. The default, `local`, verifies Pod-bound JWTs locally and checks their Pod and ServiceAccount bindings against informer collections. To use Kubernetes TokenReview instead:
 
 ```yaml
 agentiod:
-  kubernetesWorkloadAuthMode: local
+  kubernetesWorkloadAuthMode: tokenreview
 ```
 
 The OpenKruise sandbox-manager integration exposes the same setting at `agentio.agentiod.kubernetesWorkloadAuthMode`. Changing modes requires restarting agentiod; clients continue to send their existing projected ServiceAccount tokens.
@@ -284,7 +284,7 @@ $ curl --request PUT \
 
 `PUT /debug/logging` remains available and changes the `default` scope. The default scope covers standard-library, Kubernetes dependency, and other unscoped logs; it does not overwrite levels already assigned to registered components. At startup, `AGENTIO_LOG_LEVEL` initializes the default and every registered component to the same value.
 
-Loopback requests do not require credentials. Requests from any other address must pass the same TokenReview and root-namespace authorization as `/debug/configz`. A successful change returns HTTP 202 and affects existing loggers immediately. It is process-local and is not persisted: after an `agentiod` restart, `AGENTIO_LOG_LEVEL` supplies the level again.
+Loopback requests do not require credentials. Requests from any other address must pass the configured Kubernetes workload authentication and the same root-namespace authorization as `/debug/configz`. A successful change returns HTTP 202 and affects existing loggers immediately. It is process-local and is not persisted: after an `agentiod` restart, `AGENTIO_LOG_LEVEL` supplies the level again.
 
 ## Configuration validation
 

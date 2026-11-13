@@ -1,10 +1,10 @@
 # Agentio Porter
 
-Porter is the Rust connection processor. It resolves the source Workload and its SNI policies for the gateway's outer HBONE CONNECT request. It implements standard Envoy ext_proc on `127.0.0.1:9002`; application HTTP processing remains with EPE or the configured HTTP ext_proc provider.
+Porter is the Rust connection processor. It resolves the source Workload and its SNI/TCP policies for the gateway's outer HBONE CONNECT request. It implements standard Envoy ext_proc on `127.0.0.1:9002`; application HTTP processing remains with EPE or the configured HTTP ext_proc provider.
 
-Select the gateway contract at startup with `--gateway=agentio-egress|agentgateway` (default: `agentio-egress`). Official agentgateway deployments use `--gateway=agentgateway` and invoke Porter before their HTTP policy processor. The proxy supplies `agentio.peer.certificate`, `agentio.peer.principal` and `agentio.downstream.ip` under the existing `filter_state['…']` attribute names from authenticated connection context. It also supplies `destination.address` as a numeric IP string and `destination.port` as a number from the restored HBONE CONNECT destination. Porter resolves Workload identity with the same discovery and certificate checks as CONNECT, returning canonical identity without SNI metadata. It rejects Sandbox identity. With `ENABLE_TRAFFIC_POLICY=true`, it also evaluates Workload egress policy against that original IP and port, independently of application Host headers. The proxy's second ext-proc phase maps `extproc.agentio.workload` into EPE Workload attributes. No proxy source patch is required. HTTP calls do not count as CONNECT attempts; no HTTP-specific metrics are added.
+Select the gateway contract at startup with `--gateway=agentio-egress|agentgateway` (default: `agentio-egress`). Official agentgateway deployments use `--gateway=agentgateway` and invoke Porter before their HTTP policy processor. The proxy supplies `agentio.peer.certificate`, `agentio.peer.principal` and `agentio.downstream.ip` under the existing `filter_state['…']` attribute names from authenticated connection context. Porter resolves Workload identity with the same discovery and certificate checks as CONNECT, returning canonical identity without SNI metadata. It rejects Sandbox identity. The proxy's second ext-proc phase maps `extproc.agentio.workload` into EPE Workload attributes. No proxy source patch is required. HTTP calls do not count as CONNECT attempts; no HTTP-specific metrics are added.
 
-The agentgateway check runs after outer CONNECT acceptance, before forwarding each HTTP request; it does not authorize TCP/TLS passthrough, restore an original hostname from an IP, or bind later Host/route rewrites to the authorized address. Full EPE final-destination enforcement remains separate. Selecting `--gateway` does not enable TrafficPolicy enforcement; the existing environment opt-in applies to both gateway contracts.
+The agentgateway check runs after outer CONNECT acceptance, before forwarding each HTTP request; it does not authorize TCP/TLS passthrough, restore an original hostname from an IP, or bind later Host/route rewrites to the authorized address. Full EPE final-destination enforcement remains separate. TrafficPolicy remains independently enforced by the sandbox data plane.
 
 The gateway passes Envoy's TLS-verified peer certificate to Porter using `%DOWNSTREAM_PEER_CERT%` in CONNECT-local filter state. Porter reads the existing non-critical JSON instance extension (`1.3.6.1.4.1.57874.5.1`): `registry` names a trusted source registry and its installation/cluster scope, and `uid` is the immutable, non-reused instance key within that registry. Neither field assumes Kubernetes. The optional `role` is not part of the lookup key. For example, Kubernetes uses `kubernetes/<cluster-id>` plus the actual Pod UID; another runtime can use its own registry and instance UID. The issuer must attest these claims; a CSR cannot authorize its own identity.
 
@@ -14,7 +14,7 @@ Only certificates without the instance extension use physical peer IP plus certi
 
 The certificate authenticates the Workload/attester, not each Sandbox. The optional `X-AGENTIO-SANDBOX-ID` CONNECT header selects the Sandbox for that tunnel. Porter requires its WDS attester binding to match the resolved Workload; an absent, unassigned or differently bound Sandbox is rejected. Multiple Sandboxes can share one Workload certificate, while each CONNECT selects exactly one Sandbox. `X-AGENTIO-SANDBOX-TOKEN` remains available to downstream EPE; it does not select or authenticate the Workload. Sandbox ID and token are hashable filter state shared once with the next internal listener so internal connection pools cannot reuse another Sandbox's context. Policies and workload labels come from discovery, not client assertions. Existing legacy waypoint behavior is unchanged. It does not evaluate an SNI supplied in request headers. The gateway exposes certificate principals as `agentio.peer.principal` and `agentio.local.principal`; Porter reads only `agentio.peer.principal`. Custom CEL expressions for the new gateway must use these keys. Legacy waypoint configurations retain `io.istio.peer_principal` and `io.istio.local_principal`.
 
-Porter combines compiled Workload rules followed by Sandbox rules, preserving the rule order within each source and returns canonical `SniTrafficPolicy` JSON in dynamic metadata under `agentio.sni.policy`. After ext_proc, the gateway copies the resolved Workload UID, name, namespace and certified instance alias into hashable filter state shared once with the next internal listener for EPE and connection isolation, even when SNI policy is disabled. A selected Sandbox ID is published as `agentio.sandbox.id` in dynamic metadata only after successful binding and policy checks, then copied into `agentio.sandbox.id` before rate limiting and internal connection creation. Porter does not return workload labels. EPE demands the Workload by UID to obtain current metadata and SecurityProfile references. Legacy gateways still capture `X-AGENTIO-SANDBOX-LABELS` into `sandbox.labels` for older consumers. After TLS termination, the gateway explicitly relays Workload UID, name, namespace, Sandbox ID, metadata and token once more to the final internal listener. These fields remain readable by EPE and access logs there, but are not shared with external upstream connections and do not partition their pools. The peer certificate itself is not shared with inner connections. The gateway copies `%DYNAMIC_METADATA(agentio:sni:policy)%` into hashable `agentio.sni.policy` filter state before opening the internal connection. The Rust listener module evaluates Envoy TLS inspector's actual SNI and writes `agentio.tls.action` to select termination, passthrough or denial. Gateway exclusions take precedence. A valid empty policy selects passthrough; missing or malformed policy denies detected TLS.
+Porter loads the Workload’s ordered SecurityProfile references followed by the Sandbox’s inline SecurityProfile and returns their grouped SNI/TCP policies under `agentio:connection:policy` dynamic metadata. Each profile retains its source UID and rule order. Porter does not emit the legacy flat SNI policy or a precomputed original-destination TCP decision. After ext_proc, the gateway copies the resolved Workload UID, name, namespace and certified instance alias into hashable filter state shared once with the next internal listener for EPE and connection isolation, even when SNI policy is disabled. A selected Sandbox ID is published as `agentio.sandbox.id` in dynamic metadata only after successful binding and policy checks, then copied into `agentio.sandbox.id` before rate limiting and internal connection creation. Porter does not return workload labels. EPE demands the Workload by UID to obtain current metadata and SecurityProfile references. Legacy gateways still capture `X-AGENTIO-SANDBOX-LABELS` into `sandbox.labels` for older consumers. After TLS termination, the gateway explicitly relays Workload UID, name, namespace, Sandbox ID, metadata and token once more to the final internal listener. These fields remain readable by EPE and access logs there, but are not shared with external upstream connections and do not partition their pools. The peer certificate itself is not shared with inner connections. The current gateway registers `%DYNAMIC_METADATA(agentio:connection:policy)%` in its worker-local connection-policy store and shares only a hashable `agentio.connection.policy_hash` reference before opening the internal connection. The CONNECT and TCP filters retain that immutable snapshot until the last consumer exits. The module does not accept the flat SNI format as a fallback. The Rust listener module evaluates Envoy TLS inspector's actual SNI and writes `agentio.tls.action` to select termination, explicit passthrough, fallthrough or denial. Gateway exclusions take precedence. An empty `profiles` list selects fallthrough; missing or malformed connection policy denies detected TLS.
 
 The optional `sandbox` metadata object contains the selected ID (`{"sandbox":{"id":"kruise:..."}}`) and is omitted when no Sandbox identity is selected. Metadata readers use `%DYNAMIC_METADATA(agentio:sandbox:id)%`. The filter-state key is `agentio.sandbox.id`.
 
@@ -33,13 +33,13 @@ Workload metadata separates its WDS resource name from its immutable UID:
 
 `workload.uid` is the complete opaque Agentio identity, including the registry scope; it is not a bare Kubernetes Pod UID. It is omitted when resolution uses peer IP without a certificate instance extension. A same-name Pod replacement retains `resource_name` and gets a new UID. The Envoy gateway maps `%DYNAMIC_METADATA(agentio:workload:resource_name)%` to the internal WDS lookup key `agentio.workload.uid`, and `%DYNAMIC_METADATA(agentio:workload:uid)%` to `agentio.workload.instance` for connection isolation. Agentgateway maps `extproc.agentio.workload.resource_name` to EPE's Workload UID attribute. Internal WDS and EPE UID fields continue to mean the discovery resource name.
 
-SNI metadata projection requires `AGENTIO_ENABLE_SNI_TRAFFIC_POLICY=true` (default: `false`). The gateway template passes the existing `agentiod.enableSNITrafficPolicy` chart setting to Porter. When disabled, Porter skips expanding both Sandbox and Workload SNI rules and omits the `sni` metadata field; identity checks, workload metadata and optional TrafficPolicy enforcement still run. When enabled, an empty SNI policy is still returned as `{}`. Manual deployments must set the same flag as Agentiod and restart Porter when changing it.
+SNI metadata projection requires `AGENTIO_ENABLE_SNI_TRAFFIC_POLICY=true` (default: `false`). The gateway template passes the existing `agentiod.enableSNITrafficPolicy` chart setting to Porter. When disabled, Porter skips expanding both Sandbox and Workload SNI rules and omits the `sni` metadata field; identity checks, workload metadata and TCP policy evaluation still run. When enabled, an empty SNI policy is still returned as `{}`. Manual deployments must set the same flag as Agentiod and restart Porter when changing it.
 
-Workload, Sandbox and TrafficPolicy subscriptions start with a subscribe/unsubscribe `*` handshake to disable wildcard discovery, then demand only named resources. The demand cache keeps subscriptions while retained and receives policy updates and removals. After ADS disconnects, cached resources remain usable for at most 5 seconds; successful ADS stream establishment or expiry of that grace period clears them, whichever happens first. Failed reconnect attempts do not extend the grace period. Cached bindings and policies can authorize new requests during this window even if they changed or were deleted while disconnected. The default processing budget is 4 seconds; Envoy allows 5 seconds and uses `failure_mode_allow: false`. Policy changes apply to new CONNECT requests. CONNECT-UDP also uses Porter once at tunnel establishment for Workload resolution and Sandbox binding checks, including the same IP fallback. Envoy presents it as `GET` with `Upgrade: connect-udp`. Porter evaluates UDP egress policy and returns Workload identity plus the selected Sandbox ID for UDP; the gateway skips SNI policy transfer and forwards datagrams directly without inspection.
+Workload, Sandbox and SecurityProfile subscriptions start with a subscribe/unsubscribe `*` handshake to disable wildcard discovery, then demand only named resources. The demand cache keeps subscriptions while retained and receives policy updates and removals. After ADS disconnects, cached resources remain usable for at most 5 seconds; successful ADS stream establishment or expiry of that grace period clears them, whichever happens first. Failed reconnect attempts do not extend the grace period. Cached bindings and policies can authorize new requests during this window even if they changed or were deleted while disconnected. The default processing budget is 4 seconds; Envoy allows 5 seconds and uses `failure_mode_allow: false`. Policy changes apply to new CONNECT requests. CONNECT-UDP also uses Porter once at tunnel establishment for Workload resolution and Sandbox binding checks, including the same IP fallback. Envoy presents it as `GET` with `Upgrade: connect-udp`. Porter returns Workload identity plus the selected Sandbox ID for UDP, without evaluating TCP rules; the gateway skips SNI policy transfer and forwards datagrams directly without inspection.
 
-The projected gateway Pod token authenticates ADS. Agentiod verifies Pod identity and Gateway membership before accepting `agentio-porter~<Pod IP>~<Pod name>.<namespace>~<DNS domain>`; Envoy and Porter share the `ClientAgentioEgress` class, which allows Envoy xDS resources plus Workload, Sandbox and TrafficPolicy. Porter itself subscribes only to these three discovery types. No Kubernetes read RBAC is needed. `--cluster-id` must match Agentiod because Workload resource names use `<cluster-id>//Pod/<namespace>/<name>`.
+The projected gateway Pod token authenticates ADS. Agentiod verifies Pod identity and Gateway membership before accepting `agentio-porter~<Pod IP>~<Pod name>.<namespace>~<DNS domain>`; Envoy and Porter share the `ClientAgentioEgress` class, which allows Envoy xDS resources plus Workload, Sandbox, TrafficPolicy and SecurityProfile. Porter subscribes only to Workload, Sandbox and SecurityProfile. No Kubernetes read RBAC is needed. `--cluster-id` must match Agentiod because Workload resource names use `<cluster-id>//Pod/<namespace>/<name>`.
 
-Both static and Gateway API chart deployments include Porter with the gateway's token and CA volumes. Configure `egressGateway.porter.image`, `.resources` and `.cache` (`idleTTL: 10m`, `maxEntries: 0`; no entry-count limit, with idle subscriptions evicted after ten minutes). A manual deployment sets `POD_NAME`, `POD_NAMESPACE`, `POD_UID`, `POD_IP`, `--xds-address` and `--cluster-id`. The health listener on port 9003 serves gRPC `readiness` after all three discovery watches synchronize, and `liveness` for process health. Do not expose the processing port through a Service.
+Both static and Gateway API chart deployments include Porter with the gateway's token and CA volumes. Configure `egressGateway.porter.image`, `.resources` and `.cache` (`idleTTL: 10m`, `maxEntries: 0`; no entry-count limit, with idle subscriptions evicted after ten minutes). A manual deployment sets `POD_NAME`, `POD_NAMESPACE`, `POD_UID`, `POD_IP`, `--xds-address` and `--cluster-id`. The health listener on port 9003 serves gRPC `readiness` after all discovery watches synchronize, and `liveness` for process health. Do not expose the processing port through a Service.
 
 The gateway requires Kubernetes native sidecar support (`SidecarContainers`). Porter runs in `initContainers` with `restartPolicy: Always`; the gateway stays in `containers`. On normal Pod deletion, kubelet stops Porter only after the gateway exits, keeping discovery available to CONNECT requests already in progress during gateway drain. Porter readiness still gates Pod readiness. The Pod termination budget is shared: gateway-agent caps drain at the total budget minus ten seconds, reserving five seconds for gateway cleanup and five for Porter shutdown. With the default 30-second budget, drain is capped at 20 seconds. Force deletion, node failure and independent Porter restarts are outside this ordering guarantee.
 
@@ -53,26 +53,40 @@ The supplied images must exist in local Docker and match the node architecture. 
 
 `AGENTIO_SANDBOX_MODE` defaults to `false`: Porter discovers Workloads without sending Sandbox initialization or lookup requests, and readiness does not wait for Sandbox discovery. Requests selecting a Sandbox are rejected in this mode. Set it to `true` to enable Sandbox identity and policy discovery alongside Workloads. The chart propagates `sandbox.enabled` to Porter; the agentgateway contract remains Workload-only.
 
-## CONNECT TrafficPolicy authorization
+## CONNECT destination decision
 
-Upgrade Agentiod before Porter: the native gateway client class must be authorized to subscribe to `agentio.security.TrafficPolicy`. Workloads must carry an explicit `PolicyReference` for this type, including an empty reference list when no policies apply. A missing binding denies CONNECT. Shared policy bodies are demanded concurrently in the same request budget and retained in the existing bounded discovery cache; they are decoded and validated once per accepted update. Policy cache entries count toward the same `maxEntries` limit as Workloads and Sandboxes.
+Porter consumes `agentio.security.SecurityProfile`, containing preprocessed SNI
+and ordered TCP policies alongside HTTP `policy_json`. Porter does not parse or
+retain the HTTP JSON in its compiled view. Workload extensions carry an ordered `PolicyReference`;
+Porter discovers those shared profiles on demand. Sandbox extensions embed one
+SecurityProfile and retain the existing attester/readiness lifecycle. Profile
+HTTP/TCP-only body updates do not republish Workloads. SNI updates still refresh
+the legacy embedded WDS/Sandbox projection for older Porter clients. Adjacent SNI rules with the same action
+and port set merge their domains; intervening rules retain their precedence.
+It does not subscribe to or evaluate TrafficPolicy; `ENABLE_TRAFFIC_POLICY` is removed.
+TrafficPolicy retains its sandbox execution point and ingress/egress semantics.
 
-CONNECT authority must be a numeric IPv4 `IP:port` or bracketed IPv6 `[IP]:port` with port 1–65535. Porter does not independently resolve hostnames. CONNECT-UDP uses the authority rewritten by Envoy from the validated MASQUE target, and is evaluated as UDP rather than TCP. The current gateway UDP path still restricts forwarding to IPv4.
+CONNECT authority must be a numeric IPv4 `IP:port` or IPv6 `[IP]:port`, with a
+port in 1–65535. Shared Workload rules precede Sandbox rules. The first matching
+CIDR/port clause decides, and an empty or unmatched chain allows. Missing or
+unavailable referenced profile fails the request; it never means an empty chain.
 
-Workload policy references run in control-plane order, with the first matching rule deciding the stage. If any policy configures egress but no rule matches, the stage denies. If none configures egress, it allows. Every referenced body must be available before an earlier ALLOW is accepted. An explicit missing resource returns 403; discovery errors/timeouts fail the ext_proc call and Envoy fails closed. Invalid updates are NACKed without replacing the previous accepted resource. Unsupported response types are also NACKed on the same ADS stream without resetting accepted resources. Updates and removals affect new CONNECT requests, not already-established tunnels.
+After identity and Sandbox binding validation, Porter accepts CONNECT and returns the ordered, grouped SNI/TCP view under `agentio:connection:policy`. The current gateway shares it through a worker-local store and `agentio.connection.policy_hash`; the Rust network filter authorizes raw TCP and unmatched TLS against the original destination before TCP proxy can connect. Explicit SNI passthrough resolves the SNI, checks earlier profiles against the resolved address, and pins the authorized numeric target. Terminated non-HTTP traffic resolves the outer SNI, checks the complete TCP policy chain, and preserves that SNI for upstream TLS certificate validation. Porter validates and transfers the policy but does not evaluate TCP destinations; the gateway owns those decisions. Use matching Porter and gateway versions.
 
-Before allowing CONNECT, Porter captures immutable Workload, Sandbox and referenced TrafficPolicy views together under the discovery cache lock. Changes to the Workload or Sandbox during cold discovery discard the candidate and restart construction within the same deadline. Once captured, SNI metadata projection and policy audit use these views without further discovery reads. A candidate evaluation is reused only when the captured policy objects are unchanged; otherwise construction restarts. Discovery owns the dependency leases, terminal lookup failures, TTL refresh and hit/miss accounting. Known denials still return immediately without waiting for unrelated pending resources.
+EPE evaluates each profile's HTTP rules followed by its `tcpRules`, then continues
+to the next profile only if neither made a terminal decision. HTTP bypass/block
+and TCP allow/deny end that chain; an empty or unmatched profile continues.
+Earlier TCP restrictions are rechecked if a later rule changes the HTTP target.
+EPE pins the authorized address for DFP. Platform address authorization still
+applies, including to bypassed requests. TLS uses the SNI behavior above.
+CONNECT-UDP performs identity/binding validation only; these TCP rules do not
+replace UDP restrictions in the sandbox.
 
-This is authorization of the declared CONNECT destination, not yet a complete gateway enforcement boundary. It does not restrict direct traffic bypassing the gateway, reauthorize destinations selected later by HTTP/SNI dynamic forwarding or target rewriting, or revoke established tunnels. It also preserves the current optional Sandbox selection contract: omitting the Sandbox ID evaluates Workload policy only; a shared attester does not prove which hosted Sandbox originated a request. Retain existing enforcement until external egress isolation, final-destination authorization and trusted Sandbox selection cover those paths. Ingress, ICMP and SCTP are not enforced by this CONNECT hook.
-
-The opt-in [TrafficPolicy benchmark](tests/traffic_benchmark.rs) measures cold requests over local TLS ADS, hot handler execution, and hot ext_proc gRPC at concurrency 1 and 16. It uses actual certificate parsing, 20 workload labels, eight SNI rules and ordered TrafficPolicy sets whose last rule matches. The ADS inventory is synthetic; it does not measure Kubernetes, Agentiod compilation, Envoy forwarding or production network latency. Run a release build in isolation:
-
-```sh
-cargo test --release --locked --manifest-path extensions/porter/Cargo.toml \
-  --test traffic_benchmark -- --ignored --nocapture
-```
-
-Copy the same benchmark source into a checkout without Porter TrafficPolicy authorization to compare identical inputs. This baseline measures the cost of adding authorization, not two implementations with equivalent enforcement. `PORTER_BENCH_REQUESTS` sets hot samples per scenario (default 5000); cold scenarios use 100 unique Workload/policy sets.
+Deploy matching Agentiod and Porter versions: this prototype replaces inline
+Workload policies with references and wraps Sandbox policies in SecurityProfile.
+Older Porter versions cannot consume this delivery layout. The new Porter requires
+an explicit Workload binding (which may be empty) and a complete profile for every
+reference and selected Sandbox. Keep the matching native gateway/SNI module version.
 
 ## Code organization
 
@@ -82,11 +96,11 @@ Copy the same benchmark source into a checkout without Porter TrafficPolicy auth
 
 `processor/resolve.rs` accepts identity evidence and an optional authorization target, returning immutable resolved views or a typed error. Its injected `identity::Authenticator` resolves connection evidence into a Workload identity and a Sandbox selection. `Instance` carries a trusted instance's WDS lookup key (resource name or alias), allowing non-Pod runtimes such as VMs. `Peer` retains the native IP/principal fallback, restricted to a non-hostNetwork Kubernetes Pod in the configured cluster and default network. Input `requested_sandbox_id` is an unverified request selection, unlike the TLS-authenticated certificate and principal. Native preserves that selection for binding validation; runtimes that authenticate a Sandbox directly derive its ID from trusted evidence. An empty output `sandbox_id` means no Sandbox selection. Authentication shares the original request deadline with discovery; denial or provider failure never falls back to native authentication. The resolver continues to own Workload/Sandbox binding checks, policy evaluation, snapshot capture and invalidation retries. It does not know the gateway type or ext-proc wire format; adapters encode results using the same captured views without additional discovery reads. `view.rs` projects discovery resources into cached views and response metadata.
 
-`discovery.rs` owns demand subscriptions and cache state; `discovery/transport.rs` owns ADS connections, TLS/token loading and reconnects. `ResourceKind` identifies Workload, Sandbox and TrafficPolicy resources while the state remains array-backed. Discovery uses the resolver's request deadline to classify canceled wait metrics.
+`discovery.rs` owns demand subscriptions and cache state; `discovery/transport.rs` owns ADS connections, TLS/token loading and reconnects. `ResourceKind` identifies Workload, Sandbox and SecurityProfile resources while the state remains array-backed. Discovery uses the resolver's request deadline to classify canceled wait metrics.
 
 Lifecycle and ADS connection events use structured tracing fields. Each ADS attempt has an `xds` span with its connection ID and address. Like gateway-agent, normal ADS EOF, cancellation and explicit `NO_ERROR` shutdowns are DEBUG; unexpected disconnects, NACKs and forced shutdowns are WARN. Abnormal GOAWAY reasons take precedence over accompanying EOF or transport-close text. An unclassified `BrokenPipe` or ADS deadline remains WARN. This classification only changes logging; reconnect, backoff, readiness and cache grace behavior are unchanged. Service failures are errors, and request rejection reasons are debug events. Certificate contents and tokens are never logged. The existing `AGENTIO_LOG_LEVEL` and `AGENTIO_LOG_FORMAT=text|json` settings remain the configuration interface.
 
-Logging writes synchronously to stderr. Text output contains no ANSI color or style escape sequences. Policy decisions are emitted at INFO for audit collection; a slow log sink can apply backpressure to request processing.
+Logging writes synchronously to stderr. Text output contains no ANSI color or style escape sequences.
 
 `POST /logging` on port 9004 follows ztunnel's logging API. It accepts only loopback connections; invoke it from the gateway Pod. A request without parameters returns `current log level is <filter>`. `level` merges directives into the current configuration; `reset` restores the startup configuration before applying any supplied `level`. Its value is ignored, as in ztunnel. Invalid levels return 400 without changing the filter; non-POST methods return 405. Startup `AGENTIO_LOG_LEVEL` now uses ztunnel's target filter semantics: a bare level applies globally, and more specific module directives override it. The existing `none` startup alias for `off` remains supported.
 
@@ -97,35 +111,27 @@ curl -X POST 'http://127.0.0.1:9004/logging?reset&level=warn'
 curl -X POST 'http://127.0.0.1:9004/logging?reset'
 ```
 
-Completed TrafficPolicy evaluations emit one INFO event, `request target policy evaluated`, under the `agentio_porter::policy` target. These events are enabled by the default `AGENTIO_LOG_LEVEL=info`. Fields include `workload` (canonical WDS resource name), `sandbox_id`, `destination` (IP:port), `protocol`, the deciding `stage` (`workload`), `action` (`allow` or `deny`), and `reason` (`rule_match`, `no_matching_rule`, or `no_egress_policy`). A matching Workload rule includes its xDS resource name in `policy`; `rule_index` is zero-based. Unmatched/default decisions have no `policy` or `rule_index`. The final Workload decision emits this event. Identity/discovery failures before evaluation retain their separate diagnostics. These events cover completed policy evaluations, not all CONNECT attempts: identity/discovery failures before evaluation are not included. Raising the policy target filter above INFO or setting it to off suppresses these audit events.
-
 ## Log format contract
 
-`AGENTIO_LOG_FORMAT=json` emits one JSON object per line for both operational logs and policy decisions. The envelope follows [ztunnel's Istio JSON format](https://github.com/openkruise/ztunnel/blob/f4e7257075c7eb4d1c45abb4b9a20e549516a6d3/src/telemetry.rs). `AGENTIO_LOG_FORMAT=text` remains the default human-readable tracing format, with the same event fields and span context; its layout is not a machine parsing contract. Both formats write synchronously to stderr and respect the same dynamic level filter.
+`AGENTIO_LOG_FORMAT=json` emits one JSON object per line for operational logs. The envelope follows [ztunnel's Istio JSON format](https://github.com/openkruise/ztunnel/blob/f4e7257075c7eb4d1c45abb4b9a20e549516a6d3/src/telemetry.rs). `AGENTIO_LOG_FORMAT=text` remains the default human-readable tracing format, with the same event fields and span context; its layout is not a machine parsing contract. Both formats write synchronously to stderr and respect the same dynamic level filter.
 
 | JSON field | Type | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `time` | string | UTC RFC 3339 event timestamp |
 | `level` | string | Lowercase `trace`, `debug`, `info`, `warn`, or `error` |
-| `scope` | string | Full tracing target, e.g. `agentio_porter::policy` |
+| `scope` | string | Full tracing target, e.g. `agentio_porter::discovery` |
 | `message` | string | Human-readable description; wording is not a stable query key |
-| `event` | string, when defined | Stable machine event identifier; policy decisions use `traffic_policy_decision` |
+| `event` | string, when defined | Stable machine event identifier |
 | `spans` | array, when present | Context from root to leaf as `{ "name": ..., "fields": {...} }`; includes the xDS connection ID and address |
 
 Business fields live at the top level, use snake_case and preserve JSON numeric/boolean types. `time`, `level`, `scope`, and `spans` are reserved for the formatter. Span fields stay inside `spans`, so they do not overwrite event fields. Unlike ztunnel's dynamic top-level span keys, the array preserves nested spans with the same name. Standard tracing JSON span fields support subsequent `span.record` updates.
 
-Policy decisions retain `workload`, `sandbox_id`, `destination`, `protocol`, `stage`, `action`, and `reason`. `workload` is the canonical WDS resource name, not an immutable Kubernetes Pod UID. An empty `sandbox_id` means this request has no Sandbox identity. `stage` is `workload`; `action` is `allow` or `deny`; `reason` is `rule_match`, `no_matching_rule`, or `no_egress_policy`. A matched rule includes `rule_index`, a zero-based integer within the deciding policy. A matched Workload rule also includes `policy`, its canonical xDS resource name. Unmatched/default decisions omit both fields; missing values are not synthesized. This schema describes completed policy evaluation; it does not imply that identity/discovery errors are covered or that the destination connection succeeded. INFO decisions are not sampled. Raising the logging filter can suppress them.
-
-```json
-{"time":"2026-10-20T10:20:30.123456Z","level":"info","scope":"agentio_porter::policy","event":"traffic_policy_decision","workload":"cluster1//Pod/demo/client","sandbox_id":"","destination":"203.0.113.10:443","protocol":"tcp","stage":"workload","policy":"namespaces/demo/trafficPolicies/allow-egress","rule_index":0,"action":"allow","reason":"rule_match","message":"request target policy evaluated"}
-```
-
-Operational events retain their descriptive `message` and diagnostic fields. Lifecycle events are INFO, expected ADS closures DEBUG, unexpected reconnect/NACK events WARN, service failures ERROR, and detailed cache/processing diagnostics DEBUG. No duration or request ID is added to policy decisions: latency is available in metrics, and an Envoy correlation ID requires a verified propagation path. Certificate contents and tokens must never be logged.
+Operational events retain their descriptive `message` and diagnostic fields. Lifecycle events are INFO, expected ADS closures DEBUG, unexpected reconnect/NACK events WARN, service failures ERROR, and detailed cache/processing diagnostics DEBUG. Certificate contents and tokens must never be logged.
 
 ### Operational events and error handling
 
 | Event | Level | Trigger and fields |
-|---|---|---|
+| --- | --- | --- |
 | `log_level_changed` | INFO | A successful effective filter change. `previous_filter` and `current_filter` are canonical filter strings; `source_address` is the HTTP peer socket address; `reset` is a boolean indicating that startup defaults were used as the base. Reads, rejected requests and no-op updates emit no change event. |
 | `porter_failed` | ERROR | A returned runtime/startup-service failure after logging initialization. `error` contains the full diagnostic chain, including the failing task when applicable. Porter exits with failure status. |
 
@@ -175,11 +181,11 @@ Upgrade note: SNI rules now evaluate Workload before Sandbox. Configurations tha
 - Resolve a Sandbox separately and require its attester Workload UID to match. Evaluate Workload SNI rules before Sandbox rules, preserving order within each source. CONNECT-UDP validates identity and binding but returns no SNI policy.
 - Decode and validate discovered resources before publishing a delta atomically. Retain typed Workload views and policy rules on discovery updates. Malformed resources and unsupported policy actions reject the entire update and preserve the last accepted state. Ambiguous aliases cannot resolve an identity; unregistered discovery types receive a NACK without terminating the stream or clearing accepted resources.
 - Demand watches use the same `*` subscribe/unsubscribe initial handshake as the Go xDS client. Concurrent callers share a subscription generation. Deletion ends that generation; old canceled callers cannot release a newer subscription.
-- One retained cache spans Workload, Sandbox and TrafficPolicy. Idle TTL starts after the final caller finishes; in-flight entries are pinned. Both bounds at zero bypass the retention manager and keep xDS interests until server deletion or the disconnect grace ends; the managed-cache gauge is zero in this mode. Cache hits read current published values; updates do not extend idle TTL. Errors release the entry when its final caller finishes.
+- One retained cache spans Workload and Sandbox. Idle TTL starts after the final caller finishes; in-flight entries are pinned. Both bounds at zero bypass the retention manager and keep xDS interests until server deletion or the disconnect grace ends; the managed-cache gauge is zero in this mode. Cache hits read current published values; updates do not extend idle TTL. Errors release the entry when its final caller finishes.
 - Expiration uses one timer and LRU eviction only visits idle entries. Alias indexes update incrementally. A separate outbound stream drains changed subscriptions and the latest ACK/NACK per type, so outbound flow control cannot stop receiving/applying deltas. Resources are never dropped to coalesce ACKs.
-- Disconnect immediately clears readiness and starts a fixed 5-second cache grace period. Cached Workload, Sandbox and TrafficPolicy values may serve new CONNECT requests during that period; cold demands still wait within their own original 4-second total budget. Failed connection or RPC attempts do not restart the grace period. The expiry worker clears cached resources even without new traffic. Successful ADS RPC establishment clears the cache earlier; a TCP/TLS connection alone does not. The request body sends only active pending demands even before RPC establishment, never historical cached subscriptions or retained versions. Clear preserves active demand generations and terminal deletions; later requests rediscover idle resources on demand. CONNECT resolution spanning a clear discards previously resolved dependencies and retries under the same original deadline, so a previously acquired Workload cannot authorize a request using a stale binding. Resource-level xDS TTL is rejected; the cache's idle TTL is separate.
+- Disconnect immediately clears readiness and starts a fixed 5-second cache grace period. Cached Workload and Sandbox values may serve new CONNECT requests during that period; cold demands still wait within their own original 4-second total budget. Failed connection or RPC attempts do not restart the grace period. The expiry worker clears cached resources even without new traffic. Successful ADS RPC establishment clears the cache earlier; a TCP/TLS connection alone does not. The request body sends only active pending demands even before RPC establishment, never historical cached subscriptions or retained versions. Clear preserves active demand generations and terminal deletions; later requests rediscover idle resources on demand. CONNECT resolution spanning a clear discards previously resolved dependencies and retries under the same original deadline, so a previously acquired Workload cannot authorize a request using a stale binding. Resource-level xDS TTL is rejected; the cache's idle TTL is separate.
 
-The xDS and ext_proc proto files are narrow wire projections. Workload, Sandbox and extension messages compile from this repository’s authoritative proto definitions. `tests/fixtures.json` retains 28 serialized Envoy requests and expected responses captured before removing the Go processor (updated to numeric authorities, explicit empty TrafficPolicy bindings, the `agentio.sandbox.id` filter-state key, and canonical Workload UIDs without label metadata); the tests consume these fixtures directly, without a Go Porter dependency. Update contract fixtures and semantic tests together when intentionally changing the protocol.
+The xDS and ext_proc proto files are narrow wire projections. Workload, Sandbox and extension messages compile from this repository’s authoritative proto definitions. `tests/fixtures.json` retains 28 serialized Envoy requests and expected responses captured before removing the Go processor (updated to shared SecurityProfile resources, inline Sandbox profiles, numeric authorities, explicit empty TCP policies, the `agentio.sandbox.id` filter-state key, and canonical Workload UIDs without label metadata); the tests consume these fixtures directly, without a Go Porter dependency. Update contract fixtures and semantic tests together when intentionally changing the protocol.
 
 ## Validation and measurement
 
@@ -200,9 +206,64 @@ Metrics are served at `:9004/metrics` (`--metrics-port`). CONNECT duration measu
 | `agentio_xds_client_demand_wait_duration_seconds` | `resource_type`, `result` | Calls that actually waited, across reconnects; results: `success`, `not_found`, `timeout`, `canceled`, `error` |
 | `agentio_xds_client_demand_waiters` | `resource_type` | Concurrent waiting calls, including calls sharing a subscription |
 
-`allowed` means a normal ext_proc response was produced; downstream SNI policy enforcement and tunnel establishment are outside this handler. `protocol` is `tcp` or `udp`; `resource_type` is the full Workload/Sandbox/TrafficPolicy TypeURL. No workload identities or user labels are metric dimensions. Labeled series appear on first use. Histograms expose `_bucket`, `_sum`, `_count` with finite boundaries 0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8 seconds. Cache lookup counters remain active with retention disabled because demand subscriptions still retain discovered resources. RSS and CPU should be collected by container monitoring; the production endpoint has no allocator diagnostics or forced-purge hooks.
+`allowed` means a normal ext_proc response was produced; downstream SNI policy enforcement and tunnel establishment are outside this handler. `protocol` is `tcp` or `udp`; `resource_type` is the full Workload/Sandbox/SecurityProfile TypeURL. No workload identities or user labels are metric dimensions. Labeled series appear on first use. Histograms expose `_bucket`, `_sum`, `_count` with finite boundaries 0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8 seconds. Cache lookup counters remain active with retention disabled because demand subscriptions still retain discovered resources. RSS and CPU should be collected by container monitoring; the production endpoint has no allocator diagnostics or forced-purge hooks.
 
 Rust tracing provides lifecycle/discovery diagnostics. At debug level, discovery logs cache invalidation time and select/transform/publish/total durations for each accepted ADS response. Publication timing includes lock acquisition; timings exclude destruction of remaining locals after return. Use these logs in separate diagnostic runs because logging can affect performance.
+
+Run the opt-in Rust local benchmark in release mode:
+
+```sh
+PORTER_BENCH_REQUESTS=8000 cargo test --release --locked \
+  --manifest-path extensions/porter/Cargo.toml --test tcp_benchmark \
+  -- --ignored --nocapture --test-threads=1
+```
+
+It measures cold handler calls using real loopback TLS ADS, hot handler calls,
+and hot ext_proc gRPC at concurrency 1 and 16. Inputs contain 20 labels, eight
+SNI rules and 0, 16, 128 or 1024 ordered TCP rules in a referenced SecurityProfile, with the last rule
+allowing the target. The case names retain logical profile/rule counts for
+comparison with the previous TrafficPolicy benchmark; TCP rules arrive in one
+compiled profile chain. These are component timings, not full gateway throughput.
+
+The TCP inventory now emits the actual number of referenced profiles for each
+case. `PORTER_BENCH_SHARED=1` shares them across the generated Workloads; the
+default uses distinct profiles per Workload. All cases retain eight SNI rules,
+including `0x0`, which uses one SNI profile with an empty TCP policy. Historical
+inline benchmark results predate this fixture change.
+
+To compare full SecurityProfile JSON ingestion with the current SNI/TCP protobuf
+projection, generate fixtures using the Go compiler and run the opt-in prototype:
+
+```sh
+go run extensions/porter/tests/sp_json_fixtures.go /tmp/porter-sp-fixtures.json
+PORTER_SP_FIXTURES=/tmp/porter-sp-fixtures.json cargo test --release --locked \
+  --manifest-path extensions/porter/Cargo.toml --test sp_json_benchmark \
+  -- --ignored --nocapture --test-threads=1
+```
+
+The benchmark checks projection parity with Go, then compares direct typed JSON
+deserialization (skipping HTTP action payloads), a full `serde_json::Value` tree,
+and protobuf decoding. All paths use the existing TCP compiler. Hot measurements
+cover cached TCP matching and SNI metadata generation. This is a benchmark-only
+JSON projection for generated valid inputs, not a production SP validator or an
+end-to-end xDS implementation.
+
+To compare policy delivery/cache layouts without changing production xDS, run:
+
+```sh
+cargo test --release --locked --manifest-path extensions/porter/Cargo.toml \
+  --test policy_delivery_benchmark delivery_semantics_self_check
+PORTER_DELIVERY_CASE=shared-1k PORTER_DELIVERY_MODE=ref_unified_lookup \
+PORTER_DELIVERY_MS=100 cargo test --release --locked \
+  --manifest-path extensions/porter/Cargo.toml --test policy_delivery_benchmark \
+  policy_delivery_benchmark -- --ignored --nocapture --test-threads=1
+```
+
+This prototype compares split/combined inline policies, per-profile inline
+policies, and combined/split references with lookup or prebound caches. It uses
+real Delta/Workload protobufs, the TCP compiler and SNI metadata projection;
+it does not implement production subscriptions, identity checks or network RPCs.
+Set `PORTER_DELIVERY_MEMORY=1` for initialization and process RSS sampling only.
 
 The scale harness compares supplied Porter images with the same control plane, WDS clients, resource inventory, certificates and resource limits. The harness drives actual TLS ADS and ext_proc, not the full Envoy/EPE forwarding path. See the [reusable scale test framework](../../bench/porter/README.md) for build/run commands, scenarios, metrics and limitations.
 
@@ -225,7 +286,3 @@ Without Prometheus Operator, add a separate scrape job:
 ```
 
 The Agentio Grafana dashboard includes CONNECT mean/P95/P99 duration, retained cache entries, ADS connection state, demand wait P95/P99 duration and current demand waiters.
-
-### TrafficPolicy opt-in
-
-Porter TrafficPolicy enforcement is disabled by default. Set `ENABLE_TRAFFIC_POLICY=true` on the Porter container and restart it to enable Workload egress evaluation for `agentio-egress` or `agentgateway`. The variable accepts `true` or `false`; invalid values fail startup. With the flag disabled, Porter retains identity checks, Workload/Sandbox discovery and metadata projection, but skips TrafficPolicy resource demands, binding requirements, target IP parsing and policy evaluation. Keep ztunnel enforcement enabled until Porter enforcement has been explicitly enabled on all gateways and verified.

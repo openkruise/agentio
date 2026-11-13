@@ -96,7 +96,18 @@ func TestAgentioEgressPolicyTransfer(t *testing.T) {
 			if cfg.GetProcessingMode().GetRequestBodyMode() != extprocv3.ProcessingMode_NONE {
 				t.Fatal("CONNECT processor must not consume tunnel data")
 			}
-		case "agentio.connect_sni_policy":
+		case "agentio.connect_workload":
+			cfg := &setstatehttpv3.Config{}
+			if err := f.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+				t.Fatal(err)
+			}
+			states := cfg.GetOnRequestHeaders()
+			state := states[len(states)-1]
+			if state.GetObjectKey() != "agentio.connection.policy_json" || state.GetReadOnly() ||
+				state.GetFactoryKey() != "envoy.string" || state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_NONE {
+				t.Fatalf("JSON input must be mutable and local to CONNECT: %v", state)
+			}
+		case "agentio.connect_policy":
 			cfg := &setstatehttpv3.Config{}
 			if err := f.GetTypedConfig().UnmarshalTo(cfg); err != nil {
 				t.Fatal(err)
@@ -106,14 +117,15 @@ func TestAgentioEgressPolicyTransfer(t *testing.T) {
 				t.Fatalf("policy states=%v", states)
 			}
 			state := states[0]
-			if state.GetObjectKey() != "agentio.sni.policy" || state.GetFactoryKey() != "envoy.hashable_string" ||
-				!state.GetReadOnly() ||
+			if state.GetObjectKey() != model.FilterStateConnectionPolicyHash ||
+				state.GetFactoryKey() != "envoy.hashable_string" ||
 				!state.GetSkipIfEmpty() ||
+				!state.GetReadOnly() ||
 				state.GetSharedWithUpstream() != setstatecommonv3.FilterStateValue_ONCE ||
 				state.GetFormatString().
 					GetTextFormatSource().
 					GetInlineString() !=
-					"%DYNAMIC_METADATA(agentio:sni:policy)%" {
+					"%DYNAMIC_METADATA(agentio.connection:policy_hash)%" {
 				t.Fatalf("policy transfer=%v", state)
 			}
 			found = true

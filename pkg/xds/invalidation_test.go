@@ -326,7 +326,7 @@ func TestQueuedDeletionKeepsCurrentWireReplacement(t *testing.T) {
 	replacement, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.ClusterType, Name: "replacement-key"},
 		old.XDSName,
-		old.Value,
+		testResourceContents(testResourceValue(old)),
 		nil,
 		old.Facts,
 	)
@@ -389,7 +389,7 @@ func TestWildcardQueuedDeletionKeepsCurrentWireReplacement(t *testing.T) {
 			next := selectionWorkload(t, "shared", "demo", node, "", "")
 			replacement, err := model.NewResource(
 				model.ResourceKey{TypeURL: model.AddressType, Name: "replacement-key"},
-				old.XDSName, next.Value, nil, next.Facts)
+				old.XDSName, testResourceContents(testResourceValue(next)), nil, next.Facts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -458,14 +458,14 @@ func TestIncrementalCombinesSelectedAndWithdrawnNames(t *testing.T) {
 	newC := gatewayResource(t, "demo/egress", "c", "new-c")
 	replacement, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.ClusterType, Name: "replacement-a"},
-		oldA.XDSName, oldA.Value, nil, oldA.Facts,
+		oldA.XDSName, testResourceContents(testResourceValue(oldA)), nil, oldA.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	aliasOnly, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.ClusterType, Name: "alias-only"},
-		"unrelated", oldB.Value, []string{oldB.XDSName}, oldB.Facts,
+		"unrelated", testResourceContents(testResourceValue(oldB)), []string{oldB.XDSName}, oldB.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)

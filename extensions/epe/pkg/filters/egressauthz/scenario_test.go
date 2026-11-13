@@ -45,22 +45,12 @@ func authRequest(host string) *enginetest.RequestBuilder {
 	return enginetest.NewRequest("GET", host, "/v1").Workload("default", "sandbox", nil)
 }
 
-func authRule(action egressauthz.Action, cidr string, port uint16) egressauthz.Rule {
-	return egressauthz.Rule{
-		Action: action,
-		CIDRs:  []netip.Prefix{netip.MustParsePrefix(cidr)},
-		Ports:  []egressauthz.PortRange{{Start: port}},
+func updateDenied(t *testing.T, current *egressauthz.StaticAuthorizer, cidrs ...string) {
+	t.Helper()
+	cfg := egressauthz.Config{}
+	for _, cidr := range cidrs {
+		cfg.DeniedCIDRs = append(cfg.DeniedCIDRs, netip.MustParsePrefix(cidr))
 	}
-}
-
-func updateRules(t *testing.T, current *egressauthz.StaticAuthorizer, rules ...egressauthz.Rule) {
-	t.Helper()
-	publishPolicies(t, current, egressauthz.Policy{Name: "test", Rules: rules})
-}
-
-func publishPolicies(t *testing.T, current *egressauthz.StaticAuthorizer, policies ...egressauthz.Policy) {
-	t.Helper()
-	cfg := egressauthz.Config{Policies: policies}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -76,41 +66,21 @@ func requireDenied(t *testing.T, v *enginetest.Verdict) {
 	}
 }
 
-func TestScenario_EgressAuthzFirstMatchAndLiveReordering(t *testing.T) {
+func TestScenario_EgressAuthzLiveRestrictionsOnCachedDNS(t *testing.T) {
 	calls := 0
 	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		calls++
-		return dns.LookupResult{
-			Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")},
-			TTL:       time.Minute,
-		}, nil
+		return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}, TTL: time.Minute}, nil
 	}), time.Second)
-	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	allow := authRule(egressauthz.Allow, "192.0.2.0/24", 443)
-	deny := authRule(egressauthz.Deny, "192.0.2.1/32", 443)
-	updateRules(t, policy, allow, deny)
-	h := authHarness(t, client, policy)
-
-	// The broad Allow wins because it comes first, even though a later Deny
-	// matches the same destination more specifically.
-	v := h.Run(t, authRequest("api.example.com:443"))
-	response := v.RequireUpstream(t, "192.0.2.1:443")
-	v.RequireOutcome(t, "passthrough")
-	if response.GetRequestHeaders().GetResponse().GetClearRouteCache() || len(v.RequestHeaderOps) != 0 {
-		t.Fatal("authorization unexpectedly changed request headers or route cache")
-	}
-
-	// Same server, caller snapshot source and cached DNS answer; only rule order changes.
-	updateRules(t, policy, deny, allow)
+	current := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
+	h := authHarness(t, client, current)
+	h.Run(t, authRequest("api.example.com:443")).RequireUpstream(t, "192.0.2.1:443")
+	updateDenied(t, current, "192.0.2.0/24")
 	requireDenied(t, h.Run(t, authRequest("api.example.com:443")))
-
-	// A non-matching port must not inherit a previous request's authorization.
-	updateRules(t, policy, allow, deny)
-	requireDenied(t, h.Run(t, authRequest("api.example.com:80")))
-	updateRules(t, policy)
-	requireDenied(t, h.Run(t, authRequest("api.example.com:443")))
+	updateDenied(t, current)
+	h.Run(t, authRequest("api.example.com:80")).RequireUpstream(t, "192.0.2.1:80")
 	if calls != 1 {
-		t.Fatalf("DNS calls=%d, want 1; policy changes must apply on cache hits", calls)
+		t.Fatalf("DNS calls=%d, want cached DNS across policy updates", calls)
 	}
 }
 
@@ -129,10 +99,7 @@ func TestScenario_EgressAuthzPinsOnlyAuthorizedCustomAddress(t *testing.T) {
 		}
 	}
 	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	updateRules(t, policy,
-		authRule(egressauthz.Deny, "192.0.2.1/32", 443),
-		authRule(egressauthz.Allow, "192.0.2.0/24", 443),
-	)
+	updateDenied(t, policy, "192.0.2.1/32", "203.0.113.0/24")
 	h := authHarness(t, client, policy)
 
 	setRecord("192.0.2.1", "192.0.2.2")
@@ -148,56 +115,18 @@ func TestScenario_EgressAuthzChecksLiteralCONNECTDestination(t *testing.T) {
 		return dns.LookupResult{}, errors.New("literal target must not query DNS")
 	}), time.Second)
 	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	updateRules(t, policy, authRule(egressauthz.Allow, "2001:db8::/32", 8443))
+	updateDenied(t, policy, "2001:db8:1::/48")
 	h := authHarness(t, client, policy)
 	request := func(port string) *enginetest.RequestBuilder {
 		return enginetest.NewRequest("CONNECT", "[2001:db8::10]:"+port, "").
 			Workload("default", "sandbox", nil)
 	}
 	h.Run(t, request("8443")).RequireUpstream(t, "[2001:db8::10]:8443")
-	requireDenied(t, h.Run(t, request("443")))
-}
-
-func TestScenario_EgressAuthzReplacesCallerPolicySnapshots(t *testing.T) {
-	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
-		return dns.LookupResult{}, errors.New("unexpected DNS lookup")
-	}), time.Second)
-	if err := client.SetRecord("api.example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")}); err != nil {
-		t.Fatal(err)
-	}
-	skip := egressauthz.Policy{Name: "TrafficPolicy/team/unrelated",
-		Rules: []egressauthz.Rule{
-			authRule(egressauthz.Deny, "203.0.113.0/24", 443),
-		}}
-	team := egressauthz.Policy{Name: "TrafficPolicy/team/api",
-		Rules: []egressauthz.Rule{
-			authRule(egressauthz.Allow, "192.0.2.1/32", 443),
-			authRule(egressauthz.Deny, "192.0.2.0/24", 443),
-		}}
-	global := egressauthz.Policy{Name: "GlobalTrafficPolicy/default",
-		Rules: []egressauthz.Rule{
-			authRule(egressauthz.Deny, "0.0.0.0/0", 443),
-		}}
-	current := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	publishPolicies(t, current, skip, team, global)
-	h := authHarness(t, client, current)
-	h.Run(t, authRequest("api.example.com:443")).RequireUpstream(t, "192.0.2.1:443")
-
-	denyTeam := egressauthz.Policy{Name: team.Name, Rules: team.Rules[1:]}
-	publishPolicies(t, current, skip, denyTeam, global)
-	requireDenied(t, h.Run(t, authRequest("api.example.com:443")))
-	publishPolicies(t, current, skip, team, global)
-	h.Run(t, authRequest("api.example.com:443")).RequireUpstream(t, "192.0.2.1:443")
-
-	// Removal and ordering are entirely caller-owned.
-	publishPolicies(t, current, skip, global)
-	requireDenied(t, h.Run(t, authRequest("api.example.com:443")))
-	publishPolicies(t, current, global, team)
-	requireDenied(t, h.Run(t, authRequest("api.example.com:443")))
-	publishPolicies(t, current, team)
-	h.Run(t, authRequest("api.example.com:443")).RequireUpstream(t, "192.0.2.1:443")
-	publishPolicies(t, current)
-	h.Run(t, authRequest("api.example.com:443")).RequireUpstream(t, "192.0.2.1:443")
+	h.Run(t, request("443")).RequireUpstream(t, "[2001:db8::10]:443")
+	requireDenied(
+		t,
+		h.Run(t, enginetest.NewRequest("CONNECT", "[2001:db8:1::10]:443", "").Workload("default", "sandbox", nil)),
+	)
 }
 
 func TestScenario_EgressAuthzDNSFailureNeverEmitsTarget(t *testing.T) {
@@ -205,7 +134,6 @@ func TestScenario_EgressAuthzDNSFailureNeverEmitsTarget(t *testing.T) {
 		return dns.LookupResult{}, errors.New("DNS unavailable")
 	}), time.Second)
 	policy := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	updateRules(t, policy, authRule(egressauthz.Allow, "0.0.0.0/0", 443))
 	v := authHarness(t, client, policy).Run(t, authRequest("api.example.com:443"))
 	v.RequireBlocked(t, 500)
 	v.RequireNoUpstream(t)
@@ -228,7 +156,6 @@ func TestScenario_EgressAuthzLoadsCurrentPolicyAfterDNS(t *testing.T) {
 		}
 	}), 5*time.Second)
 	current := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	updateRules(t, current, authRule(egressauthz.Allow, "192.0.2.0/24", 443))
 	h := authHarness(t, client, current)
 	stream := enginetest.NewScriptedStream(context.Background(), authRequest("api.example.com:443").Build()...)
 	done := make(chan error, 1)
@@ -240,7 +167,7 @@ func TestScenario_EgressAuthzLoadsCurrentPolicyAfterDNS(t *testing.T) {
 	}
 
 	// Policies are loaded after DNS completes, so this request must use the update.
-	publishPolicies(t, current, egressauthz.Policy{Name: "empty"})
+	updateDenied(t, current, "0.0.0.0/0")
 	close(release)
 	err := <-done
 	v := enginetest.ParseVerdict(stream.Responses(), err)
@@ -261,17 +188,7 @@ func TestScenario_EgressAuthzDenialHasNoPolicyPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-	publishPolicies(t, current,
-		egressauthz.Policy{Name: "TrafficPolicy/team/first",
-			Rules: []egressauthz.Rule{
-				authRule(egressauthz.Allow, "192.0.2.0/24", 80),
-				authRule(egressauthz.Deny, "192.0.2.0/24", 443),
-			}},
-		egressauthz.Policy{Name: "GlobalTrafficPolicy/second",
-			Rules: []egressauthz.Rule{
-				authRule(egressauthz.Deny, "198.51.100.0/24", 443),
-			}},
-	)
+	updateDenied(t, current, "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
 	v := authHarness(t, client, current).Run(t, authRequest("api.example.com:443"))
 	requireDenied(t, v)
 	var body map[string]string

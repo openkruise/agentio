@@ -9,19 +9,20 @@ RUN cargo build --release --locked --offline
 FROM scratch AS metrics-artifact
 COPY --from=metrics-builder /src/target/release/libagentio_gateway_metrics.so /libagentio_gateway_metrics.so
 
-FROM rust:1.99.0-bookworm AS sni-builder
+FROM rust:1.99.0-bookworm AS connection-builder
 RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY extensions/envoy/sni-policy/ ./
+COPY extensions/envoy/connection-policy/ ./
 RUN bash build.sh --build-only
 
-FROM sni-builder AS network-limits-builder
+FROM connection-builder AS network-limits-builder
 WORKDIR /network-limits
-COPY --from=sni-builder /src/.envoy-sdk/ ./.envoy-sdk/
+COPY --from=connection-builder /src/.envoy-sdk/ ./.envoy-sdk/
 COPY extensions/envoy/network-limits/ ./
 RUN bash build.sh --build-only
 
 FROM metrics-artifact AS gateway-test-artifacts
+COPY --from=connection-builder /src/target/release/libenvoy_agentio_connection_policy.so /libenvoy_agentio_connection_policy.so
 COPY --from=network-limits-builder /network-limits/target/release/libenvoy_agentio_network_limits.so /libenvoy_agentio_network_limits.so
 
 FROM --platform=$BUILDPLATFORM golang:1.27.3 AS builder
@@ -42,7 +43,7 @@ RUN apt-get update \
 WORKDIR /
 COPY --from=builder /out/gateway-agent /usr/local/bin/gateway-agent
 COPY --from=metrics-builder /src/target/release/libagentio_gateway_metrics.so /usr/local/lib/libagentio_gateway_metrics.so
-COPY --from=sni-builder /src/target/release/libenvoy_agentio_sni_policy.so /usr/local/lib/libenvoy_agentio_sni_policy.so
+COPY --from=connection-builder /src/target/release/libenvoy_agentio_connection_policy.so /usr/local/lib/libenvoy_agentio_connection_policy.so
 COPY --from=network-limits-builder /network-limits/target/release/libenvoy_agentio_network_limits.so /usr/local/lib/libenvoy_agentio_network_limits.so
 COPY LICENSE NOTICE /usr/share/doc/agentio-gateway/
 USER 1337:1337

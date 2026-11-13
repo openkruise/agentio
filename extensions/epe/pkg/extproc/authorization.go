@@ -54,22 +54,7 @@ func (s *Server) authorize(
 		err = ctx.Err()
 	}
 	if err != nil {
-		log.FromContext(ctx).Error(err, "request authorization failed")
-		stream.Info.Error = err.Error()
-		if stream.Info.Authorization == nil || stream.Info.Authorization.Action != "error" {
-			stream.Info.RecordAuthorization(
-				filter.AuthorizationDecision{
-					Action: "error",
-					Reason: filter.AuthorizationReasonFailed,
-				},
-			)
-		}
-		return nil, authorizationReply(
-			500,
-			"epe_request_authorization_failed",
-			"Unable to authorize outbound destination.",
-			stream.RequestID,
-		)
+		return nil, authorizationFailure(ctx, stream, err)
 	}
 	if reply != nil {
 		if reply.Details == "epe_egress_denied" {
@@ -104,4 +89,24 @@ func authorizationReply(status int, code, message, requestID string) *filter.Rep
 		Body:      body,
 		HeaderOps: []filter.HeaderOp{{Kind: filter.HeaderSet, Name: "content-type", Value: "application/json"}},
 	}
+}
+
+// Both checkpoints and final authorization report failures as local replies.
+func authorizationFailure(ctx context.Context, stream *filter.Stream, err error) *filter.Reply {
+	log.FromContext(ctx).Error(err, "request authorization failed")
+	stream.Info.Error = err.Error()
+	if stream.Info.Authorization == nil || stream.Info.Authorization.Action != "error" {
+		stream.Info.RecordAuthorization(
+			filter.AuthorizationDecision{
+				Action: "error",
+				Reason: filter.AuthorizationReasonFailed,
+			},
+		)
+	}
+	return authorizationReply(
+		500,
+		"epe_request_authorization_failed",
+		"Unable to authorize outbound destination.",
+		stream.RequestID,
+	)
 }

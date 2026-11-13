@@ -39,22 +39,17 @@ var (
 	xdsCacheIdleTTL = flag.Duration(
 		"xds-cache-idle-ttl",
 		10*time.Minute,
-		"Idle lifetime of retained Workload, TrafficPolicy, SecurityProfile and Sandbox subscriptions; zero disables expiry",
+		"Idle lifetime of retained Workload, SecurityProfile and Sandbox subscriptions; zero disables expiry",
 	)
 	xdsCacheMaxEntries = flag.Int(
 		"xds-cache-max-entries",
-		10000,
-		"Maximum retained Workload, TrafficPolicy, SecurityProfile and Sandbox subscriptions; active resolutions are pinned; zero disables capacity eviction",
+		0,
+		"Maximum retained Workload, SecurityProfile and Sandbox subscriptions; active resolutions are pinned; zero disables capacity eviction",
 	)
 	clusterDomain = flag.String(
 		"domain",
 		"cluster.local",
 		"Kubernetes DNS suffix used in the default ADS node ID",
-	)
-	enableXDSEgressAuthz = flag.Bool(
-		"enable-xds-egressauthz",
-		false,
-		"Apply native Workload and TrafficPolicy xDS policies in addition to global egress authorization",
 	)
 	xdsAddress = flag.String(
 		"xds-address",

@@ -184,7 +184,8 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &resourceBuilder{}
+	// This direct TLS fixture has no CONNECT context; test static SNI precedence alone.
+	b := &resourceBuilder{legacyGateway: true}
 	matcher := b.staticSNIMatcher(&configv1.TlsTerminationConfig{
 		IncludeHosts: []string{
 			"same.test",

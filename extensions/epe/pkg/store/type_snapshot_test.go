@@ -176,10 +176,10 @@ func TestCustomBuilderPrecedenceAndDependencyReuse(t *testing.T) {
 }
 
 func TestDefaultSnapshotReuseAndSourceError(t *testing.T) {
-	high, low := memory(Workload), memory(Workload, TrafficPolicy)
+	high, low := memory(Workload), memory(Workload, Type("TestPolicy"))
 	high.put(Resource{Key: Key{Type: Workload, Name: "pod"}, Value: "high"})
 	low.put(Resource{Key: Key{Type: Workload, Name: "pod"}, Value: "low"})
-	low.put(Resource{Key: Key{Type: TrafficPolicy, Name: "policy"}, Value: "policy"})
+	low.put(Resource{Key: Key{Type: Type("TestPolicy"), Name: "policy"}, Value: "policy"})
 	a := NewAggregate(high, low)
 	before := a.Snapshot()
 	// The backend returns new per-type objects, but unchanged effective content
@@ -187,7 +187,7 @@ func TestDefaultSnapshotReuseAndSourceError(t *testing.T) {
 	low.put(Resource{Key: Key{Type: Workload, Name: "pod"}, Value: "shadowed update"})
 	a.Refresh()
 	if a.Snapshot().Type(Workload) != before.Type(Workload) ||
-		a.Snapshot().Type(TrafficPolicy) != before.Type(TrafficPolicy) {
+		a.Snapshot().Type(Type("TestPolicy")) != before.Type(Type("TestPolicy")) {
 		t.Fatal("unchanged effective type was rebuilt")
 	}
 	low.err = errors.New("unavailable")

@@ -77,7 +77,13 @@ func TestDemandDoesNotReplayPreviousSourceIncarnation(t *testing.T) {
 	resource := sandboxResource(t, "reused")
 	facts := resource.Facts
 	facts.SourceIdentity = model.SourceIdentity{UID: "old-object"}
-	resource, err := model.NewResource(resource.Key, resource.XDSName, resource.Value, resource.Aliases, facts)
+	resource, err := model.NewResource(
+		resource.Key,
+		resource.XDSName,
+		testResourceContents(testResourceValue(resource)),
+		resource.Aliases,
+		facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -209,15 +209,7 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 						if stream.Request.OriginalDestination.Addr().String() == "127.0.0.3" && stream.Upstream != nil {
 							t.Error("an unmatched endpoint acquired a pinned target")
 						}
-						cfg := egressauthz.Config{
-							Policies: []egressauthz.Policy{{
-								Name: "test",
-								Rules: []egressauthz.Rule{{
-									Action: egressauthz.Allow,
-									CIDRs:  []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
-								}},
-							}},
-						}
+						cfg := egressauthz.Config{}
 						if stream.Request.Path == "/deny" {
 							cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
 						}
@@ -558,6 +550,11 @@ func endpointServiceEntryConfig(
 			return f.Name == "envoy.filters.listener.dynamic_modules"
 		})
 		for _, chain := range l.FilterChains {
+			// The stock-Envoy fixture injects policy decisions and tests endpoint binding.
+			chain.Filters = slices.DeleteFunc(
+				chain.Filters,
+				func(f *listener.Filter) bool { return f.Name == "agentio.tcp_policy" },
+			)
 			if chain.Name == tlsTerminateChain {
 				chain.TransportSocket.ConfigType = &core.TransportSocket_TypedConfig{
 					TypedConfig: b.pack(&tlsconfig.DownstreamTlsContext{

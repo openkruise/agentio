@@ -49,7 +49,7 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 			t.Fatal(err)
 		}
 		resource, err := model.NewResource(
-			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", value, nil,
+			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", testResourceContents(value), nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: name,
 				Principal:   model.MustServiceAccountPrincipal("default", "default"),

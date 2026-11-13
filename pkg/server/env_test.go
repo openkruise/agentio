@@ -198,7 +198,7 @@ func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 	for _, variable := range []string{
 		"AGENTIO_SANDBOX_MODE",
 		"AGENTIO_TOKEN_AUDIENCE",
-		"ENABLE_POLICY_STATUS",
+		"AGENTIO_ENABLE_POLICY_STATUS",
 		"AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE",
 		"AGENTIO_SCOPED_SECRETS",
 		"AGENTIO_CONFIGMAP_NAME",
@@ -272,7 +272,7 @@ func TestSecretNamespaceScopeFeatureFlag(t *testing.T) {
 }
 
 func TestPolicyStatusFeatureFlag(t *testing.T) {
-	const variable = "ENABLE_POLICY_STATUS"
+	const variable = "AGENTIO_ENABLE_POLICY_STATUS"
 	const helper = "AGENTIO_POLICY_STATUS_TEST_HELPER"
 	if expected := os.Getenv(helper); expected != "" {
 		if features.EnablePolicyStatus != (expected == "true") {

@@ -44,10 +44,10 @@ func defaultFlowControlConfig(concurrency int, requestRateLimit float64) flowCon
 	return flowControlConfig{
 		concurrency:      concurrency,
 		requestRateLimit: requestRateLimit,
-		admissionWait:    time.Second,
-		rateLimitWait:    time.Second,
-		sendTimeout:      5 * time.Second,
-		ackTimeout:       5 * time.Second,
+		admissionWait:    10 * time.Second,
+		rateLimitWait:    3 * time.Second,
+		sendTimeout:      15 * time.Second,
+		ackTimeout:       20 * time.Second,
 	}
 }
 

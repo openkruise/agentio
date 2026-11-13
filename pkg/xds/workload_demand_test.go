@@ -100,7 +100,7 @@ func TestWorkloadEvictionRetainsOtherAliasSubscriptions(t *testing.T) {
 	service := selectionService(t, "demo/service", "service-ip")
 	b := addressResource(t, "b", "b", "instance-b", "ip-a")
 	snapshot := selectionSnapshot(t, []model.Resource{a, b, service})
-	projected, err := (WorkloadGenerator{}).projectAddresses([]model.Resource{a})
+	projected, err := (WorkloadGenerator{}).projectResources(gatewayScope(), []model.Resource{a}, model.WorkloadType)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,11 @@ func TestWorkloadDemandFullDiffResendsOnlyRequestedResources(t *testing.T) {
 		selectionService(t, "demo/service", "service-alias"),
 		selectionService(t, "demo/empty", "empty-service"),
 	})
-	projected, err := (WorkloadGenerator{}).projectAddresses([]model.Resource{a, b, unrelated})
+	projected, err := (WorkloadGenerator{}).projectResources(
+		gatewayScope(),
+		[]model.Resource{a, b, unrelated},
+		model.WorkloadType,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

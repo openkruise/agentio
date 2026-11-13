@@ -122,7 +122,7 @@ func TestConnectIdentityFallbackTransfer(t *testing.T) {
 				if err := hcm.HttpFilters[index].GetTypedConfig().UnmarshalTo(restored); err != nil {
 					t.Fatal(err)
 				}
-				if len(restored.OnRequestHeaders) != 5 {
+				if len(restored.OnRequestHeaders) != 6 {
 					t.Fatalf("identity state=%v", restored)
 				}
 				for i, field := range []struct {

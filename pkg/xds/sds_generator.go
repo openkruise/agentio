@@ -151,7 +151,7 @@ func (g *SDSGenerator) Generate(ctx context.Context, request GenerationRequest) 
 		}
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.SecretType, Name: request.Scope.GatewayKey + "|" + name},
-			name, value, nil, model.ResourceFacts{GatewayOwner: request.Scope.GatewayKey})
+			name, model.Prebuilt(value), nil, model.ResourceFacts{GatewayOwner: request.Scope.GatewayKey})
 		if err != nil {
 			return GeneratedDelta{}, fmt.Errorf("build SDS secret %q: %w", name, err)
 		}

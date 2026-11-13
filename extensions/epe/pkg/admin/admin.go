@@ -150,13 +150,15 @@ func toView(p *securityprofile.Profile, full bool) (ProfileView, error) {
 		view.Spec = p.Spec
 		if kind == kindSandbox {
 			view.Spec = &v1alpha1.SecurityProfileSpec{}
-			if err := json.NewDecoder(strings.NewReader(p.RawSandboxRules)).Decode(&view.Spec.Rules); err != nil {
-				return ProfileView{}, fmt.Errorf(
-					"decode installed Sandbox %s/%s rules: %w",
-					p.Meta.Namespace,
-					p.Meta.Name,
-					err,
-				)
+			if p.RawSandboxRules != "" {
+				if err := json.NewDecoder(strings.NewReader(p.RawSandboxRules)).Decode(&view.Spec.Rules); err != nil {
+					return ProfileView{}, fmt.Errorf(
+						"decode installed Sandbox %s/%s rules: %w",
+						p.Meta.Namespace,
+						p.Meta.Name,
+						err,
+					)
+				}
 			}
 		}
 	}
