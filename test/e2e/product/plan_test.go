@@ -86,6 +86,10 @@ func TestRequiredCoverage(t *testing.T) {
 		"trafficpolicy/TestTrafficPolicyLowerPriorityWins": 4,
 		"epe/TestEPEServiceAccountCanWatchItsInputs":       1,
 		"epe/TestPodIdentityReachesEPE":                    1,
+		"epe/TestSandboxInlineHTTPPolicies":                1,
+		"epe/TestSandboxInlineTLSPolicies":                 1,
+		"epe/TestSandboxInlinePolicyLifecycle":             1,
+		"epe/TestSandboxIdentitySelection":                 1,
 		"clienttrust/TestClientTrustHTTPS":                 1,
 	} {
 		if counts[test] != want {

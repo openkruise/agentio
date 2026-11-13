@@ -34,7 +34,7 @@ pub enum WorkloadIdentity {
 /// Discovery must still validate the selected Workload and Sandbox binding.
 pub struct ConnectionIdentity {
     pub workload: WorkloadIdentity,
-    /// Empty means no Sandbox selection; nonempty still requires discovery binding checks.
+    /// Empty permits the gateway's Workload-name fallback; nonempty requires binding checks.
     pub sandbox_id: String,
 }
 

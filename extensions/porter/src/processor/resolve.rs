@@ -28,6 +28,7 @@ pub(super) struct Resolver<'a> {
     pub authenticator: &'a dyn Authenticator,
     pub cluster_id: &'a str,
     pub timeout: Duration,
+    pub sandbox_by_workload: bool,
 }
 
 struct RequestSnapshot {
@@ -106,6 +107,7 @@ impl Resolver<'_> {
             if tokio::time::Instant::now() >= request_deadline {
                 return Err(ResolveError::Deadline);
             }
+            let mut sandbox_lookup = Cow::Borrowed(sandbox_id);
             let workload = self
                 .client
                 .pin(ResourceKind::Workload, lookup, Some(request_deadline));
@@ -118,7 +120,7 @@ impl Resolver<'_> {
                     .await
                     .map(Some)
             };
-            let (workload, sandbox) = tokio::try_join!(workload, sandbox)?;
+            let (workload, mut sandbox) = tokio::try_join!(workload, sandbox)?;
             let View::Workload(source) = workload.value.as_ref() else {
                 unreachable!("typed Workload watch")
             };
@@ -136,11 +138,35 @@ impl Resolver<'_> {
                 debug!(reason = "fallback_workload_mismatch", "request denied");
                 return Err(ResolveError::Denied);
             }
+            if sandbox_id.is_empty()
+                && self.client.sandbox_mode
+                && self.sandbox_by_workload
+                && !source.namespace.is_empty()
+                && !source.name.is_empty()
+            {
+                // Use authenticated WDS identity, never CONNECT name headers.
+                sandbox_lookup = Cow::Owned(format!("{}/{}", source.namespace, source.name));
+                sandbox = match self
+                    .client
+                    .pin(
+                        ResourceKind::Sandbox,
+                        &sandbox_lookup,
+                        Some(request_deadline),
+                    )
+                    .await
+                {
+                    Ok(resource) => Some(resource),
+                    Err(DemandError::NotFound) => None,
+                    Err(error) => return Err(error.into()),
+                };
+            }
             if let Some(resource) = &sandbox {
                 let View::Sandbox(value) = resource.value.as_ref() else {
                     unreachable!("typed Sandbox watch")
                 };
-                if value.uid != sandbox_id || value.workload_uid != source.uid {
+                if (!sandbox_id.is_empty() && value.uid != sandbox_id)
+                    || value.workload_uid != source.uid
+                {
                     debug!(reason = "sandbox_binding_mismatch", "request denied");
                     return Err(ResolveError::Denied);
                 }
@@ -156,8 +182,8 @@ impl Resolver<'_> {
             let names: Vec<_> = references.iter().map(|r| r.name.clone()).collect();
             let profiles = dependencies.resolve(&names).await;
             let mut keys = vec![(ResourceKind::Workload, lookup)];
-            if sandbox.is_some() {
-                keys.push((ResourceKind::Sandbox, sandbox_id));
+            if !sandbox_lookup.is_empty() {
+                keys.push((ResourceKind::Sandbox, sandbox_lookup.as_ref()));
             }
             let profile_offset = keys.len();
             keys.extend(
@@ -172,12 +198,12 @@ impl Resolver<'_> {
             {
                 continue;
             }
-            if let Some(before) = &sandbox
-                && !captured[1]
-                    .as_ref()
-                    .is_some_and(|after| Arc::ptr_eq(&before.value, after))
-            {
-                continue;
+            if !sandbox_lookup.is_empty() {
+                match (&sandbox, &captured[1]) {
+                    (Some(before), Some(after)) if Arc::ptr_eq(&before.value, after) => {}
+                    (None, None) => {}
+                    _ => continue,
+                }
             }
             let profiles = profiles?;
             if profiles.iter().enumerate().any(|(i, before)| {

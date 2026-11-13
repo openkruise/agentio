@@ -66,6 +66,12 @@ fn processor() -> Processor {
     }
 }
 
+fn workload_processor() -> Processor {
+    let mut p = processor();
+    p.client = Client::new(CacheConfig::default(), Metrics::new(), false);
+    p
+}
+
 fn workload() -> Workload {
     Workload {
         uid: UID.into(),
@@ -214,7 +220,7 @@ fn assert_policies(response: extproc::ProcessingResponse, actions: &[Option<TcpA
 async fn policies_are_forwarded_without_legacy_decisions_and_missing_policy_fails_closed() {
     for enable_sni in [true, false] {
         for action in [Some(TcpAction::Allow), Some(TcpAction::Deny), None] {
-            let mut p = processor();
+            let mut p = workload_processor();
             p.enable_sni_traffic_policy = enable_sni;
             seed_workload(&p.client, action.map(|a| policy(Some(a))));
             let result = p.handle(request("")).await;
@@ -232,7 +238,7 @@ async fn policies_are_forwarded_without_legacy_decisions_and_missing_policy_fail
 
 #[tokio::test]
 async fn empty_profile_allows_but_missing_referenced_profile_does_not() {
-    let p = processor();
+    let p = workload_processor();
     seed_workload(&p.client, Some(policy(None)));
     assert_policies(p.handle(request("")).await.unwrap(), &[None]);
     seed(
@@ -398,7 +404,7 @@ async fn shared_profiles_update_without_workload_and_preserve_binding_order() {
     use crate::wire::agentio::security::{
         SniAction, SniMatch, SniPolicy as SniTrafficPolicy, SniRule,
     };
-    let p = processor();
+    let p = workload_processor();
     seed(
         &p.client,
         ResourceKind::Workload,
@@ -499,7 +505,7 @@ async fn shared_profiles_update_without_workload_and_preserve_binding_order() {
 
 #[tokio::test]
 async fn empty_binding_allows_and_changed_binding_rebuilds_pending_snapshot() {
-    let p = processor();
+    let p = workload_processor();
     seed(
         &p.client,
         ResourceKind::Workload,
@@ -543,7 +549,7 @@ async fn empty_binding_allows_and_changed_binding_rebuilds_pending_snapshot() {
 
 #[tokio::test]
 async fn withdrawn_reference_does_not_reject_the_replacement_binding() {
-    let p = processor();
+    let p = workload_processor();
     seed(
         &p.client,
         ResourceKind::Workload,
@@ -575,7 +581,7 @@ async fn withdrawn_reference_does_not_reject_the_replacement_binding() {
 
 #[tokio::test]
 async fn profile_source_name_is_independent_of_its_discovery_name() {
-    let p = processor();
+    let p = workload_processor();
     let name = "namespaced/ns/shared";
     seed(
         &p.client,
@@ -616,7 +622,7 @@ impl crate::identity::Authenticator for RuntimeIdentity {
 
 #[tokio::test(start_paused = true)]
 async fn runtime_authentication_shares_deadline_and_never_falls_back() {
-    let mut p = processor();
+    let mut p = workload_processor();
     seed_workload(&p.client, Some(policy(None)));
     assert!(is_allowed(p.handle(request("")).await.unwrap()));
     for (failure, expected) in [
@@ -649,6 +655,229 @@ fn is_allowed(response: extproc::ProcessingResponse) -> bool {
         response.response,
         Some(extproc::processing_response::Response::RequestHeaders(_))
     )
+}
+
+fn inline_sandbox(workload_uid: &str) -> Sandbox {
+    Sandbox {
+        uid: SANDBOX.into(),
+        attester: Some(Attester {
+            workload_uid: workload_uid.into(),
+        }),
+        extensions: vec![policy(Some(TcpAction::Deny))],
+    }
+}
+
+#[tokio::test]
+async fn omitted_hbone_id_preserves_inline_tcp_and_sni_profiles() {
+    use crate::wire::agentio::security::{SniAction, SniMatch, SniPolicy, SniRule};
+
+    for id in [SANDBOX, ""] {
+        for enable_sni in [true, false] {
+            let mut p = processor();
+            p.enable_sni_traffic_policy = enable_sni;
+            seed_workload(&p.client, Some(policy(None)));
+            let mut sandbox = inline_sandbox(UID);
+            let mut profile =
+                SecurityProfile::decode(sandbox.extensions[0].value.as_slice()).unwrap();
+            profile.sni_policy = Some(SniPolicy {
+                rules: vec![SniRule {
+                    action: SniAction::Deny as i32,
+                    r#match: Some(SniMatch {
+                        sni: vec!["blocked.example".into()],
+                        ports: vec![443],
+                    }),
+                }],
+            });
+            sandbox.extensions[0].value = profile.encode_to_vec();
+            seed(
+                &p.client,
+                ResourceKind::Sandbox,
+                SANDBOX,
+                &["ns/pod"],
+                sandbox,
+            );
+            let mut req = request(id);
+            if id.is_empty() {
+                let fields = &mut req
+                    .attributes
+                    .get_mut("envoy.filters.http.ext_proc")
+                    .unwrap()
+                    .fields;
+                fields.remove("filter_state['agentio.sandbox.id']");
+                fields.insert(
+                    "filter_state['agentio.workload.name']".into(),
+                    view::string("forged"),
+                );
+            }
+            let response = p.handle(req).await.unwrap();
+            assert_eq!(
+                metadata(response.clone()).fields["sandbox"],
+                view::object([("id".into(), view::string(SANDBOX))])
+            );
+            assert_policies(response.clone(), &[None, Some(TcpAction::Deny)]);
+            let profiles = connection_profiles(response);
+            let Some(Kind::StructValue(inline)) = &profiles[1].kind else {
+                panic!("missing inline Sandbox profile");
+            };
+            assert_eq!(
+                inline.fields["sniPolicy"],
+                view::object([(
+                    "rules".into(),
+                    view::list(if enable_sni {
+                        view::project_rules(&profile.sni_policy.unwrap().rules).collect()
+                    } else {
+                        Vec::new()
+                    }),
+                )])
+            );
+            let mut udp = request(id);
+            let headers = &mut udp
+                .request_headers
+                .as_mut()
+                .unwrap()
+                .headers
+                .as_mut()
+                .unwrap()
+                .headers;
+            headers[0].value = "GET".into();
+            headers.push(extproc::HeaderValue {
+                key: "upgrade".into(),
+                value: "connect-udp".into(),
+                ..Default::default()
+            });
+            let udp_metadata = metadata(p.handle(udp).await.unwrap());
+            assert_eq!(
+                udp_metadata.fields["sandbox"],
+                view::object([("id".into(), view::string(SANDBOX))])
+            );
+            assert!(!udp_metadata.fields.contains_key("connection"));
+            seed(
+                &p.client,
+                ResourceKind::Sandbox,
+                SANDBOX,
+                &["ns/pod"],
+                inline_sandbox("other-workload"),
+            );
+            assert!(!is_allowed(p.handle(request(id)).await.unwrap()));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn sandbox_alias_requires_not_found_and_rejects_ambiguity() {
+    let p = processor();
+    seed_workload(&p.client, Some(policy(None)));
+    assert_eq!(
+        p.handle(request("")).await.unwrap_err().code(),
+        tonic::Code::Unavailable
+    );
+    let mut pending = Box::pin(p.handle(request("")));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    p.client
+        .apply(
+            ResourceKind::Sandbox,
+            &Response {
+                type_url: view::SANDBOX.into(),
+                removed_resources: vec!["ns/pod".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let response = pending.await.unwrap();
+    assert!(!metadata(response.clone()).fields.contains_key("sandbox"));
+    assert_policies(response, &[None]);
+    for uid in [SANDBOX, "kruise:other"] {
+        let mut sandbox = inline_sandbox(UID);
+        sandbox.uid = uid.into();
+        seed(&p.client, ResourceKind::Sandbox, uid, &["ns/pod"], sandbox);
+    }
+    assert_eq!(
+        p.handle(request("")).await.unwrap_err().code(),
+        tonic::Code::Unavailable
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn explicit_sandbox_id_failure_never_uses_alias_fallback() {
+    let p = processor();
+    seed_workload(&p.client, Some(policy(None)));
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        SANDBOX,
+        &["ns/pod"],
+        inline_sandbox(UID),
+    );
+    let mut pending = Box::pin(p.handle(request("missing")));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    p.client
+        .apply(
+            ResourceKind::Sandbox,
+            &Response {
+                type_url: view::SANDBOX.into(),
+                removed_resources: vec!["missing".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!is_allowed(pending.await.unwrap()));
+    assert_policies(
+        p.handle(request(SANDBOX)).await.unwrap(),
+        &[None, Some(TcpAction::Deny)],
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn sandbox_alias_shares_original_workload_deadline() {
+    let p = processor();
+    let mut pending = Box::pin(p.handle(request("")));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    tokio::time::advance(Duration::from_millis(60)).await;
+    seed_workload(&p.client, Some(policy(None)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    assert!(
+        p.client.state.lock().unwrap().types[ResourceKind::Sandbox.index()]
+            .entries
+            .contains_key("ns/pod")
+    );
+    tokio::time::advance(Duration::from_millis(40)).await;
+    assert_eq!(pending.await.unwrap_err().code(), tonic::Code::Unavailable);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sandbox_alias_binding_is_revalidated_after_profile_discovery() {
+    let p = processor();
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        UID,
+        &["/192.0.2.10"],
+        referenced_workload(&["shared"]),
+    );
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        SANDBOX,
+        &["ns/pod"],
+        inline_sandbox(UID),
+    );
+    let mut pending = Box::pin(p.handle(request("")));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        SANDBOX,
+        &["ns/pod"],
+        inline_sandbox("other-workload"),
+    );
+    seed(
+        &p.client,
+        ResourceKind::SecurityProfile,
+        "shared",
+        &[],
+        shared_profile("shared", None),
+    );
+    assert!(!is_allowed(pending.await.unwrap()));
 }
 
 #[tokio::test]

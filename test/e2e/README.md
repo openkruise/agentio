@@ -87,6 +87,8 @@ go run ./cmd/product-e2e run --suites epe --tests '^TestEPE(GlobalDeniedCIDRs|IP
 go run ./cmd/product-e2e run --suites epe,gateway --tests '^(TestEPETCPPriorityAndResolvedDestination|TestSandboxTLSTCPResolvedDestination|TestSandboxServerFirstSecurityProfile)$'
 # HTTPCallout real-traffic scenarios (same image/cluster prerequisites).
 go run ./cmd/product-e2e run --suites epe --tests '^TestEPEHTTPCallout$'
+# Sandbox inline policies and identity selection, with and without the HBONE ID header.
+go run ./cmd/product-e2e run --suites epe --tests '^TestSandbox(InlineHTTPPolicies|InlineTLSPolicies|InlinePolicyLifecycle|IdentitySelection)$'
 # Manually verify a supported backend beyond the required CI coverage.
 go run ./cmd/product-e2e run --suites clienttrust --profile sidecar --backend iptables --force
 ```
@@ -138,7 +140,7 @@ The same framework cluster and retention flags described below apply. For failur
 
 The component defaults to Helm release `agentio` and the production chart in this source tree. Override those only for an intentional integration setup with `-agentio.release-name`, `-agentio.chart-path`, `AGENTIO_E2E_RELEASE_NAME`, or `AGENTIO_E2E_CHART_PATH`.
 
-This matrix covers native Workload policies on ordinary Pods without synthetic Sandboxes. It does not claim coverage of a real Sandbox UID and structured Workload-to-Sandbox binding; that remains a separate future scenario.
+The EPE suite also covers real Sandbox identity and inline `agents.kruise.io/security-rules` policies. `TestSandboxInlineHTTPPolicies`, `TestSandboxInlineTLSPolicies`, `TestSandboxInlinePolicyLifecycle`, and `TestSandboxIdentitySelection` run in the sidecar EPE job. They create Sandbox-owned Pods and update the real backing-Pod status, obtain Pod-bound certificates from Agentiod, and send fresh HTTP/2 HBONE CONNECT requests directly to the production gateway. Each policy runs with an explicit delivery ID and with the CONNECT ID header omitted. These probes exercise Agentiod, xDS, Porter, the connection-policy module and EPE; they do not exercise sidecar interception or the Sandbox Manager's registration API. HTTP assertions check specific block bodies and origin-observed header mutation. TLS assertions check rejection, origin-certificate preservation and CA-verified termination. Lifecycle checks cover valid updates, last-known-good retention after both a confirmed compiler failure and EPE's stale-profile signal, annotation removal and re-addition. Identity checks cover cross-Sandbox selection, missing IDs, invalid/unassigned host bindings and ordinary Workloads without a Sandbox. Initial invalid authoring without a last-known-good version retains the documented unenforced behavior.
 
 ## New disposable Kind cluster
 
