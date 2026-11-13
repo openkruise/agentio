@@ -166,6 +166,7 @@ impl Processor {
             authenticator: self.authenticator.as_ref(),
             cluster_id: &self.cluster_id,
             timeout: self.timeout,
+            sandbox_by_workload: self.gateway == Gateway::AgentioEgress,
         };
         let response = match resolver.resolve(&parsed.resolution).await {
             Ok(resolved) => match self.gateway {
