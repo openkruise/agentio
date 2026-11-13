@@ -2,10 +2,19 @@
 
 Use an Agentio waypoint to apply TrafficPolicy and SecurityProfile to traffic from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, Porter evaluates connection policy, and EPE evaluates HTTP request policy. Agentio can also inject client CA trust without injecting its own sidecar, allowing HTTPS inspection through the same waypoint.
 
-```text
-curl -> Istio ztunnel -> HBONE/mTLS -> Agentio waypoint -> HTTP origin
-                                      Porter + EPE
+```mermaid
+flowchart LR
+    webhook["Agentio CA-only webhook"] -.->|"Mount CA trust bundle and set client trust variables at Pod admission"| app
+    subgraph requests["Requests to destinations bound to the Agentio waypoint"]
+        app["Application"] -->|"Traffic capture"| ztunnel["Istio ztunnel"]
+        ztunnel -->|"HBONE / mTLS"| gateway["Agentio waypoint<br/>HTTPS MITM when enabled"]
+        gateway --> origin["HTTP / HTTPS origin"]
+    end
+    gateway -.->|"Connection policy check"| porter["Porter<br/>TrafficPolicy"]
+    gateway -.->|"HTTP inspection via ext_proc"| epe["EPE<br/>SecurityProfile"]
 ```
+
+Solid arrows show the request path; dotted arrows show CA injection at Pod admission and policy checks. CA-only injection adds client trust without an Agentio sidecar and leaves Istio workload certificates unchanged. Only traffic to bound Services and ServiceEntries follows this path; other outbound destinations are not automatically routed through Agentio.
 
 The [example manifests](../../manifests/examples/istio-ambient/README.md) deploy a curl client and a small HTTP origin, bind the origin Service to an Agentio waypoint, and block one HTTP path. An optional HTTPS example routes `httpbin.org` through the waypoint and demonstrates MITM with CA-only injection. Run the commands from the repository root.
 
