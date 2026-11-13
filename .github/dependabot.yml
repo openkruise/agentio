@@ -39,15 +39,25 @@ updates:
       day: monday
       time: "03:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     labels:
       - dependencies
     commit-message:
       prefix: deps
     groups:
-      root-go-modules:
+      # Match coupled dependencies first; other minor/major updates get individual PRs.
+      root-go-kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/controller-runtime"
+      root-go-istio:
+        patterns:
+          - "istio.io/*"
+      root-go-patches:
         patterns:
           - "*"
+        update-types:
+          - patch
 
   - package-ecosystem: gomod
     directory: /test/e2e
@@ -57,15 +67,25 @@ updates:
       day: monday
       time: "03:15"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     labels:
       - dependencies
     commit-message:
       prefix: deps
     groups:
-      e2e-go-modules:
+      # Keep the same grouping policy as the root Go module.
+      e2e-go-kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/controller-runtime"
+      e2e-go-istio:
+        patterns:
+          - "istio.io/*"
+      e2e-go-patches:
         patterns:
           - "*"
+        update-types:
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
