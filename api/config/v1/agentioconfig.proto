@@ -34,7 +34,7 @@ message AgentioConfig {
 
   // Ordered list of egress policies. Traffic is evaluated against policies
   // in order; the first matching policy's action is applied.
-  repeated kruise.networking.extensions.v1.EgressPolicy egress_policies = 2;
+  repeated agentio.extensions.EgressPolicy egress_policies = 2;
 
   // Filter sandbox labels to reduce xds push size.
   repeated string sandbox_ignored_labels = 3;

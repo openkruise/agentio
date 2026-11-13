@@ -259,7 +259,7 @@ func (x *SniTrafficPolicy) GetRules() []*SniRule {
 type SniRule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Match         *SniMatch              `protobuf:"bytes,1,opt,name=match,proto3" json:"match,omitempty"`
-	Action        SniAction              `protobuf:"varint,2,opt,name=action,proto3,enum=kruise.networking.extensions.v1.SniAction" json:"action,omitempty"`
+	Action        SniAction              `protobuf:"varint,2,opt,name=action,proto3,enum=agentio.extensions.SniAction" json:"action,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -368,21 +368,21 @@ var File_api_extensions_v1_snipolicy_proto protoreflect.FileDescriptor
 
 const file_api_extensions_v1_snipolicy_proto_rawDesc = "" +
 	"\n" +
-	"!api/extensions/v1/snipolicy.proto\x12\x1fkruise.networking.extensions.v1\x1a\x19google/protobuf/any.proto\"u\n" +
+	"!api/extensions/v1/snipolicy.proto\x12\x12agentio.extensions\x1a\x19google/protobuf/any.proto\"u\n" +
 	"\x17PolicyResourceReference\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03uid\x18\x02 \x01(\tR\x03uid\x124\n" +
 	"\n" +
 	"extensions\x18\x03 \x03(\v2\x14.google.protobuf.AnyR\n" +
-	"extensions\"\x84\x01\n" +
+	"extensions\"w\n" +
 	"\x0fPolicyReference\x12\x19\n" +
-	"\btype_url\x18\x01 \x01(\tR\atypeUrl\x12V\n" +
-	"\tresources\x18\x02 \x03(\v28.kruise.networking.extensions.v1.PolicyResourceReferenceR\tresources\"R\n" +
-	"\x10SniTrafficPolicy\x12>\n" +
-	"\x05rules\x18\x01 \x03(\v2(.kruise.networking.extensions.v1.SniRuleR\x05rules\"\x8e\x01\n" +
-	"\aSniRule\x12?\n" +
-	"\x05match\x18\x01 \x01(\v2).kruise.networking.extensions.v1.SniMatchR\x05match\x12B\n" +
-	"\x06action\x18\x02 \x01(\x0e2*.kruise.networking.extensions.v1.SniActionR\x06action\"2\n" +
+	"\btype_url\x18\x01 \x01(\tR\atypeUrl\x12I\n" +
+	"\tresources\x18\x02 \x03(\v2+.agentio.extensions.PolicyResourceReferenceR\tresources\"E\n" +
+	"\x10SniTrafficPolicy\x121\n" +
+	"\x05rules\x18\x01 \x03(\v2\x1b.agentio.extensions.SniRuleR\x05rules\"t\n" +
+	"\aSniRule\x122\n" +
+	"\x05match\x18\x01 \x01(\v2\x1c.agentio.extensions.SniMatchR\x05match\x125\n" +
+	"\x06action\x18\x02 \x01(\x0e2\x1d.agentio.extensions.SniActionR\x06action\"2\n" +
 	"\bSniMatch\x12\x10\n" +
 	"\x03sni\x18\x01 \x03(\tR\x03sni\x12\x14\n" +
 	"\x05ports\x18\x02 \x03(\rR\x05ports*x\n" +
@@ -407,20 +407,20 @@ func file_api_extensions_v1_snipolicy_proto_rawDescGZIP() []byte {
 var file_api_extensions_v1_snipolicy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_api_extensions_v1_snipolicy_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_api_extensions_v1_snipolicy_proto_goTypes = []any{
-	(SniAction)(0),                  // 0: kruise.networking.extensions.v1.SniAction
-	(*PolicyResourceReference)(nil), // 1: kruise.networking.extensions.v1.PolicyResourceReference
-	(*PolicyReference)(nil),         // 2: kruise.networking.extensions.v1.PolicyReference
-	(*SniTrafficPolicy)(nil),        // 3: kruise.networking.extensions.v1.SniTrafficPolicy
-	(*SniRule)(nil),                 // 4: kruise.networking.extensions.v1.SniRule
-	(*SniMatch)(nil),                // 5: kruise.networking.extensions.v1.SniMatch
+	(SniAction)(0),                  // 0: agentio.extensions.SniAction
+	(*PolicyResourceReference)(nil), // 1: agentio.extensions.PolicyResourceReference
+	(*PolicyReference)(nil),         // 2: agentio.extensions.PolicyReference
+	(*SniTrafficPolicy)(nil),        // 3: agentio.extensions.SniTrafficPolicy
+	(*SniRule)(nil),                 // 4: agentio.extensions.SniRule
+	(*SniMatch)(nil),                // 5: agentio.extensions.SniMatch
 	(*any1.Any)(nil),                // 6: google.protobuf.Any
 }
 var file_api_extensions_v1_snipolicy_proto_depIdxs = []int32{
-	6, // 0: kruise.networking.extensions.v1.PolicyResourceReference.extensions:type_name -> google.protobuf.Any
-	1, // 1: kruise.networking.extensions.v1.PolicyReference.resources:type_name -> kruise.networking.extensions.v1.PolicyResourceReference
-	4, // 2: kruise.networking.extensions.v1.SniTrafficPolicy.rules:type_name -> kruise.networking.extensions.v1.SniRule
-	5, // 3: kruise.networking.extensions.v1.SniRule.match:type_name -> kruise.networking.extensions.v1.SniMatch
-	0, // 4: kruise.networking.extensions.v1.SniRule.action:type_name -> kruise.networking.extensions.v1.SniAction
+	6, // 0: agentio.extensions.PolicyResourceReference.extensions:type_name -> google.protobuf.Any
+	1, // 1: agentio.extensions.PolicyReference.resources:type_name -> agentio.extensions.PolicyResourceReference
+	4, // 2: agentio.extensions.SniTrafficPolicy.rules:type_name -> agentio.extensions.SniRule
+	5, // 3: agentio.extensions.SniRule.match:type_name -> agentio.extensions.SniMatch
+	0, // 4: agentio.extensions.SniRule.action:type_name -> agentio.extensions.SniAction
 	5, // [5:5] is the sub-list for method output_type
 	5, // [5:5] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name

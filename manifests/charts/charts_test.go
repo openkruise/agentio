@@ -456,7 +456,6 @@ func TestStaticEgressGateway(t *testing.T) {
 		t.Fatalf("static mode Gateways = %v, want none", got)
 	}
 	requireContains(t, manifest,
-		"networking.agents.kruise.io/sandbox-egress: \"true\"",
 		"gateway.networking.k8s.io/gateway-name: agentio-egress",
 		"name: AGENTIO_XDS_ADDRESS",
 		"name: agentio-porter",
@@ -467,6 +466,9 @@ func TestStaticEgressGateway(t *testing.T) {
 		"name: agentio-egress",
 		"namespace: agentio-system",
 	)
+	if strings.Contains(manifest, "networking.agents.kruise.io/sandbox-egress") {
+		t.Fatal("static gateway still emits the obsolete sandbox-egress label")
+	}
 }
 
 func TestStaticGatewayCPULimit(t *testing.T) {

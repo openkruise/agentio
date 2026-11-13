@@ -7,12 +7,12 @@ use crate::{
     processor::{Gateway, Processor},
     wire::{
         agentio::{
+            extensions::{PolicyReference, PolicyResourceReference},
             sandbox::{Sandbox, sandbox::Attester},
             security::SecurityProfile,
         },
         extproc,
         istio::workload::{Extension, Workload},
-        kruise::networking::extensions::v1::{PolicyReference, PolicyResourceReference},
     },
 };
 use prost::Message;
@@ -369,7 +369,7 @@ fn referenced_workload(names: &[&str]) -> Workload {
     w.extensions.push(Extension {
         name: "security-profile-reference".into(),
         config: Some(Any {
-            type_url: "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference".into(),
+            type_url: "type.googleapis.com/agentio.extensions.PolicyReference".into(),
             value: PolicyReference {
                 type_url: view::SECURITY_PROFILE.into(),
                 resources: names

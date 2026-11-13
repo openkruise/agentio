@@ -13,11 +13,10 @@ use agentio_porter::{
     metrics::Metrics,
     processor::Processor,
     wire::{
-        ads, extproc,
+        ads,
+        agentio::extensions::{PolicyReference, PolicyResourceReference, WorkloadMetadata},
+        extproc,
         istio::workload::{Extension, Workload},
-        kruise::networking::extensions::v1::{
-            PolicyReference, PolicyResourceReference, WorkloadMetadata,
-        },
     },
 };
 use futures_util::Stream;
@@ -37,7 +36,7 @@ use tonic::{
 };
 
 const WDS: &str = "type.googleapis.com/istio.workload.Workload";
-const TCP: &str = "type.googleapis.com/kruise.networking.extensions.v1.TCPPolicy";
+const TCP: &str = "type.googleapis.com/agentio.extensions.TCPPolicy";
 
 // Match the allocator used by the Linux Porter binary.
 #[cfg(target_os = "linux")]
@@ -135,7 +134,7 @@ fn inventory(
             Extension {
                 name: "metadata".into(),
                 config: Some(pack(
-                    "type.googleapis.com/kruise.networking.extensions.v1.WorkloadMetadata",
+                    "type.googleapis.com/agentio.extensions.WorkloadMetadata",
                     WorkloadMetadata {
                         labels: (0..20)
                             .map(|j| (format!("label-{j}"), format!("value-{j}")))
@@ -147,7 +146,7 @@ fn inventory(
             Extension {
                 name: "sni".into(),
                 config: Some(pack(
-                    "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy",
+                    "type.googleapis.com/agentio.extensions.SniTrafficPolicy",
                     SniTrafficPolicy {
                         rules: (0..8)
                             .map(|j| SniRule {
@@ -205,7 +204,7 @@ fn inventory(
         retained.push(Extension {
             name: "security-profile-reference".into(),
             config: Some(pack(
-                "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference",
+                "type.googleapis.com/agentio.extensions.PolicyReference",
                 PolicyReference {
                     type_url: agentio_porter::view::SECURITY_PROFILE.into(),
                     resources: references,

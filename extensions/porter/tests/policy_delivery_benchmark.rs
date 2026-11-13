@@ -11,11 +11,10 @@ use agentio_porter::wire::agentio::security::{
 use agentio_porter::{
     tcp, view,
     wire::{
-        ads, extproc,
+        ads,
+        agentio::extensions::{PolicyReference, PolicyResourceReference, WorkloadMetadata},
+        extproc,
         istio::workload::{Extension, Workload},
-        kruise::networking::extensions::v1::{
-            PolicyReference, PolicyResourceReference, WorkloadMetadata,
-        },
     },
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -37,9 +36,9 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const WDS: &str = view::WORKLOAD;
 const SP: &str = "type.googleapis.com/agentio.bench.SecurityProfile";
-const SNI: &str = "type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy";
-const TCP: &str = "type.googleapis.com/kruise.networking.extensions.v1.TCPPolicy";
-const REFS: &str = "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference";
+const SNI: &str = "type.googleapis.com/agentio.extensions.SniTrafficPolicy";
+const TCP: &str = "type.googleapis.com/agentio.extensions.TCPPolicy";
+const REFS: &str = "type.googleapis.com/agentio.extensions.PolicyReference";
 
 // Test-local wire shape: no generated production APIs or new dependencies.
 #[derive(Clone, PartialEq, Message)]
@@ -294,7 +293,7 @@ fn workload(case: Case, mode: Mode, index: usize, revision: usize, changed: bool
     extensions.push(Extension {
         name: "metadata".into(),
         config: Some(pack(
-            "type.googleapis.com/kruise.networking.extensions.v1.WorkloadMetadata",
+            "type.googleapis.com/agentio.extensions.WorkloadMetadata",
             WorkloadMetadata {
                 labels: (0..20)
                     .map(|i| (format!("label-{i}"), format!("value-{i}")))
