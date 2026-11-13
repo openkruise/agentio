@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Copyright 2026 The Kruise Authors
-FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.0 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY pkg/log/ ./pkg/log/
