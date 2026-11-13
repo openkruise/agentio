@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/openkruise/agentio/bench/connect/fixture"
+	"github.com/openkruise/agentio/internal/testutil"
 )
 
 func TestEnvoyInspectionConfigValidation(t *testing.T) {
@@ -93,8 +94,8 @@ func TestEnvoyShapedProtocolInspection(t *testing.T) {
 	origin := startOrigin(t, false)
 	r := startEnvoyBootstrap(t, origin.port(), freePort(t), func(l object) {
 		limit := nested(policy(filters(l)[1])["descriptors"].([]any)[0], "bandwidth_limit")
-		limit["upload_bytes_per_second"] = 16 << 10
-		limit["upload_burst_bytes"] = 4096
+		limit["upload_bytes_per_second"] = 1
+		limit["upload_burst_bytes"] = 1
 	}, false, func(b object) {
 		resources := obj(b["static_resources"])
 		clusters := resources["clusters"].([]any)
@@ -180,34 +181,34 @@ func TestEnvoyShapedProtocolInspection(t *testing.T) {
 	})
 	client := newClient(t, r.port)
 	t.Run("queued_bytes_do_not_consume_inspection_time", func(t *testing.T) {
-		// A first oversized batch is allowed, but its debt must survive reconnect.
-		warm := client.open(t, "test", "same", "plain:80", 200)
-		_, err := fmt.Fprintf(warm.writer, "U %d\n", 128<<10)
-		must(t, err)
-		_, err = warm.writer.Write(payload(128 << 10))
-		must(t, err)
-		must(t, warm.writer.Close())
-		data, err := io.ReadAll(warm.response.Body)
-		must(t, err)
-		if string(data) != "OK" {
-			t.Fatalf("warm response %q", data)
+		for _, chunks := range [][]string{{"D "}, {"D", " "}} {
+			t.Run(fmt.Sprintf("prefix_chunks=%d", len(chunks)), func(t *testing.T) {
+				queued := client.open(t, "test", t.Name(), "plain:80", 200)
+				started := time.Now()
+				// Observe each prefix chunk at the internal listener before sending more.
+				for _, chunk := range chunks {
+					before := r.stat(t, "cluster.plain.upstream_cx_tx_bytes_total")
+					_, err := io.WriteString(queued.writer, chunk)
+					must(t, err)
+					testutil.Eventually(t, func() bool {
+						return r.stat(t, "cluster.plain.upstream_cx_tx_bytes_total") >= before+len(chunk)
+					}, "protocol prefix reaches the internal listener")
+				}
+				// Two bytes at 1 B/s leave the inspector incomplete across two seconds of pacing.
+				_, err := io.WriteString(queued.writer, "00000032\n")
+				must(t, err)
+				data, err := io.ReadAll(queued.response.Body)
+				must(t, err)
+				if !bytes.Equal(data, payload(32)) {
+					t.Fatalf("queued response %q", data)
+				}
+				elapsed := time.Since(started)
+				if elapsed < 1250*time.Millisecond {
+					t.Fatalf("inspection did not span bandwidth pacing: %s", elapsed)
+				}
+				t.Logf("inspection survived %s of bandwidth pacing", elapsed)
+			})
 		}
-		warm.close()
-		started := time.Now()
-		queued := client.open(t, "test", "same", "plain:80", 200)
-		// Enough bytes for the native inspector to classify this non-HTTP protocol.
-		_, err = io.WriteString(queued.writer, "D 00000032\n")
-		must(t, err)
-		data, err = io.ReadAll(queued.response.Body)
-		must(t, err)
-		if !bytes.Equal(data, payload(32)) {
-			t.Fatalf("queued response %q", data)
-		}
-		elapsed := time.Since(started)
-		if elapsed < 1250*time.Millisecond {
-			t.Fatalf("shared upload debt was lost: %s", elapsed)
-		}
-		t.Logf("new connection survived %s of shared upload debt", elapsed)
 	})
 	t.Run("silent_client_still_times_out", func(t *testing.T) {
 		s := client.open(t, "test", "silent", "plain:80", 200)
