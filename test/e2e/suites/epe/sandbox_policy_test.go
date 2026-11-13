@@ -56,7 +56,7 @@ func TestSandboxInlineHTTPPolicies(t *testing.T) {
 			// The HTTP block also proves EPE receives identity after TLS termination.
 			reply := f.check(t, caller, id, "/sandbox-block", true, 451, "sandbox-http-enforced")
 			if _, err := reply.peer.Verify(
-				x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()},
+				x509.VerifyOptions{Roots: f.mitmRoots, DNSName: trafficFixture.Server.Address()},
 			); err != nil {
 				t.Fatalf("terminated TLS certificate: %v", err)
 			}
@@ -140,7 +140,7 @@ func TestSandboxInlineTLSPolicies(t *testing.T) {
 			t.Fatal("HTTP policy did not terminate TLS")
 		}
 		if _, err := reply.peer.Verify(
-			x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()},
+			x509.VerifyOptions{Roots: f.mitmRoots, DNSName: trafficFixture.Server.Address()},
 		); err != nil {
 			t.Fatalf("TLS termination certificate: %v", err)
 		}

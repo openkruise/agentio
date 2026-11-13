@@ -73,6 +73,7 @@ type sandboxPolicyFixture struct {
 	gateway     string
 	debug       string
 	roots       *x509.CertPool
+	mitmRoots   *x509.CertPool
 	ca          securityapi.IstioCertificateServiceClient
 	gatewayID   string
 }
@@ -117,6 +118,16 @@ func newSandboxPolicyFixture(t *testing.T) *sandboxPolicyFixture {
 	f.roots = x509.NewCertPool()
 	if !f.roots.AppendCertsFromPEM([]byte(cm.Data["root-cert.pem"])) {
 		t.Fatal("empty Agentio trust bundle")
+	}
+	mitmCA, err := environment.Cluster.Kube.CoreV1().
+		Secrets(resolvedAgentioConfig.Namespace).
+		Get(ctx, "agentio-mitm-ca", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mitmRoots = x509.NewCertPool()
+	if !f.mitmRoots.AppendCertsFromPEM(mitmCA.Data["root-cert.pem"]) {
+		t.Fatal("empty Agentio MITM trust bundle")
 	}
 	conn, err := grpc.NewClient(caAddress, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 		MinVersion: tls.VersionTLS13,

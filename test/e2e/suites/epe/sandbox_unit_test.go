@@ -16,11 +16,16 @@ package epe
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,12 +37,33 @@ import (
 )
 
 func TestSandboxHTTPSResponseSurvivesTunnelCleanup(t *testing.T) {
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// httptest servers share a default certificate; use an independent inner CA.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test MITM CA"},
+		DNSNames:              []string{"example.com"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnavailableForLegalReasons)
 		if _, err := io.WriteString(w, "sandbox-blocked"); err != nil {
 			t.Error(err)
 		}
 	}))
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	origin.StartTLS()
 	defer origin.Close()
 	gateway := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstream, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", r.Host)
@@ -91,6 +117,14 @@ func TestSandboxHTTPSResponseSurvivesTunnelCleanup(t *testing.T) {
 	}
 	if reply.status != http.StatusUnavailableForLegalReasons || reply.body != "sandbox-blocked" || reply.peer == nil {
 		t.Fatalf("unexpected HTTPS policy response: %+v", reply)
+	}
+	mitmRoots := x509.NewCertPool()
+	mitmRoots.AddCert(origin.Certificate())
+	if _, err := reply.peer.Verify(x509.VerifyOptions{Roots: mitmRoots, DNSName: "example.com"}); err != nil {
+		t.Fatalf("inner HTTPS certificate: %v", err)
+	}
+	if _, err := reply.peer.Verify(x509.VerifyOptions{Roots: roots, DNSName: "example.com"}); err == nil {
+		t.Fatal("inner HTTPS certificate trusted by the unrelated gateway identity CA")
 	}
 }
 
