@@ -111,7 +111,7 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 		return nil, err
 	}
 	if inputs.LegacyGateway && len(inputs.EgressAuthorization.GetDeniedCidrs()) > 0 {
-		return nil, fmt.Errorf("egressAuthorization requires a native Envoy gateway; legacy proxyv2 is unsupported")
+		return nil, fmt.Errorf("egressAuthorization.deniedCIDRs is not supported in legacy gateway mode")
 	}
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
