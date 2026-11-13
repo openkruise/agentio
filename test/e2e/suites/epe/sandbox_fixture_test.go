@@ -335,6 +335,23 @@ func (f *sandboxPolicyFixture) compileFailure(t *testing.T, caller sandboxCaller
 	})
 }
 
+func (f *sandboxPolicyFixture) staleProfiles(t *testing.T, want int) {
+	t.Helper()
+	endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/metrics", epeName, resolvedAgentioConfig.Namespace, epeMetricsPort)
+	harness.RetryAssertion(t, time.Minute, time.Second, func() error {
+		ctx, cancel := context.WithTimeout(f.ctx, 10*time.Second)
+		defer cancel()
+		output, stderr, err := trafficFixture.Client.Exec(ctx, []string{"curl", "-fsS", "--max-time", "8", endpoint})
+		if err != nil {
+			return fmt.Errorf("read EPE policy state: %w; stderr=%s", err, stderr)
+		}
+		if !strings.Contains(output, fmt.Sprintf("\nepe_profile_stale{scope=\"pod\"} %d\n", want)) {
+			return fmt.Errorf("EPE has not observed the Sandbox policy state, want stale=%d", want)
+		}
+		return nil
+	})
+}
+
 func sandboxTLSRejected(err error) bool {
 	var networkError net.Error
 	if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) && networkError.Timeout() {

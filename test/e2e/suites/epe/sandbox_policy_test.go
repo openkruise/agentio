@@ -120,11 +120,14 @@ func TestSandboxInlinePolicyLifecycle(t *testing.T) {
 	check("sandbox-v1", 451)
 	f.rules(t, caller, sandboxHTTPRules("sandbox-v2", 452))
 	check("sandbox-v2", 452)
-	// Wait for the compiler's failure before checking last-known-good enforcement.
+	f.staleProfiles(t, 0)
+	// Both publishers must observe the invalid update before checking retained rules.
 	f.rules(t, caller, `[{`)
 	f.compileFailure(t, caller)
+	f.staleProfiles(t, 1)
 	check("sandbox-v2", 452)
 	f.rules(t, caller, sandboxHTTPRules("sandbox-restored", 451))
+	f.staleProfiles(t, 0)
 	check("sandbox-restored", 451)
 	f.rules(t, caller, "")
 	check("Hostname=", http.StatusOK)
