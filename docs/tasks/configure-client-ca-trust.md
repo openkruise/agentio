@@ -32,7 +32,9 @@ agentiod:
 
 Empty `include` selects all business containers. Patterns match the complete container name and support only `*`; exclusion wins. Agentio proxy and init containers are always excluded; business init containers are opt-in.
 
-With the feature enabled in a `profile: sidecar` installation, set `client-trust.agentio.kruise.io/inject: "true"` on a Namespace or Pod to inject CA mounts and client environment variables independently of sidecar injection. Use `"false"` to disable CA injection. Pod labels override Namespace labels; neither can bypass the global `enabled: false` switch. Without either label, CA injection continues to follow the `ztunnel` sidecar template.
+With the feature enabled, set `client-trust.agentio.kruise.io/inject: "true"` on a Namespace or Pod to inject CA mounts and client environment variables independently of sidecar injection. Use `"false"` to disable CA injection. Pod labels override Namespace labels; neither can bypass the global `enabled: false` switch. Without either label, CA injection continues to follow the `ztunnel` sidecar template in the sidecar profile. In the ambient profile, the chart installs CA-only admission when this feature is enabled; workload sidecar labels do not cause proxy injection through that endpoint.
+
+For an existing Istio installation, use the [Istio integration preset](../integrations/istio-ambient.md), which disables Agentio CNI and node ztunnel while retaining CA injection. Istio mesh workload certificates and Agentio's HTTPS MITM trust bundle remain separate.
 
 For example, this Namespace enables CA injection without opting into a sidecar:
 

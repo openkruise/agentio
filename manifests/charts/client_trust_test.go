@@ -17,6 +17,7 @@ package charts_test
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -34,6 +35,79 @@ import (
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/inject"
 )
+
+func TestIstioAmbientPreset(t *testing.T) {
+	manifest := renderAgentio(t,
+		"--namespace", "agentio-istio-system",
+		"--kube-version", "1.33.0",
+		"--values", "../examples/istio-ambient/agentio-values.yaml",
+	)
+	if got := objectNamesByKind(t, manifest, "DaemonSet"); len(got) != 0 {
+		t.Fatalf("Istio preset must retain external traffic capture, got %v", got)
+	}
+	if got := objectNamesByKind(t, manifest, "Deployment"); !reflect.DeepEqual(
+		got,
+		[]string{"agentio-epe", "agentiod"},
+	) {
+		t.Fatalf("Istio preset Deployments=%v", got)
+	}
+	webhookFound, configFound := false, false
+	for document := range strings.SplitSeq(manifest, "\n---") {
+		var object renderedObject
+		if err := yaml.Unmarshal([]byte(document), &object); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case object.Kind == "MutatingWebhookConfiguration":
+			webhookFound = true
+			var configuration admissionregistrationv1.MutatingWebhookConfiguration
+			if err := yaml.Unmarshal([]byte(document), &configuration); err != nil {
+				t.Fatal(err)
+			}
+			if len(configuration.Webhooks) != 2 {
+				t.Fatalf("ambient CA admission must have exactly two selectors: %+v", configuration.Webhooks)
+			}
+			for _, webhook := range configuration.Webhooks {
+				if webhook.ClientConfig.Service == nil || webhook.ClientConfig.Service.Path == nil ||
+					*webhook.ClientConfig.Service.Path != "/inject/ca-only" {
+					t.Fatalf("ambient preset can invoke proxy injection: %+v", webhook)
+				}
+			}
+		case object.Kind == "ConfigMap" && object.Metadata.Name == "agentio-sidecar-injector":
+			configFound = true
+			var cm corev1.ConfigMap
+			if err := yaml.Unmarshal([]byte(document), &cm); err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal([]byte(cm.Data["values"]), &values); err != nil {
+				t.Fatal(err)
+			}
+			settings, err := clienttrust.Parse(values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !settings.Client.Enabled || !slices.Contains(settings.Client.Containers.Exclude, "istio-proxy") {
+				t.Fatalf("Istio client trust settings=%+v", settings.Client)
+			}
+		}
+	}
+	if !webhookFound || !configFound {
+		t.Fatal("Istio preset is missing its CA injection configuration")
+	}
+	workloads, err := os.ReadFile("../examples/istio-ambient/workloads.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(workloads), clienttrust.InjectLabel+": \"true\"") {
+		t.Fatal("example client is not enrolled for CA injection")
+	}
+	requireContains(t, manifest,
+		"name: AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR\n              value: \"true\"",
+		"name: AGENTIO_ENABLE_SIDECAR_INJECTOR\n              value: \"true\"",
+		"resources: [\"mutatingwebhookconfigurations\"]",
+	)
+}
 
 func TestClientTrustWebhookSelection(t *testing.T) {
 	const dataplaneLabel = "agentio.kruise.io/dataplane-mode"
@@ -275,7 +349,7 @@ func TestClientTrustMasterSwitch(t *testing.T) {
 	}{
 		{name: "default-disabled", profile: "sidecar"},
 		{name: "enabled", profile: "sidecar", enabled: true, wantEnabled: true},
-		{name: "ambient", profile: "ambient", enabled: true},
+		{name: "ambient", profile: "ambient", enabled: true, wantEnabled: true},
 		{
 			name:        "mitm-only",
 			profile:     "sidecar",

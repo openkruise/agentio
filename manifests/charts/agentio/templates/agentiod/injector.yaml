@@ -1,4 +1,4 @@
-{{- if or (eq .Values.profile "sidecar") .Values.agentiod.gatewayDeployer.enabled }}
+{{- if or (eq .Values.profile "sidecar") .Values.agentiod.gatewayDeployer.enabled .Values.agentiod.injector.clientTrust.enabled }}
 {{- $ztunnelImage := include "agentiod.componentImage" (list .Values.agentiod.injector.ztunnel.image .Values.agentiod.injector.ztunnel.imageName .) }}
 {{- $proxyInitImage := include "agentiod.componentImage" (list .Values.agentiod.injector.proxyInit.image .Values.agentiod.injector.proxyInit.imageName .) }}
 apiVersion: v1
@@ -118,12 +118,12 @@ data:
         AGENTIO_ENABLE_SNI_TRAFFIC_POLICY: {{ .Values.agentiod.enableSNITrafficPolicy }}
     pilot:
       cni:
-        enabled: {{ eq .Values.profile "ambient" }}
+        enabled: {{ and (eq .Values.profile "ambient") .Values.cni.enabled }}
         provider: default
         networkName: {{ .Values.cni.networkName | quote }}
     sidecarInjectorWebhook:
       rewriteAppHTTPProbe: true
-{{- if eq .Values.profile "sidecar" }}
+{{- if or (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
@@ -133,6 +133,7 @@ metadata:
     app: sidecar-injector
     {{- include "agentiod.labels" . | nindent 4 }}
 webhooks:
+  {{- if eq .Values.profile "sidecar" }}
   - name: namespace.sidecar-injector.agentio.io
     admissionReviewVersions: [v1]
     sideEffects: None
@@ -204,8 +205,9 @@ webhooks:
         apiGroups: [""]
         apiVersions: [v1]
         resources: [pods]
+  {{- end }}
   {{- if .Values.agentiod.injector.clientTrust.enabled }}
-  # These selectors partition CA-selected Pods from the sidecar entries above.
+  # CA selectors partition selected Pods from sidecar injection when it is installed.
   - name: namespace.client-trust-injector.agentio.io
     admissionReviewVersions: [v1]
     sideEffects: None
@@ -216,7 +218,7 @@ webhooks:
       service:
         name: {{ include "agentiod.fullname" . }}
         namespace: {{ .Release.Namespace }}
-        path: /inject
+        path: {{ ternary "/inject" "/inject/ca-only" (eq .Values.profile "sidecar") }}
         port: 443
     namespaceSelector:
       matchLabels:
@@ -237,7 +239,7 @@ webhooks:
       service:
         name: {{ include "agentiod.fullname" . }}
         namespace: {{ .Release.Namespace }}
-        path: /inject
+        path: {{ ternary "/inject" "/inject/ca-only" (eq .Values.profile "sidecar") }}
         port: 443
     namespaceSelector:
       matchExpressions:

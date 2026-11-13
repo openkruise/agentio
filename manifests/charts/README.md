@@ -123,7 +123,7 @@ Deploy the policy backend and wait for readiness before restarting existing clie
 
 > **Alpha:** Ambient mode does not yet have full feature parity with sidecar mode. Prefer [sidecar mode](#sidecar-mode) for deployments.
 
-Ambient mode installs `agentiod`, the Agentio CNI node agent, and the node ztunnel. Select it explicitly with `--set profile=ambient`:
+Ambient mode installs `agentiod`, the Agentio CNI node agent, and the node ztunnel by default. Select it explicitly with `--set profile=ambient`:
 
 ```bash
 helm upgrade --install agentio manifests/charts/agentio \
@@ -140,6 +140,8 @@ Enroll a workload namespace after the release is ready:
 kubectl label namespace demo agentio.kruise.io/dataplane-mode=ambient --overwrite
 kubectl rollout restart deployment -n demo
 ```
+
+The ambient deployment switches `cni.enabled` and `ztunnel.enabled` both default to `true`. Set them to `false` when an existing Istio installation provides those components. Client CA distribution and admission are controlled independently by `agentiod.injector.clientTrust.enabled`; enabling it in the ambient profile creates CA-only webhooks without adding per-Pod proxies. See the [Istio integration guide](../../docs/integrations/istio-ambient.md) and its predefined values for this combination.
 
 ## Egress gateway
 

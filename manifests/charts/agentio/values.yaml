@@ -173,6 +173,8 @@ agentiod:
   env: {}
 
 cni:
+  # Deploy Agentio CNI in the ambient profile; disable when Istio owns capture.
+  enabled: true
   nameOverride: agentio-cni
   fullnameOverride: ""
   image:
@@ -240,6 +242,8 @@ cni:
     enabled: false
 
 ztunnel:
+  # Deploy Agentio's node ztunnel in the ambient profile.
+  enabled: true
   nameOverride: ztunnel
   fullnameOverride: ""
   image:

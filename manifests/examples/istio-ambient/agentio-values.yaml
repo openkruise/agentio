@@ -1,0 +1,30 @@
+# Reuse Istio's ambient data plane and install Agentio policy and CA injection.
+profile: ambient
+cni:
+  enabled: false
+ztunnel:
+  enabled: false
+global:
+  clusterId: Kubernetes
+  trustDomain: cluster.local
+  clusterDomain: cluster.local
+agentiod:
+  injector:
+    clientTrust:
+      enabled: true
+      containers:
+        exclude: ["istio-proxy"]
+  gatewayDeployer:
+    enabled: true
+  podLabels:
+    istio.io/dataplane-mode: none
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
+egressGateway:
+  enabled: false
+epe:
+  mode: managed
+  podLabels:
+    istio.io/dataplane-mode: none
+  podAnnotations:
+    sidecar.istio.io/inject: "false"

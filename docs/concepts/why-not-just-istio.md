@@ -41,6 +41,7 @@ Agentio separates that stable routing invariant from dynamic request decisions. 
 
 ## See also
 
+- [Integrate with Istio ambient](../integrations/istio-ambient.md) to reuse Istio traffic capture and workload certificates with an Agentio egress waypoint
 - [Getting started](../getting-started.md)
 - [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md)
 - [Egress Policy Enforcer overview](epe-overview.md)

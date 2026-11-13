@@ -3,13 +3,21 @@ Agentio was installed with the {{ .Values.profile }} profile.
 Control plane:
   {{ include "agentiod.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}:15012
 
-{{- if eq .Values.profile "ambient" }}
+{{- if and (eq .Values.profile "ambient") .Values.cni.enabled .Values.ztunnel.enabled }}
 Enroll a namespace in ambient mode:
   kubectl label namespace <namespace> agentio.kruise.io/dataplane-mode=ambient --overwrite
   kubectl rollout restart deployment -n <namespace>
-{{- else }}
+{{- else if eq .Values.profile "sidecar" }}
 Enable per-Pod ztunnel injection:
   kubectl label namespace <namespace> agentio.kruise.io/dataplane-mode=sidecar --overwrite
+  kubectl rollout restart deployment -n <namespace>
+{{- else }}
+Agentio node capture is disabled. Keep the existing data plane's workload enrollment.
+{{- end }}
+
+{{- if .Values.agentiod.injector.clientTrust.enabled }}
+Enable client CA injection independently of traffic capture:
+  kubectl label namespace <namespace> client-trust.agentio.kruise.io/inject=true --overwrite
   kubectl rollout restart deployment -n <namespace>
 {{- end }}
 
