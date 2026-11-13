@@ -8,7 +8,7 @@ require (
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2
 	github.com/containernetworking/plugins v1.9.1
 	github.com/dunglas/httpsfv v1.1.2
-	github.com/envoyproxy/go-control-plane/envoy v1.39.0
+	github.com/envoyproxy/go-control-plane/envoy v1.40.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-logr/logr v1.4.3
@@ -23,7 +23,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/openkruise/agents-api v0.7.0-alpha1.0.20261113034313-6be2827c6155
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.69.0
 	github.com/prometheus/procfs v0.20.1
 	github.com/spf13/pflag v1.0.10
@@ -38,10 +38,10 @@ require (
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0
 	gomodules.xyz/jsonpatch/v2 v2.5.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
-	google.golang.org/grpc v1.83.1
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a
+	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
 	istio.io/api v1.29.4-0.20260528223333-f9b16f1f49ce
 	istio.io/istio v0.0.0-20260624015733-fe1d6ad98611
