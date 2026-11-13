@@ -34,7 +34,9 @@ func Dial(ctx context.Context, address, target string, config *tls.Config, heade
 	if err != nil {
 		return nil, 0, err
 	}
-	stop := context.AfterFunc(ctx, func() { outer.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		outer.Close() //nolint:errcheck // Cancellation cannot recover from a close error.
+	})
 	reader, writer := io.Pipe()
 	closeTunnel := func() error {
 		stop()
@@ -63,7 +65,12 @@ func Dial(ctx context.Context, address, target string, config *tls.Config, heade
 	if response.StatusCode != http.StatusOK {
 		return nil, response.StatusCode, errors.Join(response.Body.Close(), closeTunnel())
 	}
-	return &tunnel{Conn: outer, reader: response.Body, writer: writer, closeTunnel: closeTunnel}, response.StatusCode, nil
+	return &tunnel{
+		Conn:        outer,
+		reader:      response.Body,
+		writer:      writer,
+		closeTunnel: closeTunnel,
+	}, response.StatusCode, nil
 }
 
 type tunnel struct {

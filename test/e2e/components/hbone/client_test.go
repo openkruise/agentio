@@ -34,7 +34,8 @@ func TestConnectHeadersAndBidirectionalStream(t *testing.T) {
 				if r.ProtoMajor != 2 || r.Method != http.MethodConnect || r.Host != "192.0.2.1:443" {
 					t.Errorf("unexpected CONNECT: %s %s %s", r.Proto, r.Method, r.Host)
 				}
-				if values, present := r.Header["X-Agentio-Sandbox-Id"]; present != (id != "") || r.Header.Get("X-Agentio-Sandbox-Id") != id {
+				if values, present := r.Header["X-Agentio-Sandbox-Id"]; present != (id != "") ||
+					r.Header.Get("X-Agentio-Sandbox-Id") != id {
 					t.Errorf("Sandbox ID presence=%t values=%v, want %q", present, values, id)
 				}
 				w.WriteHeader(http.StatusOK)
@@ -44,7 +45,9 @@ func TestConnectHeadersAndBidirectionalStream(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				fmt.Fprintf(w, "reply:%s", body)
+				if _, err := fmt.Fprintf(w, "reply:%s", body); err != nil {
+					t.Error(err)
+				}
 			}))
 			server.EnableHTTP2 = true
 			server.StartTLS()
@@ -57,11 +60,21 @@ func TestConnectHeadersAndBidirectionalStream(t *testing.T) {
 			if id != "" {
 				headers.Set("X-Agentio-Sandbox-Id", id)
 			}
-			conn, status, err := Dial(ctx, strings.TrimPrefix(server.URL, "https://"), "192.0.2.1:443", &tls.Config{RootCAs: roots, NextProtos: []string{"h2"}}, headers)
+			conn, status, err := Dial(
+				ctx,
+				strings.TrimPrefix(server.URL, "https://"),
+				"192.0.2.1:443",
+				&tls.Config{RootCAs: roots, NextProtos: []string{"h2"}},
+				headers,
+			)
 			if err != nil || status != http.StatusOK {
 				t.Fatalf("CONNECT status=%d error=%v", status, err)
 			}
-			defer conn.Close()
+			defer func() {
+				if err := conn.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if _, err := io.WriteString(conn, "ping"); err != nil {
 				t.Fatal(err)
 			}
@@ -91,10 +104,15 @@ func TestConnectRejectionAndCancellation(t *testing.T) {
 			defer server.Close()
 			roots := x509.NewCertPool()
 			roots.AddCert(server.Certificate())
-			conn, got, err := Dial(ctx, strings.TrimPrefix(server.URL, "https://"), "192.0.2.1:443", &tls.Config{RootCAs: roots, NextProtos: []string{"h2"}}, nil)
+			conn, got, err := Dial(
+				ctx,
+				strings.TrimPrefix(server.URL, "https://"),
+				"192.0.2.1:443",
+				&tls.Config{RootCAs: roots, NextProtos: []string{"h2"}},
+				nil,
+			)
 			if conn != nil {
-				conn.Close()
-				t.Fatal("rejected or canceled CONNECT returned a stream")
+				t.Fatalf("rejected or canceled CONNECT returned a stream, close error=%v", conn.Close())
 			}
 			if status == http.StatusForbidden && (err != nil || got != status) {
 				t.Fatalf("CONNECT status=%d error=%v", got, err)

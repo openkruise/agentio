@@ -43,11 +43,21 @@ func TestSandboxInlineHTTPPolicies(t *testing.T) {
 	for _, id := range []string{caller.id, ""} {
 		if !t.Run(fmt.Sprintf("id=%q", id), func(t *testing.T) {
 			f.check(t, caller, id, "/sandbox-block", false, 451, "sandbox-http-enforced")
-			f.check(t, caller, id, "/sandbox-mutate", false, http.StatusOK, "RequestHeader=X-Sandbox-Policy:sandbox-http-enforced")
+			f.check(
+				t,
+				caller,
+				id,
+				"/sandbox-mutate",
+				false,
+				http.StatusOK,
+				"RequestHeader=X-Sandbox-Policy:sandbox-http-enforced",
+			)
 			f.check(t, caller, id, "/sandbox-control", false, http.StatusOK, "Hostname=")
 			// The HTTP block also proves EPE receives identity after TLS termination.
 			reply := f.check(t, caller, id, "/sandbox-block", true, 451, "sandbox-http-enforced")
-			if _, err := reply.peer.Verify(x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()}); err != nil {
+			if _, err := reply.peer.Verify(
+				x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()},
+			); err != nil {
 				t.Fatalf("terminated TLS certificate: %v", err)
 			}
 		}) {
@@ -61,7 +71,15 @@ func TestSandboxInlineTLSPolicies(t *testing.T) {
 	caller := f.caller(t, "sandbox-tls", true)
 	baseline := f.check(t, caller, caller.id, "/sandbox-control", true, http.StatusOK, "Hostname=")
 	for _, action := range []string{"Deny", "Passthrough"} {
-		f.rules(t, caller, fmt.Sprintf(`[{"name":"tls","match":[{"domains":[%q],"ports":[443]}],"actions":{"tls":{"action":%q}}}]`, trafficFixture.Server.Address(), action))
+		f.rules(
+			t,
+			caller,
+			fmt.Sprintf(
+				`[{"name":"tls","match":[{"domains":[%q],"ports":[443]}],"actions":{"tls":{"action":%q}}}]`,
+				trafficFixture.Server.Address(),
+				action,
+			),
+		)
 		for _, id := range []string{caller.id, ""} {
 			if !t.Run(fmt.Sprintf("%s/id=%q", action, id), func(t *testing.T) {
 				if action == "Deny" {
@@ -75,7 +93,12 @@ func TestSandboxInlineTLSPolicies(t *testing.T) {
 								return budgetError
 							}
 							if response.connect != http.StatusOK || !sandboxTLSRejected(err) {
-								return fmt.Errorf("expected TLS policy rejection after CONNECT, got CONNECT=%d, HTTP=%d, error=%v", response.connect, response.status, err)
+								return fmt.Errorf(
+									"expected TLS policy rejection after CONNECT, got CONNECT=%d, HTTP=%d, error=%w",
+									response.connect,
+									response.status,
+									err,
+								)
 							}
 						}
 						return nil
@@ -94,8 +117,13 @@ func TestSandboxInlineTLSPolicies(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					if response.connect != http.StatusOK || response.status != http.StatusOK || !bytes.Equal(response.peer.Raw, baseline.peer.Raw) {
-						return fmt.Errorf("unmatched TLS port: CONNECT=%d HTTP=%d, want origin passthrough", response.connect, response.status)
+					if response.connect != http.StatusOK || response.status != http.StatusOK ||
+						!bytes.Equal(response.peer.Raw, baseline.peer.Raw) {
+						return fmt.Errorf(
+							"unmatched TLS port: CONNECT=%d HTTP=%d, want origin passthrough",
+							response.connect,
+							response.status,
+						)
 					}
 					return nil
 				})
@@ -111,7 +139,9 @@ func TestSandboxInlineTLSPolicies(t *testing.T) {
 		if bytes.Equal(reply.peer.Raw, baseline.peer.Raw) {
 			t.Fatal("HTTP policy did not terminate TLS")
 		}
-		if _, err := reply.peer.Verify(x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()}); err != nil {
+		if _, err := reply.peer.Verify(
+			x509.VerifyOptions{Roots: f.roots, DNSName: trafficFixture.Server.Address()},
+		); err != nil {
 			t.Fatalf("TLS termination certificate: %v", err)
 		}
 	}
@@ -194,7 +224,11 @@ func TestSandboxIdentitySelection(t *testing.T) {
 
 func applySandboxPolicyConfig(t *testing.T, scope *kube.ResourceScope) {
 	t.Helper()
-	rig.ApplyConfig(t, scope, map[string]any{"Namespace": resolvedAgentioConfig.Namespace, "Host": trafficFixture.Server.Address()}, `
+	rig.ApplyConfig(
+		t,
+		scope,
+		map[string]any{"Namespace": resolvedAgentioConfig.Namespace, "Host": trafficFixture.Server.Address()},
+		`
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -225,5 +259,6 @@ data:
       namespace: {{ .Namespace }}
       tlsTermination:
         includeHosts: [{{ .Host | printf "%q" }}]
-`)
+`,
+	)
 }
