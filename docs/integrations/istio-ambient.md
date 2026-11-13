@@ -3,9 +3,9 @@
 Use an Agentio waypoint to apply TrafficPolicy and SecurityProfile to traffic from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, Porter evaluates connection policy, and EPE evaluates HTTP request policy. Agentio can also inject client CA trust without injecting its own sidecar, allowing HTTPS inspection through the same waypoint.
 
 ```mermaid
-flowchart LR
-    webhook["Agentio CA-only webhook"] -.->|"Mount CA trust bundle and set client trust variables at Pod admission"| app
-    subgraph requests["Requests to destinations bound to the Agentio waypoint"]
+flowchart TB
+    webhook["Agentio CA-only webhook"] -.->|"CA trust bundle and variables<br/>at Pod admission"| app
+    subgraph requests["Traffic to bound Services and ServiceEntries"]
         app["Application"] -->|"Traffic capture"| ztunnel["Istio ztunnel"]
         ztunnel -->|"HBONE / mTLS"| gateway["Agentio waypoint<br/>HTTPS MITM when enabled"]
         gateway --> origin["HTTP / HTTPS origin"]
