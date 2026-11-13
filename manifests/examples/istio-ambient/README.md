@@ -6,10 +6,10 @@ Follow [Integrate with Istio ambient](../../../docs/integrations/istio-ambient.m
 | --- | --- |
 | `agentio-values.yaml` | Helm preset for Agentiod, EPE and CA-only admission; Agentio CNI/node ztunnel disabled |
 | `namespaces.yaml` | Agentio control plane and ambient application namespaces |
-| `waypoint.yaml` | Gateway and its certificate, Porter, and logging configuration |
+| `waypoint.yaml` | Gateway, certificate configuration, and access logs |
 | `workloads.yaml` | Curl client and HTTP origin |
 | `service.yaml` | Service binding to the Agentio waypoint |
 | `https-service.yaml` | Optional Istio ServiceEntry binding for `httpbin.org:443` |
-| `policies.yaml` | TrafficPolicy allow rules and SecurityProfile HTTP/HTTPS deny rule |
+| `policies.yaml` | SecurityProfile HTTP/HTTPS deny rule |
 
 Use the preset with `helm upgrade --install`; no template filtering is required. Istio owns traffic capture. The curl Pod receives a client CA mount and environment variables, with no Agentio sidecar.

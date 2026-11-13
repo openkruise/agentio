@@ -1,6 +1,6 @@
 # Integrate with Istio ambient
 
-Use an Agentio waypoint to apply TrafficPolicy and SecurityProfile to traffic from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, Porter evaluates connection policy, and EPE evaluates HTTP request policy. Agentio can also inject client CA trust without injecting its own sidecar, allowing HTTPS inspection through the same waypoint.
+Use an Agentio waypoint to apply SecurityProfile to HTTP requests from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, and EPE evaluates HTTP request policy. Agentio can also inject client CA trust without injecting its own sidecar, allowing HTTPS inspection through the same waypoint.
 
 ```mermaid
 flowchart TB
@@ -10,7 +10,6 @@ flowchart TB
         ztunnel -->|"HBONE / mTLS"| gateway["Agentio waypoint<br/>HTTPS MITM when enabled"]
         gateway --> origin["HTTP / HTTPS origin"]
     end
-    gateway -.->|"Connection policy check"| porter["Porter<br/>TrafficPolicy"]
     gateway -.->|"HTTP inspection via ext_proc"| epe["EPE<br/>SecurityProfile"]
 ```
 
@@ -125,10 +124,7 @@ These labels select a waypoint for traffic **to the Service**. They do not confi
 
 ## Apply policy and send requests
 
-The [policy manifest](../../manifests/examples/istio-ambient/policies.yaml) selects only the curl workload:
-
-- `TrafficPolicy` allows TCP port `18082` to the origin Service and port `443` to `httpbin.org` for the optional HTTPS example. Porter enforces it when a new connection reaches the gateway; the waypoint manifest enables this with `ENABLE_TRAFFIC_POLICY=true`.
-- `SecurityProfile` blocks HTTP path `/deny` with status `403`. EPE applies this request-level rule after the connection is allowed.
+The [SecurityProfile manifest](../../manifests/examples/istio-ambient/policies.yaml) selects only the curl workload. EPE applies its request-level rule to block HTTP path `/deny` with status `403`.
 
 ```sh
 kubectl apply -f manifests/examples/istio-ambient/policies.yaml
@@ -160,7 +156,7 @@ kubectl logs deployment/agentio-egress -n agentio-istio-system \
   -c agentio-proxy --tail=20
 ```
 
-The log should identify a `curl-...` workload in `agentio-istio-demo` and show the `200` and `403` responses. Ordinary Istio workload certificates are supported through the TLS-verified peer principal and source Pod IP lookup; this setup requires no special Porter command-line mode.
+The log should identify a `curl-...` workload in `agentio-istio-demo` and show the `200` and `403` responses. Ordinary Istio workload certificates are supported through the TLS-verified peer principal and source Pod IP lookup.
 
 ## Inspect HTTPS with CA-only injection
 
@@ -197,7 +193,7 @@ data:
       includeHosts: [httpbin.org]
 ```
 
-This setting belongs in the Gateway's parameters ConfigMap alongside its existing access-log settings. For another destination, update the hostname, routing resource, and TrafficPolicy together. Client trust alone does not route HTTPS through the waypoint or enable termination.
+This setting belongs in the Gateway's parameters ConfigMap alongside its existing access-log settings. For another destination, update the hostname and routing resource together. Client trust alone does not route HTTPS through the waypoint or enable termination.
 
 For the optional public HTTPS example, ensure your Istio ambient installation supports ServiceEntry DNS capture and address allocation, as described in [Istio DNS proxying](https://istio.io/latest/docs/ops/configuration/traffic-management/dns-proxy/). The [HTTPS ServiceEntry](../../manifests/examples/istio-ambient/https-service.yaml) binds `httpbin.org:443` to this cross-namespace waypoint. It requires external HTTPS connectivity.
 
@@ -243,5 +239,4 @@ Leave shared Agentio and Gateway API CRDs installed.
 ## See also
 
 - [Customize Gateway resources](../tasks/customize-gateway-resources.md)
-- [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md)
 - [Get started with EPE](../getting-started/epe.md)

@@ -48,11 +48,6 @@ data:
             - name: istio-ca-token
               mountPath: /var/run/secrets/istio-token
               readOnly: true
-          initContainers:
-          - name: agentio-porter
-            env:
-            - name: ENABLE_TRAFFIC_POLICY
-              value: "true"
           volumes:
           - name: istio-root
             configMap:

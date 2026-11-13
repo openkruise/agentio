@@ -1,31 +1,4 @@
 apiVersion: agents.kruise.io/v1alpha1
-kind: TrafficPolicy
-metadata:
-  name: allow-origin
-  namespace: agentio-istio-demo
-spec:
-  priority: 100
-  selector:
-    matchLabels:
-      app: istio-demo-client
-  egress:
-    rules:
-    - action: allow
-      to:
-      - service:
-          name: origin
-          namespace: agentio-istio-demo
-      ports:
-      - port: 18082
-        protocol: TCP
-    - action: allow
-      to:
-      - fqdn: httpbin.org
-      ports:
-      - port: 443
-        protocol: TCP
----
-apiVersion: agents.kruise.io/v1alpha1
 kind: SecurityProfile
 metadata:
   name: block-http-path
