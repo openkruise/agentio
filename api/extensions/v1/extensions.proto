@@ -14,7 +14,7 @@
 
 syntax = "proto3";
 
-package kruise.networking.extensions.v1;
+package agentio.extensions;
 
 option go_package = "github.com/openkruise/agentio/api/extensions/v1;extensionsv1";
 

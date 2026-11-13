@@ -18,7 +18,7 @@ syntax = "proto3";
 // istio.workload.Workload.Extensions (pkg/compiler/wds.go), so its type URL
 // embeds this proto package name. Moving or renaming anything reachable from
 // EgressPolicies breaks every deployed data plane.
-package kruise.networking.extensions.v1;
+package agentio.extensions;
 
 option go_package = "github.com/openkruise/agentio/api/extensions/v1;extensionsv1";
 

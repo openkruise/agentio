@@ -35,7 +35,7 @@ var knownTypes = map[string]string{
 	"type.googleapis.com/istio.workload.Address":                           "address",
 	"type.googleapis.com/istio.workload.Workload":                          "workload",
 	"type.googleapis.com/istio.security.Authorization":                     "authorization",
-	"type.googleapis.com/kruise.networking.extensions.v1.SniTrafficPolicy": "sni_traffic_policy",
+	"type.googleapis.com/agentio.extensions.SniTrafficPolicy": "sni_traffic_policy",
 	"type.googleapis.com/envoy.config.cluster.v3.Cluster":                  "cluster",
 	"type.googleapis.com/envoy.config.listener.v3.Listener":                "listener",
 	"type.googleapis.com/envoy.config.route.v3.RouteConfiguration":         "route",

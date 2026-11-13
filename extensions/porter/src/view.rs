@@ -10,9 +10,12 @@ use prost_types::{Any, Struct, Value, value::Kind};
 
 use crate::tcp::Policy;
 use crate::wire::{
-    agentio::{sandbox::Sandbox, security::SecurityProfile},
+    agentio::{
+        extensions::{PolicyReference, PolicyResourceReference},
+        sandbox::Sandbox,
+        security::SecurityProfile,
+    },
     istio::workload::{NetworkMode, Workload},
-    kruise::networking::extensions::v1::{PolicyReference, PolicyResourceReference},
 };
 
 pub const WORKLOAD: &str = "type.googleapis.com/istio.workload.Workload";
@@ -232,7 +235,7 @@ fn profile_references(values: &[Any]) -> Result<Option<Vec<PolicyResourceReferen
     let mut result = None;
     for value in values
         .iter()
-        .filter(|v| matches(v, "kruise.networking.extensions.v1.PolicyReference"))
+        .filter(|v| matches(v, "agentio.extensions.PolicyReference"))
     {
         let references = PolicyReference::decode(value.value.as_slice())?;
         if references.type_url != SECURITY_PROFILE {

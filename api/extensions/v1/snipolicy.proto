@@ -14,7 +14,7 @@
 
 syntax = "proto3";
 
-package kruise.networking.extensions.v1;
+package agentio.extensions;
 
 import "google/protobuf/any.proto";
 

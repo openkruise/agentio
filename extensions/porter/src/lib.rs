@@ -33,15 +33,9 @@ pub mod wire {
         pub mod security {
             tonic::include_proto!("agentio.security");
         }
-    }
 
-    pub mod kruise {
-        pub mod networking {
-            pub mod extensions {
-                pub mod v1 {
-                    tonic::include_proto!("kruise.networking.extensions.v1");
-                }
-            }
+        pub mod extensions {
+            tonic::include_proto!("agentio.extensions");
         }
     }
 }

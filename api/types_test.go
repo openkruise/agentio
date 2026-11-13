@@ -44,8 +44,13 @@ func TestWireMessageNamesAndTypeURLs(t *testing.T) {
 		{&configv1.EgressServiceEntryEndpoint{}, "agentio.config.v1.EgressServiceEntryEndpoint"},
 		// EgressPolicies is packed with anypb into Workload.Extensions
 		// (pkg/compiler/wds.go), so its full name is a wire contract.
-		{&extensionsv1.EgressPolicies{}, "kruise.networking.extensions.v1.EgressPolicies"},
-		{&extensionsv1.SniTrafficPolicy{}, "kruise.networking.extensions.v1.SniTrafficPolicy"},
+		{&extensionsv1.EgressPolicies{}, "agentio.extensions.EgressPolicies"},
+		{&extensionsv1.EgressPolicy{}, "agentio.extensions.EgressPolicy"},
+		{&extensionsv1.TrafficPolicyExtension{}, "agentio.extensions.TrafficPolicyExtension"},
+		{&extensionsv1.WorkloadMetadata{}, "agentio.extensions.WorkloadMetadata"},
+		{&extensionsv1.PolicyReference{}, "agentio.extensions.PolicyReference"},
+		{&extensionsv1.PolicyResourceReference{}, "agentio.extensions.PolicyResourceReference"},
+		{&extensionsv1.SniTrafficPolicy{}, "agentio.extensions.SniTrafficPolicy"},
 	}
 
 	for _, tc := range cases {
@@ -53,7 +58,11 @@ func TestWireMessageNamesAndTypeURLs(t *testing.T) {
 		if name != tc.want {
 			t.Errorf("message full name = %q, want %q", name, tc.want)
 		}
-		typeURL := "type.googleapis.com/" + name
+		value, err := anypb.New(tc.message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		typeURL := value.TypeUrl
 		wantTypeURL := "type.googleapis.com/" + tc.want
 		if typeURL != wantTypeURL {
 			t.Errorf("type URL = %q, want %q", typeURL, wantTypeURL)

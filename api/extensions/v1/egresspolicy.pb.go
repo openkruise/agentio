@@ -155,7 +155,7 @@ type EgressPolicy struct {
 	// that dimension).
 	MatchPorts []string `protobuf:"bytes,5,rep,name=match_ports,json=matchPorts,proto3" json:"match_ports,omitempty"`
 	// Policy defines the action to take for matching traffic.
-	Policy EgressPolicyAction `protobuf:"varint,3,opt,name=policy,proto3,enum=kruise.networking.extensions.v1.EgressPolicyAction" json:"policy,omitempty"`
+	Policy EgressPolicyAction `protobuf:"varint,3,opt,name=policy,proto3,enum=agentio.extensions.EgressPolicyAction" json:"policy,omitempty"`
 	// Gateway is the egress gateway address to forward traffic to (when policy is GATEWAY).
 	Gateway *GatewayAddress `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
 	// MatchHosts specifies destination hostnames to match. The control plane
@@ -297,9 +297,9 @@ var File_api_extensions_v1_egresspolicy_proto protoreflect.FileDescriptor
 
 const file_api_extensions_v1_egresspolicy_proto_rawDesc = "" +
 	"\n" +
-	"$api/extensions/v1/egresspolicy.proto\x12\x1fkruise.networking.extensions.v1\"h\n" +
-	"\x0eEgressPolicies\x12V\n" +
-	"\x0fegress_policies\x18\x01 \x03(\v2-.kruise.networking.extensions.v1.EgressPolicyR\x0eegressPolicies\"\xa9\x02\n" +
+	"$api/extensions/v1/egresspolicy.proto\x12\x12agentio.extensions\"[\n" +
+	"\x0eEgressPolicies\x12I\n" +
+	"\x0fegress_policies\x18\x01 \x03(\v2 .agentio.extensions.EgressPolicyR\x0eegressPolicies\"\x8f\x02\n" +
 	"\fEgressPolicy\x12\x1e\n" +
 	"\n" +
 	"namespaces\x18\x01 \x03(\tR\n" +
@@ -307,9 +307,9 @@ const file_api_extensions_v1_egresspolicy_proto_rawDesc = "" +
 	"\vmatch_cidrs\x18\x02 \x03(\tR\n" +
 	"matchCidrs\x12\x1f\n" +
 	"\vmatch_ports\x18\x05 \x03(\tR\n" +
-	"matchPorts\x12K\n" +
-	"\x06policy\x18\x03 \x01(\x0e23.kruise.networking.extensions.v1.EgressPolicyActionR\x06policy\x12I\n" +
-	"\agateway\x18\x04 \x01(\v2/.kruise.networking.extensions.v1.GatewayAddressR\agateway\x12\x1f\n" +
+	"matchPorts\x12>\n" +
+	"\x06policy\x18\x03 \x01(\x0e2&.agentio.extensions.EgressPolicyActionR\x06policy\x12<\n" +
+	"\agateway\x18\x04 \x01(\v2\".agentio.extensions.GatewayAddressR\agateway\x12\x1f\n" +
 	"\vmatch_hosts\x18\x06 \x03(\tR\n" +
 	"matchHosts\">\n" +
 	"\x0eGatewayAddress\x12\x18\n" +
@@ -335,15 +335,15 @@ func file_api_extensions_v1_egresspolicy_proto_rawDescGZIP() []byte {
 var file_api_extensions_v1_egresspolicy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_api_extensions_v1_egresspolicy_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_api_extensions_v1_egresspolicy_proto_goTypes = []any{
-	(EgressPolicyAction)(0), // 0: kruise.networking.extensions.v1.EgressPolicyAction
-	(*EgressPolicies)(nil),  // 1: kruise.networking.extensions.v1.EgressPolicies
-	(*EgressPolicy)(nil),    // 2: kruise.networking.extensions.v1.EgressPolicy
-	(*GatewayAddress)(nil),  // 3: kruise.networking.extensions.v1.GatewayAddress
+	(EgressPolicyAction)(0), // 0: agentio.extensions.EgressPolicyAction
+	(*EgressPolicies)(nil),  // 1: agentio.extensions.EgressPolicies
+	(*EgressPolicy)(nil),    // 2: agentio.extensions.EgressPolicy
+	(*GatewayAddress)(nil),  // 3: agentio.extensions.GatewayAddress
 }
 var file_api_extensions_v1_egresspolicy_proto_depIdxs = []int32{
-	2, // 0: kruise.networking.extensions.v1.EgressPolicies.egress_policies:type_name -> kruise.networking.extensions.v1.EgressPolicy
-	0, // 1: kruise.networking.extensions.v1.EgressPolicy.policy:type_name -> kruise.networking.extensions.v1.EgressPolicyAction
-	3, // 2: kruise.networking.extensions.v1.EgressPolicy.gateway:type_name -> kruise.networking.extensions.v1.GatewayAddress
+	2, // 0: agentio.extensions.EgressPolicies.egress_policies:type_name -> agentio.extensions.EgressPolicy
+	0, // 1: agentio.extensions.EgressPolicy.policy:type_name -> agentio.extensions.EgressPolicyAction
+	3, // 2: agentio.extensions.EgressPolicy.gateway:type_name -> agentio.extensions.GatewayAddress
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
