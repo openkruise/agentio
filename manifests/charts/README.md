@@ -305,6 +305,8 @@ The chart maps these values to `AGENTIO_LOG_LEVEL` and `AGENTIO_LOG_FORMAT`. Sta
 
 ## Upgrades and profile changes
 
+Static gateway selectors now use only `gateway.networking.k8s.io/gateway-name`; the obsolete `networking.agents.kruise.io/sandbox-egress` label is no longer emitted. When upgrading an existing static gateway whose Deployment selector includes that label, recreate the gateway Deployment during a maintenance window because Kubernetes does not allow changing its selector. This also applies to the sandbox-manager integration and interrupts gateway traffic while the replacement starts.
+
 To keep an existing ambient installation in ambient mode when upgrading, set `profile: ambient` in your release values. The chart now defaults to `sidecar`.
 
 Keep release values in a file and use the same command for installation and upgrade:

@@ -227,12 +227,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: agentio
 app.kubernetes.io/component: egress-gateway
-networking.agents.kruise.io/sandbox-egress: "true"
 gateway.networking.k8s.io/gateway-name: {{ include "gateway.fullname" . }}
 {{- end -}}
 {{- define "gateway.selectorLabels" -}}
 gateway.networking.k8s.io/gateway-name: {{ include "gateway.fullname" . }}
-networking.agents.kruise.io/sandbox-egress: "true"
 {{- end -}}
 
 {{- define "epe.name" -}}{{ default "agentio-epe" .Values.epe.nameOverride | trunc 63 | trimSuffix "-" }}{{- end -}}
