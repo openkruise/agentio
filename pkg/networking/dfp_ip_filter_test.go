@@ -15,10 +15,10 @@
 package networking
 
 import (
-	"fmt"
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -26,7 +26,9 @@ import (
 	dfpcommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
@@ -35,10 +37,29 @@ import (
 // Every consumer of a named cache must receive the same configuration, including
 // gateways without an EPE provider.
 func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+	configured := &configv1.DnsCacheSettings{
+		MaxHosts:           new(uint32(16384)),
+		MaxPendingRequests: new(uint32(4096)),
+		HostTtl:            durationpb.New(2 * time.Minute),
+	}
+	for _, tc := range []struct {
+		name     string
+		legacy   bool
+		settings *configv1.DnsCacheSettings
+	}{
+		{name: "native defaults"},
+		{name: "legacy defaults", legacy: true},
+		{name: "empty settings", settings: &configv1.DnsCacheSettings{}},
+		{name: "native configured", settings: configured},
+		{name: "legacy configured", legacy: true, settings: configured},
+		{name: "capacity only", settings: &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}},
+		{name: "pending only", settings: &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}},
+		{name: "TTL only", settings: &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			legacy := tc.legacy
 			resources, err := Build(Inputs{
-				Gateway:          testGateway(&configv1.EgressGateway{}),
+				Gateway:          testGateway(&configv1.EgressGateway{DnsCache: tc.settings}),
 				LegacyGateway:    legacy,
 				DiscoveryAddress: "agentiod:15012",
 				TrustDomain:      "cluster.local",
@@ -53,9 +74,12 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 				model.ClusterType,
 				func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
 			)
-			for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+			for name, cluster := range clusters {
+				if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" {
+					continue
+				}
 				cfg := &dfpclusterv3.ClusterConfig{}
-				if err := clusters[name].GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+				if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
 					t.Fatal(err)
 				}
 				caches[name] = cfg.GetDnsCacheConfig()
@@ -71,6 +95,12 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 					for _, filter := range chain.GetFilters() {
 						key := name + "/" + chain.GetName() + "/" + filter.GetName()
 						switch filter.GetName() {
+						case "envoy.filters.network.sni_dynamic_forward_proxy":
+							cfg := &dfpnetworkv3.FilterConfig{}
+							if err := filter.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+								t.Fatal(err)
+							}
+							caches[key] = cfg.GetDnsCacheConfig()
 						case "envoy.filters.network.http_connection_manager":
 							hcm := &hcmv3.HttpConnectionManager{}
 							if err := filter.GetTypedConfig().UnmarshalTo(hcm); err != nil {
@@ -96,6 +126,16 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 					}
 					if !proto.Equal(cache, caches[HTTPDynamicForwardProxy]) {
 						t.Fatal("DFP consumers disagree on the shared DNS cache configuration")
+					}
+					pending := cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests()
+					if cache.GetMaxHosts().GetValue() != tc.settings.GetMaxHosts() ||
+						pending.GetValue() != tc.settings.GetMaxPendingRequests() ||
+						!proto.Equal(cache.GetHostTtl(), tc.settings.GetHostTtl()) {
+						t.Fatalf("DNS cache settings were not propagated: %v", cache)
+					}
+					if tc.settings.GetMaxHosts() == 0 && cache.GetMaxHosts() != nil ||
+						tc.settings.GetMaxPendingRequests() == 0 && cache.GetDnsCacheCircuitBreaker() != nil {
+						t.Fatal("omitted limits must retain Envoy defaults")
 					}
 					if legacy {
 						if cache.GetResolvedAddressFilter() != nil {

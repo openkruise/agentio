@@ -28,6 +28,7 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	fileaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/file/v3"
+	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -269,6 +270,82 @@ func TestGatewayResourcesCarryClusterOptions(t *testing.T) {
 		GetTrustedCa().
 		GetInlineString(); got != trustBundle {
 		t.Fatalf("TLS origination root CA = %q, want %q", got, trustBundle)
+	}
+}
+
+func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
+	fixture := newIncrementalFixture(t)
+	config := &configv1.AgentioConfig{EgressGateways: []*configv1.EgressGateway{
+		{Namespace: "demo", Name: "egress-a"},
+		{Namespace: "demo", Name: "egress-b"},
+	}}
+	fixture.agentioConfig.ConditionalUpdateObject(
+		model.AgentioConfiguration{ResourceVersion: "defaults", Value: config},
+	)
+	wantA := gatewayResourceName(model.ClusterType, "demo/egress-a", networking.HTTPDynamicForwardProxy)
+	wantB := gatewayResourceName(model.ClusterType, "demo/egress-b", networking.HTTPDynamicForwardProxy)
+	waitSynced(t, fixture.compiler)
+	awaitSteadyState(t, fixture.compiler, wantA, wantB)
+	beforeA := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
+	beforeB := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-b")
+	recorder := newRecorder(fixture.compiler.Resources())
+
+	updated := proto.Clone(config).(*configv1.AgentioConfig)
+	updated.EgressGateways[0].DnsCache = &configv1.DnsCacheSettings{
+		MaxHosts:           new(uint32(16384)),
+		MaxPendingRequests: new(uint32(4096)),
+		HostTtl:            durationpb.New(2 * time.Minute),
+	}
+	fixture.agentioConfig.ConditionalUpdateObject(
+		model.AgentioConfiguration{ResourceVersion: "custom-cache", Value: updated},
+	)
+	testutil.Eventually(t, func() bool {
+		resource := fixture.compiler.graph.resources.GetKey(wantA)
+		if resource == nil || !recorder.has(wantA) {
+			return false
+		}
+		cluster := &clusterv3.Cluster{}
+		if err := resource.Value.UnmarshalTo(cluster); err != nil {
+			t.Fatal(err)
+		}
+		cfg := &dfpclusterv3.ClusterConfig{}
+		if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
+			t.Fatal(err)
+		}
+		cache := cfg.GetDnsCacheConfig()
+		return cache.GetMaxHosts().GetValue() == 16384 &&
+			cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests().GetValue() == 4096 &&
+			cache.GetHostTtl().AsDuration() == 2*time.Minute
+	}, "DNS cache update to publish the gateway's new limits")
+	customA := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
+	invalid := proto.Clone(updated).(*configv1.AgentioConfig)
+	invalid.EgressGateways[0].DnsCache.MaxHosts = new(uint32)
+	fixture.agentioConfig.ConditionalUpdateObject(
+		model.AgentioConfiguration{ResourceVersion: "invalid-cache", Value: invalid},
+	)
+	testutil.Eventually(t, func() bool {
+		_, failed := fixture.compiler.Failures()["Gateway/demo/egress-a"]
+		return failed
+	}, "invalid DNS cache update to be rejected")
+	if got := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"); !maps.Equal(got, customA) {
+		t.Fatal("invalid DNS cache settings replaced the last valid gateway graph")
+	}
+
+	fixture.agentioConfig.ConditionalUpdateObject(
+		model.AgentioConfiguration{ResourceVersion: "reset-cache", Value: config},
+	)
+	testutil.Eventually(t, func() bool {
+		_, failed := fixture.compiler.Failures()["Gateway/demo/egress-a"]
+		return !failed && maps.Equal(beforeA, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"))
+	}, "removing DNS cache overrides to restore Envoy defaults")
+	settle()
+	if !maps.Equal(beforeB, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-b")) {
+		t.Fatal("DNS cache settings changed an unrelated gateway")
+	}
+	for _, changed := range recorder.names() {
+		if strings.Contains(changed, "|demo/egress-b|") {
+			t.Fatalf("DNS cache update invalidated another gateway: %s", changed)
+		}
 	}
 }
 

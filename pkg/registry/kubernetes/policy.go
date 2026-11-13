@@ -74,6 +74,9 @@ func validateAgentioConfig(value *configv1.AgentioConfig) error {
 		return err
 	}
 	for i, gateway := range value.GetEgressGateways() {
+		if err := model.ValidateDnsCacheSettings(gateway.GetDnsCache()); err != nil {
+			return fmt.Errorf("egressGateways[%d].%w", i, err)
+		}
 		if err := model.ValidateExtProcServiceRef(gateway.GetExtProc()); err != nil {
 			return fmt.Errorf("egressGateways[%d].extProc: %w", i, err)
 		}

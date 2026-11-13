@@ -35,6 +35,7 @@ import (
 type resourceBuilder struct {
 	legacyGateway       bool
 	upstreamTrustBundle string
+	dnsCacheSettings    *configv1.DnsCacheSettings
 	extensions          []*corev3.TypedExtensionConfig
 	err                 error
 }

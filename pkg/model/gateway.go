@@ -88,6 +88,9 @@ func (g Gateway) ValidateForUse() error {
 	if err := ValidateUpstreamTrustBundle(g.Config.GetUpstreamTrustBundle()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
+	if err := ValidateDnsCacheSettings(g.Config.GetDnsCache()); err != nil {
+		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
+	}
 	if err := ValidateAccessLogFormat(g.Config.GetAccessLogFormat()); err != nil {
 		return fmt.Errorf("gateway %s: %w", g.ResourceName(), err)
 	}
@@ -137,6 +140,28 @@ func (g Gateway) ValidateForUse() error {
 	}
 	if !proto.Equal(normalized, g.Config) {
 		return fmt.Errorf("gateway %s static service entries are not normalized", g.ResourceName())
+	}
+	return nil
+}
+
+// ValidateDnsCacheSettings checks the shared DNS cache limits without applying defaults.
+func ValidateDnsCacheSettings(settings *configv1.DnsCacheSettings) error {
+	if settings == nil {
+		return nil
+	}
+	if settings.MaxHosts != nil && settings.GetMaxHosts() == 0 {
+		return fmt.Errorf("dnsCache.maxHosts must be positive")
+	}
+	if settings.MaxPendingRequests != nil && settings.GetMaxPendingRequests() == 0 {
+		return fmt.Errorf("dnsCache.maxPendingRequests must be positive")
+	}
+	if ttl := settings.GetHostTtl(); ttl != nil {
+		if err := ttl.CheckValid(); err != nil {
+			return fmt.Errorf("dnsCache.hostTtl: %w", err)
+		}
+		if ttl.AsDuration() <= 0 {
+			return fmt.Errorf("dnsCache.hostTtl must be positive")
+		}
 	}
 	return nil
 }

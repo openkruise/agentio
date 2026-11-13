@@ -159,7 +159,11 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 			return nil, fmt.Errorf("build Gateway Telemetry: %w", err)
 		}
 	}
-	b := &resourceBuilder{legacyGateway: inputs.LegacyGateway, upstreamTrustBundle: inputs.UpstreamTrustBundle}
+	b := &resourceBuilder{
+		legacyGateway:       inputs.LegacyGateway,
+		upstreamTrustBundle: inputs.UpstreamTrustBundle,
+		dnsCacheSettings:    inputs.Gateway.Config.GetDnsCache(),
+	}
 	clusters, err := b.clusters(effective)
 	if err != nil {
 		return nil, err
