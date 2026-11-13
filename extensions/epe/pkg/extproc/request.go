@@ -15,6 +15,7 @@ package extproc
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strconv"
@@ -151,6 +152,7 @@ func (s *Server) HandleRequestHeaders(
 	// that yields nothing cannot erase a previous one. The stream logger was
 	// already installed above, before the resolve error was honoured.
 	state.stream.Policies.FilterRules = res.Units
+	state.stream.Policies.DestinationAuthorizer = res.DestinationAuthorizer
 	subscriptions, err := s.eng.ValidateSubscriptions(state.stream.Policies.FilterRules)
 	if err != nil {
 		return nil, err
@@ -158,6 +160,10 @@ func (s *Server) HandleRequestHeaders(
 
 	reqHeadersRes, evalErr := s.eng.EvalRequestHeaders(ctx, st, state.stream.Policies.FilterRules)
 	if evalErr != nil {
+		if authErr, ok := errors.AsType[*engine.RequestAuthorizationError](evalErr); ok {
+			reply := authorizationFailure(ctx, st, authErr.Err)
+			return []*extProcPb.ProcessingResponse{immediateFromReply(*reply)}, nil
+		}
 		return nil, evalErr
 	}
 	// Upgrade payload is not an HTTP message body. Buffering a CONNECT body

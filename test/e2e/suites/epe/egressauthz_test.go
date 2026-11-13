@@ -35,13 +35,12 @@ import (
 	"github.com/openkruise/agentio/test/e2e/suites/internal/harness"
 )
 
-// TestEPEXDSTrafficPolicyLifecycle exercises Kubernetes -> native Workload and
-// TrafficPolicy xDS -> EPE authorization. Calling ext_proc directly isolates
-// EPE enforcement from the caller's ztunnel, which also consumes TrafficPolicy.
-func TestEPEXDSTrafficPolicyLifecycle(t *testing.T) {
-	fixture, scope := newEgressEPE(t, true)
+// TestEPESecurityProfileTCPLifecycle exercises Workload bindings and SP TCP rules
+// through EPE directly, independently of ztunnel TrafficPolicy enforcement.
+func TestEPESecurityProfileTCPLifecycle(t *testing.T) {
+	fixture, scope := newEgressEPE(t)
 	target := net.JoinHostPort(trafficFixture.Server.ServiceIPOrFail(t), "80")
-	fixture.wantHeaders(t, target, "/xds-lifecycle", true, 0)
+	fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 
 	policy := func(action, app string) *e2econfig.Plan {
 		return e2econfig.New(scope).Eval(trafficFixture.Namespace.Name(), map[string]any{
@@ -50,18 +49,23 @@ func TestEPEXDSTrafficPolicyLifecycle(t *testing.T) {
 			"Destination": trafficFixture.Server.ServiceIPOrFail(t),
 		}, `
 apiVersion: agents.kruise.io/v1alpha1
-kind: TrafficPolicy
+kind: SecurityProfile
 metadata:
-  name: epe-xds-lifecycle
+  name: epe-sp-tcp-lifecycle
 spec:
   priority: 100
   selector:
     matchLabels: {app: "{{ .App }}"}
-  egress:
-    rules:
-    - action: {{ .Action }}
-      to: [{cidr: "{{ .Destination }}"}]
-      ports: [{port: 80}]
+  tcpRules:
+  - name: selected-target
+    action: {{ .Action }}
+    match:
+    - cidrs: ["{{ .Destination }}/32"]
+      ports: [80]
+  - name: deny-other-targets
+    action: Deny
+    match:
+    - cidrs: ["0.0.0.0/0", "::/0"]
 `)
 	}
 	step := func(name string, fn func(*testing.T)) {
@@ -70,32 +74,32 @@ spec:
 			t.FailNow()
 		}
 	}
-	initial := policy("reject", trafficFixture.Client.Name())
-	step("missing_identity_is_rejected_by_xds", func(t *testing.T) {
-		request := fixture.request(target, "/xds-lifecycle", true)
+	initial := policy("Deny", trafficFixture.Client.Name())
+	step("missing_identity_uses_global_authorization", func(t *testing.T) {
+		request := fixture.request(target, "/sp-tcp-lifecycle", true)
 		request.Attributes = nil
 		response, err := fixture.sendHeaders(t.Context(), request)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := checkEPEHeaders(response, target, 403); err != nil {
+		if err := checkEPEHeaders(response, target, 0); err != nil {
 			t.Fatal(err)
 		}
 	})
 	step("create_reject", func(t *testing.T) {
 		initial.ApplyOrFail(t, kube.CreateOnly)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 403)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 403)
 	})
 	step("update_allow", func(t *testing.T) {
-		policy("allow", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 0)
+		policy("Allow", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 	})
 	step("destination_and_port", func(t *testing.T) {
 		for _, denied := range []string{
 			net.JoinHostPort(trafficFixture.Server.ServiceIPOrFail(t), "81"),
 			net.JoinHostPort(trafficFixture.Client.ServiceIPOrFail(t), "80"),
 		} {
-			response, err := fixture.headers(t.Context(), denied, "/xds-lifecycle", true)
+			response, err := fixture.headers(t.Context(), denied, "/sp-tcp-lifecycle", true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +112,7 @@ spec:
 		response, err := fixture.headers(
 			t.Context(),
 			net.JoinHostPort(trafficFixture.Server.Address(), "80"),
-			"/xds-lifecycle",
+			"/sp-tcp-lifecycle",
 			true,
 		)
 		if err != nil {
@@ -118,29 +122,29 @@ spec:
 			t.Fatal(err)
 		}
 	})
-	step("global_deny_wins_over_xds_allow", func(t *testing.T) {
+	step("global_deny_wins_over_sp_allow", func(t *testing.T) {
 		global := egressEPEConfig(scope, "epe-egressauthz", fmt.Sprintf(
 			"egressAuthorization: {deniedCIDRs: [%s/32]}", trafficFixture.Server.ServiceIPOrFail(t)))
 		global.ApplyOrFail(t, kube.CreateOnly)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 403)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 403)
 		global.DeleteOrFail(t)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 0)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 	})
 	step("update_reject", func(t *testing.T) {
-		policy("reject", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 403)
+		policy("Deny", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 403)
 	})
 	step("workload_binding_removed", func(t *testing.T) {
-		policy("reject", "not-the-client").ApplyOrFail(t, kube.ReconcileOwned)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 0)
+		policy("Deny", "not-the-client").ApplyOrFail(t, kube.ReconcileOwned)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 	})
 	step("workload_binding_restored", func(t *testing.T) {
-		policy("reject", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 403)
+		policy("Deny", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 403)
 	})
 	step("delete", func(t *testing.T) {
 		initial.DeleteOrFail(t)
-		fixture.wantHeaders(t, target, "/xds-lifecycle", true, 0)
+		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 	})
 }
 
@@ -148,7 +152,7 @@ spec:
 // proves a header block wins and destination authorization need not wait for
 // body input, including when the headers declare an empty body.
 func TestEPERequestPhases(t *testing.T) {
-	fixture, scope := newEgressEPE(t, true)
+	fixture, scope := newEgressEPE(t)
 	target := net.JoinHostPort(trafficFixture.Server.ServiceIPOrFail(t), "80")
 	e2econfig.New(scope).YAML(trafficFixture.Namespace.Name(), `
 apiVersion: agents.kruise.io/v1alpha1
@@ -192,20 +196,8 @@ spec:
 	// This barrier proves the profile is active before negative assertions.
 	fixture.wantHeaders(t, target, "/epe-phases/block", false, 451)
 
-	deny := e2econfig.New(scope).YAML(trafficFixture.Namespace.Name(), `
-apiVersion: agents.kruise.io/v1alpha1
-kind: TrafficPolicy
-metadata:
-  name: epe-phases-deny
-spec:
-  priority: 100
-  selector:
-    matchLabels: {app: client}
-  egress:
-    rules:
-    - action: reject
-      to: [{cidr: "0.0.0.0/0"}, {cidr: "::/0"}]
-`)
+	deny := egressEPEConfig(scope, "epe-egressauthz", fmt.Sprintf(
+		"egressAuthorization: {deniedCIDRs: [%s/32]}", trafficFixture.Server.ServiceIPOrFail(t)))
 	deny.ApplyOrFail(t, kube.CreateOnly)
 	fixture.wantHeaders(t, target, "/epe-phases", false, 403)
 	// These assertions run after the deny has converged, without retrying.
@@ -317,7 +309,7 @@ type egressEPE struct {
 	namespace string
 }
 
-func newEgressEPE(t *testing.T, enableXDS bool) (*egressEPE, *kube.ResourceScope) {
+func newEgressEPE(t *testing.T) (*egressEPE, *kube.ResourceScope) {
 	t.Helper()
 	environment, scope := rig.BeginScenario(t)
 	namespace := resolvedAgentioConfig.Namespace
@@ -334,7 +326,6 @@ func newEgressEPE(t *testing.T, enableXDS bool) (*egressEPE, *kube.ResourceScope
 	e2econfig.New(scope).Eval(namespace, map[string]any{
 		"Namespace": namespace,
 		"Image":     resolvedAgentioConfig.EPEImage,
-		"EnableXDS": enableXDS,
 	}, egressEPEYAML).ApplyOrFail(t, kube.CreateOnly)
 	ctx, cancel := e2e.Context(t, 2*time.Minute)
 	defer cancel()
@@ -485,9 +476,6 @@ spec:
     - --epe-config=epe-egressauthz
     - --epe-config-primary=epe-egressauthz-primary
     - --namespace={{ .Namespace }}
-    {{- if .EnableXDS }}
-    - --enable-xds-egressauthz
-    {{- end }}
     - --xds-address=agentiod.{{ .Namespace }}.svc:15012
     - --xds-root-path=/var/run/xds-root/root-cert.pem
     - --xds-token-path=/var/run/xds-token/token

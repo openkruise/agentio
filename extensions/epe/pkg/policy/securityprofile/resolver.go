@@ -19,6 +19,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
@@ -48,8 +49,13 @@ type Matcher interface {
 //
 // sink receives the audit events the returned logger produces at stream end.
 // A nil sink becomes a no-op, so callers that do not audit need no branch.
-func NewResolver(matcher Matcher, regs []filter.Registration, sink audit.Sink) engine.Resolver {
-	binder := newBinder(regs)
+func NewResolver(
+	matcher Matcher,
+	regs []filter.Registration,
+	sink audit.Sink,
+	targets *egressauthz.Aggregate,
+) engine.Resolver {
+	binder := newBinder(regs, targets)
 	if sink == nil {
 		sink = audit.NopSink()
 	}
@@ -61,27 +67,22 @@ func NewResolver(matcher Matcher, regs []filter.Registration, sink audit.Sink) e
 		if len(profiles) == 0 {
 			return engine.Resolution{}, nil
 		}
-		units, err := binder.bind(profiles, req, inputs.WorkloadFromSubject(subject))
+		bound, err := binder.bind(profiles, req, inputs.WorkloadFromSubject(subject))
 		if err != nil {
 			// The request fails closed, but the rules that matched still
 			// describe a stream worth recording. Returning the logger with
 			// the error keeps a resolve failure as auditable as an
 			// engine-eval failure; Units stays empty so nothing is evaluated.
-			return engine.Resolution{StreamLogger: streamLoggerFor(sink, units)}, err
+			return engine.Resolution{StreamLogger: streamLoggerFor(sink, bound.rules)}, err
 		}
-		if len(units) == 0 {
-			return engine.Resolution{}, nil
-		}
-		engineUnits := make([]engine.Unit, len(units))
-		for i := range units {
-			engineUnits[i] = units[i].Unit
-		}
+
 		return engine.Resolution{
-			Units: engineUnits,
+			Units:                 bound.units,
+			DestinationAuthorizer: bound.authorizer,
 			// The logger keeps the full units — profile, rule and the match
 			// clause that fired — in this package's own types. The adapter
 			// invokes it at stream end without naming any of them.
-			StreamLogger: streamLoggerFor(sink, units),
+			StreamLogger: streamLoggerFor(sink, bound.rules),
 		}, nil
 	}
 }

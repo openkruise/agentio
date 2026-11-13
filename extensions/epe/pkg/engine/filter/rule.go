@@ -14,6 +14,7 @@
 package filter
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
@@ -46,6 +47,10 @@ type RuleConfig[C any] struct {
 
 // Unit is one bound policy rule, with its immutable evaluation scope and configs.
 type Unit struct {
+	// CheckRequest is an ordered request-only authorization checkpoint between rule groups.
+	// The engine supplies the effective routing headers and upstream target.
+	CheckRequest func(context.Context, *Stream) (Action, error)
+
 	ID    UnitID
 	Scope *inputs.Scope
 	// Cfgs[i] belongs to filter registration i; nil means no config for that filter.

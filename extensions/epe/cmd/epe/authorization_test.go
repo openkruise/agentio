@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"flag"
+	"net/netip"
 	"testing"
 	"testing/synctest"
 
@@ -25,6 +26,7 @@ import (
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"github.com/openkruise/agentio/extensions/epe/pkg/wiring"
 	"github.com/openkruise/agentio/pkg/config"
@@ -32,10 +34,9 @@ import (
 	"github.com/openkruise/agentio/pkg/krt"
 )
 
-func TestXDSEgressAuthorizationFlag(t *testing.T) {
-	f := flag.Lookup("enable-xds-egressauthz")
-	if f == nil || f.DefValue != "false" {
-		t.Fatal("xDS authorization must be opt-in")
+func TestTrafficPolicyAuthorizationFlagsRemoved(t *testing.T) {
+	if flag.Lookup("enable-xds-egressauthz") != nil {
+		t.Fatal("TrafficPolicy authorization flag is still registered")
 	}
 	if flag.Lookup("enable-egressauthz") != nil {
 		t.Fatal("legacy opt-in authorization flag is still registered")
@@ -86,14 +87,26 @@ func TestStaticAuthorizationConfigLifecycle(t *testing.T) {
 			Validate:  validateEPEConfig,
 		}, krt.WithStop(ctx.Done()))
 		// No resource store, xDS connection, workload binding, or source identity.
-		authorize, reg := newRequestAuthorizer(configs.AsCollection(), nil, dns.NewClient(nil, 0))
+		authorize, reg := newRequestAuthorizer(configs.AsCollection(), dns.NewClient(nil, 0))
 		if !reg.WaitUntilSynced(ctx.Done()) {
 			t.Fatal("authorization configuration did not sync")
+		}
+		target, reply, err := authorize.Authorize(ctx, &filter.Stream{
+			RequestContext: filter.RequestContext{
+				Request: httpreq.HTTPRequest{Host: "192.0.2.1", Port: 443},
+				Policies: filter.PolicySnapshot{DestinationAuthorizer: egressauthz.Config{
+					DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")},
+				}},
+			},
+			StreamRuntime: filter.StreamRuntime{Info: filter.NewStreamInfo()},
+		})
+		if err != nil || target != nil || reply == nil || reply.Status != 403 {
+			t.Fatalf("profile authorization was not applied: target=%v reply=%v err=%v", target, reply, err)
 		}
 		check := func(host string, denied bool) {
 			t.Helper()
 			synctest.Wait()
-			target, reply, err := authorize(
+			target, reply, err := authorize.Authorize(
 				ctx,
 				&filter.Stream{
 					RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: 15000}},

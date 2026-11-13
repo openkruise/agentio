@@ -24,9 +24,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/labels"
 
+	"google.golang.org/protobuf/proto"
+
 	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
 )
 
 // FromXDS compiles the HTTP view; sandboxUID comes from the enclosing Sandbox, if any.
@@ -70,6 +73,13 @@ func FromXDS(value *securityv1.SecurityProfile, sandboxUID string, regs []filter
 	}
 	// xDS selection and ordering belong to the control plane's Workload binding.
 	profile.Selector = labels.Nothing()
+	if value.TcpPolicy != nil {
+		tcp := proto.Clone(value.TcpPolicy).(*securityv1.TCPPolicy)
+		if err := policy.NormalizeTCPPolicy(tcp); err != nil {
+			return nil, err
+		}
+		profile.TCPPolicy = tcp
+	}
 	if err := profile.Project(regs); err != nil {
 		return nil, err
 	}

@@ -46,6 +46,7 @@ import (
 	"google.golang.org/grpc/status"
 	securityapi "istio.io/api/security/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/portforward"
@@ -103,12 +104,22 @@ func TestEPEGatewayMTLS(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	issue := func(t *testing.T, sa string) ([]byte, []byte) {
+	issue := func(t *testing.T, pod corev1.Pod) ([]byte, []byte) {
 		t.Helper()
-		token, err := environment.Cluster.Kube.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, sa,
-			&authenticationv1.TokenRequest{
-				Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}},
-			}, metav1.CreateOptions{})
+		token, err := environment.Cluster.Kube.CoreV1().
+			ServiceAccounts(namespace).
+			CreateToken(ctx, pod.Spec.ServiceAccountName,
+				&authenticationv1.TokenRequest{
+					Spec: authenticationv1.TokenRequestSpec{
+						Audiences: []string{"agentio-ca"},
+						BoundObjectRef: &authenticationv1.BoundObjectReference{
+							APIVersion: "v1",
+							Kind:       "Pod",
+							Name:       pod.Name,
+							UID:        pod.UID,
+						},
+					},
+				}, metav1.CreateOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +138,7 @@ func TestEPEGatewayMTLS(t *testing.T) {
 				ValidityDuration: 3600,
 			})
 		if err != nil {
-			t.Fatalf("issue certificate for %s: %v", sa, err)
+			t.Fatalf("issue certificate for %s: %v", pod.Spec.ServiceAccountName, err)
 		}
 		der, err := x509.MarshalECPrivateKey(key)
 		if err != nil {
@@ -250,7 +261,7 @@ data:
 		})
 	}
 	address := epeForwardPort(t, environment, namespace, name, 9002)
-	clientPEM, clientKey := issue(t, gatewaySA)
+	clientPEM, clientKey := issue(t, pods[0])
 	clientCert, err := tls.X509KeyPair(clientPEM, clientKey)
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +374,7 @@ data:
 	step("accept_other_trusted_workload", func(t *testing.T) {
 		// This is deliberately not a gateway identity. CA-only authentication
 		// currently admits every client issued by the trusted CA.
-		certPEM, keyPEM := issue(t, "agentio-epe")
+		certPEM, keyPEM := issue(t, *initial)
 		cert, err := tls.X509KeyPair(certPEM, keyPEM)
 		if err != nil {
 			t.Fatal(err)

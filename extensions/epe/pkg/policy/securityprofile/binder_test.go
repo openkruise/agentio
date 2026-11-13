@@ -112,15 +112,16 @@ func claimAll(t testing.TB, calls *int) []filter.Registration {
 
 func TestBindOrdersUnitsByProfileThenRule(t *testing.T) {
 	regs := claimAll(t, nil)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	p1 := compile(t, regs, "alpha", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r1"), matchAllRule("r2")})
 	p2 := compile(t, regs, "beta", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r3")})
 
-	units, err := b.bind([]*Profile{p1, p2}, testRequest("example.com"), inputs.Workload{Namespace: "ns"})
+	bound, err := b.bind([]*Profile{p1, p2}, testRequest("example.com"), inputs.Workload{Namespace: "ns"})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	want := []filter.UnitID{
 		{Scope: "ns/alpha", Name: "r1", Ordinal: 0},
 		{Scope: "ns/alpha", Name: "r2", Ordinal: 1},
@@ -144,16 +145,17 @@ func TestBindOrdersUnitsByProfileThenRule(t *testing.T) {
 
 func TestBindSkipsNonMatchingRules(t *testing.T) {
 	regs := claimAll(t, nil)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{
 		matchHostRule("hit", "example.com"),
 		matchHostRule("miss", "other.com"),
 	})
-	units, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
+	bound, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	if len(units) != 1 || units[0].ID.Name != "hit" {
 		t.Fatalf("units = %+v, want only 'hit'", units)
 	}
@@ -161,16 +163,17 @@ func TestBindSkipsNonMatchingRules(t *testing.T) {
 
 func TestBinderCopiesRegistrations(t *testing.T) {
 	regs := claimAll(t, nil)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
 
 	// Mutating the caller's slice after construction must not change what the
 	// binder does with a profile already projected against it.
 	regs[0].Name = "mutated"
-	units, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
+	bound, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	if len(units) != 1 {
 		t.Fatalf("units = %d, want 1", len(units))
 	}
@@ -186,7 +189,7 @@ func TestBinderCopiesRegistrations(t *testing.T) {
 func TestProjectionRunsOncePerProfileVersion(t *testing.T) {
 	calls := 0
 	regs := claimAll(t, &calls)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
 	profiles := []*Profile{p}
@@ -220,7 +223,7 @@ func TestProjectionRealErrorFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
 	if _, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{}); !errors.Is(err, boom) {
@@ -239,17 +242,18 @@ func TestUnmountedFilterYieldsNilSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	rule := v1alpha1.SecurityRule{
 		Name:  "r",
 		Match: []v1alpha1.RuleMatch{{Domains: []string{"*"}}},
 	}
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{rule})
-	units, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
+	bound, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	if len(units) != 1 || units[0].Cfgs[0] != nil {
 		t.Fatalf("units = %+v, want one unit with nil cfg slot", units)
 	}
@@ -257,7 +261,7 @@ func TestUnmountedFilterYieldsNilSlot(t *testing.T) {
 
 func TestMatchIndexMatchesRuleMatchingIndex(t *testing.T) {
 	regs := claimAll(t, nil)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	rule := v1alpha1.SecurityRule{
 		Name: "r",
@@ -267,10 +271,11 @@ func TestMatchIndexMatchesRuleMatchingIndex(t *testing.T) {
 		},
 	}
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{rule})
-	units, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
+	bound, err := b.bind([]*Profile{p}, testRequest("example.com"), inputs.Workload{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
+	units := bound.rules
 	if len(units) != 1 || units[0].MatchIndex != 1 {
 		t.Fatalf("MatchIndex = %d, want 1", units[0].MatchIndex)
 	}
@@ -283,7 +288,7 @@ func TestMatchIndexMatchesRuleMatchingIndex(t *testing.T) {
 func TestInlineAndCRProfilesKeepSeparateProjections(t *testing.T) {
 	calls := 0
 	regs := claimAll(t, &calls)
-	b := newBinder(regs)
+	b := newBinder(regs, nil)
 
 	cr := compile(t, regs, "shared", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("cr-rule")})
 	inline := compile(t, regs, "shared", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("inline-rule")})
@@ -293,10 +298,11 @@ func TestInlineAndCRProfilesKeepSeparateProjections(t *testing.T) {
 	workload := inputs.Workload{Namespace: "ns", Name: "shared"}
 
 	for i := 0; i < 3; i++ {
-		units, err := b.bind([]*Profile{cr, inline}, req, workload)
+		bound, err := b.bind([]*Profile{cr, inline}, req, workload)
 		if err != nil {
 			t.Fatalf("bind %d: %v", i, err)
 		}
+		units := bound.rules
 		if len(units) != 2 {
 			t.Fatalf("bind %d: got %d units, want 2", i, len(units))
 		}

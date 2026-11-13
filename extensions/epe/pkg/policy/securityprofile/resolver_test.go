@@ -22,11 +22,50 @@ import (
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/block"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
+
+func TestResolverInterleavesTCPCheckpointsAndPreservesAuditIDs(t *testing.T) {
+	regs := claimAll(t, nil)
+	profiles := []*Profile{
+		compile(t, regs, "a", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("first")}),
+		compile(t, regs, "b", "ns", "1", []v1alpha1.SecurityRule{matchHostRule("miss", "other.example")}),
+		compile(t, regs, "c", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("last")}),
+	}
+	for _, profile := range profiles {
+		profile.TCPPolicy = &securityv1.TCPPolicy{
+			Rules: []*securityv1.TCPRule{{Action: securityv1.TCPAction_TCP_ACTION_DENY}},
+		}
+	}
+	resolve := NewResolver(benchStore{profiles: profiles}, regs, nil, nil)
+	res, err := resolve(t.Context(), subject.Subject{}, testRequest("example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []filter.UnitID{
+		{Scope: "ns/a", Name: "first", Ordinal: 0},
+		{Scope: "ns/a", Name: "tcpRules", Ordinal: 1},
+		{Scope: "ns/b", Name: "tcpRules", Ordinal: 2},
+		{Scope: "ns/c", Name: "last", Ordinal: 3},
+		{Scope: "ns/c", Name: "tcpRules", Ordinal: 4},
+	}
+	if len(res.Units) != len(want) {
+		t.Fatalf("units=%d, want %d", len(res.Units), len(want))
+	}
+	for i, u := range res.Units {
+		if u.ID != want[i] || (u.CheckRequest != nil) != (want[i].Name == "tcpRules") {
+			t.Fatalf("unit %d: id=%+v checkpoint=%v, want %+v", i, u.ID, u.CheckRequest != nil, want[i])
+		}
+	}
+	logger := res.StreamLogger.(*streamLogger)
+	if len(logger.units) != 2 || logger.units[0].ID != want[0] || logger.units[1].ID != want[3] {
+		t.Fatalf("audit units lost execution IDs: %+v", logger.units)
+	}
+}
 
 // A matched resolution must carry the per-stream audit logger. Nothing else
 // wires it: the logger left the static logger list when the units stopped
@@ -36,7 +75,7 @@ func TestResolverSuppliesStreamLoggerWhenPolicyMatches(t *testing.T) {
 	regs := claimAll(t, nil)
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
-	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil)
+	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil, nil)
 
 	subject := subject.Subject{
 		Workload: subject.Workload{
@@ -86,7 +125,7 @@ func TestResolverSuppliesStreamLoggerWhenProjectionFails(t *testing.T) {
 	}
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
-	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil)
+	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil, nil)
 
 	res, err := resolve(context.Background(), subject.Subject{}, testRequest("example.com"))
 	if !errors.Is(err, boom) {
@@ -117,7 +156,7 @@ func TestResolverOmitsStreamLoggerWhenNothingMatches(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resolve := NewResolver(tc.store, regs, nil)
+			resolve := NewResolver(tc.store, regs, nil, nil)
 			res, err := resolve(context.Background(), subject.Subject{}, testRequest("example.com"))
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
@@ -139,7 +178,7 @@ func TestResolverNilSinkBecomesNoop(t *testing.T) {
 	regs := claimAll(t, nil)
 
 	p := compile(t, regs, "p", "ns", "1", []v1alpha1.SecurityRule{matchAllRule("r")})
-	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil)
+	resolve := NewResolver(benchStore{profiles: []*Profile{p}}, regs, nil, nil)
 
 	res, err := resolve(context.Background(), subject.Subject{}, testRequest("example.com"))
 	if err != nil {

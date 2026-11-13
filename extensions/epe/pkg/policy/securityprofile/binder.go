@@ -26,6 +26,7 @@ import (
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 )
 
@@ -55,30 +56,41 @@ type unit struct {
 // check that a profile was projected against the same chain and to name a
 // filter in an error; projecting itself happens once, in the compiler.
 type binder struct {
-	regs  []filter.Registration
-	chain string
+	regs    []filter.Registration
+	chain   string
+	targets *egressauthz.Aggregate
 }
 
-func newBinder(regs []filter.Registration) *binder {
+// binding keeps the executable plan separate from HTTP audit attribution.
+type binding struct {
+	units      []engine.Unit
+	rules      []unit
+	authorizer *tcpAuthorizer
+}
+
+func newBinder(regs []filter.Registration, targets *egressauthz.Aggregate) *binder {
 	frozen := append([]filter.Registration(nil), regs...)
-	return &binder{regs: frozen, chain: chainFingerprint(frozen)}
+	return &binder{regs: frozen, chain: chainFingerprint(frozen), targets: targets}
 }
 
 // bind matches profiles (already sorted by the store) against req and
-// returns the ordered unit list, reading the projection each profile was
+// builds the ordered execution plan, reading the projection each profile was
 // compiled with. A matched rule whose payloads or projection failed fails the
 // request closed.
 //
-// On failure the units matched up to and including the failing rule are
-// returned alongside the error. They are NOT safe to evaluate — the failing
-// one has no usable Cfgs — but they carry the profile/rule attribution the
-// audit stream logger needs, so a stream that fails to resolve can still be
-// recorded. Callers that evaluate must discard the list when err != nil.
-func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, workload inputs.Workload) ([]unit, error) {
+// On failure, rules includes the failing rule for audit attribution.
+// The caller must discard the execution plan when err != nil.
+func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, workload inputs.Workload) (binding, error) {
 	request := inputs.RequestFrom(*req)
 
-	var units []unit
-	for _, profile := range profiles {
+	type checkpoint struct {
+		profileIndex int
+		ordinal      int
+	}
+	var checkpoints []checkpoint
+	ordinal := 0
+	bound := binding{authorizer: &tcpAuthorizer{profiles: profiles}}
+	for index, profile := range profiles {
 		// A profile whose declared inputs failed to resolve still installs and
 		// enforces; the scope poisons only the inputs slot, so a Block rule
 		// keeps blocking while an inputs-reading evaluation fails through the
@@ -97,12 +109,12 @@ func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, workload in
 			// Appended before the projection verdict: the rule matched, so its
 			// attribution is valid even when its config is not, and that is
 			// what lets a failed resolution still be audited.
-			units = append(units, unit{
+			bound.rules = append(bound.rules, unit{
 				Unit: engine.Unit{
 					ID: filter.UnitID{
 						Scope:   profile.Meta.Namespace + "/" + profile.Meta.Name,
 						Name:    rule.Name,
-						Ordinal: len(units),
+						Ordinal: ordinal,
 					},
 					Scope: inputs.NewScope(
 						request, workload,
@@ -120,19 +132,40 @@ func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, workload in
 			})
 
 			if projErr != nil {
-				return units, projErr
+				return bound, projErr
 			}
 			if p.Err != nil {
-				return units, fmt.Errorf("build payloads for rule %q of profile %q: %w",
+				return bound, fmt.Errorf("build payloads for rule %q of profile %q: %w",
 					rule.Name, profile.Meta.Name, p.Err)
 			}
 			for regIdx, err := range p.Errs {
 				if err != nil {
-					return units, fmt.Errorf("project rule %q of profile %q for filter %q: %w",
+					return bound, fmt.Errorf("project rule %q of profile %q for filter %q: %w",
 						rule.Name, profile.Meta.Name, b.regs[regIdx].Name, err)
 				}
 			}
+			ordinal++
+		}
+		if len(profile.TCPPolicy.GetRules()) > 0 {
+			checkpoints = append(checkpoints, checkpoint{profileIndex: index, ordinal: ordinal})
+			ordinal++
 		}
 	}
-	return units, nil
+	bound.units = make([]engine.Unit, ordinal)
+	for _, rule := range bound.rules {
+		bound.units[rule.ID.Ordinal] = rule.Unit
+	}
+	for _, point := range checkpoints {
+		profile := profiles[point.profileIndex]
+		bound.units[point.ordinal] = engine.Unit{
+			ID: filter.UnitID{
+				Scope:   profile.Meta.Namespace + "/" + profile.Meta.Name,
+				Name:    "tcpRules",
+				Ordinal: point.ordinal,
+			},
+			Cfgs:         make([]any, len(b.regs)),
+			CheckRequest: bound.authorizer.checkpoint(point.profileIndex, b.targets),
+		}
+	}
+	return bound, nil
 }

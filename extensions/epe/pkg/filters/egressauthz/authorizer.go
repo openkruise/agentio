@@ -60,9 +60,7 @@ func (a *StaticAuthorizer) Authorize(
 	return a.current.Load().Authorize(ctx, stream, candidates)
 }
 
-// Authorize filters candidates against this validated configuration and records
-// matching allow rules in StreamInfo for audit. If every candidate is denied,
-// the denial is recorded instead.
+// Authorize applies platform CIDR restrictions and records rejected destinations.
 func (c Config) Authorize(
 	ctx context.Context,
 	stream *filter.Stream,
@@ -82,9 +80,6 @@ func (c Config) Authorize(
 		if decision.Action != Allow {
 			continue
 		}
-		if decision.PolicyName != "" {
-			stream.Info.RecordAuthorizationMatch(candidate, decision.PolicyName, decision.RuleIndex)
-		}
 		allowed = append(allowed, candidate)
 	}
 	if len(allowed) == 0 {
@@ -100,16 +95,16 @@ func (c Config) Authorize(
 	return allowed, nil
 }
 
-// Aggregate intersects an ordered list of authorizers. It owns DNS resolution
-// and target selection, so children filter the same addresses without resolving
+// Aggregate resolves targets and intersects common authorizers before the
+// request-bound policy. Children filter the same addresses without resolving
 // or pinning targets independently.
 type Aggregate struct {
 	client      *dns.Client
 	authorizers []Authorizer
 }
 
-// NewAggregate evaluates authorizers in the supplied order. An empty list
-// imposes no restrictions but still resolves and pins the target.
+// NewAggregate evaluates common authorizers in the supplied order, followed
+// by the request-bound policy when authorizing the final destination.
 func NewAggregate(client *dns.Client, authorizers ...Authorizer) *Aggregate {
 	return &Aggregate{client: client, authorizers: slices.Clone(authorizers)}
 }

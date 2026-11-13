@@ -269,7 +269,7 @@ func newSandboxCollection(
 	})
 	sources := registry.TrackSources(sandboxes, "sandbox-profile-sources",
 		func(o *metav1.PartialObjectMetadata) []model.ResourceKey {
-			if o.Annotations[securityprofile.AnnotationSecurityRules] == "" {
+			if !kruise.HasSecurityRules(o) {
 				return nil
 			}
 			return []model.ResourceKey{sandboxProfileKey(o.Namespace, o.Name)}
@@ -281,7 +281,7 @@ func newSandboxCollection(
 	compiled := krt.NewCollection(
 		sandboxes,
 		func(_ krt.HandlerContext, o *metav1.PartialObjectMetadata) *securityprofile.Profile {
-			if o.GetAnnotations()[securityprofile.AnnotationSecurityRules] == "" {
+			if !kruise.HasSecurityRules(o) {
 				return nil
 			}
 			p, err := securityprofile.NewSandboxProfile(o)
@@ -328,7 +328,7 @@ func newSandboxCollection(
 			return sandboxSource{
 				name:     types.NamespacedName{Namespace: obj.Namespace, Name: obj.Name},
 				identity: model.SourceIdentity{UID: string(obj.UID)},
-			}, obj.Annotations[securityprofile.AnnotationSecurityRules] != "", nil
+			}, kruise.HasSecurityRules(obj), nil
 		},
 	}
 }

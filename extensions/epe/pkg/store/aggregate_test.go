@@ -120,13 +120,13 @@ func (s *memoryStore) put(r Resource) {
 }
 
 func TestAggregateQueriesPriorityAndErrors(t *testing.T) {
-	first, second, unrelated := memory(Workload), memory(Workload, TrafficPolicy), memory("SecurityProfile")
+	first, second, unrelated := memory(Workload), memory(Workload, Type("TestPolicy")), memory("SecurityProfile")
 	key := Key{Type: Workload, Name: "shared"}
 	first.put(Resource{Key: key, Value: "first"})
 	second.put(Resource{Key: key, Value: "second"})
 	second.put(Resource{Key: Key{Type: Workload, Name: "other"}, Value: "other"})
 	aggregate := NewAggregate(first, second, unrelated)
-	if !slices.Equal(aggregate.Types(), []Type{Workload, TrafficPolicy, "SecurityProfile"}) {
+	if !slices.Equal(aggregate.Types(), []Type{Workload, Type("TestPolicy"), "SecurityProfile"}) {
 		t.Fatal(aggregate.Types())
 	}
 	resource, err := aggregate.Get(key)
@@ -161,7 +161,7 @@ func TestAggregateQueriesPriorityAndErrors(t *testing.T) {
 }
 
 func TestAggregateFetchAndPublication(t *testing.T) {
-	workloads, policies := memory(Workload), memory(TrafficPolicy)
+	workloads, policies := memory(Workload), memory(Type("TestPolicy"))
 	aggregate := NewAggregate(workloads, policies)
 	before := aggregate.Snapshot()
 	if !before.Ready() {
@@ -171,7 +171,7 @@ func TestAggregateFetchAndPublication(t *testing.T) {
 	if aggregate.Snapshot() != before {
 		t.Fatal("published without changes")
 	}
-	key := Key{Type: TrafficPolicy, Name: "policy"}
+	key := Key{Type: Type("TestPolicy"), Name: "policy"}
 	policies.pending = &Resource{Key: key, Value: "fetched"}
 	resource, err := aggregate.Fetch(t.Context(), key)
 	if err != nil || resource.Value != "fetched" || workloads.fetches != 0 || policies.fetches != 1 {
@@ -215,17 +215,17 @@ func TestAcquirePreservesPriorityAndExplicitFetch(t *testing.T) {
 }
 
 func TestAggregateChangeNotificationAndPinnedView(t *testing.T) {
-	first, second := memory(Workload), memory(TrafficPolicy)
+	first, second := memory(Workload), memory(Type("TestPolicy"))
 	aggregate := NewAggregate(first, second)
 	before := aggregate.Snapshot()
-	second.put(Resource{Key: Key{Type: TrafficPolicy, Name: "updated"}, Value: "new"})
+	second.put(Resource{Key: Key{Type: Type("TestPolicy"), Name: "updated"}, Value: "new"})
 	aggregate.Refresh()
 	select {
 	case <-before.Changed():
 	default:
 		t.Fatal("missed publication notification")
 	}
-	if resource, err := before.Get(Key{Type: TrafficPolicy, Name: "updated"}); err != nil || resource != nil {
+	if resource, err := before.Get(Key{Type: Type("TestPolicy"), Name: "updated"}); err != nil || resource != nil {
 		t.Fatal("old view changed")
 	}
 	select {

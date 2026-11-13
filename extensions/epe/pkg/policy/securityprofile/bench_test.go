@@ -122,7 +122,7 @@ func BenchmarkBinderBind(b *testing.B) {
 			name := "profiles=" + strconv.Itoa(a.profiles) +
 				"/rules=" + strconv.Itoa(a.rules) + "/" + outcome
 			b.Run(name, func(b *testing.B) {
-				binder := newBinder(regs)
+				binder := newBinder(regs, nil)
 				req := testRequest("api.example.com")
 				workload := inputs.Workload{
 					Name:      "agent-pod-abc123",
@@ -145,8 +145,8 @@ func BenchmarkBinderBind(b *testing.B) {
 }
 
 // BenchmarkResolver measures the full engine.Resolver seam: store lookup,
-// binder, the []engine.Unit copy, and the per-stream logger. The delta against
-// BenchmarkBinderBind at the same axis is what the adapter boundary costs.
+// binding the execution plan and creating the per-stream logger. The delta
+// against BenchmarkBinderBind at the same axis is what the adapter costs.
 func BenchmarkResolver(b *testing.B) {
 	regs := claimAll(b, nil)
 
@@ -154,7 +154,7 @@ func BenchmarkResolver(b *testing.B) {
 		profiles := benchProfiles(b, regs, a.profiles, a.rules)
 		name := "profiles=" + strconv.Itoa(a.profiles) + "/rules=" + strconv.Itoa(a.rules)
 		b.Run(name, func(b *testing.B) {
-			resolve := NewResolver(benchStore{profiles: profiles}, regs, nil)
+			resolve := NewResolver(benchStore{profiles: profiles}, regs, nil, nil)
 			ctx := context.Background()
 			req := testRequest("api.example.com")
 			subj := subject.Subject{

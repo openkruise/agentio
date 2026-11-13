@@ -75,17 +75,7 @@ func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	cfg := egressauthz.Config{
-		Policies: []egressauthz.Policy{
-			{
-				Name: "allow",
-				Rules: []egressauthz.Rule{
-					authRule(egressauthz.Allow, "192.0.2.0/24", 8443),
-					authRule(egressauthz.Allow, "192.0.2.0/24", 443),
-				},
-			},
-		},
-	}
+	cfg := egressauthz.Config{}
 	for _, buffered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "headers", true: "buffered"}[buffered], func(t *testing.T) {
 			h := preferenceHarness(t, client, "192.0.2.2:8443", cfg, buffered)
@@ -109,11 +99,7 @@ func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzRouteDoesNotRequireDNS(t *testing.T) {
-	cfg := egressauthz.Config{
-		Policies: []egressauthz.Policy{
-			{Name: "allow", Rules: []egressauthz.Rule{authRule(egressauthz.Allow, "192.0.2.2/32", 8443)}},
-		},
-	}
+	cfg := egressauthz.Config{}
 	h := preferenceHarness(t, nil, "192.0.2.2:8443", cfg, false)
 	h.Run(t, authRequest("unresolved.invalid:443")).RequireUpstream(t, "192.0.2.2:8443")
 }
@@ -123,11 +109,7 @@ func TestScenario_EgressAuthzDeniedRouteDoesNotFallBack(t *testing.T) {
 	if err := client.SetRecord("api.example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := egressauthz.Config{
-		Policies: []egressauthz.Policy{
-			{Name: "allow", Rules: []egressauthz.Rule{authRule(egressauthz.Allow, "192.0.2.1/32", 443)}},
-		},
-	}
+	cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.99/32")}}
 	h := preferenceHarness(t, client, "192.0.2.99:443", cfg, false)
 	requireDenied(
 		t,
@@ -162,13 +144,7 @@ func TestScenario_EgressAuthzOriginalMustBelongToHost(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-			publishPolicies(t, cfg, egressauthz.Policy{
-				Name: "allow",
-				Rules: []egressauthz.Rule{
-					authRule(egressauthz.Allow, "192.0.2.1/32", uint16(tc.port)),
-					authRule(egressauthz.Allow, "192.0.2.2/32", uint16(tc.port)),
-					authRule(egressauthz.Allow, "2001:db8::/64", uint16(tc.port)),
-				}})
+			updateDenied(t, cfg, "192.0.2.99/32")
 			h := authHarness(t, client, cfg)
 			v := h.Run(t, authRequest("api.example.com:443").DestinationAddress(tc.original).DestinationPort(tc.port))
 			if tc.want == "" {
@@ -181,11 +157,7 @@ func TestScenario_EgressAuthzOriginalMustBelongToHost(t *testing.T) {
 }
 
 func TestEgressAuthzOriginalMustMatchLiteralHost(t *testing.T) {
-	cfg := egressauthz.Config{Policies: []egressauthz.Policy{{
-		Name: "allow",
-		Rules: []egressauthz.Rule{
-			authRule(egressauthz.Allow, "192.0.2.0/24", 443),
-		}}}}
+	cfg := egressauthz.Config{}
 	target, reply, err := egressauthz.NewAggregate(dns.NewClient(nil, time.Second), cfg).Authorize(
 		t.Context(),
 		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
@@ -206,11 +178,10 @@ func TestScenario_EgressAuthzChecksRewrittenAuthority(t *testing.T) {
 		for _, buffered := range []bool{false, true} {
 			for _, allow := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/body=%v/allow=%v", header, buffered, allow), func(t *testing.T) {
-					rules := []egressauthz.Rule{authRule(egressauthz.Allow, "192.0.2.1/32", 443)}
-					if allow {
-						rules = append(rules, authRule(egressauthz.Allow, "192.0.2.2/32", 8443))
+					cfg := egressauthz.Config{}
+					if !allow {
+						cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.2/32")}
 					}
-					cfg := egressauthz.Config{Policies: []egressauthz.Policy{{Name: "allow", Rules: rules}}}
 					client := dns.NewClient(nil, time.Second)
 					calls := 0
 					h := enginetest.New(t, enginetest.Options{

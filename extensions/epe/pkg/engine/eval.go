@@ -510,36 +510,64 @@ func (e *Engine) invokeBody(
 // walkRequest completes the request-header phase and records body callbacks.
 func (e *Engine) walkRequest(ctx context.Context, st *filter.Stream, units []Unit) (requestWalk, error) {
 	walk := requestWalk{actionWalk: newActionWalk(st)}
-	for p := range e.pairs(units, evalCursor{}, filter.PhaseRequestHeaders) {
-		view, err := walk.streamView()
-		if err != nil {
-			return walk, err
-		}
-		erased := filter.ErasedRuleConfig{ID: p.unit.ID, Cfg: p.cfg, Scope: p.unit.Scope}
-		f := p.reg.New(erased)
-		act, invokeErr := e.invoke(ctx, st, e.metrics[p.at.regIdx].requestHeaders,
-			func(ctx context.Context) (filter.Action, error) { return f.OnRequestHeaders(ctx, view) })
-		if invokeErr != nil {
-			walk.filterFailed(p, filter.PhaseRequestHeaders, invokeErr)
+	for u := range units {
+		if check := units[u].CheckRequest; check != nil {
+			reduced, err := walk.result()
+			if err != nil {
+				return walk, err
+			}
+			effective := *st
+			effective.Request = filter.RequestAfterMutations(st.Request, reduced.headerOps)
+			if reduced.route != nil && reduced.route.Upstream != nil {
+				effective.Upstream = reduced.route.Upstream
+			}
+			act, err := check(ctx, &effective)
+			if err != nil {
+				return walk, &RequestAuthorizationError{Err: err}
+			}
+			p := pair{
+				at:   evalCursor{unit: u},
+				unit: units[u],
+				reg:  filter.Registration{Name: "destination_authorization"},
+			}
+			if err := walk.apply(p, act); err != nil {
+				return walk, err
+			}
 			if walk.halted() {
 				return walk, nil
 			}
-			continue
 		}
-		if err := validateAction(p.reg, filter.PhaseRequestHeaders, act); err != nil {
-			return walk, err
-		}
-		if act.Kind() == filter.KindNeedBody {
-			walk.pending = append(walk.pending, act.Mutations()...)
-			walk.bodyFilters = append(walk.bodyFilters, requestBodyInvocation{at: p.at, f: f})
-			walk.record(p, filter.ActionNeedBody)
-			continue
-		}
-		if err := walk.apply(p, act); err != nil {
-			return walk, err
-		}
-		if walk.halted() {
-			return walk, nil
+		for p := range e.pairs(units[:u+1], evalCursor{unit: u}, filter.PhaseRequestHeaders) {
+			view, err := walk.streamView()
+			if err != nil {
+				return walk, err
+			}
+			erased := filter.ErasedRuleConfig{ID: p.unit.ID, Cfg: p.cfg, Scope: p.unit.Scope}
+			f := p.reg.New(erased)
+			act, invokeErr := e.invoke(ctx, st, e.metrics[p.at.regIdx].requestHeaders,
+				func(ctx context.Context) (filter.Action, error) { return f.OnRequestHeaders(ctx, view) })
+			if invokeErr != nil {
+				walk.filterFailed(p, filter.PhaseRequestHeaders, invokeErr)
+				if walk.halted() {
+					return walk, nil
+				}
+				continue
+			}
+			if err := validateAction(p.reg, filter.PhaseRequestHeaders, act); err != nil {
+				return walk, err
+			}
+			if act.Kind() == filter.KindNeedBody {
+				walk.pending = append(walk.pending, act.Mutations()...)
+				walk.bodyFilters = append(walk.bodyFilters, requestBodyInvocation{at: p.at, f: f})
+				walk.record(p, filter.ActionNeedBody)
+				continue
+			}
+			if err := walk.apply(p, act); err != nil {
+				return walk, err
+			}
+			if walk.halted() {
+				return walk, nil
+			}
 		}
 	}
 	return walk, nil
@@ -580,6 +608,7 @@ func (w *actionWalk) apply(p pair, act filter.Action) error {
 		w.record(p, filter.ActionBlock)
 		return nil
 	case filter.KindBypass:
+		w.pending = append(w.pending, act.Mutations()...)
 		w.disposition = DispositionBypassed
 		w.record(p, filter.ActionBypass)
 		return nil

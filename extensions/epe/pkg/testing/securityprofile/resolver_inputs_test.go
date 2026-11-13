@@ -62,7 +62,7 @@ func TestResolverMountsProfileInputsOnUnits(t *testing.T) {
 		}}
 		store.ProfileSet(profile)
 	}
-	resolution, err := policysecurityprofile.NewResolver(store, regs, nil)(
+	resolution, err := policysecurityprofile.NewResolver(store, regs, nil, nil)(
 		context.Background(),
 		subject.Subject{
 			Workload: subject.Workload{Name: "pod", Namespace: "default", Labels: map[string]string{"app": "blocked"}},
@@ -111,7 +111,7 @@ func TestResolverSkipsInitialProfileWithUnresolvedInputs(t *testing.T) {
 	}}
 	store.ProfileSet(profile)
 
-	resolution, err := policysecurityprofile.NewResolver(store, nil, nil)(
+	resolution, err := policysecurityprofile.NewResolver(store, nil, nil, nil)(
 		context.Background(),
 		subject.Subject{
 			Workload: subject.Workload{Name: "pod", Namespace: "default", Labels: map[string]string{"app": "blocked"}},

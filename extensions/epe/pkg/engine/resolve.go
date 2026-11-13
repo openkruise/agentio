@@ -32,7 +32,8 @@ import (
 // to carry — attribution never has to survive a round trip through an untyped
 // map to reach the one component that reads it.
 type Resolution struct {
-	Units []Unit
+	DestinationAuthorizer filter.DestinationAuthorizer
+	Units                 []Unit
 	// StreamLogger, when non-nil, is invoked once at stream end under the
 	// same contract as the statically registered loggers: exactly once, at
 	// true stream end including abnormal termination, and it must not block.
@@ -55,3 +56,10 @@ type Resolver func(ctx context.Context, subject subject.Subject, req *httpreq.HT
 // denies the request; otherwise the returned target is pinned for forwarding.
 // Errors become local failures, never an allow decision.
 type RequestAuthorizer func(context.Context, *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error)
+
+// RequestAuthorizationError distinguishes a failed checkpoint from an engine
+// contract error, so adapters can reject locally even with transport fail-open.
+type RequestAuthorizationError struct{ Err error }
+
+func (e *RequestAuthorizationError) Error() string { return e.Err.Error() }
+func (e *RequestAuthorizationError) Unwrap() error { return e.Err }

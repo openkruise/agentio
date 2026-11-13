@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -82,48 +81,39 @@ func TestWaitForPrometheusMetricsRetriesTransientConnectionFailure(t *testing.T)
 }
 
 func TestEgressEPEFixtureXDSArguments(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("xds=%t", enabled), func(t *testing.T) {
-			manifest := template.Must(template.New("epe").Option("missingkey=error").Parse(egressEPEYAML))
-			var rendered bytes.Buffer
-			if err := manifest.Execute(&rendered, map[string]any{
-				"Namespace": "agentio-system",
-				"Image":     "registry.example/epe@sha256:" + strings.Repeat("b", 64),
-				"EnableXDS": enabled,
-			}); err != nil {
-				t.Fatal(err)
-			}
-			objects, err := kube.DecodeYAML(&rendered)
-			if err != nil {
-				t.Fatal(err)
-			}
-			found := false
-			for _, object := range objects {
-				if object.GetKind() != "Pod" {
-					continue
-				}
-				found = true
-				var pod corev1.Pod
-				if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, &pod); err != nil {
-					t.Fatal(err)
-				}
-				args := pod.Spec.Containers[0].Args
-				if slices.Contains(args, "--enable-xds-egressauthz") != enabled {
-					t.Fatalf("xds=%t, args=%v", enabled, args)
-				}
-				if !slices.Contains(args, "--xds-address=agentiod.agentio-system.svc:15012") ||
-					pod.Spec.ServiceAccountName != "agentio-epe" {
-					t.Fatalf(
-						"fixture must always configure EPE WDS: args=%v account=%s",
-						args,
-						pod.Spec.ServiceAccountName,
-					)
-				}
-			}
-			if !found {
-				t.Fatal("fixture did not render a Pod")
-			}
-		})
+	manifest := template.Must(template.New("epe").Option("missingkey=error").Parse(egressEPEYAML))
+	var rendered bytes.Buffer
+	if err := manifest.Execute(&rendered, map[string]any{
+		"Namespace": "agentio-system",
+		"Image":     "registry.example/epe@sha256:" + strings.Repeat("b", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := kube.DecodeYAML(&rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, object := range objects {
+		if object.GetKind() != "Pod" {
+			continue
+		}
+		found = true
+		var pod corev1.Pod
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, &pod); err != nil {
+			t.Fatal(err)
+		}
+		args := pod.Spec.Containers[0].Args
+		if slices.Contains(args, "--enable-xds-egressauthz") {
+			t.Fatalf("removed TrafficPolicy authorization argument: %v", args)
+		}
+		if !slices.Contains(args, "--xds-address=agentiod.agentio-system.svc:15012") ||
+			pod.Spec.ServiceAccountName != "agentio-epe" {
+			t.Fatalf("fixture must configure EPE WDS: args=%v account=%s", args, pod.Spec.ServiceAccountName)
+		}
+	}
+	if !found {
+		t.Fatal("fixture did not render a Pod")
 	}
 }
 

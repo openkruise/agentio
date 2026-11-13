@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trafficpolicy
+package workload
 
 import (
 	"context"
@@ -25,35 +25,16 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// NewContextResolver pins metadata and, when enabled, native policies before filters run.
-func NewContextResolver(source Resources, native bool) filter.ContextResolver {
+// NewContextResolver pins Workload metadata before profile selection and filters run.
+func NewContextResolver(source Resources) filter.ContextResolver {
 	return func(ctx context.Context, request filter.RequestContext) (filter.RequestContext, error) {
-		caller := &request.Caller
-		identity := caller.Subject.Workload
-		var binding subject.Workload
-		if native {
-			snapshot, err := lookup(ctx, source, caller.Subject)
-			if err != nil {
-				return request, err
-			}
-			if snapshot.entry.bindingErr != nil {
-				return request, snapshot.entry.bindingErr
-			}
-			if snapshot.entry.compiled.err != nil {
-				return request, snapshot.entry.compiled.err
-			}
-			binding = snapshot.entry.binding
-			request.Policies.DestinationAuthorizer = &snapshot.entry.compiled.config
-		} else {
-			var err error
-			binding, err = lookupBinding(ctx, source, caller.Subject)
-			if err != nil {
-				return request, err
-			}
+		binding, err := lookupBinding(ctx, source, request.Caller.Subject)
+		if err != nil {
+			return request, err
 		}
+		identity := &request.Caller.Subject.Workload
 		identity.UID, identity.Name, identity.Namespace = binding.UID, binding.Name, binding.Namespace
 		identity.Labels, identity.SecurityProfileReferences = binding.Labels, binding.SecurityProfileReferences
-		caller.Subject.Workload = identity
 		return request, nil
 	}
 }

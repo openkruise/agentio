@@ -138,22 +138,16 @@ func TestAuthorizationSelectsAndPinsAllowedCandidate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Policies: []Policy{{Name: "test",
-		Rules: []Rule{
-			{Action: Deny, CIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}},
-			{
-				Action: Allow,
-				CIDRs:  []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-				Ports:  []PortRange{{Start: 443}},
-			},
-		}}}}
+	cfg := Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}}
 	f := NewAggregate(client, cfg).Authorize
 	if route := run(t, f, "example.com", 443); route.Upstream.Address.String() != "192.0.2.2:443" || route.ClearCache {
 		t.Fatalf("unauthorized or changed target: %+v", route)
 	}
-	assertDenied(t, f, "example.com", 80)
-	// A configured policy with no rules denies all destinations.
-	empty := NewAggregate(client, Config{Policies: []Policy{{Name: "empty"}}}).Authorize
+	if route := run(t, f, "example.com", 80); route.Upstream.Address.String() != "192.0.2.2:80" {
+		t.Fatal("unexpected target", route)
+	}
+	// A catch-all CIDR denies every IPv4 destination.
+	empty := NewAggregate(client, Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}}).Authorize
 	assertDenied(t, empty, "example.com", 443)
 	assertDenied(t, empty, "192.0.2.1", 443)
 }
@@ -181,7 +175,6 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 		want        string
 	}{
 		{name: "single deny", ips: []string{"192.0.2.1"}, want: filter.AuthorizationReasonPolicyDenied},
-		{name: "no matching rule", ips: []string{"192.0.2.3"}, want: filter.AuthorizationReasonPolicyDenied},
 		{name: "multiple denied", ips: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.99:80", want: filter.AuthorizationReasonPolicyDenied},
 		{name: "allowed candidate", ips: []string{"192.0.2.1", "192.0.2.2"}, allowSecond: true, wantAllowed: true},
 		{name: "denied original does not fall back", ips: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.1:80", allowSecond: true, want: filter.AuthorizationReasonPolicyDenied},
@@ -195,21 +188,9 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 			if err := client.SetRecord("example.com", ips); err != nil {
 				t.Fatal(err)
 			}
-			action := Deny
-			if tc.allowSecond {
-				action = Allow
-			}
-			cfg := Config{
-				Policies: []Policy{
-					{
-						Name:  "first",
-						Rules: []Rule{{Action: Deny, CIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}}},
-					},
-					{
-						Name:  "second",
-						Rules: []Rule{{Action: action, CIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/32")}}},
-					},
-				},
+			cfg := Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}}
+			if !tc.allowSecond {
+				cfg.DeniedCIDRs = append(cfg.DeniedCIDRs, netip.MustParsePrefix("192.0.2.2/32"))
 			}
 			stream := &filter.Stream{
 				RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}},
@@ -227,13 +208,13 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 				t.Fatalf("audit: %+v", got)
 			}
 			if tc.wantAllowed {
-				if reply != nil || got.Action != "allow" || got.Policy != "second" ||
+				if reply != nil || got.Action != "allow" || got.Policy != "" ||
 					got.Destination != "192.0.2.2:80" {
 					t.Fatalf("allow: %+v reply=%v", got, reply)
 				}
 			} else if tc.original == "192.0.2.1:80" {
 				if target != nil || reply == nil || reply.Status != 403 || got.Action != "deny" ||
-					got.Destination != tc.original || got.Policy != "first" ||
+					got.Destination != tc.original || got.Policy != "EPEConfig/egressAuthorization" ||
 					got.RuleIndex == nil || *got.RuleIndex != 0 {
 					t.Fatalf("original denial: target=%v reply=%v audit=%+v", target, reply, got)
 				}
@@ -242,8 +223,6 @@ func TestAuthorizationAuditDecision(t *testing.T) {
 					got.Policy != "" || got.RuleIndex != nil || got.Destination != "" {
 					t.Fatalf("host denial: target=%v reply=%v audit=%+v", target, reply, got)
 				}
-			} else if tc.name == "no matching rule" && (got.Policy != "" || got.RuleIndex != nil) {
-				t.Fatalf("invented match: %+v", got)
 			}
 		})
 	}
