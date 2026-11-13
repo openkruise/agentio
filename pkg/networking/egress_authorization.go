@@ -48,7 +48,7 @@ func (b *resourceBuilder) deniedIPRanges() []*corev3.CidrRange {
 	return ranges
 }
 
-// CONNECT authority capture supplies the numeric target for both TCP and UDP.
+// CONNECT-UDP retains its original-target admission check.
 func (b *resourceBuilder) egressAuthorizationFilter() *hcm.HttpFilter {
 	return httpFilter("agentio.egress_authorization", b.pack(&rbachttpv3.RBAC{
 		RulesStatPrefix: "egress_authorization",

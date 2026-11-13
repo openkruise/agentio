@@ -212,7 +212,7 @@ func TestGatewayForwardProxyConnectSemantics(t *testing.T) {
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
 	for routeName, clusterName := range map[string]string{
-		HTTPDynamicForwardProxy: PassthroughCluster,
+		HTTPDynamicForwardProxy: HTTPDynamicForwardProxy,
 		TLSConnectOriginate:     "tls_proxy_originate",
 	} {
 		for _, virtualHost := range routes[routeName].GetVirtualHosts() {

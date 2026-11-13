@@ -35,7 +35,9 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
+	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extprocservice "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -72,8 +74,29 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 		t.Fatal("a non-loopback IPv4 interface is required")
 	}
 	var originCalls, epeCalls atomic.Int64
-	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		originCalls.Add(1)
+		if request.Method == http.MethodConnect {
+			connection, buffer, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := fmt.Fprintf(
+				buffer,
+				"HTTP/1.1 200 Connection Established\r\n\r\n%s\n",
+				request.Host,
+			); err != nil {
+				t.Error(err)
+			}
+			if err := buffer.Flush(); err != nil {
+				t.Error(err)
+			}
+			if err := connection.Close(); err != nil {
+				t.Error(err)
+			}
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	if err := origin.Listener.Close(); err != nil {
@@ -97,6 +120,9 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 			selected := target
 			if stream.Request.Path == "/loopback" {
 				selected = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), target.Port())
+			}
+			if stream.Request.Method == http.MethodConnect {
+				selected = netip.MustParseAddrPort("127.0.0.1:1")
 			}
 			return &filter.UpstreamTarget{Address: &selected}, nil, nil
 		},
@@ -143,6 +169,21 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				manager.RouteSpecifier = &hcmv3.HttpConnectionManager_RouteConfig{
 					RouteConfig: b.buildForwardRoute(HTTPDynamicForwardProxy, settings.gateway),
 				}
+				// Model the original destination restored from the outer HBONE tunnel.
+				manager.HttpFilters = append(
+					[]*hcmv3.HttpFilter{httpFilter("test.original_target", b.pack(&httpstate.Config{
+						OnRequestHeaders: []*common.FilterStateValue{
+							{
+								Key: &common.FilterStateValue_ObjectKey{
+									ObjectKey: "envoy.filters.listener.original_dst.local_ip",
+								},
+								Value: &common.FilterStateValue_FormatString{
+									FormatString: formatString("%REQ(x-test-original-target)%"),
+								},
+							},
+						},
+					}))},
+					manager.HttpFilters...)
 				listener := &listenerv3.Listener{
 					Name:    "egress",
 					Address: socketAddress("127.0.0.1", port),
@@ -186,6 +227,7 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 					t.Fatal(err)
 				}
 				req.Host = host
+				req.Header.Set("x-test-original-target", net.JoinHostPort("127.0.0.1", fmt.Sprint(target.Port())))
 				response, err := client.Do(req)
 				if err != nil {
 					t.Fatal(err)
@@ -195,6 +237,48 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				}
 				if err := response.Body.Close(); err != nil {
 					t.Fatal(err)
+				}
+				return response.StatusCode
+			}
+			proxyRequest := func(loopback bool) int {
+				t.Helper()
+				connection, err := net.DialTimeout("tcp", address, time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := connection.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				proxy := target
+				if loopback {
+					proxy = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), target.Port())
+				}
+				// The external proxy owns this inner target; the gateway only dials proxy.
+				const authority = "127.0.0.1:443"
+				if _, err := fmt.Fprintf(
+					connection,
+					"CONNECT %s HTTP/1.1\r\nHost: %s\r\nx-test-original-target: %s\r\n\r\n",
+					authority,
+					authority,
+					proxy,
+				); err != nil {
+					t.Fatal(err)
+				}
+				reader := bufio.NewReader(connection)
+				response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.StatusCode == http.StatusOK {
+					forwarded, err := reader.ReadString('\n')
+					if err != nil || forwarded != authority+"\n" {
+						t.Fatalf("proxy received authority %q: %v", forwarded, err)
+					}
 				}
 				return response.StatusCode
 			}
@@ -213,12 +297,18 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 					}
 					time.Sleep(20 * time.Millisecond)
 				}
+				if status := proxyRequest(false); status != want {
+					t.Fatalf("proxy status = %d, want %d", status, want)
+				}
 				before, beforeEPE := originCalls.Load(), epeCalls.Load()
 				if status := request(true); status != http.StatusServiceUnavailable {
 					t.Fatalf("mandatory loopback restriction: status = %d", status)
 				}
 				if len(denied) > 0 && request(false) != want {
 					t.Fatal("denied upstream became reachable")
+				}
+				if status := proxyRequest(true); status != http.StatusServiceUnavailable {
+					t.Fatalf("loopback proxy status = %d", status)
 				}
 				if originCalls.Load() != before {
 					t.Fatal("a denied request reached the origin")
@@ -245,10 +335,9 @@ func TestEnvoyEgressAuthorizationCONNECT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Isolate admission from HBONE identity/Porter; an accepted target returns 200.
+	// Isolate admission from HBONE identity/Porter; TCP is checked after routing.
 	manager.HttpFilters = []*hcmv3.HttpFilter{
 		manager.HttpFilters[0],
-		b.egressAuthorizationFilter(),
 		httpFilter("envoy.filters.http.router", b.pack(&routerv3.Router{})),
 	}
 	manager.RouteSpecifier = &hcmv3.HttpConnectionManager_RouteConfig{RouteConfig: &routev3.RouteConfiguration{
@@ -267,7 +356,7 @@ func TestEnvoyEgressAuthorizationCONNECT(t *testing.T) {
 				},
 			}}},
 	}}
-	configureUDPHCM(manager)
+	b.configureUDPHCM(manager)
 	cfg := &bootstrapv3.Bootstrap{StaticResources: &bootstrapv3.Bootstrap_StaticResources{
 		Clusters: []*clusterv3.Cluster{},
 		Listeners: []*listenerv3.Listener{
@@ -330,7 +419,7 @@ func TestEnvoyEgressAuthorizationCONNECT(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := http.StatusForbidden
-				if ip == "10.20.30.40" {
+				if !udp || ip == "10.20.30.40" {
 					want = http.StatusOK
 				}
 				if response.StatusCode != want {

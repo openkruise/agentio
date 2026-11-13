@@ -106,10 +106,14 @@ func connectUDPRoute() *routev3.Route {
 // configureUDPHCM preserves CONNECT identity processing and validates the UDP
 // target before opening the upstream socket. UDP skips TCP SNI policy transfer;
 // datagrams are forwarded without inspection.
-func configureUDPHCM(hcm *hcmv3.HttpConnectionManager) {
+func (b *resourceBuilder) configureUDPHCM(hcm *hcmv3.HttpConnectionManager) {
 	router := hcm.HttpFilters[len(hcm.HttpFilters)-1]
 	filters := make([]*hcmv3.HttpFilter, 0, len(hcm.HttpFilters))
-	for _, filter := range hcm.HttpFilters[:len(hcm.HttpFilters)-1] {
+	filters = append(filters, hcm.HttpFilters[0])
+	if !b.legacyGateway {
+		filters = append(filters, b.egressAuthorizationFilter())
+	}
+	for _, filter := range hcm.HttpFilters[1 : len(hcm.HttpFilters)-1] {
 		if filter.Name != "agentio.connect_policy" &&
 			filter.Name != "agentio.connection_policy_store" &&
 			filter.Name != bandwidthFilterName && filter.Name != concurrencyFilterName {

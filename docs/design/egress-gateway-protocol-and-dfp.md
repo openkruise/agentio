@@ -14,7 +14,7 @@ The TCP path does not run HTTP request-level EPE authorization. Configured Servi
 
 ## Destination restrictions
 
-The native `agentio-egress` gateway checks original TCP/UDP destinations and dynamic forward proxy (DFP) targets using `AgentioConfig.egressAuthorization.deniedCIDRs` plus the same mandatory restrictions as EPE:
+The native `agentio-egress` gateway checks actual upstream destinations using `AgentioConfig.egressAuthorization.deniedCIDRs` plus the same mandatory restrictions as EPE:
 
 | Destination | Denied ranges |
 | --- | --- |
@@ -24,7 +24,7 @@ The native `agentio-egress` gateway checks original TCP/UDP destinations and dyn
 
 Equivalent IPv4-mapped IPv6 addresses are also filtered. Private service networks and Alibaba Cloud metadata at `100.100.100.200` remain allowed by this default.
 
-CONNECT admission checks the original numeric target before opening TCP or UDP forwarding. TCP policy filters also check their selected target, including original-destination paths after TLS termination. DFP filtering is enabled for HTTP, native TLS passthrough, and TLS origination even without EPE. It applies to IP literals and DNS results, including ServiceEntry and EPE targets selected through filter state. An explicit denied target fails without falling back to another IP. An upstream proxy's actual endpoint is checked; the external proxy's subsequent connections are outside the gateway's control. Internal Porter, EPE, and xDS connections are excluded.
+TCP CONNECT admission leaves destination authorization to the forwarding path, after target selection. TCP policy filters check their selected target, including original-destination paths after TLS termination. DFP filtering is enabled for HTTP, native TLS passthrough, and TLS origination even without EPE. It applies to IP literals and DNS results, including ServiceEntry and EPE targets selected through filter state. An explicit denied target fails without falling back to another IP. Application-level CONNECT also uses DFP: plaintext proxy connections use the original proxy IP and port, while HTTPS proxy connections retain their outer-SNI target selection. This checks the actual proxy endpoint without restricting a tunnel target reached by the external proxy. An original address that is replaced by an allowed final target is not rejected at tunnel admission. CONNECT-UDP keeps its existing original-target admission check. Internal Porter, EPE, and xDS connections are excluded.
 
 Envoy removes matching addresses before adding them to the DNS cache. If none remain on the first resolution, forwarding fails; if a refresh returns only denied addresses under the same policy, Envoy retains the previously allowed address. Filtered addresses increment `dns_cache.<cache-name>.dns_address_filter_out`. The default cache name is `agentio_dns_cache`; custom lists append the canonical effective CIDRs. Every DFP consumer uses the same name and settings. Changing the list creates a separate cache, allowing old and new CDS/LDS resources to coexist during updates without reusing stale allowed entries. Updates do not revoke established connections. Envoy retains superseded caches until restart.
 

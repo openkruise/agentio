@@ -219,7 +219,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 		}
 	}
 	for listenerName, want := range map[string][]string{
-		MainInternal: {"envoy.filters.http.ext_proc", "agentio.route_upstream", "agentio.egress_target", "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
+		MainInternal: {"envoy.filters.http.ext_proc", "agentio.route_upstream", "agentio.egress_target", "agentio.connect_proxy_target", "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
 		MainForward:  {"envoy.filters.http.rbac", "envoy.filters.http.ext_proc", "agentio.fqdn_upstream", "agentio.route_upstream", "agentio.egress_target", connectProxyTLSIdentityFilter, "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
 	} {
 		if got := httpFilterNames(findHCM(t, listeners[listenerName])); !equalStrings(got, want) {
