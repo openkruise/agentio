@@ -43,7 +43,7 @@ require (
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
-	istio.io/api v1.29.4-0.20260528223333-f9b16f1f49ce
+	istio.io/api v1.32.0
 	istio.io/istio v0.0.0-20260624015733-fe1d6ad98611
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.1
