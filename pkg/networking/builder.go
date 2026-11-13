@@ -48,7 +48,6 @@ const (
 	TLSPassthrough          = "tls_passthrough"
 	ExtProcCluster          = "sandbox-ext-proc"
 	PorterCluster           = "agentio-porter"
-	UDPPassthroughCluster   = "agentio_udp_passthrough"
 	DNSCacheName            = "agentio_dns_cache"
 )
 

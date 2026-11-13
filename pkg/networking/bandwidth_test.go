@@ -22,15 +22,12 @@ import (
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
-	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
-	test.SetForTest(t, &features.EnableUDPProxy, true)
 	settings := new(configv1.EgressGateway)
 	if err := protojson.Unmarshal([]byte(`{
       "http":{"routing":{"fallback":{"retries":{"attempts":3,"retryOn":"5xx"}}}},
@@ -72,15 +69,6 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 	if inner[len(inner)-1].GetRoute().GetRetryPolicy().GetRetryOn() != "5xx" {
 		t.Fatal("bandwidth shaping changed retries on the separate inner HTTP chain")
 	}
-	for _, upgrade := range hcm.UpgradeConfigs {
-		if upgrade.UpgradeType == connectUDPUpgradeType {
-			for _, filter := range upgrade.Filters {
-				if filter.Name == bandwidthFilterName {
-					t.Fatal("TCP byte shaping leaked into CONNECT-UDP")
-				}
-			}
-		}
-	}
 	inputs.LegacyGateway = true
 	if _, err := Build(inputs); err == nil {
 		t.Fatal("legacy gateway accepted unsupported bandwidth module")
@@ -106,7 +94,6 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 }
 
 func TestNetworkLimitsRouteGates(t *testing.T) {
-	test.SetForTest(t, &features.EnableUDPProxy, true)
 	settings := new(configv1.EgressGateway)
 	if err := protojson.Unmarshal([]byte(`{
  "bandwidthLimit":{

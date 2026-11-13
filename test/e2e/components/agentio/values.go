@@ -61,9 +61,6 @@ func chartValues(config Config) ([]byte, error) {
 			"trustedNodeServiceAccount": config.Namespace + "/ztunnel",
 			"meshInternalTrafficPolicy": "PASSTHROUGH",
 			"enableSNITrafficPolicy":    true,
-			// Experimental CONNECT-UDP termination only adds a connect-udp upgrade
-			// beside the TCP CONNECT route, so the whole suite can run with it on.
-			"env": map[string]any{"AGENTIO_GATEWAY_ENABLE_UDP_PROXY": "true"},
 			"injector": map[string]any{
 				"clientTrust":    map[string]any{"enabled": config.EnableClientTrust},
 				"nativeSidecars": false,

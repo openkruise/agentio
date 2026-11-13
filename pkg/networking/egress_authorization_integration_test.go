@@ -25,7 +25,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -185,7 +184,9 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 								},
 							},
 							{
-								Key: &common.FilterStateValue_ObjectKey{ObjectKey: originalDstAddressKey},
+								Key: &common.FilterStateValue_ObjectKey{
+									ObjectKey: "envoy.network.transport_socket.original_dst_address",
+								},
 								Value: &common.FilterStateValue_FormatString{
 									FormatString: formatString("%REQ(x-test-original-target)%"),
 								},
@@ -370,7 +371,6 @@ func TestEnvoyEgressAuthorizationCONNECT(t *testing.T) {
 				},
 			}}},
 	}}
-	b.configureUDPHCM(manager)
 	cfg := &bootstrapv3.Bootstrap{StaticResources: &bootstrapv3.Bootstrap_StaticResources{
 		Clusters: []*clusterv3.Cluster{},
 		Listeners: []*listenerv3.Listener{
@@ -393,53 +393,58 @@ func TestEnvoyEgressAuthorizationCONNECT(t *testing.T) {
 		t.Fatal(err)
 	}
 	address, _ := runCompatibilityEnvoy(t, binary, string(data))
-	for _, udp := range []bool{false, true} {
-		for _, ip := range []string{"127.0.0.1", "0.0.0.0", "169.254.169.254", "100.100.100.200", "::1", "::", "fe80::1", "::ffff:127.0.0.1", "2001:db8::1", "10.20.30.40"} {
-			if udp && strings.Contains(ip, ":") {
-				continue // The supported CONNECT-UDP contract is IPv4 only.
+	for _, ip := range []string{"127.0.0.1", "0.0.0.0", "169.254.169.254", "100.100.100.200", "::1", "::", "fe80::1", "::ffff:127.0.0.1", "2001:db8::1", "10.20.30.40"} {
+		t.Run(ip, func(t *testing.T) {
+			connection, err := net.DialTimeout("tcp", address, time.Second)
+			if err != nil {
+				t.Fatal(err)
 			}
-			t.Run(fmt.Sprintf("udp=%t/%s", udp, ip), func(t *testing.T) {
-				connection, err := net.DialTimeout("tcp", address, time.Second)
-				if err != nil {
-					t.Fatal(err)
+			defer func() {
+				if err := connection.Close(); err != nil {
+					t.Error(err)
 				}
-				defer func() {
-					if err := connection.Close(); err != nil {
-						t.Error(err)
-					}
-				}()
-				if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
-					t.Fatal(err)
-				}
-				request := fmt.Sprintf(
-					"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
-					net.JoinHostPort(ip, "443"),
-					net.JoinHostPort(ip, "443"),
-				)
-				if udp {
-					request = fmt.Sprintf(
-						"GET /.well-known/masque/udp/%s/443/ HTTP/1.1\r\nHost: gateway\r\nConnection: Upgrade\r\nUpgrade: connect-udp\r\n\r\n",
-						ip,
-					)
-				}
-				if _, err := io.WriteString(connection, request); err != nil {
-					t.Fatal(err)
-				}
-				response, err := http.ReadResponse(bufio.NewReader(connection), nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := response.Body.Close(); err != nil {
-					t.Fatal(err)
-				}
-				want := http.StatusForbidden
-				if !udp || ip == "10.20.30.40" {
-					want = http.StatusOK
-				}
-				if response.StatusCode != want {
-					t.Fatalf("status = %d, want %d", response.StatusCode, want)
-				}
-			})
-		}
+			}()
+			if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			request := fmt.Sprintf(
+				"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
+				net.JoinHostPort(ip, "443"),
+				net.JoinHostPort(ip, "443"),
+			)
+			if _, err := io.WriteString(connection, request); err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := response.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+			}
+		})
 	}
+	t.Run("unsupported UDP upgrade", func(t *testing.T) {
+		request, err := http.NewRequest(http.MethodGet, "http://"+address+"/.well-known/masque/udp/192.0.2.1/443/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Connection", "Upgrade")
+		request.Header.Set("Upgrade", "connect-udp")
+		client := &http.Client{Timeout: time.Second}
+		t.Cleanup(client.CloseIdleConnections)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusForbidden)
+		}
+	})
 }

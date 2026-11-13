@@ -37,7 +37,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
-	"github.com/openkruise/agentio/pkg/features"
 )
 
 var previousHostsRetryPredicate = func() *routev3.RetryPolicy_RetryHostPredicate {
@@ -100,10 +99,6 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 			}
 			tcp.TypedPerFilterConfig[name] = b.pack(&routev3.FilterConfig{Config: &anypb.Any{}})
 		}
-	}
-	if features.EnableUDPProxy {
-		vhost := connect.VirtualHosts[0]
-		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)
 	}
 	if len(gateway.GetTcpPassthrough()) > 0 {
 		vhost := connect.VirtualHosts[0]

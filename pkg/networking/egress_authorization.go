@@ -48,7 +48,7 @@ func (b *resourceBuilder) deniedIPRanges() []*corev3.CidrRange {
 	return ranges
 }
 
-// Checks the original destination for CONNECT-UDP admission and plaintext proxy forwarding.
+// Checks the original proxy destination before plaintext CONNECT forwarding.
 func (b *resourceBuilder) egressAuthorizationFilter() *hcm.HttpFilter {
 	return httpFilter("agentio.egress_authorization", b.pack(&rbachttpv3.RBAC{
 		RulesStatPrefix: "egress_authorization",
