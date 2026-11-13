@@ -343,7 +343,8 @@ func (f *sandboxPolicyFixture) request(
 	if err != nil || status != http.StatusOK {
 		return reply, err
 	}
-	defer func() { err = errors.Join(err, conn.Close()) }()
+	// Close the HBONE tunnel directly; inner TLS Close changes the shared socket's write deadline.
+	defer func(tunnel net.Conn) { err = errors.Join(err, tunnel.Close()) }(conn)
 	if secure {
 		// The echo origin uses a fixture certificate; certificate assertions follow the handshake.
 		inner := tls.Client(

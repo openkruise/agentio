@@ -16,14 +16,83 @@ package epe
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/http2"
 )
+
+func TestSandboxHTTPSResponseSurvivesTunnelCleanup(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnavailableForLegalReasons)
+		if _, err := io.WriteString(w, "sandbox-blocked"); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer origin.Close()
+	gateway := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstream, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", r.Host)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() {
+			if err := upstream.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		go func() {
+			if _, err := io.Copy(upstream, r.Body); err != nil {
+				t.Logf("CONNECT upload ended: %v", err)
+			}
+		}()
+		buffer := make([]byte, 4096)
+		for {
+			n, readErr := upstream.Read(buffer)
+			if n > 0 {
+				if _, err := w.Write(buffer[:n]); err != nil {
+					t.Logf("CONNECT download ended: %v", err)
+					return
+				}
+				w.(http.Flusher).Flush()
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}))
+	gateway.EnableHTTP2 = true
+	gateway.StartTLS()
+	defer gateway.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(gateway.Certificate())
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(origin.URL, "https://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := sandboxPolicyFixture{gateway: strings.TrimPrefix(gateway.URL, "https://"), serverIP: host}
+	caller := sandboxCaller{tls: &tls.Config{RootCAs: roots, NextProtos: []string{"h2"}}}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	reply, err := f.request(ctx, caller, "kruise:delivery-test", "/sandbox-block", port, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.status != http.StatusUnavailableForLegalReasons || reply.body != "sandbox-blocked" || reply.peer == nil {
+		t.Fatalf("unexpected HTTPS policy response: %+v", reply)
+	}
+}
 
 func TestSandboxTLSRejectionEvidence(t *testing.T) {
 	for _, tc := range []struct {
