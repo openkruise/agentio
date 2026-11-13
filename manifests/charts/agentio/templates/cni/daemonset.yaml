@@ -1,4 +1,4 @@
-{{- if eq .Values.profile "ambient" }}
+{{- if and (eq .Values.profile "ambient") .Values.cni.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

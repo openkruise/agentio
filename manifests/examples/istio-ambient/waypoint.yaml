@@ -5,6 +5,8 @@ metadata:
   namespace: agentio-istio-system
 data:
   config: |
+    tlsTermination:
+      includeHosts: [httpbin.org]
     accessLogFormat:
       json:
         request_id: "%REQ(X-REQUEST-ID)%"

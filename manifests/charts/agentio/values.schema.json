@@ -12,6 +12,22 @@
     "epe"
   ],
   "properties": {
+    "cni": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ztunnel": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "sandbox": {
       "type": "object",
       "additionalProperties": false,

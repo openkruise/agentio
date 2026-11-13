@@ -1,5 +1,5 @@
 {{- define "agentiod.deployment" -}}
-{{- $clientTrustEnabled := and (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled -}}
+{{- $clientTrustEnabled := and (ne (.Values.agentiod.controlPlanePool | default "proxy") "policy") .Values.agentiod.injector.clientTrust.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -133,7 +133,7 @@ spec:
             - name: AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR
               value: {{ $clientTrustEnabled | quote }}
             - name: AGENTIO_ENABLE_SIDECAR_INJECTOR
-              value: {{ (eq .Values.profile "sidecar") | quote }}
+              value: {{ (and (ne (.Values.agentiod.controlPlanePool | default "proxy") "policy") (or (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled)) | quote }}
             - name: AGENTIO_INJECTOR_CONFIGMAP_NAME
               value: {{ .Values.agentiod.injector.configMapName | quote }}
             - name: AGENTIO_INJECTION_WEBHOOK_CONFIG_NAME
@@ -143,7 +143,7 @@ spec:
             - name: AGENTIO_NATIVE_SIDECARS
               value: {{ .Values.agentiod.injector.nativeSidecars | quote }}
             - name: AGENTIO_ENABLE_GATEWAY_DEPLOYER
-              value: {{ .Values.agentiod.gatewayDeployer.enabled | quote }}
+              value: {{ (and (ne (.Values.agentiod.controlPlanePool | default "proxy") "policy") .Values.agentiod.gatewayDeployer.enabled) | quote }}
             - name: AGENTIO_GATEWAY_LEASE_NAME
               value: {{ .Values.agentiod.gatewayDeployer.leaseName | quote }}
             {{- range $name, $value := .Values.agentiod.env }}

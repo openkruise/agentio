@@ -21,7 +21,7 @@ var (
 	EnableClientTrustDistributor = env.Register(
 		"AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR",
 		false,
-		"Enable client CA distribution and injection with the sidecar injector.",
+		"Enable client CA distribution and injection through Pod admission.",
 	).Get()
 	// ClientTrustPackagePath points to the versioned public certificate package.
 	ClientTrustPackagePath = env.Register(
@@ -33,7 +33,7 @@ var (
 	EnableSidecarInjector = env.Register(
 		"AGENTIO_ENABLE_SIDECAR_INJECTOR",
 		false,
-		"If true, serve the Agentio ztunnel injection webhook at the /inject endpoint.",
+		"If true, serve Agentio Pod admission for sidecar and client CA injection.",
 	).Get()
 	InjectorConfigMapName = env.Register(
 		"AGENTIO_INJECTOR_CONFIGMAP_NAME",

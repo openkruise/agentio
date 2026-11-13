@@ -831,6 +831,13 @@ func prepareSandboxManagerTemplate(rel string, content []byte) ([]byte, error) {
 		}
 	}
 	content = bytes.ReplaceAll(content, []byte(`{{- $_ := set $values "profile" "ambient" }}`), nil)
+	removeBlock(`{{- if or (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled }}`)
+	content = bytes.ReplaceAll(
+		content,
+		[]byte(`(and (ne (.Values.agentiod.controlPlanePool | default "proxy") "policy") `+
+			`(or (eq .Values.profile "sidecar") .Values.agentiod.injector.clientTrust.enabled))`),
+		[]byte("false"),
+	)
 	removeBlock(`{{- if eq .Values.profile "sidecar" }}`)
 	removeBlock(`{{- if eq .Values.profile "ambient" }}`)
 	content = bytes.ReplaceAll(

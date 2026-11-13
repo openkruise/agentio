@@ -1,19 +1,19 @@
 # Integrate with Istio ambient
 
-Use an Agentio waypoint to apply TrafficPolicy and SecurityProfile to HTTP traffic from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, Porter evaluates connection policy, and EPE evaluates HTTP request policy.
+Use an Agentio waypoint to apply TrafficPolicy and SecurityProfile to traffic from an existing Istio ambient workload. Istio provides traffic capture, ztunnel, and workload certificates. Agentiod configures the gateway, Porter evaluates connection policy, and EPE evaluates HTTP request policy. Agentio can also inject client CA trust without injecting its own sidecar, allowing HTTPS inspection through the same waypoint.
 
 ```text
 curl -> Istio ztunnel -> HBONE/mTLS -> Agentio waypoint -> HTTP origin
                                       Porter + EPE
 ```
 
-The [example manifests](../../manifests/examples/istio-ambient/README.md) deploy a curl client and a small HTTP origin, bind the origin Service to an Agentio waypoint, and block one HTTP path. Run the commands from the repository root.
+The [example manifests](../../manifests/examples/istio-ambient/README.md) deploy a curl client and a small HTTP origin, bind the origin Service to an Agentio waypoint, and block one HTTP path. An optional HTTPS example routes `httpbin.org` through the waypoint and demonstrates MITM with CA-only injection. Run the commands from the repository root.
 
 ## Prerequisites
 
 - A working Istio ambient installation, including Istio CNI, ztunnel, and Gateway API CRDs.
-- Kubernetes 1.29 or later with native sidecars enabled, Helm 3.10 or later, and `kubectl`.
-- Matching Agentio images with independent CA token support, Gateway address publication, and the physical-peer workload identity fallback. For a pinned deployment, use a release or CI commit tag containing those features.
+- A Kubernetes version supported by your Istio release, with native sidecars enabled (stable in Kubernetes 1.33 and later), Helm 3.10 or later, and `kubectl`.
+- Matching Agentio charts and images with independent CA token support, Gateway address publication, the physical-peer workload identity fallback, and ambient CA-only admission support. Use a release or CI commit tag containing all those features; older images do not serve the CA-only admission endpoint.
 - Direct connectivity from ztunnel to the gateway that preserves the source Pod IP.
 
 This uses Agentiod's `agentio-egress` GatewayClass. It is separate from Istio's `istio-waypoint` and `istio-agentgateway-waypoint` implementations.
@@ -35,35 +35,20 @@ kubectl apply --server-side -f manifests/charts/agentio/crds/
 
 Reuse existing Agentio policy CRDs if they are already installed. If an Agentio control plane already manages this cluster, configure it for this integration instead of installing another GatewayClass controller.
 
-Render the Agentio control-plane resources only. The example's `profile: ambient` disables the Agentio sidecar injector at runtime; selecting the templates below omits Agentio CNI and ztunnel so the existing Istio installation continues to capture traffic.
+Install with the predefined [Istio integration values](../../manifests/examples/istio-ambient/agentio-values.yaml). They keep `profile: ambient`, disable Agentio CNI and node ztunnel, enable the Gateway controller and managed EPE, and enable CA-only admission. Istio continues to capture traffic.
 
 ```sh
-helm template agentio manifests/charts/agentio \
+helm upgrade --install agentio manifests/charts/agentio \
   --namespace agentio-istio-system \
-  --kube-version 1.29.0 \
   --values manifests/examples/istio-ambient/agentio-values.yaml \
   --set-string global.clusterId="$ISTIO_CLUSTER_ID" \
   --set-string global.trustDomain="$ISTIO_TRUST_DOMAIN" \
   --set-string global.clusterDomain="$CLUSTER_DOMAIN" \
   --set-string global.tag="$AGENTIO_IMAGE_TAG" \
-  --show-only templates/agentiod/serviceaccount.yaml \
-  --show-only templates/agentiod/rbac.yaml \
-  --show-only templates/agentiod/configmaps.yaml \
-  --show-only templates/agentiod/injector.yaml \
-  --show-only templates/agentiod/deployment.yaml \
-  --show-only templates/agentiod/service.yaml \
-  --show-only templates/epe/serviceaccount.yaml \
-  --show-only templates/epe/rbac.yaml \
-  --show-only templates/epe/deployment.yaml \
-  --show-only templates/epe/service.yaml \
-  > "$AGENTIO_ISTIO_OUTPUT/control-plane.yaml"
-
-kubectl apply -f "$AGENTIO_ISTIO_OUTPUT/control-plane.yaml"
-kubectl rollout status deployment/agentiod -n agentio-istio-system --timeout=5m
-kubectl rollout status deployment/agentio-epe -n agentio-istio-system --timeout=5m
+  --atomic --wait --timeout 5m
 ```
 
-This is a rendered-manifest installation, not a Helm release. Keep `control-plane.yaml` for updates and cleanup. The rendered `agentio-sidecar-injector` ConfigMap also contains gateway templates; these values do not render an Agentio injection webhook. Use a pinned image tag instead of `latest` for repeatable deployments.
+Keep the same values file for upgrades. Helm owns the control-plane resources, including policy validation and CA admission webhooks. The application namespace retains Istio's `istio.io/dataplane-mode: ambient` label and sets `agentio.kruise.io/dataplane-mode: none`; CA injection does not change either label. Use a pinned image tag instead of `latest` for repeatable deployments.
 
 ## Connect the waypoint to Istiod
 
@@ -111,7 +96,7 @@ The Gateway publishes a Service hostname using `networking.istio.io/address-type
 
 ## Deploy the application and bind its Service
 
-The client namespace has `istio.io/dataplane-mode: ambient`. If your Istio revision requires an `istio.io/rev` namespace label, set it on `agentio-istio-demo` before creating the application Pods below. The origin Pod opts out of capture, so it acts as an ordinary HTTP server behind the gateway. All example Pods disable sidecar injection.
+The client namespace has `istio.io/dataplane-mode: ambient`. If your Istio revision requires an `istio.io/rev` namespace label, set it on `agentio-istio-demo` before creating the application Pods below. The origin Pod opts out of capture, so it acts as an ordinary HTTP server behind the gateway. All example Pods disable Istio sidecar injection. The curl Pod opts into Agentio CA-only injection with `client-trust.agentio.kruise.io/inject: "true"`.
 
 ```sh
 kubectl apply -f manifests/examples/istio-ambient/workloads.yaml
@@ -133,7 +118,7 @@ These labels select a waypoint for traffic **to the Service**. They do not confi
 
 The [policy manifest](../../manifests/examples/istio-ambient/policies.yaml) selects only the curl workload:
 
-- `TrafficPolicy` allows TCP port `18082` to the origin Service. Porter enforces it when a new connection reaches the gateway; the waypoint manifest enables this with `ENABLE_TRAFFIC_POLICY=true`.
+- `TrafficPolicy` allows TCP port `18082` to the origin Service and port `443` to `httpbin.org` for the optional HTTPS example. Porter enforces it when a new connection reaches the gateway; the waypoint manifest enables this with `ENABLE_TRAFFIC_POLICY=true`.
 - `SecurityProfile` blocks HTTP path `/deny` with status `403`. EPE applies this request-level rule after the connection is allowed.
 
 ```sh
@@ -168,11 +153,62 @@ kubectl logs deployment/agentio-egress -n agentio-istio-system \
 
 The log should identify a `curl-...` workload in `agentio-istio-demo` and show the `200` and `403` responses. Ordinary Istio workload certificates are supported through the TLS-verified peer principal and source Pod IP lookup; this setup requires no special Porter command-line mode.
 
+## Inspect HTTPS with CA-only injection
+
+CA trust and traffic capture are independent. The preset enables `agentiod.injector.clientTrust.enabled`, and the curl Deployment selects CA injection with this Pod label:
+
+```yaml
+spec:
+  template:
+    metadata:
+      labels:
+        client-trust.agentio.kruise.io/inject: "true"
+```
+
+For your own workloads, set the same label on a Namespace to enable CA injection by default, or on a Pod template to override the Namespace. `"false"` opts out. Recreate existing Pods after changing labels. The preset excludes `istio-proxy` from CA changes; applications keep their existing Istio sidecar or ambient enrollment.
+
+Agentio mounts the public + MITM CA bundle from `agentio-client-ca` and sets `AGENTIO_TRUST_BUNDLE`, `CURL_CA_BUNDLE`, and the other configured client trust variables. In this ambient preset, admission does not add Agentio proxy/init containers or rewrite probes, even if a Pod also carries an Agentio sidecar label. Inspect the curl workload before enabling HTTPS interception:
+
+```sh
+kubectl get configmap agentio-client-ca -n agentio-istio-demo
+kubectl exec deployment/curl -n agentio-istio-demo -c curl -- \
+  printenv AGENTIO_TRUST_BUNDLE CURL_CA_BUNDLE
+kubectl get pods -n agentio-istio-demo -l app=istio-demo-client \
+  -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.containers[*].name}{"\n"}{end}'
+```
+
+Both variables point to `/etc/agentio/client-ca/ca-bundle.pem`, and the only application Pod container is `curl`. Libraries that ignore these variables need their own trust configuration; see [client CA trust](../tasks/configure-client-ca-trust.md).
+
+The waypoint parameters already select `httpbin.org` for TLS termination:
+
+```yaml
+data:
+  config: |
+    tlsTermination:
+      includeHosts: [httpbin.org]
+```
+
+This setting belongs in the Gateway's parameters ConfigMap alongside its existing access-log settings. For another destination, update the hostname, routing resource, and TrafficPolicy together. Client trust alone does not route HTTPS through the waypoint or enable termination.
+
+For the optional public HTTPS example, ensure your Istio ambient installation supports ServiceEntry DNS capture and address allocation, as described in [Istio DNS proxying](https://istio.io/latest/docs/ops/configuration/traffic-management/dns-proxy/). The [HTTPS ServiceEntry](../../manifests/examples/istio-ambient/https-service.yaml) binds `httpbin.org:443` to this cross-namespace waypoint. It requires external HTTPS connectivity.
+
+```sh
+kubectl apply -f manifests/examples/istio-ambient/https-service.yaml
+kubectl exec deployment/curl -n agentio-istio-demo -c curl -- \
+  curl --fail --silent --show-error https://httpbin.org/get
+kubectl exec deployment/curl -n agentio-istio-demo -c curl -- \
+  curl --silent --show-error --include https://httpbin.org/deny
+```
+
+The first request returns the HTTPS origin's JSON. The second returns `403` with `blocked by Agentio EPE`, proving that EPE sees the decrypted HTTP path. Keep certificate verification enabled; do not add `-k`. Check the gateway access log if requests do not match those results.
+
+Istio's CA continues to authenticate HBONE peers. The Agentio MITM CA signs certificates presented to application HTTPS clients, and the gateway verifies upstream HTTPS with its public CA package. These are separate trust relationships. For private upstream roots or an operator-managed MITM signer, see [TLS termination and upstream CA trust](../reference/agentio-configuration.md#tls-termination-for-https-inspection).
+
 ## Deployment considerations
 
-This example governs connections routed through the selected waypoint. Istio ztunnel does not execute Agentio policy CRDs, and this Service binding does not force every outbound destination through Agentio. Istio ServiceEntry binding, arbitrary external destinations, and enforcing a mandatory egress path require their own routing configuration.
+This example governs connections routed through the bound HTTP Service and optional HTTPS ServiceEntry. Istio ztunnel does not execute Agentio policy CRDs, and these bindings do not force every outbound destination through Agentio. Additional external destinations and a mandatory egress path require their own routing and enforcement configuration.
 
-The example uses HTTP and plaintext gateway-to-EPE gRPC. For HTTPS request inspection and authenticated EPE transport, configure [client CA trust](../tasks/configure-client-ca-trust.md) and [EPE transport security](../reference/epe-configuration.md). Mesh workload trust, client HTTPS trust, and upstream HTTPS trust are separate concerns.
+The example uses plaintext gateway-to-EPE gRPC. Configure [EPE transport security](../reference/epe-configuration.md) when that connection requires authentication and encryption. The CA-injection labels can also be used on Istio sidecar workloads, but this guide's waypoint-routing example is for ambient sources; retain the routing appropriate to your Istio data-plane mode.
 
 ## Clean up
 
@@ -180,15 +216,16 @@ Remove the example's Service binding and policies before deleting its workloads:
 
 ```sh
 kubectl delete -f manifests/examples/istio-ambient/service.yaml
+kubectl delete -f manifests/examples/istio-ambient/https-service.yaml --ignore-not-found
 kubectl delete -f manifests/examples/istio-ambient/policies.yaml
 kubectl delete -f manifests/examples/istio-ambient/waypoint.yaml
 kubectl delete namespace agentio-istio-demo
 ```
 
-If the rendered control plane was created only for this example, remove it as well:
+If the Helm release was created only for this example, remove it as well:
 
 ```sh
-kubectl delete -f "$AGENTIO_ISTIO_OUTPUT/control-plane.yaml"
+helm uninstall agentio -n agentio-istio-system
 kubectl delete namespace agentio-istio-system
 ```
 
@@ -198,4 +235,4 @@ Leave shared Agentio and Gateway API CRDs installed.
 
 - [Customize Gateway resources](../tasks/customize-gateway-resources.md)
 - [Configure a TrafficPolicy](../tasks/configure-traffic-policy.md)
-- [Get started with EPE](../getting-started/epe.md) for Agentio Helm installations; its deployment commands do not apply to this rendered-manifest setup
+- [Get started with EPE](../getting-started/epe.md)

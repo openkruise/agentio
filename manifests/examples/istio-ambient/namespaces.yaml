@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: agentio-istio-system
   labels:
+    agentio.kruise.io/dataplane-mode: none
     istio.io/dataplane-mode: none
 ---
 apiVersion: v1
@@ -10,4 +11,5 @@ kind: Namespace
 metadata:
   name: agentio-istio-demo
   labels:
+    agentio.kruise.io/dataplane-mode: none
     istio.io/dataplane-mode: ambient

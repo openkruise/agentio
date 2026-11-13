@@ -1,14 +1,15 @@
 # Agentio waypoint with Istio ambient
 
-Follow [Integrate with Istio ambient](../../../docs/integrations/istio-ambient.md) from the repository root. The example reuses Istio traffic capture and workload certificates, then demonstrates Agentio policy with ordinary HTTP curl requests.
+Follow [Integrate with Istio ambient](../../../docs/integrations/istio-ambient.md) from the repository root. The example reuses Istio traffic capture and workload certificates, demonstrates policy with HTTP curl requests, and optionally inspects HTTPS using CA-only injection.
 
 | File | Purpose |
 | --- | --- |
-| `agentio-values.yaml` | Render values for Agentiod and EPE |
+| `agentio-values.yaml` | Helm preset for Agentiod, EPE and CA-only admission; Agentio CNI/node ztunnel disabled |
 | `namespaces.yaml` | Agentio control plane and ambient application namespaces |
 | `waypoint.yaml` | Gateway and its certificate, Porter, and logging configuration |
 | `workloads.yaml` | Curl client and HTTP origin |
 | `service.yaml` | Service binding to the Agentio waypoint |
-| `policies.yaml` | TrafficPolicy service allow rule and SecurityProfile HTTP deny rule |
+| `https-service.yaml` | Optional Istio ServiceEntry binding for `httpbin.org:443` |
+| `policies.yaml` | TrafficPolicy allow rules and SecurityProfile HTTP/HTTPS deny rule |
 
-Use the guide's template selection when rendering the Agentio chart. A full chart installation would also deploy Agentio traffic capture or injection.
+Use the preset with `helm upgrade --install`; no template filtering is required. Istio owns traffic capture. The curl Pod receives a client CA mount and environment variables, with no Agentio sidecar.

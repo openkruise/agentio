@@ -195,8 +195,9 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 	deploy, typeMeta := GetDeployMetaFromPod(&pod)
 
 	params := InjectionParameters{
-		pod:                 &pod,
-		injectSidecar:       injectRequired(IgnoredNamespaces.UnsortedList(), wh.config, &pod.Spec, pod.ObjectMeta),
+		pod: &pod,
+		injectSidecar: path != "/inject/ca-only" &&
+			injectRequired(IgnoredNamespaces.UnsortedList(), wh.config, &pod.Spec, pod.ObjectMeta),
 		deployMeta:          deploy,
 		typeMeta:            typeMeta,
 		templates:           wh.config.Templates,
@@ -205,7 +206,6 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 		settings:            wh.settings,
 		valuesConfig:        wh.valuesConfig,
 		injectedAnnotations: wh.config.InjectedAnnotations,
-		proxyEnvs:           parseInjectEnvs(path),
 	}
 
 	wh.mu.RUnlock()
@@ -237,6 +237,7 @@ func (wh *Webhook) inject(ar *admissionv1.AdmissionReview, path string) *admissi
 		return &admissionv1.AdmissionResponse{Allowed: true}
 	}
 	if params.injectSidecar {
+		params.proxyEnvs = parseInjectEnvs(path)
 		params.nativeSidecar = detectNativeSidecar(wh.nodes, wh.nativeSidecarMode, pod.Spec.NodeName)
 	}
 

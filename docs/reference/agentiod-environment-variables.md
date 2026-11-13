@@ -82,11 +82,11 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_CLIENT_QUEUE_SIZE</code> | Integer | <code>100</code> | Maximum incoming requests buffered per xDS stream before reads apply backpressure. |
 | <code>AGENTIO_CLIENT_TRUST_PACKAGE_PATH</code> | String | <code>/usr/local/share/agentio/trust-package/cert-manager-package-debian.json</code> | Path to the versioned public CA trust package JSON shared by gateway TLS origination and client trust distribution. Must be non-empty; an unreadable or invalid package prevents startup. |
 | <code>AGENTIO_CONFIGMAP_NAME</code> | String | <code>agentio-config</code> | ConfigMap name of Agentio configuration. |
-| <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection with the sidecar injector. |
+| <code>AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR</code> | Boolean | <code>false</code> | Enable client CA distribution and injection through Pod admission. |
 | <code>AGENTIO_ENABLE_DEBUG_ON_HTTP</code> | Boolean | <code>true</code> | Enable authenticated debug handlers on the monitoring HTTP listener. |
 | <code>AGENTIO_ENABLE_GATEWAY_DEPLOYER</code> | Boolean | <code>false</code> | If true, run the Agentio Gateway API deployment controller that provisions egress gateway Deployments. |
 | <code>AGENTIO_ENABLE_POLICY_STATUS</code> | Boolean | <code>true</code> | Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained. |
-| <code>AGENTIO_ENABLE_SIDECAR_INJECTOR</code> | Boolean | <code>false</code> | If true, serve the Agentio ztunnel injection webhook at the /inject endpoint. |
+| <code>AGENTIO_ENABLE_SIDECAR_INJECTOR</code> | Boolean | <code>false</code> | If true, serve Agentio Pod admission for sidecar and client CA injection. |
 | <code>AGENTIO_ENABLE_SNI_TRAFFIC_POLICY</code> | Boolean | <code>false</code> | If enabled, enforce SNI traffic policies in egress gateways, using HBONE TLS action headers when present. |
 | <code>AGENTIO_GATEWAY_CONNECT_TIMEOUT</code> | Duration | <code>10s</code> | Connect timeout for passthrough and dynamic-forward-proxy gateway clusters. |
 | <code>AGENTIO_GATEWAY_ENABLE_UDP_PROXY</code> | Boolean | <code>false</code> | If enabled, egress gateways terminate experimental IPv4 CONNECT-UDP sessions from ztunnel and forward datagrams directly to the MASQUE target without inspection. |
@@ -205,7 +205,7 @@ agentiod:
 
 ## Client CA distribution and injection
 
-`AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR` defaults to `false`. The Helm chart derives it from `agentiod.injector.clientTrust.enabled` in the sidecar profile; use that single chart value to enable or disable the feature. When disabled, `agentiod` does not construct the distributor or allow CA injection, even with a Pod opt-in. The chart also omits the public CA package init container. Secret CA sources reuse existing system-namespace RBAC; the chart grants no additional source permissions. Disabling retains existing bundle ConfigMaps but stops updating them.
+`AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR` defaults to `false`. The Helm chart derives it from `agentiod.injector.clientTrust.enabled` independently of the data-plane profile; use that single chart value to enable or disable the feature. In the ambient profile, enabling it also starts Pod admission and installs CA-only webhooks. When disabled, `agentiod` does not construct the distributor or allow CA injection, even with a Pod opt-in. The public CA package is built into the Agentiod image. Secret CA sources reuse existing system-namespace RBAC; the chart grants no additional source permissions. Disabling retains existing bundle ConfigMaps but stops updating them.
 
 ## Experimental UDP sessions
 

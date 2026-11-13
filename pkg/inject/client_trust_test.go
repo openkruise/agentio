@@ -20,13 +20,56 @@ import (
 	"strings"
 	"testing"
 
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
+
+func TestClientTrustOnlyEndpoint(t *testing.T) {
+	wh := newTestWebhook(t, NativeSidecarModeDisabled)
+	setClientTrustEnabled(t, wh, true)
+	pod := testPod()
+	pod.Labels[dataplaneModeLabel] = dataplaneModeSidecar
+	pod.Labels[clienttrust.InjectLabel] = "true"
+	// A CA-only request must never attempt to render a proxy template.
+	pod.Annotations = map[string]string{injectTemplatesAnnotation: "missing-template"}
+	raw, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := wh.inject(&admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{
+		Namespace: pod.Namespace,
+		Object:    runtime.RawExtension{Raw: raw},
+	}}, "/inject/ca-only")
+	if !response.Allowed {
+		t.Fatalf("CA-only admission denied: %+v", response.Result)
+	}
+	patch, err := jsonpatch.DecodePatch(response.Patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patched, err := patch.Apply(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out corev1.Pod
+	if err := json.Unmarshal(patched, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Labels[clienttrust.ManagedLabel] != "true" || len(out.Spec.Containers) != 1 ||
+		len(out.Spec.InitContainers) != 0 || !reflect.DeepEqual(
+		out.Spec.Containers[0].ReadinessProbe,
+		pod.Spec.Containers[0].ReadinessProbe,
+	) {
+		t.Fatalf("CA-only admission changed sidecar/probe state or omitted trust: %+v", out)
+	}
+}
 
 func TestClientTrustLabels(t *testing.T) {
 	for _, tc := range []struct {

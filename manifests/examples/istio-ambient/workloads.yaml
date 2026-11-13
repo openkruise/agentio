@@ -18,6 +18,7 @@ spec:
     metadata:
       labels:
         app: istio-demo-client
+        client-trust.agentio.kruise.io/inject: "true"
       annotations:
         sidecar.istio.io/inject: "false"
     spec:
