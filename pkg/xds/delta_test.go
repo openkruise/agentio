@@ -95,6 +95,10 @@ func TestPushedUpdateRecordsDashboardCompatibilityLifecycle(t *testing.T) {
 
 func TestPushFailuresAreRecordedByStage(t *testing.T) {
 	valid := addressResource(t, "cluster//Pod/demo/a", "a")
+	valid, err := valid.Encode(ztunnelScope(), model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
 	invalid := valid
 	invalid.Value = &anypb.Any{TypeUrl: model.WorkloadType, Value: valid.Value.GetValue()}
 
@@ -208,7 +212,11 @@ func TestExplicitWildcardReconnectWithLargeCache(t *testing.T) {
 	updated := addressResource(t, "cluster//Pod/demo/updated", "updated")
 	added := addressResource(t, "cluster//Pod/demo/added", "added")
 	server := newTestServer(t, ztunnelScope(), []model.Resource{unchanged, updated, added}, nil)
-	initial := map[string]string{unchanged.XDSName: unchanged.Hash, updated.XDSName: "old-version"}
+	encoded, err := unchanged.Encode(ztunnelScope(), model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := map[string]string{unchanged.XDSName: encoded.Hash, updated.XDSName: "old-version"}
 	removed := make([]string, 0, 29_998)
 	for i := range 29_998 {
 		name := fmt.Sprintf("cluster//Pod/demo/removed-%05d", i)
@@ -357,11 +365,15 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 	watches := map[string]*watchState{model.AddressType: watch}
 	subscription := server.resources.Subscribe(ctx, model.ClientScope{})
 
+	encoded, err := resourceA.Encode(ztunnelScope(), model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := server.server.handleRequest(stream, server.scope, log, watches, subscription,
 		&discoveryv3.DeltaDiscoveryRequest{
 			TypeUrl: model.AddressType,
 			InitialResourceVersions: map[string]string{
-				resourceA.XDSName:        resourceA.Hash,
+				resourceA.XDSName:        encoded.Hash,
 				"cluster//Pod/demo/gone": "old-version",
 			},
 		}); err != nil {
@@ -378,7 +390,10 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 		t.Fatalf("wildcard initial response retained sent hashes: %v", watch.sent)
 	}
 	if len(initialSentStorage) != 2 {
-		t.Fatalf("wildcard initial response cleared rather than released the %d-entry transient map", len(initialSentStorage))
+		t.Fatalf(
+			"wildcard initial response cleared rather than released the %d-entry transient map",
+			len(initialSentStorage),
+		)
 	}
 
 	if err := server.server.handleRequest(stream, server.scope, log, watches, subscription,
@@ -393,11 +408,16 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 	if watch.wildcard {
 		t.Fatal("wildcard-to-named transition remained wildcard")
 	}
-	if got := resourceNames(stream.responsesFor(model.AddressType)[1]); !slices.Equal(got, []string{resourceA.XDSName}) {
+	if got := resourceNames(
+		stream.responsesFor(model.AddressType)[1],
+	); !slices.Equal(
+		got,
+		[]string{resourceA.XDSName},
+	) {
 		t.Fatalf("wildcard-to-named resources = %v, want %s", got, resourceA.XDSName)
 	}
-	if got := watch.sent[resourceA.XDSName]; got != resourceA.Hash {
-		t.Fatalf("named sent version = %q, want %q", got, resourceA.Hash)
+	if got := watch.sent[resourceA.XDSName]; got != encoded.Hash {
+		t.Fatalf("named sent version = %q, want %q", got, encoded.Hash)
 	}
 
 	if err := server.resources.apply([]model.ResourceChange{{Key: resourceA.Key}}); err != nil {
@@ -407,7 +427,14 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 		Key: resourceA.Key,
 		Old: &resourceA,
 	}})
-	if err := server.server.sendIncremental(stream, server.scope, log, model.AddressType, watch, deleteUpdate); err != nil {
+	if err := server.server.sendIncremental(
+		stream,
+		server.scope,
+		log,
+		model.AddressType,
+		watch,
+		deleteUpdate,
+	); err != nil {
 		t.Fatal(err)
 	}
 	removed := stream.responsesFor(model.AddressType)[2]
@@ -423,7 +450,14 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 		Key: resourceC.Key,
 		New: &resourceC,
 	}})
-	if err := server.server.sendIncremental(stream, server.scope, log, model.AddressType, watch, addUpdate); err != nil {
+	if err := server.server.sendIncremental(
+		stream,
+		server.scope,
+		log,
+		model.AddressType,
+		watch,
+		addUpdate,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(stream.responsesFor(model.AddressType)); got != 3 {
@@ -453,7 +487,14 @@ func TestWildcardWDSInitialVersionsIncrementalRemovalAndSubscriptionTransitions(
 		Key: resourceB.Key,
 		Old: &resourceB,
 	}})
-	if err := server.server.sendIncremental(stream, server.scope, log, model.AddressType, watch, wildcardDelete); err != nil {
+	if err := server.server.sendIncremental(
+		stream,
+		server.scope,
+		log,
+		model.AddressType,
+		watch,
+		wildcardDelete,
+	); err != nil {
 		t.Fatal(err)
 	}
 	last := stream.responsesFor(model.AddressType)[4]
@@ -623,12 +664,18 @@ func TestNamedServiceSubscriptionTracksEndpointScopeAndDeletion(t *testing.T) {
 	}
 
 	updatedWorkloadA, err := model.NewResource(
-		workloadA.Key, workloadA.XDSName, workloadA.Value, []string{"uid-a-alias"}, workloadA.Facts,
+		workloadA.Key,
+		workloadA.XDSName,
+		testResourceContents(testResourceValue(workloadA)),
+		[]string{"uid-a-alias"},
+		workloadA.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.resources.apply([]model.ResourceChange{{Key: updatedWorkloadA.Key, New: &updatedWorkloadA}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: updatedWorkloadA.Key, New: &updatedWorkloadA}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.AddressType, 2)
@@ -646,7 +693,9 @@ func TestNamedServiceSubscriptionTracksEndpointScopeAndDeletion(t *testing.T) {
 	}
 
 	movedWorkloadB := selectionWorkload(t, "uid-b", "demo", "node-b", "svc-a", "")
-	if err := server.resources.apply([]model.ResourceChange{{Key: movedWorkloadB.Key, New: &movedWorkloadB}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: movedWorkloadB.Key, New: &movedWorkloadB}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.AddressType, 4)
@@ -662,7 +711,10 @@ func TestNamedServiceSubscriptionTracksEndpointScopeAndDeletion(t *testing.T) {
 	}
 	responses = stream.awaitResponses(t, model.AddressType, 5)
 	if got := responses[4].GetRemovedResources(); !slices.Equal(got, []string{"demo/svc-a", "uid-b"}) {
-		t.Fatalf("service deletion removed = %v, want service and remote endpoint; node-local endpoint remains implicit", got)
+		t.Fatalf(
+			"service deletion removed = %v, want service and remote endpoint; node-local endpoint remains implicit",
+			got,
+		)
 	}
 
 	if err := server.finish(t, stream, done); err != nil {
@@ -747,12 +799,18 @@ func TestGatewayWorkloadTypeNamedServiceTracksCrossTypeLifecycle(t *testing.T) {
 	}
 
 	updatedWorkloadB, err := model.NewResource(
-		workloadB.Key, workloadB.XDSName, workloadB.Value, []string{"uid-b-alias"}, workloadB.Facts,
+		workloadB.Key,
+		workloadB.XDSName,
+		testResourceContents(testResourceValue(workloadB)),
+		[]string{"uid-b-alias"},
+		workloadB.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.resources.apply([]model.ResourceChange{{Key: updatedWorkloadB.Key, New: &updatedWorkloadB}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: updatedWorkloadB.Key, New: &updatedWorkloadB}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.WorkloadType, 3)
@@ -761,7 +819,9 @@ func TestGatewayWorkloadTypeNamedServiceTracksCrossTypeLifecycle(t *testing.T) {
 	}
 
 	detachedWorkloadB := selectionWorkload(t, "uid-b", "demo", "node-b", "", "")
-	if err := server.resources.apply([]model.ResourceChange{{Key: detachedWorkloadB.Key, New: &detachedWorkloadB}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: detachedWorkloadB.Key, New: &detachedWorkloadB}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.WorkloadType, 4)
@@ -770,12 +830,18 @@ func TestGatewayWorkloadTypeNamedServiceTracksCrossTypeLifecycle(t *testing.T) {
 	}
 
 	aliasedService, err := model.NewResource(
-		service.Key, service.XDSName, service.Value, []string{"/10.96.0.9"}, service.Facts,
+		service.Key,
+		service.XDSName,
+		testResourceContents(testResourceValue(service)),
+		[]string{"/10.96.0.9"},
+		service.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.resources.apply([]model.ResourceChange{{Key: aliasedService.Key, New: &aliasedService}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: aliasedService.Key, New: &aliasedService}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.WorkloadType, 5)
@@ -848,12 +914,18 @@ func TestNodeNamedAddressSubscriptionTracksAllLocalWorkloads(t *testing.T) {
 	}
 
 	updatedLocalB, err := model.NewResource(
-		localB.Key, localB.XDSName, localB.Value, []string{"uid-b-alias"}, localB.Facts,
+		localB.Key,
+		localB.XDSName,
+		testResourceContents(testResourceValue(localB)),
+		[]string{"uid-b-alias"},
+		localB.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.resources.apply([]model.ResourceChange{{Key: updatedLocalB.Key, New: &updatedLocalB}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: updatedLocalB.Key, New: &updatedLocalB}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	responses = stream.awaitResponses(t, model.AddressType, 2)
@@ -981,7 +1053,10 @@ func TestAcknowledgementsDoNotTriggerResend(t *testing.T) {
 			first := stream.awaitResponses(t, model.AddressType, 1)[0]
 			ack := &discoveryv3.DeltaDiscoveryRequest{TypeUrl: model.AddressType, ResponseNonce: first.GetNonce()}
 			if nack {
-				ack.ErrorDetail = &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "rejected by the proxy"}
+				ack.ErrorDetail = &rpcstatus.Status{
+					Code:    int32(codes.InvalidArgument),
+					Message: "rejected by the proxy",
+				}
 			}
 			stream.send(ack)
 			if err := server.finish(t, stream, done); err != nil {
@@ -1035,7 +1110,8 @@ func TestDeltaAcknowledgementsTrackLatestResponse(t *testing.T) {
 	}
 	rejection := &rpcstatus.Status{Code: int32(codes.InvalidArgument), Message: "invalid policy"}
 	reply(model.AddressType, secondNonce, rejection)
-	if watch.nonceNacked != secondNonce || watch.nonceAcked != firstNonce || watch.lastError != rejection.Message || watch.lastErrorCode != codes.InvalidArgument {
+	if watch.nonceNacked != secondNonce || watch.nonceAcked != firstNonce || watch.lastError != rejection.Message ||
+		watch.lastErrorCode != codes.InvalidArgument {
 		t.Fatalf("NACK state = %+v", watch)
 	}
 	// An old ACK cannot clear the current rejection.
@@ -1049,7 +1125,8 @@ func TestDeltaAcknowledgementsTrackLatestResponse(t *testing.T) {
 		t.Fatal("new send lost the previous rejection")
 	}
 	reply(model.AddressType, thirdNonce, nil)
-	if watch.nonceAcked != thirdNonce || watch.nonceNacked != "" || watch.lastError != "" || watch.lastErrorCode != codes.OK {
+	if watch.nonceAcked != thirdNonce || watch.nonceNacked != "" || watch.lastError != "" ||
+		watch.lastErrorCode != codes.OK {
 		t.Fatalf("recovery ACK state = %+v", watch)
 	}
 	// An old NACK cannot replace the latest successful ACK.
@@ -1093,7 +1170,14 @@ func TestDeltaAcknowledgementsPreserveSubscriptionChanges(t *testing.T) {
 				subscription := server.resources.Subscribe(t.Context(), model.ClientScope{})
 				handle := func(req *discoveryv3.DeltaDiscoveryRequest) {
 					t.Helper()
-					if err := server.server.handleRequest(stream, server.scope, log, watches, subscription, req); err != nil {
+					if err := server.server.handleRequest(
+						stream,
+						server.scope,
+						log,
+						watches,
+						subscription,
+						req,
+					); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -1335,8 +1419,13 @@ func TestWildcardReferencedGatewayLifecycle(t *testing.T) {
 	gatewayWorkload := func(uid, key, revision string) model.Resource {
 		resource := selectionOwnedByGateway(t,
 			selectionWorkload(t, uid, "agentio-system", "gateway-node", "", ""), key)
-		updated, err := model.NewResource(resource.Key, resource.XDSName, resource.Value,
-			[]string{"revision/" + revision}, resource.Facts)
+		updated, err := model.NewResource(
+			resource.Key,
+			resource.XDSName,
+			testResourceContents(testResourceValue(resource)),
+			[]string{"revision/" + revision},
+			resource.Facts,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1493,7 +1582,9 @@ func TestPushSendErrorReleasesSchedulerCapacity(t *testing.T) {
 	second.send(nodeRequest(model.AddressType))
 	secondDone := server.start(second)
 	second.awaitResponses(t, model.AddressType, 1)
-	if err := server.resources.apply([]model.ResourceChange{{Key: finalResource.Key, New: &finalResource}}); err != nil {
+	if err := server.resources.apply(
+		[]model.ResourceChange{{Key: finalResource.Key, New: &finalResource}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	second.awaitResponses(t, model.AddressType, 2)
@@ -1722,9 +1813,14 @@ func TestIncrementalGenerationCopiesOnlyRelevantSentState(t *testing.T) {
 	oldResource := addressResource(t, "cluster//Pod/demo/a", "old")
 	newResource := addressResource(t, "cluster//Pod/demo/a", "new")
 	generator := &subscriptionRecordingGenerator{}
-	server := newTestServerWithGenerators(t, ztunnelScope(), []model.Resource{newResource}, map[string]ResourceGenerator{
-		model.AddressType: generator,
-	})
+	server := newTestServerWithGenerators(
+		t,
+		ztunnelScope(),
+		[]model.Resource{newResource},
+		map[string]ResourceGenerator{
+			model.AddressType: generator,
+		},
+	)
 	watch := &watchState{
 		wildcard: true,
 		started:  true,
@@ -1739,7 +1835,14 @@ func TestIncrementalGenerationCopiesOnlyRelevantSentState(t *testing.T) {
 		Old: &oldResource,
 		New: &newResource,
 	}})
-	if err := server.server.sendIncremental(newFakeStream(context.Background(), 1), server.scope, log, model.AddressType, watch, update); err != nil {
+	if err := server.server.sendIncremental(
+		newFakeStream(context.Background(), 1),
+		server.scope,
+		log,
+		model.AddressType,
+		watch,
+		update,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1754,6 +1857,10 @@ func TestIncrementalGenerationCopiesOnlyRelevantSentState(t *testing.T) {
 func TestFailedSendDoesNotCommitGeneratedDelta(t *testing.T) {
 	oldResource := addressResource(t, "cluster//Pod/demo/old", "old")
 	newResource := addressResource(t, "cluster//Pod/demo/new", "new")
+	newResource, encodeErr := newResource.Encode(ztunnelScope(), model.AddressType)
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
 	generator := &recordingGenerator{delta: GeneratedDelta{
 		Resources: []model.Resource{newResource},
 		Removed:   []string{oldResource.XDSName},

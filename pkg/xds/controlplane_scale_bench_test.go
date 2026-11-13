@@ -49,11 +49,11 @@ func BenchmarkControlPlaneScale(b *testing.B) {
 			service, err := model.NewResource(
 				model.ResourceKey{TypeURL: model.AddressType, Name: "demo/service"},
 				"",
-				mustAny(
+				testResourceContents(mustAny(
 					&workloadv1.Address{
 						Type: &workloadv1.Address_Service{Service: &workloadv1.Service{Name: "service"}},
 					},
-				),
+				)),
 				[]string{
 					"service-alias",
 				},

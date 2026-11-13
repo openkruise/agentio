@@ -19,20 +19,153 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
+	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+func BenchmarkDirectWorkloadSNIPolicy(b *testing.B) {
+	for _, rules := range []int{0, 40, 160, 640} {
+		policy := &extensionsv1.SniTrafficPolicy{}
+		for index := range rules {
+			policy.Rules = append(policy.Rules, &extensionsv1.SniRule{
+				Match: &extensionsv1.SniMatch{
+					Sni:   []string{fmt.Sprintf("api-%03d.example.com", index)},
+					Ports: []uint32{443},
+				},
+				Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+			})
+		}
+		extensions := []*workloadv1.Extension{{Name: "security-profile-reference",
+			Config: mustAny(&extensionsv1.PolicyReference{
+				TypeUrl: model.SecurityProfileType,
+				Resources: []*extensionsv1.PolicyResourceReference{
+					{Name: "namespaced/demo/profile", Uid: "profile-uid"},
+				},
+			})}}
+		if rules > 0 {
+			extensions = append(extensions, &workloadv1.Extension{Name: "sni-traffic-policy", Config: mustAny(policy)})
+		}
+		resources := make([]model.Resource, 0, 100)
+		for index := range 100 {
+			base := addressResource(b, fmt.Sprintf("uid-%03d", index), "pod")
+			address := &workloadv1.Address{}
+			if err := testResourceValue(base).UnmarshalTo(address); err != nil {
+				b.Fatal(err)
+			}
+			address.GetWorkload().Extensions = extensions
+			resource, err := model.NewResource(
+				base.Key,
+				base.XDSName,
+				testResourceContents(mustAny(address)),
+				base.Aliases,
+				base.Facts,
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			resources = append(resources, resource)
+		}
+		before, err := model.NewResourceSet(resources)
+		if err != nil {
+			b.Fatal(err)
+		}
+		address := &workloadv1.Address{}
+		if err := testResourceValue(resources[0]).UnmarshalTo(address); err != nil {
+			b.Fatal(err)
+		}
+		if rules > 0 {
+			policy.Rules[0].Action = extensionsv1.SniAction_SNI_ACTION_DENY
+			address.GetWorkload().Extensions[1].Config = mustAny(policy)
+		} else {
+			address.GetWorkload().Node = "node-b"
+		}
+		resources[0], err = model.NewResource(
+			resources[0].Key,
+			resources[0].XDSName,
+			testResourceContents(mustAny(address)),
+			resources[0].Aliases,
+			resources[0].Facts,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		after, err := model.NewResourceSet(resources)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, class := range []model.ClientClass{model.ClientEgressGateway, model.ClientAgentioEgress} {
+			for _, mode := range []string{"cold", "update"} {
+				b.Run(fmt.Sprintf("rules=%d/client=%s/%s", rules, class, mode), func(b *testing.B) {
+					scope := gatewayScope()
+					scope.Class = class
+					request := GenerationRequest{
+						Scope:        scope,
+						TypeURL:      model.WorkloadType,
+						Snapshot:     after,
+						Subscription: SubscriptionView{wildcard: true},
+						Full:         mode == "cold",
+						Update:       updateBetween(before, after, before.Diff(after)),
+					}
+					if mode == "update" {
+						initial, err := (WorkloadGenerator{}).Generate(b.Context(), GenerationRequest{
+							Scope:        scope,
+							TypeURL:      model.WorkloadType,
+							Snapshot:     before,
+							Subscription: SubscriptionView{wildcard: true},
+							Full:         true,
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+						request.Subscription.sent = make(map[string]string, len(initial.Resources))
+						for _, resource := range initial.Resources {
+							request.Subscription.sent[resource.XDSName] = resource.Hash
+						}
+					}
+					b.ReportAllocs()
+					var delta GeneratedDelta
+					for b.Loop() {
+						var err error
+						delta, err = (WorkloadGenerator{}).Generate(b.Context(), request)
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+					payloadBytes := 0
+					for _, resource := range delta.Resources {
+						payloadBytes += proto.Size(resource.Value)
+					}
+					b.ReportMetric(float64(payloadBytes), "payload-B/msg")
+					b.ReportMetric(float64(len(delta.Resources)), "resources/msg")
+				})
+			}
+		}
+	}
+}
 
 func BenchmarkWorkloadGeneratorGatewayUpdate(b *testing.B) {
 	b.Run("unrelated-resources=5000", func(b *testing.B) {
 		const unrelatedCount = 5_000
 		value := func(payload string) *anypb.Any {
-			return &anypb.Any{TypeUrl: model.AddressType, Value: []byte(payload)}
+			return mustAny(
+				&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{Name: payload}}},
+			)
 		}
 		resource := func(name, payload string, facts model.ResourceFacts) model.Resource {
 			result, err := model.NewResource(
-				model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", value(payload), nil, facts)
+				model.ResourceKey{
+					TypeURL: model.AddressType,
+					Name:    name,
+				},
+				"",
+				testResourceContents(value(payload)),
+				nil,
+				facts,
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -176,6 +309,10 @@ func BenchmarkWorkloadGeneratorFull(b *testing.B) {
 			Full:         true,
 		}
 
+		// Measure cached pushes separately from first materialization.
+		if _, err := (WorkloadGenerator{}).Generate(context.Background(), request); err != nil {
+			b.Fatal(err)
+		}
 		b.ReportAllocs()
 		b.ReportMetric(resourceCount, "resources/msg")
 		b.ResetTimer()
@@ -186,4 +323,57 @@ func BenchmarkWorkloadGeneratorFull(b *testing.B) {
 			}
 		}
 	})
+}
+
+// Includes publication and the first consumer, then sharing across additional clients.
+func BenchmarkWorkloadProjectionLifecycle(b *testing.B) {
+	for _, rules := range []int{0, 40, 160, 640} {
+		base := addressResource(b, "uid", "pod")
+		address := &workloadv1.Address{}
+		if err := testResourceValue(base).UnmarshalTo(address); err != nil {
+			b.Fatal(err)
+		}
+		policy := &extensionsv1.SniTrafficPolicy{}
+		for index := range rules {
+			policy.Rules = append(policy.Rules, &extensionsv1.SniRule{
+				Match:  &extensionsv1.SniMatch{Sni: []string{fmt.Sprintf("api-%03d.example.com", index)}},
+				Action: extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH,
+			})
+		}
+		if rules > 0 {
+			address.GetWorkload().Extensions = []*workloadv1.Extension{
+				{Name: "sni-traffic-policy", Config: mustAny(policy)},
+			}
+		}
+		value := mustAny(address)
+		for _, clients := range []int{1, 10, 100} {
+			b.Run(fmt.Sprintf("rules=%d/clients=%d", rules, clients), func(b *testing.B) {
+				scope := gatewayScope()
+				scope.Class = model.ClientAgentioEgress
+				b.ReportAllocs()
+				for b.Loop() {
+					resource, err := model.NewResource(
+						base.Key,
+						base.XDSName,
+						testResourceContents(value),
+						base.Aliases,
+						base.Facts,
+					)
+					if err != nil {
+						b.Fatal(err)
+					}
+					for client := range clients {
+						scope.WorkloadUID = fmt.Sprintf("client-%d", client)
+						if _, err := (WorkloadGenerator{}).projectResources(
+							scope,
+							[]model.Resource{resource},
+							model.WorkloadType,
+						); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
 }

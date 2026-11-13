@@ -19,11 +19,8 @@ import (
 	"fmt"
 	"slices"
 
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/istio/pkg/util/sets"
 
-	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/pkg/model"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
@@ -45,6 +42,10 @@ func (g WorkloadGenerator) Generate(ctx context.Context, request GenerationReque
 		resources := selectWorkloadResources(
 			request.Scope, request.Snapshot, request.TypeURL, selectionNames(request.Subscription),
 		)
+		resources, err := g.projectResources(request.Scope, resources, model.AddressType)
+		if err != nil {
+			return GeneratedDelta{}, err
+		}
 		if request.Subscription.Wildcard() && len(request.Subscription.sent) == 0 &&
 			(request.Scope.Class == model.ClientDedicatedZTunnel || request.Scope.Class == model.ClientSharedZTunnel) {
 			return GeneratedDelta{
@@ -66,7 +67,13 @@ func (g WorkloadGenerator) Generate(ctx context.Context, request GenerationReque
 		}
 		return delta, nil
 	}
-	return generateWDSIncremental(request, false), nil
+	delta := generateWDSIncremental(request, false)
+	resources, err := g.projectResources(request.Scope, delta.Resources, model.AddressType)
+	if err != nil {
+		return GeneratedDelta{}, err
+	}
+	delta.Resources = unsentResources(request.Subscription, resources)
+	return delta, nil
 }
 
 func (g WorkloadGenerator) generateDirectWorkloads(request GenerationRequest) (GeneratedDelta, error) {
@@ -76,7 +83,7 @@ func (g WorkloadGenerator) generateDirectWorkloads(request GenerationRequest) (G
 	// watches: only egress gateways consume them, and sent versions are what
 	// let a full regeneration send a diff instead of retransmitting the entire set.
 	projectDelta := func(delta GeneratedDelta) (GeneratedDelta, error) {
-		projected, err := g.projectAddresses(delta.Resources)
+		projected, err := g.projectResources(request.Scope, delta.Resources, model.WorkloadType)
 		if err != nil {
 			return GeneratedDelta{}, err
 		}
@@ -87,7 +94,7 @@ func (g WorkloadGenerator) generateDirectWorkloads(request GenerationRequest) (G
 	if request.Full || request.Update.FullFor(model.WorkloadType) {
 		addresses := selectWorkloadResources(
 			request.Scope, request.Snapshot, model.AddressType, selectionNames(request.Subscription))
-		projected, err := g.projectAddresses(addresses)
+		projected, err := g.projectResources(request.Scope, addresses, model.WorkloadType)
 		if err != nil {
 			return GeneratedDelta{}, err
 		}
@@ -152,32 +159,23 @@ func diffDemandWorkloads(request GenerationRequest, selected map[string]model.Re
 	return delta
 }
 
-func (g WorkloadGenerator) projectAddresses(addresses []model.Resource) ([]model.Resource, error) {
-	result := make([]model.Resource, 0, len(addresses))
+func (g WorkloadGenerator) projectResources(
+	scope model.ClientScope,
+	addresses []model.Resource,
+	typeURL string,
+) ([]model.Resource, error) {
+	result := addresses[:0]
 	for _, addressResource := range addresses {
-		address := &workloadv1.Address{}
-		if err := addressResource.Value.UnmarshalTo(address); err != nil {
-			return nil, fmt.Errorf("decode Address %s: %w", addressResource.Key.Name, err)
-		}
-		workload := address.GetWorkload()
-		if workload == nil {
+		if typeURL == model.WorkloadType && !addressResource.IsWorkloadAddress() {
 			continue
 		}
-		// Deterministic marshaling keeps the projected hash stable across
-		// regenerations; the default marshal randomizes map-field order and
-		// would resend every workload on each full diff.
-		value := new(anypb.Any)
-		if err := anypb.MarshalFrom(value, workload, proto.MarshalOptions{Deterministic: true}); err != nil {
-			return nil, fmt.Errorf("marshal direct Workload %s: %w", addressResource.Key.Name, err)
-		}
-		resource, err := model.NewResource(
-			model.ResourceKey{TypeURL: model.WorkloadType, Name: addressResource.Key.Name},
-			addressResource.XDSName, value, addressResource.Aliases, addressResource.Facts)
+		resource, err := addressResource.Encode(scope, typeURL)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, resource)
 	}
+	clear(addresses[len(result):])
 	return result, nil
 }
 

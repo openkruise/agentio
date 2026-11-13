@@ -27,7 +27,7 @@ func TestAuthorizationDependenciesRetainBothSnapshots(t *testing.T) {
 	resource := func(typeURL, name, wireName string, facts model.ResourceFacts) model.Resource {
 		t.Helper()
 		r, err := model.NewResource(model.ResourceKey{TypeURL: typeURL, Name: name}, wireName,
-			&anypb.Any{TypeUrl: typeURL, Value: []byte(wireName)}, nil, facts)
+			model.Prebuilt(&anypb.Any{TypeUrl: typeURL, Value: []byte(wireName)}), nil, facts)
 		if err != nil {
 			t.Fatal(err)
 		}

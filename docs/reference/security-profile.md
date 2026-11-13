@@ -63,7 +63,7 @@ rules:
         action: Deny
 ```
 
-Explicit TLS rules allow only `domains` and `ports` in each match clause. Domains match the TLS inspector's visible SNI, never the CONNECT authority. Missing SNI does not match, including `*`. Ports match the original destination port restored from CONNECT: values are ORed, an empty list allows any port, and a missing destination port never matches a restricted list. Each clause keeps its own domain/port pair.
+Explicit TLS rules allow only `domains` and `ports` in each match clause. Domains match the TLS inspector's visible SNI, never the CONNECT authority. `*` matches every TLS connection, including missing SNI; exact names and suffix wildcards require a non-empty SNI. Unmatched TLS is evaluated by `tcpRules` against the original destination. If allowed, it is forwarded to that address without decryption. Ports match the original destination port restored from CONNECT: values are ORed, an empty list allows any port, and a missing destination port never matches a restricted list. Each clause keeps its own domain/port pair.
 
 The first matching connection rule decides, in profile order and then source rule order. HTTP rules also participate in connection selection: each clause with no `schemes` or with `https` selects TLS termination using its domains and ports. Paths, methods, headers, and query parameters are deferred to HTTP processing. Put passthrough exceptions before broader HTTP rules; an earlier HTTP rule may already select TLS termination. TLS rules themselves are excluded from EPE's HTTP processing and audit.
 
@@ -236,3 +236,5 @@ Notable defaults are priority `1000`, `block.statusCode` `403`, MCP `defaultActi
 agentiod reports `Accepted` and `ResolvedRefs` using the existing status fields.
 See [Policy validation status](../components/securityprofile-status.md) for
 condition meanings, reference scope and the distinction from data-plane loading.
+
+`tcpRules.action` accepts `Allow` or `Deny`. Each `match.cidrs` entry accepts an IPv4/IPv6 address or CIDR. A single address matches only that host, equivalent to IPv4 `/32` or IPv6 `/128`.

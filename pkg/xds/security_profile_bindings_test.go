@@ -60,7 +60,13 @@ func TestSecurityProfileReferencesDeltaDelivery(t *testing.T) {
 						}}},
 					)
 				}
-				resource, err := model.NewResource(base.Key, base.XDSName, value, base.Aliases, base.Facts)
+				resource, err := model.NewResource(
+					base.Key,
+					base.XDSName,
+					testResourceContents(value),
+					base.Aliases,
+					base.Facts,
+				)
 				if err != nil {
 					t.Fatal(err)
 				}

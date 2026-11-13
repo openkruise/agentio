@@ -23,10 +23,10 @@ import (
 )
 
 func TestKubernetesWorkloadAuthenticationMode(t *testing.T) {
-	for _, mode := range []string{"tokenreview", "local"} {
+	for _, mode := range []string{"local", "tokenreview"} {
 		t.Run(mode, func(t *testing.T) {
 			args := []string{}
-			if mode != "tokenreview" {
+			if mode != "local" {
 				args = []string{"--set", "agentiod.kubernetesWorkloadAuthMode=" + mode}
 			}
 			manifest := renderAgentio(t, args...)

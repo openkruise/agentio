@@ -155,7 +155,7 @@ func TestGatewayAuthorizationIncrementalAllowsNonGlobalPolicy(t *testing.T) {
 	oldResource := selectionAuthorization(t, "demo/selector-a", model.AuthorizationScopeWorkload, "")
 	newResource, err := model.NewResource(
 		oldResource.Key, oldResource.XDSName,
-		mustWireAny(model.WorkloadAuthorizationType, &securityv1.Authorization{Name: "selector-a", Namespace: "demo"}),
+		testResourceContents(mustWireAny(model.WorkloadAuthorizationType, &securityv1.Authorization{Name: "selector-a", Namespace: "demo"})),
 		oldResource.Aliases, oldResource.Facts,
 	)
 	if err != nil {
@@ -199,7 +199,7 @@ func TestAuthorizationPolicyOnlyDeltaKeepsRenameAndRemovalSemantics(t *testing.T
 	newPolicy, err := model.NewResource(
 		oldPolicy.Key,
 		"demo/renamed",
-		oldPolicy.Value,
+		testResourceContents(testResourceValue(oldPolicy)),
 		[]string{"demo/alias"},
 		oldPolicy.Facts,
 	)

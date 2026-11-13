@@ -21,8 +21,7 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-// SecurityProfileGenerator serves policy bodies to authenticated EPE clients.
-// EPE has cluster-wide Workload visibility and demands only its active bindings.
+// SecurityProfileGenerator serves HTTP and connection policies to EPE and gateways.
 type SecurityProfileGenerator struct{}
 
 // Generate returns the requested SecurityProfiles visible to an EPE client.
@@ -34,21 +33,27 @@ func (SecurityProfileGenerator) Generate(ctx context.Context, request Generation
 		return GeneratedDelta{}, fmt.Errorf("unsupported security profile type %q", request.TypeURL)
 	}
 	visible := func(resource model.Resource) bool {
-		return request.Scope.Class == model.ClientEPE && request.Subscription.allows(resource)
+		return (request.Scope.Class == model.ClientEPE ||
+			(request.Scope.Class == model.ClientAgentioEgress || request.Scope.Class == model.ClientEgressGateway) && request.Snapshot.HasReference(resource.Key)) && request.Subscription.allows(resource)
 	}
 	if !request.Full && !request.Update.FullFor(request.TypeURL) {
 		return generateIncremental(request, visible, nil, nil), nil
 	}
 	selected := map[string]model.Resource{}
-	if request.Scope.Class == model.ClientEPE {
+	if request.Scope.Class == model.ClientEPE || request.Scope.Class == model.ClientAgentioEgress ||
+		request.Scope.Class == model.ClientEgressGateway {
 		if request.Subscription.Wildcard() {
 			for _, resource := range request.Snapshot.List(request.TypeURL) {
-				selected[resource.XDSName] = resource
+				if visible(resource) {
+					selected[resource.XDSName] = resource
+				}
 			}
 		} else {
 			for _, name := range request.Subscription.Names() {
 				for _, resource := range request.Snapshot.Lookup(request.TypeURL, name) {
-					selected[resource.XDSName] = resource
+					if visible(resource) {
+						selected[resource.XDSName] = resource
+					}
 				}
 			}
 		}

@@ -41,7 +41,7 @@ func TestResourceMembershipBatchMatchesRebuild(t *testing.T) {
 		}}
 		r, err := NewResource(
 			ResourceKey{TypeURL: AddressType, Name: name}, name,
-			&anypb.Any{TypeUrl: AddressType, Value: []byte(fmt.Sprint(revision))},
+			Prebuilt(&anypb.Any{TypeUrl: AddressType, Value: []byte(fmt.Sprint(revision))}),
 			[]string{"shared", fmt.Sprintf("alias-%d", revision%5)}, facts,
 		)
 		if err != nil {

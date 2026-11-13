@@ -156,7 +156,13 @@ func TestGatewayExplicitSubscribeResendsCachedResources(t *testing.T) {
 			a := gatewayResourceOfType(t, model.RouteType, "demo/egress", "a", "same")
 			if mode == "alias" {
 				var err error
-				a, err = model.NewResource(a.Key, a.XDSName, a.Value, []string{"alias-a"}, a.Facts)
+				a, err = model.NewResource(
+					a.Key,
+					a.XDSName,
+					testResourceContents(testResourceValue(a)),
+					[]string{"alias-a"},
+					a.Facts,
+				)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -284,7 +290,7 @@ func TestGatewayNACKRecoveryTriggers(t *testing.T) {
 				}
 				a := gatewayResourceOfType(t, model.RouteType, scope.GatewayKey, "a", "rejected")
 				a.Facts.AgentioEgress = native
-				a, err := model.NewResource(a.Key, a.XDSName, a.Value, nil, a.Facts)
+				a, err := model.NewResource(a.Key, a.XDSName, testResourceContents(testResourceValue(a)), nil, a.Facts)
 				if err != nil {
 					t.Fatal(err)
 				}

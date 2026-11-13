@@ -48,7 +48,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	if printEnv.Enabled {
 		return printEnv.Write(os.Stdout, envdoc.Options{
-			Prefixes: []string{"AGENTIO_", "ENABLE_POLICY_STATUS"},
+			Prefixes: []string{"AGENTIO_"},
 			DefaultValues: map[string]string{
 				"AGENTIO_PUSH_CONCURRENCY": "automatic (see description)",
 			},

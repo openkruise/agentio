@@ -28,7 +28,7 @@ import (
 
 func TestRegisteredEnvironmentVariablesUseAgentioNamespace(t *testing.T) {
 	for _, variable := range env.VarDescriptions() {
-		if variable.Name != "ENABLE_POLICY_STATUS" && !strings.HasPrefix(variable.Name, "AGENTIO_") {
+		if !strings.HasPrefix(variable.Name, "AGENTIO_") {
 			t.Errorf("registered environment variable %q does not use the Agentio namespace", variable.Name)
 		}
 	}
@@ -129,11 +129,11 @@ func TestValidateAllowsDisabledMaxServerConnectionAge(t *testing.T) {
 	}
 }
 
-func TestValidateAllowsLocalJWTAuthentication(t *testing.T) {
+func TestValidateAllowsTokenReviewAuthentication(t *testing.T) {
 	setValidFeatures(t)
-	test.SetForTest(t, &KubernetesWorkloadAuthMode, "local")
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "tokenreview")
 	if err := Validate(); err != nil {
-		t.Fatalf("Validate() rejected local JWT authentication: %v", err)
+		t.Fatalf("Validate() rejected TokenReview authentication: %v", err)
 	}
 }
 
@@ -250,7 +250,7 @@ func setValidFeatures(t *testing.T) {
 	test.SetForTest(t, &WorkloadCertLifetime, 2*time.Hour)
 	test.SetForTest(t, &WorkloadCertRenewBefore, time.Hour)
 	test.SetForTest(t, &TokenAudience, "agentio-ca")
-	test.SetForTest(t, &KubernetesWorkloadAuthMode, "tokenreview")
+	test.SetForTest(t, &KubernetesWorkloadAuthMode, "local")
 	test.SetForTest(t, &EnableGatewayDeployer, false)
 	test.SetForTest(t, &GatewayLeaseName, "agentiod-gateway-deployer-leader")
 }

@@ -173,7 +173,7 @@ func TestTrafficPolicyAuthorizationDirectionsUpdate(t *testing.T) {
 				return false
 			}
 			wire := new(workloadv1.Address)
-			if err := resource.Value.UnmarshalTo(wire); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(wire); err != nil {
 				t.Fatal(err)
 			}
 			_, nativeFound := snapshot.Get(
@@ -754,7 +754,7 @@ func TestCompilerPublishesWorkloadsWithoutAttestablePrincipalAndResolvesTrafficP
 			t.Fatalf("WDS Address for unattestable workload %q is missing", workload.UID)
 		}
 		address := &workloadv1.Address{}
-		if err := workloadResource.Value.UnmarshalTo(address); err != nil {
+		if err := resourceValue(t, workloadResource).UnmarshalTo(address); err != nil {
 			t.Fatalf("unmarshal WDS Address %q: %v", workload.UID, err)
 		}
 		if got := address.GetWorkload().GetServiceAccount(); got != "" {
@@ -897,7 +897,7 @@ func TestCompilerProjectsSandboxSNIWithoutInlineAttachment(t *testing.T) {
 		Name:    "cluster//Pod/demo/client",
 	})
 	address := &workloadv1.Address{}
-	if err := workloadResource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, workloadResource).UnmarshalTo(address); err != nil {
 		t.Fatalf("unmarshal Workload: %v", err)
 	}
 	if got := extensionNames(
@@ -1050,7 +1050,7 @@ func TestCompilerPublishesWorkloadEgressPolicies(t *testing.T) {
 			t.Fatalf("Address %s is missing", tc.uid)
 		}
 		address := &workloadv1.Address{}
-		if err := resource.Value.UnmarshalTo(address); err != nil {
+		if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 			t.Fatal(err)
 		}
 		effective := new(extensionsv1.EgressPolicies)

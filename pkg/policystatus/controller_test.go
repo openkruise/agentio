@@ -98,10 +98,15 @@ func awaitResult(
 	assert.Equal(t, programmed.Type, "Programmed")
 	assert.Equal(t, programmed.Status, accepted)
 	if accepted == metav1.ConditionTrue {
+		assert.Equal(t, got.Conditions[0].Message, "Configuration is valid")
 		assert.Equal(t, programmed.Reason, "Programmed")
+		assert.Equal(t, programmed.Message, "Configuration is ready for distribution")
 	} else {
 		assert.Equal(t, programmed.Reason, got.Conditions[0].Reason)
 		assert.Equal(t, programmed.Message, got.Conditions[0].Message)
+	}
+	if refs == metav1.ConditionTrue {
+		assert.Equal(t, got.Conditions[1].Message, "Reference checks passed")
 	}
 	for _, condition := range got.Conditions {
 		assert.Equal(t, got.Source.Metadata.Generation, condition.ObservedGeneration)
@@ -148,9 +153,11 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	)
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(s)}, krt.WithStop(t.Context().Done()))
 	results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ConfigMapNotFound")
+	got := awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ConfigMapNotFound")
+	assert.Equal(t, got.Conditions[1].Message, `Input "config": ConfigMap demo/config not found`)
 	maps.UpdateObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "demo"}})
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "SecretNotFound")
+	got = awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "SecretNotFound")
+	assert.Equal(t, got.Conditions[1].Message, `Rule "auth": Secret demo/cred not found`)
 	secrets.UpdateObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "cred", Namespace: "demo"}})
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
 	maps.DeleteObject("demo/config")
@@ -213,7 +220,10 @@ func TestProfileReferenceCheckScope(t *testing.T) {
 				krt.WithStop(t.Context().Done()),
 			)
 			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
-			awaitResult(t, results, s.ResourceName(), tc.accepted, tc.status, tc.reason)
+			got := awaitResult(t, results, s.ResourceName(), tc.accepted, tc.status, tc.reason)
+			if tc.reason == "OutsideWatchScope" {
+				assert.Equal(t, got.Conditions[1].Message, `Rule "r": Secret demo/cred could not be verified`)
+			}
 		})
 	}
 }
@@ -243,7 +253,19 @@ func TestTrafficReferencesAndValidation(t *testing.T) {
 	results := krt.NewCollection(sources.AsCollection(), c.trafficStatus, krt.WithStop(t.Context().Done()))
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ServiceNotFound")
 	services.UpdateObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "demo"}})
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionUnknown, "DNSResolutionPending")
+	got := awaitResult(
+		t,
+		results,
+		s.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionUnknown,
+		"DNSResolutionPending",
+	)
+	assert.Equal(
+		t,
+		got.Conditions[1].Message,
+		"spec.egress.rules[0].to[1]: No IP addresses are available for api.example.com",
+	)
 	resolvedAddresses := []netip.Addr{netip.MustParseAddr("192.0.2.1")}
 	dns.Set(&resolvedAddresses)
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")

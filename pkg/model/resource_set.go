@@ -40,7 +40,13 @@ func NewResourceSet(resources []Resource) (ResourceSet, error) {
 		normalized := resource
 		if normalized.Hash == "" {
 			var err error
-			normalized, err = normalizeResource(resource)
+			normalized, err = NewResource(
+				resource.Key,
+				resource.XDSName,
+				Prebuilt(resource.Value),
+				resource.Aliases,
+				resource.Facts,
+			)
 			if err != nil {
 				return ResourceSet{}, err
 			}
@@ -466,7 +472,13 @@ func normalizeChangedResource(change ResourceChange) (Resource, error) {
 	normalized := *change.New
 	if normalized.Hash == "" {
 		var err error
-		normalized, err = normalizeResource(normalized)
+		normalized, err = NewResource(
+			normalized.Key,
+			normalized.XDSName,
+			Prebuilt(normalized.Value),
+			normalized.Aliases,
+			normalized.Facts,
+		)
 		if err != nil {
 			return Resource{}, err
 		}

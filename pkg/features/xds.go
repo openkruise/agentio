@@ -68,22 +68,22 @@ var (
 	)
 	XDSInitialAdmissionTimeout, xdsInitialAdmissionTimeoutErr = time.ParseDuration(env.Register(
 		"AGENTIO_XDS_INITIAL_ADMISSION_TIMEOUT",
-		"1s",
+		"10s",
 		"Maximum wait for a new stream initialization slot before authentication; must be positive.",
 	).Get())
 	XDSRateLimitTimeout, xdsRateLimitTimeoutErr = time.ParseDuration(env.Register(
 		"AGENTIO_XDS_RATE_LIMIT_TIMEOUT",
-		"1s",
+		"3s",
 		"Maximum wait for new-stream rate admission before authentication; must be positive.",
 	).Get())
 	XDSSendTimeout, xdsSendTimeoutErr = time.ParseDuration(env.Register(
 		"AGENTIO_XDS_SEND_TIMEOUT",
-		"5s",
+		"15s",
 		"Maximum duration of one xDS response send before closing the stream; must be positive.",
 	).Get())
 	XDSACKTimeout, xdsACKTimeoutErr = time.ParseDuration(env.Register(
 		"AGENTIO_XDS_ACK_TIMEOUT",
-		"5s",
+		"20s",
 		"Maximum time an xDS response may remain unacknowledged before closing the stream; must be positive.",
 	).Get())
 	XDSCPUBudget = env.Register(

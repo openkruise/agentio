@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/util/sets"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
@@ -61,13 +62,17 @@ func TestWildcardFullAddressGenerationHonorsInitialVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	previous, err := resource.Encode(ztunnelScope(), model.AddressType)
+	if err != nil {
+		t.Fatal(err)
+	}
 	delta, err := (WorkloadGenerator{}).Generate(context.Background(), GenerationRequest{
 		Scope:    ztunnelScope(),
 		Snapshot: snapshot,
 		TypeURL:  model.AddressType,
 		Subscription: SubscriptionView{
 			wildcard: true,
-			sent:     map[string]string{resource.XDSName: resource.Hash},
+			sent:     map[string]string{resource.XDSName: previous.Hash},
 		},
 		Full: true,
 	})
@@ -133,7 +138,13 @@ func TestWildcardFullAddressGenerationAllocationBudget(t *testing.T) {
 func addressResourceWithWireName(t testing.TB, keyName, wireName string) model.Resource {
 	t.Helper()
 	base := addressResource(t, keyName, keyName)
-	resource, err := model.NewResource(base.Key, wireName, base.Value, base.Aliases, base.Facts)
+	resource, err := model.NewResource(
+		base.Key,
+		wireName,
+		testResourceContents(testResourceValue(base)),
+		base.Aliases,
+		base.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +171,13 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 			workloadFacts.Principal = tc.principal
 			facts.Workload = &workloadFacts
 			var err error
-			address, err = model.NewResource(address.Key, address.XDSName, address.Value, address.Aliases, facts)
+			address, err = model.NewResource(
+				address.Key,
+				address.XDSName,
+				testResourceContents(testResourceValue(address)),
+				address.Aliases,
+				facts,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,9 +185,9 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 			if got := len(snapshot.List(model.WorkloadType)); got != 0 {
 				t.Fatalf("retained Workload resources = %d, want 0", got)
 			}
-			originalValue := proto.Clone(address.Value)
+			originalValue := proto.Clone(testResourceValue(address))
 			expected := &workloadv1.Address{}
-			if err := address.Value.UnmarshalTo(expected); err != nil {
+			if err := testResourceValue(address).UnmarshalTo(expected); err != nil {
 				t.Fatal(err)
 			}
 			delta, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
@@ -183,7 +200,8 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(delta.Resources) != 1 || delta.Resources[0].Key.TypeURL != model.WorkloadType || delta.Resources[0].XDSName != "uid-a" {
+			if len(delta.Resources) != 1 || delta.Resources[0].Key.TypeURL != model.WorkloadType ||
+				delta.Resources[0].XDSName != "uid-a" {
 				t.Fatalf("projected resources = %+v", delta.Resources)
 			}
 			workload := &workloadv1.Workload{}
@@ -193,8 +211,131 @@ func TestWorkloadGeneratorProjectsDirectResourceFromCanonicalAddress(t *testing.
 			if !proto.Equal(workload, expected.GetWorkload()) {
 				t.Fatalf("projected Workload = %v, want %v", workload, expected.GetWorkload())
 			}
-			if !proto.Equal(address.Value, originalValue) {
+			if !proto.Equal(testResourceValue(address), originalValue) {
 				t.Fatal("projection mutated the canonical Address")
+			}
+		})
+	}
+}
+
+func TestDirectWorkloadSNIPolicyCompatibility(t *testing.T) {
+	addressWithPolicy := func(action extensionsv1.SniAction, node, profile string) model.Resource {
+		base := selectionWorkload(t, "uid-a", "demo", node, "", "")
+		address := &workloadv1.Address{}
+		if err := testResourceValue(base).UnmarshalTo(address); err != nil {
+			t.Fatal(err)
+		}
+		workload := address.GetWorkload()
+		workload.Extensions = []*workloadv1.Extension{
+			{Name: "security-profile-reference",
+				Config: mustAny(&extensionsv1.PolicyReference{
+					TypeUrl:   model.SecurityProfileType,
+					Resources: []*extensionsv1.PolicyResourceReference{{Name: profile, Uid: "profile-uid"}},
+				})},
+			{Name: "other-extension", Config: mustAny(&extensionsv1.PolicyReference{TypeUrl: model.TrafficPolicyType})},
+		}
+		if action != extensionsv1.SniAction_SNI_ACTION_UNSPECIFIED {
+			workload.Extensions = append(workload.Extensions, &workloadv1.Extension{
+				Name: "sni-traffic-policy",
+				Config: mustAny(&extensionsv1.SniTrafficPolicy{
+					Rules: []*extensionsv1.SniRule{
+						{Match: &extensionsv1.SniMatch{Sni: []string{"example.com"}}, Action: action},
+					},
+				}),
+			})
+		}
+		resource, err := model.NewResource(
+			base.Key,
+			base.XDSName,
+			testResourceContents(mustAny(address)),
+			base.Aliases,
+			base.Facts,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resource
+	}
+	withSNI := addressWithPolicy(extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH, "node-a", "demo/profile")
+	withoutSNI := addressWithPolicy(extensionsv1.SniAction_SNI_ACTION_UNSPECIFIED, "node-a", "demo/profile")
+	for _, class := range []model.ClientClass{model.ClientEgressGateway, model.ClientAgentioEgress, model.ClientEPE} {
+		t.Run(string(class), func(t *testing.T) {
+			scope := gatewayScope()
+			scope.Class = class
+			initialSnapshot := selectionSnapshot(t, []model.Resource{withSNI})
+			initial := projectedWorkloads(t, scope, initialSnapshot, nil)
+			if len(initial) != 1 {
+				t.Fatalf("initial resources = %v, want one Workload", initial)
+			}
+			expectedAddress := &workloadv1.Address{}
+			expected := withSNI
+			if class != model.ClientEgressGateway {
+				expected = withoutSNI
+			}
+			if err := testResourceValue(expected).UnmarshalTo(expectedAddress); err != nil {
+				t.Fatal(err)
+			}
+			projected := &workloadv1.Workload{}
+			if err := initial[0].Value.UnmarshalTo(projected); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(projected, expectedAddress.GetWorkload()) {
+				t.Fatalf("projected Workload = %v, want %v", projected, expectedAddress.GetWorkload())
+			}
+			canonical := &workloadv1.Address{}
+			if err := testResourceValue(withSNI).UnmarshalTo(canonical); err != nil {
+				t.Fatal(err)
+			}
+			if len(canonical.GetWorkload().Extensions) != 3 {
+				t.Fatal("projection removed the canonical compatibility extension")
+			}
+			for _, tc := range []struct {
+				name       string
+				before     model.Resource
+				after      model.Resource
+				alwaysSend bool
+			}{
+				{name: "unchanged", before: withSNI, after: withSNI},
+				{name: "SNI added", before: withoutSNI, after: withSNI},
+				{name: "SNI changed", before: withSNI, after: addressWithPolicy(extensionsv1.SniAction_SNI_ACTION_DENY, "node-a", "demo/profile")},
+				{name: "SNI removed", before: withSNI, after: withoutSNI},
+				{name: "workload changed", before: withSNI, after: addressWithPolicy(extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH, "node-b", "demo/profile"), alwaysSend: true},
+				{name: "reference changed", before: withSNI, after: addressWithPolicy(extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH, "node-a", "demo/other-profile"), alwaysSend: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					before := selectionSnapshot(t, []model.Resource{tc.before})
+					after := selectionSnapshot(t, []model.Resource{tc.after})
+					previous := projectedWorkloads(t, scope, before, nil)[0]
+					for _, full := range []bool{false, true} {
+						delta, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
+							Scope:    scope,
+							TypeURL:  model.WorkloadType,
+							Snapshot: after,
+							Subscription: SubscriptionView{
+								wildcard: true,
+								sent:     map[string]string{previous.XDSName: previous.Hash},
+							},
+							Full:   full,
+							Update: updateBetween(before, after, before.Diff(after)),
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						want := 0
+						if tc.alwaysSend || class == model.ClientEgressGateway && tc.before.Hash != tc.after.Hash {
+							want = 1
+						}
+						if len(delta.Resources) != want || len(delta.Removed) != 0 {
+							t.Fatalf(
+								"full=%t: resources=%v removed=%v, want %d resources",
+								full,
+								delta.Resources,
+								delta.Removed,
+								want,
+							)
+						}
+					}
+				})
 			}
 		})
 	}
@@ -208,16 +349,22 @@ func TestWildcardDirectWorkloadFullRegenerationOmitsUnchangedResources(t *testin
 	}}
 	// Two map entries exercise deterministic marshaling of the projected value.
 	address, err := model.NewResource(
-		model.ResourceKey{TypeURL: model.AddressType, Name: "uid-a"}, "",
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
-			Uid:       "uid-a",
-			Namespace: "demo",
-			Node:      "node-a",
-			Services: map[string]*workloadv1.PortList{
-				"demo/svc-a": {Ports: []*workloadv1.Port{{ServicePort: 80, TargetPort: 8080}}},
-				"demo/svc-b": {Ports: []*workloadv1.Port{{ServicePort: 81, TargetPort: 8081}}},
-			},
-		}}}), nil, facts)
+		model.ResourceKey{TypeURL: model.AddressType, Name: "uid-a"},
+		"",
+		testResourceContents(
+			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+				Uid:       "uid-a",
+				Namespace: "demo",
+				Node:      "node-a",
+				Services: map[string]*workloadv1.PortList{
+					"demo/svc-a": {Ports: []*workloadv1.Port{{ServicePort: 80, TargetPort: 8080}}},
+					"demo/svc-b": {Ports: []*workloadv1.Port{{ServicePort: 81, TargetPort: 8081}}},
+				},
+			}}}),
+		),
+		nil,
+		facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +539,12 @@ func TestNodeReferencedGatewaySelection(t *testing.T) {
 	}
 	snapshot := selectionSnapshot(t, resources)
 	scope := model.ClientScope{Class: model.ClientSharedZTunnel, NodeName: "node-a"}
-	if names := selectedNames(selectWorkloadResources(scope, snapshot, model.AddressType, nil)); !slices.Equal(names, []string{"gateway-a", "gateway-b", "uid-a", "uid-b"}) {
+	if names := selectedNames(
+		selectWorkloadResources(scope, snapshot, model.AddressType, nil),
+	); !slices.Equal(
+		names,
+		[]string{"gateway-a", "gateway-b", "uid-a", "uid-b"},
+	) {
 		t.Fatalf("node selected resources = %v", names)
 	}
 }
@@ -430,8 +582,13 @@ func TestNamedReferencedGatewayIncremental(t *testing.T) {
 	own := selectionWithGatewayReference(t, plain, "agentio-system/egress-a")
 	oldGateway := selectionOwnedByGateway(t,
 		selectionWorkload(t, "gateway-a", "agentio-system", "gateway-node", "", ""), "agentio-system/egress-a")
-	newGateway, err := model.NewResource(oldGateway.Key, oldGateway.XDSName, oldGateway.Value,
-		[]string{"revision/two"}, oldGateway.Facts)
+	newGateway, err := model.NewResource(
+		oldGateway.Key,
+		oldGateway.XDSName,
+		testResourceContents(testResourceValue(oldGateway)),
+		[]string{"revision/two"},
+		oldGateway.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,17 +680,26 @@ func TestNodeNamedSubscriptionAddsLocalAndExplicitRemoteWorkloads(t *testing.T) 
 
 	got = selectWorkloadResources(scope, snapshot, model.AddressType, []string{"uid-c"})
 	if names := selectedNames(got); !slices.Equal(names, []string{"uid-a", "uid-b", "uid-c"}) {
-		t.Fatalf("selected remote Address resource = %v, want explicit remote workload plus node-local workloads", names)
+		t.Fatalf(
+			"selected remote Address resource = %v, want explicit remote workload plus node-local workloads",
+			names,
+		)
 	}
 
 	got = selectWorkloadResources(scope, snapshot, model.AddressType, []string{"/10.96.0.1"})
 	if names := selectedNames(got); !slices.Equal(names, []string{"demo/svc-a", "uid-a", "uid-b", "uid-c"}) {
-		t.Fatalf("selected VIP Address resources = %v, want subscribed service, every endpoint, and node-local workloads", names)
+		t.Fatalf(
+			"selected VIP Address resources = %v, want subscribed service, every endpoint, and node-local workloads",
+			names,
+		)
 	}
 
 	got = selectWorkloadResources(scope, snapshot, model.AddressType, []string{"/10.96.0.3"})
 	if names := selectedNames(got); !slices.Equal(names, []string{"demo/svc-c", "uid-a", "uid-b", "uid-d"}) {
-		t.Fatalf("selected remote-only Service resources = %v, want its remote endpoint and node-local workloads", names)
+		t.Fatalf(
+			"selected remote-only Service resources = %v, want its remote endpoint and node-local workloads",
+			names,
+		)
 	}
 }
 
@@ -637,7 +803,7 @@ func TestUnrelatedGatewayNamedServiceAddressChangeDoesNotReconcile(t *testing.T)
 	endpoint := selectionWorkload(t, "uid-a", "demo", "node-a", "svc-a", "")
 	oldUnrelated := selectionWorkload(t, "uid-b", "demo", "node-b", "svc-b", "")
 	newUnrelated, err := model.NewResource(
-		oldUnrelated.Key, oldUnrelated.XDSName, oldUnrelated.Value,
+		oldUnrelated.Key, oldUnrelated.XDSName, testResourceContents(testResourceValue(oldUnrelated)),
 		[]string{"uid-b-alias"}, oldUnrelated.Facts,
 	)
 	if err != nil {
@@ -670,14 +836,18 @@ func TestNodeNamedServiceRemotePayloadUpdateUsesChangedKey(t *testing.T) {
 	local := selectionWorkload(t, "uid-local", "demo", "node-a", "svc-a", "")
 	oldRemote := selectionWorkload(t, "uid-remote", "demo", "node-b", "svc-a", "")
 	newRemote, err := model.NewResource(
-		oldRemote.Key, oldRemote.XDSName,
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
-			Uid:       "uid-remote",
-			Namespace: "demo",
-			Node:      "node-b",
-			Name:      "updated",
-		}}}),
-		oldRemote.Aliases, oldRemote.Facts,
+		oldRemote.Key,
+		oldRemote.XDSName,
+		testResourceContents(
+			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+				Uid:       "uid-remote",
+				Namespace: "demo",
+				Node:      "node-b",
+				Name:      "updated",
+			}}}),
+		),
+		oldRemote.Aliases,
+		oldRemote.Facts,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -787,7 +957,7 @@ func TestDedicatedWorkloadNamedServiceMembershipLossReconcilesRemovals(t *testin
 					workloadFacts.Source.Key = "replacement-pod"
 					facts.Workload = &workloadFacts
 					updated, err := model.NewResource(
-						oldWorkload.Key, oldWorkload.XDSName, oldWorkload.Value,
+						oldWorkload.Key, oldWorkload.XDSName, testResourceContents(testResourceValue(oldWorkload)),
 						oldWorkload.Aliases, facts,
 					)
 					if err != nil {
@@ -853,18 +1023,31 @@ func TestDedicatedWorkloadNamedServiceMembershipLossReconcilesRemovals(t *testin
 func TestGatewayWorkloadIncrementalUsesResourceFamily(t *testing.T) {
 	oldResource := selectionWorkload(t, "uid-a", "demo", "node-a", "", "")
 	newResource, err := model.NewResource(
-		oldResource.Key, "",
-		mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
-			Uid:       "uid-a",
-			Namespace: "demo",
-			Node:      "node-a",
-			Name:      "updated",
-		}}}), nil, oldResource.Facts)
+		oldResource.Key,
+		"",
+		testResourceContents(
+			mustAny(&workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: &workloadv1.Workload{
+				Uid:       "uid-a",
+				Namespace: "demo",
+				Node:      "node-a",
+				Name:      "updated",
+			}}}),
+		),
+		nil,
+		oldResource.Facts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	unrelated := selectionWorkload(t, "uid-b", "demo", "node-b", "", "")
-	snapshot := selectionSnapshot(t, []model.Resource{newResource, unrelated, selectionWorkload(t, "ordinary", "demo", "node-a", "", "demo/selector-a")})
+	snapshot := selectionSnapshot(
+		t,
+		[]model.Resource{
+			newResource,
+			unrelated,
+			selectionWorkload(t, "ordinary", "demo", "node-a", "", "demo/selector-a"),
+		},
+	)
 	watch := &watchState{
 		wildcard: true,
 		started:  true,
@@ -1006,5 +1189,113 @@ func TestWorkloadInstanceDemandDoesNotFollowNameReuse(t *testing.T) {
 	}
 	if len(delta.Resources) != 0 || !slices.Contains(delta.Removed, old.XDSName) {
 		t.Fatalf("old identity followed name reuse: %v", delta)
+	}
+}
+
+func TestZTunnelAddressExtensionsAndVersions(t *testing.T) {
+	build := func(profileUID string, action extensionsv1.SniAction, node string) model.Resource {
+		base := selectionWorkload(t, "uid-a", "demo", "node-a", "", "")
+		address := new(workloadv1.Address)
+		if err := testResourceValue(base).UnmarshalTo(address); err != nil {
+			t.Fatal(err)
+		}
+		address.GetWorkload().Node = node
+		address.GetWorkload().Extensions = []*workloadv1.Extension{
+			{Name: "metadata", Config: mustAny(&extensionsv1.PolicyReference{})},
+			{
+				Name:   "traffic-policy-reference",
+				Config: mustAny(&extensionsv1.PolicyReference{TypeUrl: model.TrafficPolicyType}),
+			},
+			{Name: "security-profile-reference",
+				Config: mustAny(&extensionsv1.PolicyReference{TypeUrl: model.SecurityProfileType,
+					Resources: []*extensionsv1.PolicyResourceReference{{Name: "demo/profile", Uid: profileUID}}})},
+			{
+				Name:   "sni-traffic-policy",
+				Config: mustAny(&extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{Action: action}}}),
+			},
+		}
+		resource, err := model.NewResource(base.Key, "", testResourceContents(address), base.Aliases, base.Facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resource
+	}
+	scope := model.ClientScope{Class: model.ClientSharedZTunnel, NodeName: "node-a"}
+	original := build("uid-1", extensionsv1.SniAction_SNI_ACTION_DENY, "node-a")
+	before := selectionSnapshot(t, []model.Resource{original})
+	initial, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
+		Scope:        scope,
+		TypeURL:      model.AddressType,
+		Snapshot:     before,
+		Full:         true,
+		Subscription: SubscriptionView{wildcard: true},
+	})
+	if err != nil || len(initial.Resources) != 1 {
+		t.Fatalf("initial: %v, %v", initial, err)
+	}
+	address := new(workloadv1.Address)
+	if err := initial.Resources[0].Value.UnmarshalTo(address); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, extension := range address.GetWorkload().Extensions {
+		names = append(names, extension.Name)
+	}
+	if !slices.Equal(names, []string{"metadata", "traffic-policy-reference"}) {
+		t.Fatalf("ztunnel extensions: %v", names)
+	}
+	for _, tc := range []struct {
+		name     string
+		resource model.Resource
+		send     bool
+	}{
+		{"SNI only", build("uid-1", extensionsv1.SniAction_SNI_ACTION_PASSTHROUGH, "node-a"), false},
+		{"SP reference only", build("uid-2", extensionsv1.SniAction_SNI_ACTION_DENY, "node-a"), false},
+		{"base changed", build("uid-1", extensionsv1.SniAction_SNI_ACTION_DENY, "node-b"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			after := selectionSnapshot(t, []model.Resource{tc.resource})
+			if original.Hash == tc.resource.Hash {
+				t.Fatal("canonical version lost an input change")
+			}
+			for _, full := range []bool{false, true} {
+				delta, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
+					Scope:    scope,
+					TypeURL:  model.AddressType,
+					Snapshot: after,
+					Full:     full,
+					Update:   updateBetween(before, after, before.Diff(after)),
+					Subscription: SubscriptionView{
+						names: []string{"uid-a"},
+						sent:  map[string]string{"uid-a": initial.Resources[0].Hash},
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (len(delta.Resources) == 1) != tc.send || len(delta.Removed) != 0 {
+					t.Fatalf("full=%t: resources=%d removed=%v", full, len(delta.Resources), delta.Removed)
+				}
+			}
+			// Wildcard Address watches deliberately omit sent state; still send the filtered format.
+			delta, err := (WorkloadGenerator{}).Generate(t.Context(), GenerationRequest{
+				Scope:        scope,
+				TypeURL:      model.AddressType,
+				Snapshot:     after,
+				Update:       updateBetween(before, after, before.Diff(after)),
+				Subscription: SubscriptionView{wildcard: true},
+			})
+			if err != nil || len(delta.Resources) != 1 {
+				t.Fatalf("wildcard update: %v, %v", delta, err)
+			}
+			received := new(workloadv1.Address)
+			if err := delta.Resources[0].Value.UnmarshalTo(received); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(received.GetWorkload().Extensions[0], address.GetWorkload().Extensions[0]) ||
+				len(received.GetWorkload().Extensions) != 2 {
+				t.Fatal("incremental update leaked private extensions")
+			}
+		})
 	}
 }

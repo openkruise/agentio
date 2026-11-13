@@ -116,7 +116,7 @@ func newSandboxes(
 				attester = &model.Attester{WorkloadUID: podsource.WorkloadUID(clusterID, pod)}
 			}
 			var policies *model.SandboxPolicies
-			if sandbox.Annotations[agentsv1alpha1.AnnotationSecurityRules] != "" {
+			if HasSecurityRules(sandbox) {
 				rules, err := sandboxSecurityRules(sandbox)
 				policies = &model.SandboxPolicies{SecurityRules: rules}
 				if err != nil {
@@ -190,4 +190,9 @@ func OwnsPod(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// HasSecurityRules reports whether the Sandbox declares inline security rules.
+func HasSecurityRules(sandbox metav1.Object) bool {
+	return sandbox.GetAnnotations()[agentsv1alpha1.AnnotationSecurityRules] != ""
 }

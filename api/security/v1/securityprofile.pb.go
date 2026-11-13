@@ -35,7 +35,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SecurityProfile carries the experimental JSON configuration consumed by EPE.
+// SecurityProfile carries the HTTP and compiled connection-policy views.
 type SecurityProfile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Uid   string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
@@ -44,7 +44,9 @@ type SecurityProfile struct {
 	Namespace string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	// UTF-8 JSON containing only rules, audit and unchanged input declarations.
 	// EPE validates and compiles this document before accepting the resource.
-	PolicyJson    []byte `protobuf:"bytes,4,opt,name=policy_json,json=policyJson,proto3" json:"policy_json,omitempty"`
+	PolicyJson    []byte     `protobuf:"bytes,4,opt,name=policy_json,json=policyJson,proto3" json:"policy_json,omitempty"`
+	SniPolicy     *SNIPolicy `protobuf:"bytes,5,opt,name=sni_policy,json=sniPolicy,proto3" json:"sni_policy,omitempty"`
+	TcpPolicy     *TCPPolicy `protobuf:"bytes,6,opt,name=tcp_policy,json=tcpPolicy,proto3" json:"tcp_policy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -107,17 +109,35 @@ func (x *SecurityProfile) GetPolicyJson() []byte {
 	return nil
 }
 
+func (x *SecurityProfile) GetSniPolicy() *SNIPolicy {
+	if x != nil {
+		return x.SniPolicy
+	}
+	return nil
+}
+
+func (x *SecurityProfile) GetTcpPolicy() *TCPPolicy {
+	if x != nil {
+		return x.TcpPolicy
+	}
+	return nil
+}
+
 var File_api_security_v1_securityprofile_proto protoreflect.FileDescriptor
 
 const file_api_security_v1_securityprofile_proto_rawDesc = "" +
 	"\n" +
-	"%api/security/v1/securityprofile.proto\x12\x10agentio.security\"v\n" +
+	"%api/security/v1/securityprofile.proto\x12\x10agentio.security\x1a\x1fapi/security/v1/snipolicy.proto\x1a\x1fapi/security/v1/tcppolicy.proto\"\xee\x01\n" +
 	"\x0fSecurityProfile\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x1f\n" +
 	"\vpolicy_json\x18\x04 \x01(\fR\n" +
-	"policyJsonB:Z8github.com/openkruise/agentio/api/security/v1;securityv1b\x06proto3"
+	"policyJson\x12:\n" +
+	"\n" +
+	"sni_policy\x18\x05 \x01(\v2\x1b.agentio.security.SNIPolicyR\tsniPolicy\x12:\n" +
+	"\n" +
+	"tcp_policy\x18\x06 \x01(\v2\x1b.agentio.security.TCPPolicyR\ttcpPolicyB:Z8github.com/openkruise/agentio/api/security/v1;securityv1b\x06proto3"
 
 var (
 	file_api_security_v1_securityprofile_proto_rawDescOnce sync.Once
@@ -134,13 +154,17 @@ func file_api_security_v1_securityprofile_proto_rawDescGZIP() []byte {
 var file_api_security_v1_securityprofile_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_api_security_v1_securityprofile_proto_goTypes = []any{
 	(*SecurityProfile)(nil), // 0: agentio.security.SecurityProfile
+	(*SNIPolicy)(nil),       // 1: agentio.security.SNIPolicy
+	(*TCPPolicy)(nil),       // 2: agentio.security.TCPPolicy
 }
 var file_api_security_v1_securityprofile_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1, // 0: agentio.security.SecurityProfile.sni_policy:type_name -> agentio.security.SNIPolicy
+	2, // 1: agentio.security.SecurityProfile.tcp_policy:type_name -> agentio.security.TCPPolicy
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_api_security_v1_securityprofile_proto_init() }
@@ -148,6 +172,8 @@ func file_api_security_v1_securityprofile_proto_init() {
 	if File_api_security_v1_securityprofile_proto != nil {
 		return
 	}
+	file_api_security_v1_snipolicy_proto_init()
+	file_api_security_v1_tcppolicy_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -28,7 +28,7 @@ func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
 	keys := []ResourceKey{sni, profile, tp, profile}
 	raw := testWorkloadResource(t, "a", "one", "", "", nil, nil)
 	raw.Facts.References = &ResourceReferences{Keys: keys}
-	r, err := NewResource(raw.Key, raw.XDSName, raw.Value, raw.Aliases, raw.Facts)
+	r, err := NewResource(raw.Key, raw.XDSName, Prebuilt(raw.Value), raw.Aliases, raw.Facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
 	}
 	facts := r.Facts
 	facts.References = &ResourceReferences{Keys: []ResourceKey{tp, sni}}
-	rebound, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, facts)
+	rebound, err := NewResource(r.Key, r.XDSName, Prebuilt(r.Value), r.Aliases, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
 	}
 	permuted := facts
 	permuted.References = &ResourceReferences{Keys: []ResourceKey{sni, tp, tp}}
-	same, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, permuted)
+	same, err := NewResource(r.Key, r.XDSName, Prebuilt(r.Value), r.Aliases, permuted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestResourceReferencesAreImmutableAndIndexed(t *testing.T) {
 	}
 	for _, invalid := range []ResourceKey{{Name: "missing-type"}, {TypeURL: SecurityProfileType}} {
 		facts.References = &ResourceReferences{Keys: []ResourceKey{invalid}}
-		if _, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, facts); err == nil {
+		if _, err := NewResource(r.Key, r.XDSName, Prebuilt(r.Value), r.Aliases, facts); err == nil {
 			t.Fatal("empty reference key was accepted")
 		}
 	}
@@ -84,7 +84,7 @@ func TestReferenceCountsTrackLastReferrerAcrossBatchUpdates(t *testing.T) {
 		t.Helper()
 		raw := testWorkloadResource(t, name, "value", "", "", nil, nil)
 		raw.Facts.References = &ResourceReferences{Keys: references}
-		resource, err := NewResource(raw.Key, raw.XDSName, raw.Value, raw.Aliases, raw.Facts)
+		resource, err := NewResource(raw.Key, raw.XDSName, Prebuilt(raw.Value), raw.Aliases, raw.Facts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestReferenceCountsSurviveContentUpdatesInMixedBatch(t *testing.T) {
 	b := testWorkloadResource(t, "b", "old", "", "", nil, nil)
 	b.Facts.References = a.Facts.References
 	updated, err := NewResource(a.Key, a.XDSName,
-		&anypb.Any{TypeUrl: a.Key.TypeURL, Value: []byte("new")}, a.Aliases, a.Facts)
+		Prebuilt(&anypb.Any{TypeUrl: a.Key.TypeURL, Value: []byte("new")}), a.Aliases, a.Facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestReferenceCountsSurviveContentUpdatesInMixedBatch(t *testing.T) {
 func TestNewResourceHashesOnceAndMatchesSetNormalization(t *testing.T) {
 	raw := testWorkloadResource(t, "a", "one", "sandbox-a", "", nil, nil)
 
-	prehashed, err := NewResource(raw.Key, raw.XDSName, raw.Value, raw.Aliases, raw.Facts)
+	prehashed, err := NewResource(raw.Key, raw.XDSName, Prebuilt(raw.Value), raw.Aliases, raw.Facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestResourceEqualsTracksContent(t *testing.T) {
 	differentFacts := testWorkloadResource(t, "a", "one", "sandbox-b", "", nil, nil)
 
 	normalize := func(r Resource) Resource {
-		out, err := NewResource(r.Key, r.XDSName, r.Value, r.Aliases, r.Facts)
+		out, err := NewResource(r.Key, r.XDSName, Prebuilt(r.Value), r.Aliases, r.Facts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,7 +244,7 @@ func TestNewResourceRejectsInvalidFacts(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewResource(tc.key, "", tc.value, nil, tc.facts); err == nil {
+			if _, err := NewResource(tc.key, "", Prebuilt(tc.value), nil, tc.facts); err == nil {
 				t.Fatal("NewResource accepted invalid facts")
 			}
 		})
@@ -267,7 +267,7 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 			_, err := NewResource(
 				ResourceKey{TypeURL: AddressType, Name: "workload-a"},
 				"",
-				&anypb.Any{TypeUrl: AddressType},
+				Prebuilt(&anypb.Any{TypeUrl: AddressType}),
 				nil,
 				ResourceFacts{Workload: &WorkloadResourceFacts{
 					WorkloadUID: "sandbox-a",
@@ -285,7 +285,7 @@ func TestNewResourceValidatesDiscoveryPrincipalShape(t *testing.T) {
 // re-normalizing and must reject invalid facts just like NewResource.
 func TestPreHashedResourceFactValidation(t *testing.T) {
 	base := testResource(t, "one", "value")
-	normalized, err := NewResource(base.Key, "", base.Value, nil, ResourceFacts{})
+	normalized, err := NewResource(base.Key, "", Prebuilt(base.Value), nil, ResourceFacts{})
 	if err != nil {
 		t.Fatal(err)
 	}

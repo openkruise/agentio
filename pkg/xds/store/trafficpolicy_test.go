@@ -31,7 +31,7 @@ func trafficPolicyResource(t testing.TB, typ, name, value string, refs ...string
 		facts.Sandbox = &model.SandboxResourceFacts{AttesterWorkloadUID: "w"}
 	}
 	r, err := model.NewResource(model.ResourceKey{TypeURL: typ, Name: name}, name,
-		&anypb.Any{TypeUrl: typ, Value: []byte(value)}, nil, facts)
+		model.Prebuilt(&anypb.Any{TypeUrl: typ, Value: []byte(value)}), nil, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func withReferences(t testing.TB, r model.Resource, keys ...model.ResourceKey) m
 	t.Helper()
 	facts := r.Facts
 	facts.References = &model.ResourceReferences{Keys: keys}
-	result, err := model.NewResource(r.Key, r.XDSName, r.Value, r.Aliases, facts)
+	result, err := model.NewResource(r.Key, r.XDSName, model.Prebuilt(r.Value), r.Aliases, facts)
 	if err != nil {
 		t.Fatal(err)
 	}

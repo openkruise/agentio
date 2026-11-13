@@ -34,8 +34,8 @@ func referenceProblem(c *metav1.Condition, status metav1.ConditionStatus, reason
 }
 
 func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condition {
-	resolved := condition("ResolvedRefs", metav1.ConditionTrue, "ResolvedRefs",
-		"All references checked by agentiod are resolved", s.Metadata.Generation)
+	resolved := condition(conditionResolvedRefs, metav1.ConditionTrue, reasonResolvedRefs,
+		messageResolvedRefs, s.Metadata.Generation)
 	for _, input := range s.Profile.Inputs {
 		if input.ConfigMap == nil {
 			continue
@@ -44,15 +44,15 @@ func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condit
 			referenceProblem(
 				&resolved,
 				metav1.ConditionUnknown,
-				"CacheNotSynced",
-				"ConfigMap cache has not synchronized",
+				reasonCacheNotSynced,
+				messageReferencesPending,
 			)
 			continue
 		}
 		key := cmp.Or(input.ConfigMap.Namespace, s.Metadata.Namespace) + "/" + input.ConfigMap.Name
 		if krt.FetchOne(ctx, c.registry.ConfigMaps, krt.FilterKey(key)) == nil {
-			referenceProblem(&resolved, metav1.ConditionFalse, "ConfigMapNotFound",
-				fmt.Sprintf("input %q: ConfigMap %s not found", input.Name, key))
+			referenceProblem(&resolved, metav1.ConditionFalse, reasonConfigMapNotFound,
+				fmt.Sprintf(messageConfigMapNotFound, input.Name, key))
 		}
 	}
 	for _, rule := range s.Profile.Rules {
@@ -62,7 +62,7 @@ func (c *Controller) profileRefs(ctx krt.HandlerContext, s source) metav1.Condit
 		}
 		ref, err := policy.NormalizeCredentialRef(tt.CredentialRef)
 		if err != nil {
-			referenceProblem(&resolved, metav1.ConditionFalse, "InvalidReference", err.Error())
+			referenceProblem(&resolved, metav1.ConditionFalse, reasonInvalidReference, err.Error())
 			continue
 		}
 		if ref.CredentialProvider != nil {
@@ -82,25 +82,25 @@ func (c *Controller) secretRef(ctx krt.HandlerContext, s source, rule string,
 		return
 	}
 	if c.scopedSecrets && namespace != c.namespace {
-		referenceProblem(resolved, metav1.ConditionUnknown, "OutsideWatchScope",
-			fmt.Sprintf("rule %q: Secret %s/%s is outside the control-plane Secret watch scope",
+		referenceProblem(resolved, metav1.ConditionUnknown, reasonOutsideWatchScope,
+			fmt.Sprintf(messageSecretNotVerified,
 				rule, namespace, ref.Name))
 		return
 	}
 	if !*krt.FetchOne(ctx, c.secretsSynced.AsCollection()) {
-		referenceProblem(resolved, metav1.ConditionUnknown, "CacheNotSynced", "Secret cache has not synchronized")
+		referenceProblem(resolved, metav1.ConditionUnknown, reasonCacheNotSynced, messageReferencesPending)
 		return
 	}
 	key := namespace + "/" + ref.Name
 	if krt.FetchOne(ctx, c.registry.Secrets, krt.FilterKey(key)) == nil {
-		referenceProblem(resolved, metav1.ConditionFalse, "SecretNotFound",
-			fmt.Sprintf("rule %q: Secret %s not found", rule, key))
+		referenceProblem(resolved, metav1.ConditionFalse, reasonSecretNotFound,
+			fmt.Sprintf(messageSecretNotFound, rule, key))
 	}
 }
 
 func (c *Controller) trafficRefs(ctx krt.HandlerContext, s source) metav1.Condition {
-	resolved := condition("ResolvedRefs", metav1.ConditionTrue, "ResolvedRefs",
-		"All named peer references resolved; empty selector matches are valid", s.Metadata.Generation)
+	resolved := condition(conditionResolvedRefs, metav1.ConditionTrue, reasonResolvedRefs,
+		messageResolvedRefs, s.Metadata.Generation)
 	namespace := s.Metadata.Namespace
 	if s.Kind == "GlobalTrafficPolicy" {
 		namespace = c.namespace
@@ -139,14 +139,19 @@ func (c *Controller) trafficPeer(ctx krt.HandlerContext, peer agentsv1alpha1.Tra
 		}
 		key := cmp.Or(ref.Namespace, namespace) + "/" + ref.Name
 		if krt.FetchOne(ctx, c.registry.KubernetesServices, krt.FilterKey(key)) == nil {
-			referenceProblem(resolved, metav1.ConditionFalse, "ServiceNotFound", path+": Service "+key+" not found")
+			referenceProblem(
+				resolved,
+				metav1.ConditionFalse,
+				reasonServiceNotFound,
+				fmt.Sprintf(messageServiceNotFound, path, key),
+			)
 		}
 	case peer.FQDN != "":
 		// The resolver exposes addresses, not error causes. An empty result
 		// cannot distinguish an in-flight lookup from an unsuccessful one.
 		if len(c.traffic.Resolve(ctx, peer.FQDN)) == 0 {
-			referenceProblem(resolved, metav1.ConditionUnknown, "DNSResolutionPending",
-				path+": no resolved addresses available for "+peer.FQDN)
+			referenceProblem(resolved, metav1.ConditionUnknown, reasonDNSResolutionPending,
+				fmt.Sprintf(messageDNSResolutionPending, path, peer.FQDN))
 		}
 	}
 }

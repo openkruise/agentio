@@ -603,7 +603,7 @@ func TestManagedEPE(t *testing.T) {
 		"- -grpc-health-port=9003",
 		"- -metrics-port=9090",
 		"--xds-cache-idle-ttl=10m",
-		"--xds-cache-max-entries=10000",
+		"--xds-cache-max-entries=0",
 		"- -audit-webhook-insecure-skip-verify=false",
 		"livenessProbe:",
 		"readinessProbe:",

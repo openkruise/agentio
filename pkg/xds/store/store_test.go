@@ -273,7 +273,7 @@ func updateTestResource(t testing.TB, typeURL, keyName, xdsName, payload string,
 	}
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: typeURL, Name: keyName}, xdsName,
-		&anypb.Any{TypeUrl: typeURL, Value: []byte(payload)}, aliases, facts)
+		model.Prebuilt(&anypb.Any{TypeUrl: typeURL, Value: []byte(payload)}), aliases, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func newSnapshot(t testing.TB, names ...string) model.ResourceSet {
 			t.Fatal(err)
 		}
 		resource, err := model.NewResource(
-			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", value, nil,
+			model.ResourceKey{TypeURL: model.AddressType, Name: name}, "", model.Prebuilt(value), nil,
 			model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 				WorkloadUID: name,
 				Principal:   model.MustServiceAccountPrincipal("default", "default"),

@@ -115,7 +115,13 @@ func TestAuthorizationIncludesBaselinesWithoutWorkloadReferences(t *testing.T) {
 				t.Fatalf("removed last workload: %+v", delta)
 			}
 		}
-		updated, err := model.NewResource(global.Key, "", global.Value, []string{"updated"}, global.Facts)
+		updated, err := model.NewResource(
+			global.Key,
+			"",
+			testResourceContents(testResourceValue(global)),
+			[]string{"updated"},
+			global.Facts,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +166,7 @@ func TestSandboxHostExplicitAuthorizationVisibility(t *testing.T) {
 	host, err := model.NewResource(
 		host.Key,
 		host.XDSName,
-		host.Value,
+		testResourceContents(testResourceValue(host)),
 		host.Aliases,
 		model.ResourceFacts{Workload: &facts},
 	)

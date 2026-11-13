@@ -1,0 +1,155 @@
+[
+  {
+    "name": "ordered-prefix-and-port",
+    "policy": {
+      "rules": [
+        {
+          "name": "allow",
+          "match": [
+            {
+              "cidrs": [
+                "10.1.0.0/16"
+              ],
+              "ports": [
+                443
+              ]
+            }
+          ],
+          "action": "TCP_ACTION_ALLOW"
+        },
+        {
+          "name": "deny",
+          "match": [
+            {
+              "cidrs": [
+                "10.0.0.0/8",
+                "fc00::/7"
+              ]
+            }
+          ],
+          "action": "TCP_ACTION_DENY"
+        }
+      ]
+    },
+    "targets": [
+      {
+        "address": "10.1.0.1:443",
+        "decision": "allow"
+      },
+      {
+        "address": "10.1.0.1:80",
+        "decision": "deny"
+      },
+      {
+        "address": "[fd00::1]:443",
+        "decision": "deny"
+      },
+      {
+        "address": "192.0.2.1:443",
+        "decision": "no_match"
+      },
+      {
+        "address": "[::ffff:10.1.0.1]:443",
+        "decision": "allow"
+      }
+    ]
+  },
+  {
+    "name": "or-clauses-and-family-catchalls",
+    "policy": {
+      "rules": [
+        {
+          "name": "allow-clauses",
+          "match": [
+            {
+              "cidrs": [
+                "192.0.2.0/24"
+              ],
+              "ports": [
+                80,
+                443
+              ]
+            },
+            {
+              "cidrs": [
+                "2001:db8::/32"
+              ],
+              "ports": [
+                8443
+              ]
+            }
+          ],
+          "action": "TCP_ACTION_ALLOW"
+        },
+        {
+          "name": "deny-rest",
+          "match": [
+            {
+              "cidrs": [
+                "0.0.0.0/0",
+                "::/0"
+              ]
+            }
+          ],
+          "action": "TCP_ACTION_DENY"
+        }
+      ]
+    },
+    "targets": [
+      {
+        "address": "192.0.2.1:443",
+        "decision": "allow"
+      },
+      {
+        "address": "192.0.2.1:8443",
+        "decision": "deny"
+      },
+      {
+        "address": "[2001:db8::1]:8443",
+        "decision": "allow"
+      },
+      {
+        "address": "[2001:db8::1]:443",
+        "decision": "deny"
+      },
+      {
+        "address": "203.0.113.1:443",
+        "decision": "deny"
+      }
+    ]
+  },
+  {
+    "name": "empty-policy",
+    "policy": {},
+    "targets": [
+      {
+        "address": "203.0.113.1:443",
+        "decision": "no_match"
+      }
+    ]
+  },
+  {
+    "name": "empty-clause-matches-everything",
+    "policy": {
+      "rules": [
+        {
+          "name": "deny",
+          "match": [
+            {}
+          ],
+          "action": "TCP_ACTION_DENY"
+        }
+      ]
+    },
+    "targets": [
+      {
+        "address": "203.0.113.1:443",
+        "decision": "deny"
+      },
+      {
+        "address": "[2001:db8::1]:80",
+        "decision": "deny"
+      }
+    ]
+  }
+]

@@ -39,7 +39,7 @@ func BenchmarkGatewayColdSelection(b *testing.B) {
 								Name:    fmt.Sprintf("%s|%d|%s", owner, v, name),
 							},
 							name,
-							&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("payload")},
+							testResourceContents(&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("payload")}),
 							nil,
 							model.ResourceFacts{GatewayOwner: owner, AgentioEgress: v == 1},
 						)
@@ -89,7 +89,7 @@ func BenchmarkGatewayUnrelatedIncremental(b *testing.B) {
 							Name:    fmt.Sprintf("%s|%d|http_dynamic_forward_proxy", owner, v),
 						},
 						"http_dynamic_forward_proxy",
-						&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("payload")},
+						testResourceContents(&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("payload")}),
 						nil,
 						model.ResourceFacts{GatewayOwner: owner, AgentioEgress: v == 1},
 					)
@@ -107,7 +107,7 @@ func BenchmarkGatewayUnrelatedIncremental(b *testing.B) {
 			next, err := model.NewResource(
 				old.Key,
 				old.XDSName,
-				&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("changed")},
+				testResourceContents(&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("changed")}),
 				nil,
 				old.Facts,
 			)

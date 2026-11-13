@@ -29,7 +29,7 @@ import (
 func sandboxNoticeResource(t testing.TB, uid, owner, value string) model.Resource {
 	t.Helper()
 	r, err := model.NewResource(model.ResourceKey{TypeURL: model.SandboxType, Name: uid}, "",
-		&anypb.Any{TypeUrl: model.SandboxType, Value: []byte(value)}, nil,
+		model.Prebuilt(&anypb.Any{TypeUrl: model.SandboxType, Value: []byte(value)}), nil,
 		model.ResourceFacts{Sandbox: &model.SandboxResourceFacts{AttesterWorkloadUID: owner}})
 	if err != nil {
 		t.Fatal(err)

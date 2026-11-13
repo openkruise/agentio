@@ -37,7 +37,7 @@ func BenchmarkStoreSnapshotDuringBulkApply(b *testing.B) {
 		updated, err := model.NewResource(
 			old.Key,
 			"",
-			&anypb.Any{TypeUrl: model.AddressType, Value: []byte("updated")},
+			model.Prebuilt(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("updated")}),
 			nil,
 			old.Facts,
 		)

@@ -167,7 +167,7 @@ func TestResourceSetApplyIgnoresNoOpChanges(t *testing.T) {
 	resource, err := NewResource(
 		testResource(t, "a", "one").Key,
 		"",
-		testResource(t, "a", "one").Value,
+		Prebuilt(testResource(t, "a", "one").Value),
 		nil,
 		ResourceFacts{},
 	)

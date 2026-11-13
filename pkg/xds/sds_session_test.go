@@ -634,7 +634,7 @@ func TestSDSReconnectStillRespondsToStaticSecretSubscription(t *testing.T) {
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.SecretType, Name: "demo/egress|" + name},
 		name,
-		value,
+		testResourceContents(value),
 		nil,
 		model.ResourceFacts{GatewayOwner: "demo/egress"},
 	)
@@ -678,7 +678,7 @@ func TestSDSStaticSecretUpdatesWhileSigningBlocked(t *testing.T) {
 					resource, err := model.NewResource(
 						model.ResourceKey{TypeURL: model.SecretType, Name: "demo/egress|" + name},
 						name,
-						value,
+						testResourceContents(value),
 						nil,
 						model.ResourceFacts{GatewayOwner: "demo/egress"},
 					)
@@ -800,7 +800,7 @@ func TestSDSStaticSecretSupersedesPendingIssuance(t *testing.T) {
 				}
 				resource, err := model.NewResource(
 					model.ResourceKey{TypeURL: model.SecretType, Name: "demo/egress|" + name},
-					name, value, nil, model.ResourceFacts{GatewayOwner: "demo/egress"},
+					name, testResourceContents(value), nil, model.ResourceFacts{GatewayOwner: "demo/egress"},
 				)
 				if err != nil {
 					t.Fatal(err)
@@ -855,7 +855,7 @@ func TestSDSStaticSnapshotSupersedesQueuedAndCompletedDemand(t *testing.T) {
 	}
 	resource, err := model.NewResource(
 		model.ResourceKey{TypeURL: model.SecretType, Name: "demo/egress|" + name},
-		name, value, nil, model.ResourceFacts{GatewayOwner: "demo/egress"},
+		name, testResourceContents(value), nil, model.ResourceFacts{GatewayOwner: "demo/egress"},
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -73,7 +73,7 @@ func storeBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource)
 		resource, err := model.NewResource(
 			model.ResourceKey{TypeURL: model.AddressType, Name: name},
 			"",
-			&anypb.Any{TypeUrl: model.AddressType, Value: []byte("old")},
+			model.Prebuilt(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("old")}),
 			nil,
 			facts,
 		)
@@ -86,7 +86,7 @@ func storeBenchmarkResources(t testing.TB) ([]model.Resource, [2]model.Resource)
 			variants[1], err = model.NewResource(
 				resource.Key,
 				"",
-				&anypb.Any{TypeUrl: model.AddressType, Value: []byte("new")},
+				model.Prebuilt(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("new")}),
 				nil,
 				facts,
 			)
@@ -109,7 +109,7 @@ func BenchmarkAuthorizationDependencyExpansion(b *testing.B) {
 					name := fmt.Sprintf("demo/p%d", i)
 					resource, err := model.NewResource(
 						model.ResourceKey{TypeURL: model.WorkloadAuthorizationType, Name: name}, "",
-						&anypb.Any{TypeUrl: model.WorkloadAuthorizationType, Value: []byte("policy")}, nil,
+						model.Prebuilt(&anypb.Any{TypeUrl: model.WorkloadAuthorizationType, Value: []byte("policy")}), nil,
 						model.ResourceFacts{Authorization: &model.AuthorizationResourceFacts{
 							Scope:     model.AuthorizationScopeNamespace,
 							Namespace: "demo",
@@ -127,7 +127,7 @@ func BenchmarkAuthorizationDependencyExpansion(b *testing.B) {
 					name := fmt.Sprintf("w%d", i)
 					resource, err := model.NewResource(
 						model.ResourceKey{TypeURL: model.AddressType, Name: name}, "",
-						&anypb.Any{TypeUrl: model.AddressType, Value: []byte("workload")}, nil,
+						model.Prebuilt(&anypb.Any{TypeUrl: model.AddressType, Value: []byte("workload")}), nil,
 						model.ResourceFacts{Workload: &model.WorkloadResourceFacts{
 							WorkloadUID: name,
 							Namespace:   "demo",
@@ -172,7 +172,7 @@ func BenchmarkStoreGatewayBacklog(b *testing.B) {
 				old, err := model.NewResource(
 					key,
 					"sandbox-ext-proc",
-					&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("old")},
+					model.Prebuilt(&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("old")}),
 					nil,
 					facts,
 				)
@@ -182,7 +182,7 @@ func BenchmarkStoreGatewayBacklog(b *testing.B) {
 				next, err := model.NewResource(
 					key,
 					"sandbox-ext-proc",
-					&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("new")},
+					model.Prebuilt(&anypb.Any{TypeUrl: model.ClusterType, Value: []byte("new")}),
 					nil,
 					facts,
 				)

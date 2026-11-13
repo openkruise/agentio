@@ -337,7 +337,7 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 		normalized, err := model.NewResource(
 			resource.Key,
 			resource.XDSName,
-			resource.Value,
+			model.Prebuilt(resource.Value),
 			resource.Aliases,
 			resource.Facts,
 		)

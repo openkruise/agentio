@@ -49,8 +49,7 @@ type wdsProjection struct {
 	EgressGatewayKeys         []string
 }
 
-// buildWDSAddress compiles one Workload into the canonical Address form
-// consumed by ztunnel.
+// buildWDSAddress compiles all Workload contents; Generate selects the client format.
 func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if err := validateDiscoveredWorkload(input.Workload); err != nil {
 		return nil, fmt.Errorf("workload %q: %w", input.Workload.UID, err)
@@ -103,14 +102,14 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if source := input.Workload.Source; source.Validate() == nil {
 		aliases = append(aliases, source.WorkloadAlias())
 	}
-	address := &workloadv1.Address{Type: &workloadv1.Address_Workload{Workload: wireWorkload}}
+	var extensions []*workloadv1.Extension
 	if input.MetadataConfiguration != nil {
 		metadata, err := newWorkloadMetadataExtension(filteredWorkloadLabels(
 			input.Workload.Labels, input.MetadataConfiguration.IgnoredLabels))
 		if err != nil {
 			return nil, fmt.Errorf("marshal metadata for workload %s: %w", input.Workload.UID, err)
 		}
-		wireWorkload.Extensions = append(wireWorkload.Extensions, metadata)
+		extensions = append(extensions, metadata)
 	}
 
 	// Always publish the native binding, even when empty. Native clients must
@@ -122,7 +121,7 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal traffic policy references for workload %s: %w", input.Workload.UID, err)
 	}
-	wireWorkload.Extensions = append(wireWorkload.Extensions, &workloadv1.Extension{
+	extensions = append(extensions, &workloadv1.Extension{
 		Name:   "traffic-policy-reference",
 		Config: trafficPolicyRefs,
 	})
@@ -135,7 +134,7 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal security profile references for workload %s: %w", input.Workload.UID, err)
 	}
-	wireWorkload.Extensions = append(wireWorkload.Extensions, &workloadv1.Extension{
+	extensions = append(extensions, &workloadv1.Extension{
 		Name:   "security-profile-reference",
 		Config: config,
 	})
@@ -145,8 +144,8 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal egress policies for workload %s: %w", input.Workload.UID, err)
 		}
-		wireWorkload.Extensions = append(
-			wireWorkload.Extensions,
+		extensions = append(
+			extensions,
 			&workloadv1.Extension{Name: "egress-policies", Config: config},
 		)
 	}
@@ -155,16 +154,12 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal SNI policy for workload %s: %w", input.Workload.UID, err)
 		}
-		wireWorkload.Extensions = append(wireWorkload.Extensions, &workloadv1.Extension{
+		extensions = append(extensions, &workloadv1.Extension{
 			Name:   "sni-traffic-policy",
 			Config: config,
 		})
 	}
 
-	addressValue, err := marshalDeterministicAny(address)
-	if err != nil {
-		return nil, fmt.Errorf("marshal workload %s: %w", input.Workload.UID, err)
-	}
 	trafficPolicyNames := make([]string, 0, len(input.TrafficPolicyReferences))
 	for _, reference := range input.TrafficPolicyReferences {
 		trafficPolicyNames = append(trafficPolicyNames, reference.Name)
@@ -191,10 +186,8 @@ func buildWDSAddress(input wdsProjection) (*model.Resource, error) {
 		}
 	}
 	addressResource, err := model.NewResource(
-		model.ResourceKey{
-			TypeURL: model.AddressType,
-			Name:    input.Workload.UID,
-		}, "", addressValue, aliases, facts)
+		model.ResourceKey{TypeURL: model.AddressType, Name: input.Workload.UID},
+		"", model.WorkloadContents(wireWorkload, extensions), aliases, facts)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +341,7 @@ func buildWDSService(service model.Service, gatewayKey string) (model.Resource, 
 		model.ResourceKey{
 			TypeURL: model.AddressType,
 			Name:    service.ResourceName(),
-		}, "", value, aliases, facts)
+		}, "", model.Prebuilt(value), aliases, facts)
 }
 
 // wireLoadBalancing prioritizes an internal traffic policy of Local, then the

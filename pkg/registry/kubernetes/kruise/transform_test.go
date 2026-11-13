@@ -99,7 +99,10 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 		{},
 	} {
 		changed := source.DeepCopy()
-		changed.Annotations = map[string]string{"unrelated": "drop"}
+		changed.Annotations = map[string]string{
+			"unrelated":                  "drop",
+			"agents.kruise.io/tcp-rules": "not a supported annotation",
+		}
 		var wantAnnotations map[string]string
 		var want []agentsv1alpha1.SecurityRule
 		if step.raw != "" {

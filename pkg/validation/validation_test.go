@@ -27,6 +27,12 @@ func TestSecurityProfileStaticValidation(t *testing.T) {
 		spec  string
 		valid bool
 	}{
+		{"TCP CIDR", `{"tcpRules":[{"name":"deny","match":[{"cidrs":["192.168.0.0/16"]}],"action":"Deny"}]}`, true},
+		{"invalid TCP CIDR", `{"tcpRules":[{"name":"deny","match":[{"cidrs":["invalid-cidr"]}],"action":"Deny"}]}`, false},
+		{"TCP IPv4 address", `{"tcpRules":[{"name":"deny","match":[{"cidrs":["140.205.162.5"]}],"action":"Deny"}]}`, true},
+		{"TCP IPv6 address", `{"tcpRules":[{"name":"allow","match":[{"cidrs":["2001:db8::1"]}],"action":"Allow"}]}`, true},
+		{"lowercase TCP action", `{"tcpRules":[{"name":"deny","match":[{}],"action":"deny"}]}`, false},
+		{"invalid TCP action", `{"tcpRules":[{"name":"deny","match":[{}],"action":"reject"}]}`, false},
 		{"HTTP domain wildcard", `{"rules":[{"name":"r","match":[{"domains":["api*.example.com"],"schemes":["http"]}]}]}`, false},
 		{"HTTP port range", `{"rules":[{"name":"r","match":[{"domains":["example.com"],"schemes":["http"],"ports":[65536]}]}]}`, false},
 		{"TLS and HTTP action union", `{"rules":[{"name":"r","match":[{"domains":["example.com"]}],"actions":{"tls":{"action":"Deny"},"bypass":true}}]}`, false},

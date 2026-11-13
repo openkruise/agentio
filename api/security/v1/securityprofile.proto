@@ -16,9 +16,12 @@ syntax = "proto3";
 
 package agentio.security;
 
+import "api/security/v1/snipolicy.proto";
+import "api/security/v1/tcppolicy.proto";
+
 option go_package = "github.com/openkruise/agentio/api/security/v1;securityv1";
 
-// SecurityProfile carries the experimental JSON configuration consumed by EPE.
+// SecurityProfile carries the HTTP and compiled connection-policy views.
 message SecurityProfile {
   string uid = 1;
   // Source identity used in audit events and for input namespace defaults.
@@ -27,4 +30,6 @@ message SecurityProfile {
   // UTF-8 JSON containing only rules, audit and unchanged input declarations.
   // EPE validates and compiles this document before accepting the resource.
   bytes policy_json = 4;
+  SNIPolicy sni_policy = 5;
+  TCPPolicy tcp_policy = 6;
 }

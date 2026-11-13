@@ -49,7 +49,7 @@ same priority ordering.
 <td>object</td>
 <td>
 
-SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
+SecurityProfileSpec defines gateway egress security policy for selected Pods.
 
 </td>
 <td>false</td>
@@ -69,7 +69,7 @@ SecurityProfileStatus captures the observed state of a SecurityProfile.
 
 ### GlobalSecurityProfile.spec
 
-SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
+SecurityProfileSpec defines gateway egress security policy for selected Pods.
 
 <table>
 <thead>
@@ -138,6 +138,43 @@ Rules is the ordered rule chain. TLS selection uses the first matching
 rule; HTTP processing accumulates matching HTTP rules until a terminal
 action. Rules from matching profiles are combined in profile evaluation
 order. An empty list preserves the existing default traffic behavior.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b><a href="#globalsecurityprofilespectcprules">tcpRules</a></b></td>
+<td>[]object</td>
+<td>
+
+TCPRules authorizes forwarding destinations at the egress gateway.
+Applicable profiles contribute rules in the same priority order as Rules.
+Evaluation proceeds as follows:
+
+1. Evaluate application Rules when the protocol permits. HTTP Bypass or
+   Block and explicit TLS Passthrough or Deny are terminal and skip TCPRules.
+2. Otherwise, evaluate TCPRules in order. The first matching rule's Allow
+   or Deny ends TCP evaluation across all applicable profiles.
+3. If no TCP rule matches, including when the chain is empty, allow.
+
+HTTP uses the resolved forwarding IP and port. Unmatched TLS (including
+missing SNI), raw TCP, and sniffing timeouts use the original destination.
+TLS termination followed by non-HTTP traffic also uses the original
+destination. Non-terminal HTTP actions, such as header or token changes,
+do not skip TCPRules. TrafficPolicy remains independently enforced at the
+sandbox side, including ingress and UDP; TCPRules does not replace it.
+For example, in an IPv4 deployment:
+
+    tcpRules:
+    - name: allow-database
+      match:
+      - cidrs: ["10.20.0.0/16"]
+        ports: [5432]
+      action: Allow
+    - name: deny-other-ipv4
+      match:
+      - cidrs: ["0.0.0.0/0"]
+      action: Deny
 
 </td>
 <td>false</td>
@@ -683,7 +720,8 @@ to the client without forwarding upstream.
 <td>
 
 Bypass forwards the request and skips all remaining actions and rules
-across matching profiles. False is equivalent to omission.
+across matching profiles, including TCPRules. Independent platform
+authorization still applies. False is equivalent to omission.
 
 </td>
 <td>false</td>
@@ -1778,6 +1816,7 @@ destination port. This rule does not participate in HTTP processing.
 Action is required and has no default. Deny rejects the connection;
 it does not promise an HTTP response or a specific TLS alert.
 Passthrough forwards without decryption or HTTP rule processing.
+The native egress gateway resolves SNI for forwarding and skips TCPRules.
 Both actions stop further TLS rule selection.
 
 <i>Enum</i>: Deny, Passthrough<br/>
@@ -2615,9 +2654,9 @@ Domains is required. All other fields further restrict the match.
 <td>[]string</td>
 <td>
 
-Domains lists target host names. Supports "*" (any non-empty domain) and
+Domains lists target host names. Supports "*" (any domain, including missing SNI for TLS) and
 "*.example.com" wildcard prefixes. TLS connections match visible SNI;
-HTTP requests match Host / authority. Missing SNI never matches.
+HTTP requests match Host / authority. Missing SNI matches only "*".
 
 CAUTION: wildcard and specific domains can both match the same request
 under Default Continue semantics, so rule ordering matters.
@@ -2842,6 +2881,98 @@ Type selects the matching strategy. Defaults to Exact.
 </tbody>
 </table>
 
+### GlobalSecurityProfile.spec.tcpRules[]
+
+TCPRule is one entry in the ordered gateway destination rule chain.
+The first matching rule across applicable profiles decides; an unmatched
+destination is allowed only after the entire chain has been evaluated.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>action</b></td>
+<td>enum</td>
+<td>
+
+Action is required and has no default. Allow permits the destination;
+Deny rejects it. Both stop evaluation of all remaining TCP rules.
+
+<i>Enum</i>: Allow, Deny<br/>
+</td>
+<td>true</td>
+</tr>
+<tr>
+<td><b><a href="#globalsecurityprofilespectcprulesmatch">match</a></b></td>
+<td>[]object</td>
+<td>
+
+Match lists alternative conditions. Entries are ORed; fields within
+an entry are ANDed. An empty entry matches every destination.
+
+</td>
+<td>true</td>
+</tr>
+<tr>
+<td><b>name</b></td>
+<td>string</td>
+<td>
+
+Name uniquely identifies the rule within the profile.
+
+</td>
+<td>true</td>
+</tr>
+</tbody>
+</table>
+
+### GlobalSecurityProfile.spec.tcpRules[].match[]
+
+TCPMatch matches a forwarding destination IP address and port.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>cidrs</b></td>
+<td>[]string</td>
+<td>
+
+CIDRs lists IPv4 or IPv6 addresses or networks. A single address matches
+only that address (IPv4 /32 or IPv6 /128). Entries are ORed; an omitted
+or empty list matches any address. Consumers validate address syntax.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b>ports</b></td>
+<td>[]integer</td>
+<td>
+
+Ports lists destination ports. Entries are ORed. An omitted or empty
+list matches any port.
+
+</td>
+<td>false</td>
+</tr>
+</tbody>
+</table>
+
 ### GlobalSecurityProfile.status
 
 SecurityProfileStatus captures the observed state of a SecurityProfile.
@@ -3007,7 +3138,7 @@ SecurityProfile defines namespaced TLS and HTTP security policy for selected Pod
 <td>object</td>
 <td>
 
-SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
+SecurityProfileSpec defines gateway egress security policy for selected Pods.
 
 </td>
 <td>false</td>
@@ -3027,7 +3158,7 @@ SecurityProfileStatus captures the observed state of a SecurityProfile.
 
 ### SecurityProfile.spec
 
-SecurityProfileSpec defines TLS connection and HTTP security policy for selected Pods.
+SecurityProfileSpec defines gateway egress security policy for selected Pods.
 
 <table>
 <thead>
@@ -3096,6 +3227,43 @@ Rules is the ordered rule chain. TLS selection uses the first matching
 rule; HTTP processing accumulates matching HTTP rules until a terminal
 action. Rules from matching profiles are combined in profile evaluation
 order. An empty list preserves the existing default traffic behavior.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b><a href="#securityprofilespectcprules">tcpRules</a></b></td>
+<td>[]object</td>
+<td>
+
+TCPRules authorizes forwarding destinations at the egress gateway.
+Applicable profiles contribute rules in the same priority order as Rules.
+Evaluation proceeds as follows:
+
+1. Evaluate application Rules when the protocol permits. HTTP Bypass or
+   Block and explicit TLS Passthrough or Deny are terminal and skip TCPRules.
+2. Otherwise, evaluate TCPRules in order. The first matching rule's Allow
+   or Deny ends TCP evaluation across all applicable profiles.
+3. If no TCP rule matches, including when the chain is empty, allow.
+
+HTTP uses the resolved forwarding IP and port. Unmatched TLS (including
+missing SNI), raw TCP, and sniffing timeouts use the original destination.
+TLS termination followed by non-HTTP traffic also uses the original
+destination. Non-terminal HTTP actions, such as header or token changes,
+do not skip TCPRules. TrafficPolicy remains independently enforced at the
+sandbox side, including ingress and UDP; TCPRules does not replace it.
+For example, in an IPv4 deployment:
+
+    tcpRules:
+    - name: allow-database
+      match:
+      - cidrs: ["10.20.0.0/16"]
+        ports: [5432]
+      action: Allow
+    - name: deny-other-ipv4
+      match:
+      - cidrs: ["0.0.0.0/0"]
+      action: Deny
 
 </td>
 <td>false</td>
@@ -3641,7 +3809,8 @@ to the client without forwarding upstream.
 <td>
 
 Bypass forwards the request and skips all remaining actions and rules
-across matching profiles. False is equivalent to omission.
+across matching profiles, including TCPRules. Independent platform
+authorization still applies. False is equivalent to omission.
 
 </td>
 <td>false</td>
@@ -4736,6 +4905,7 @@ destination port. This rule does not participate in HTTP processing.
 Action is required and has no default. Deny rejects the connection;
 it does not promise an HTTP response or a specific TLS alert.
 Passthrough forwards without decryption or HTTP rule processing.
+The native egress gateway resolves SNI for forwarding and skips TCPRules.
 Both actions stop further TLS rule selection.
 
 <i>Enum</i>: Deny, Passthrough<br/>
@@ -5573,9 +5743,9 @@ Domains is required. All other fields further restrict the match.
 <td>[]string</td>
 <td>
 
-Domains lists target host names. Supports "*" (any non-empty domain) and
+Domains lists target host names. Supports "*" (any domain, including missing SNI for TLS) and
 "*.example.com" wildcard prefixes. TLS connections match visible SNI;
-HTTP requests match Host / authority. Missing SNI never matches.
+HTTP requests match Host / authority. Missing SNI matches only "*".
 
 CAUTION: wildcard and specific domains can both match the same request
 under Default Continue semantics, so rule ordering matters.
@@ -5794,6 +5964,98 @@ Type selects the matching strategy. Defaults to Exact.
 
 <i>Enum</i>: Exact, Prefix, Regex<br/>
 <i>Default</i>: Exact<br/>
+</td>
+<td>false</td>
+</tr>
+</tbody>
+</table>
+
+### SecurityProfile.spec.tcpRules[]
+
+TCPRule is one entry in the ordered gateway destination rule chain.
+The first matching rule across applicable profiles decides; an unmatched
+destination is allowed only after the entire chain has been evaluated.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>action</b></td>
+<td>enum</td>
+<td>
+
+Action is required and has no default. Allow permits the destination;
+Deny rejects it. Both stop evaluation of all remaining TCP rules.
+
+<i>Enum</i>: Allow, Deny<br/>
+</td>
+<td>true</td>
+</tr>
+<tr>
+<td><b><a href="#securityprofilespectcprulesmatch">match</a></b></td>
+<td>[]object</td>
+<td>
+
+Match lists alternative conditions. Entries are ORed; fields within
+an entry are ANDed. An empty entry matches every destination.
+
+</td>
+<td>true</td>
+</tr>
+<tr>
+<td><b>name</b></td>
+<td>string</td>
+<td>
+
+Name uniquely identifies the rule within the profile.
+
+</td>
+<td>true</td>
+</tr>
+</tbody>
+</table>
+
+### SecurityProfile.spec.tcpRules[].match[]
+
+TCPMatch matches a forwarding destination IP address and port.
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><b>cidrs</b></td>
+<td>[]string</td>
+<td>
+
+CIDRs lists IPv4 or IPv6 addresses or networks. A single address matches
+only that address (IPv4 /32 or IPv6 /128). Entries are ORed; an omitted
+or empty list matches any address. Consumers validate address syntax.
+
+</td>
+<td>false</td>
+</tr>
+<tr>
+<td><b>ports</b></td>
+<td>[]integer</td>
+<td>
+
+Ports lists destination ports. Entries are ORed. An omitted or empty
+list matches any port.
+
 </td>
 <td>false</td>
 </tr>

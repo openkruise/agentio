@@ -39,7 +39,7 @@ func TestBuildWDSAddressPublishesCanonicalIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, *resource).UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
 	if got := address.GetWorkload().GetCanonicalName(); got != "client-api" {
@@ -62,7 +62,7 @@ func TestBuildWDSAddressPublishesDiscoveryOnlyWorkload(t *testing.T) {
 		t.Fatal("missing Address resource")
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, *resource).UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
 	wireWorkload := address.GetWorkload()
@@ -116,7 +116,7 @@ func TestBuildProjectsHostNetworkMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, *resource).UnmarshalTo(address); err != nil {
 		t.Fatal(err)
 	}
 	if got := address.GetWorkload().GetNetworkMode(); got != workloadv1.NetworkMode_HOST_NETWORK {
@@ -179,7 +179,7 @@ func TestWorkloadMetadataFiltersLabels(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, *resource).UnmarshalTo(address); err != nil {
 		t.Fatalf("unmarshal Address: %v", err)
 	}
 	workload := address.GetWorkload()
@@ -239,7 +239,7 @@ func TestServiceResourcePreservesNormalizedTargetPort(t *testing.T) {
 				t.Fatal(err)
 			}
 			address := &workloadv1.Address{}
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 				t.Fatalf("unmarshal Service Address: %v", err)
 			}
 			ports := address.GetService().GetPorts()
@@ -271,7 +271,7 @@ func TestServiceResourcePreservesNetworkingSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := &workloadv1.Address{}
-	if err := resource.Value.UnmarshalTo(address); err != nil {
+	if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 		t.Fatalf("unmarshal Service Address: %v", err)
 	}
 	service := address.GetService()
@@ -367,7 +367,7 @@ func TestServiceResourceTrafficPolicyEncoding(t *testing.T) {
 				t.Fatal(err)
 			}
 			address := &workloadv1.Address{}
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, resource).UnmarshalTo(address); err != nil {
 				t.Fatalf("unmarshal Service Address: %v", err)
 			}
 			wire := address.GetService()
@@ -510,7 +510,7 @@ func TestWDSCarriesStructuredPolicyReferences(t *testing.T) {
 				t.Fatal(err)
 			}
 			address := &workloadv1.Address{}
-			if err := resource.Value.UnmarshalTo(address); err != nil {
+			if err := resourceValue(t, *resource).UnmarshalTo(address); err != nil {
 				t.Fatal(err)
 			}
 			for _, extension := range address.GetWorkload().Extensions {

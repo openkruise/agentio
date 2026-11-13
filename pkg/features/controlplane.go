@@ -26,7 +26,7 @@ import (
 var (
 	// EnablePolicyStatus enables advisory policy validation and status reporting.
 	EnablePolicyStatus = env.Register(
-		"ENABLE_POLICY_STATUS",
+		"AGENTIO_ENABLE_POLICY_STATUS",
 		true,
 		"Enable advisory validation and status reporting for SecurityProfile and TrafficPolicy resources, including global variants. False disables the status controller and its leader election; existing status is retained.",
 	).Get()
@@ -62,7 +62,7 @@ var (
 	).Get()
 	KubernetesWorkloadAuthMode = env.Register(
 		"AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE",
-		"tokenreview",
+		"local",
 		"Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings.",
 	).Get()
 	ServiceName = env.Register(
