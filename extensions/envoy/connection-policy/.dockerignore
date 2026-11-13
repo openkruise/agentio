@@ -1,0 +1,6 @@
+*
+!target
+target/*
+!target/release
+target/release/*
+!target/release/libenvoy_agentio_connection_policy.so

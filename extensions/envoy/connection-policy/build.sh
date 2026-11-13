@@ -15,7 +15,7 @@ if [ ! -f .envoy-sdk/source/extensions/dynamic_modules/sdk/rust/Cargo.toml ]; th
     "envoy-$sdk_rev/source/extensions/dynamic_modules/*"
 fi
 if [ "$#" -eq 0 ]; then
-  cargo fmt --package agentio-envoy-sni-policy --check
-  cargo test --package agentio-envoy-sni-policy --release --locked
+  cargo fmt --package agentio-envoy-connection-policy --check
+  cargo test --package agentio-envoy-connection-policy --release --locked
 fi
-cargo build --package agentio-envoy-sni-policy --release --locked
+cargo build --package agentio-envoy-connection-policy --release --locked

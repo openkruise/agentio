@@ -16,11 +16,14 @@ package kube
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/openkruise/agentio/test/e2e/cluster"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,6 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/openkruise/agentio/test/e2e/cluster"
 )
 
 func TestCreateOnlyRejectsForeignObject(t *testing.T) {
@@ -52,7 +57,10 @@ func TestCreateOnlyUsesAtomicCreate(t *testing.T) {
 	}
 	for _, action := range client.dynamic.(*dynamicfake.FakeDynamicClient).Actions() {
 		if action.GetVerb() == "get" || action.GetVerb() == "patch" || action.GetVerb() == "update" {
-			t.Fatalf("CreateOnly issued %q; want one atomic create without a preflight read or mutation", action.GetVerb())
+			t.Fatalf(
+				"CreateOnly issued %q; want one atomic create without a preflight read or mutation",
+				action.GetVerb(),
+			)
 		}
 	}
 }
@@ -101,7 +109,12 @@ func TestApplyInNamespaceDefaultsOnlyNamespacedResources(t *testing.T) {
 		client, _ := newFakeClient(t)
 		installApplyReactor(t, client, "uid-explicit")
 
-		record, err := client.ApplyInNamespace(context.Background(), "default", configMap("explicit", "settings"), CreateOnly)
+		record, err := client.ApplyInNamespace(
+			context.Background(),
+			"default",
+			configMap("explicit", "settings"),
+			CreateOnly,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,25 +241,81 @@ func TestReconcileOwnedUsesResourceVersionAndUpdateResponse(t *testing.T) {
 	}
 }
 
+func TestReconcileOwnedRetriesConflictsAndRechecksOwnership(t *testing.T) {
+	for _, recreated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recreated=%v", recreated), func(t *testing.T) {
+			live := configMap("sandbox", "settings")
+			live.SetUID("uid-1")
+			live.SetResourceVersion("17")
+			live.SetLabels(map[string]string{RunLabel: "run-1"})
+			client, ledger := newFakeClient(t, live)
+			ledger.Record(
+				ResourceRecord{GVR: configMapGVR, Namespace: "sandbox", Name: "settings", UID: "uid-1", RunID: "run-1"},
+			)
+			fakeClient := client.dynamic.(*dynamicfake.FakeDynamicClient)
+			var versions []string
+			fakeClient.PrependReactor(
+				"update",
+				"configmaps",
+				func(action ktesting.Action) (bool, runtime.Object, error) {
+					updated := action.(ktesting.UpdateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
+					versions = append(versions, updated.GetResourceVersion())
+					if len(versions) == 1 {
+						live.SetResourceVersion("18")
+						if recreated {
+							live.SetUID("uid-2")
+						}
+						if err := fakeClient.Tracker().Update(configMapGVR, live, "sandbox"); err != nil {
+							t.Fatal(err)
+						}
+						return true, nil, apierrors.NewConflict(
+							configMapGVR.GroupResource(),
+							live.GetName(),
+							errors.New("status changed"),
+						)
+					}
+					updated.SetUID("uid-1")
+					return true, updated, nil
+				},
+			)
+			_, err := client.Apply(t.Context(), configMap("sandbox", "settings"), ReconcileOwned)
+			if recreated {
+				if err == nil || !strings.Contains(err.Error(), "UID") || len(versions) != 1 {
+					t.Fatalf("recreated resource: versions=%v error=%v", versions, err)
+				}
+			} else if err != nil || !slices.Equal(versions, []string{"17", "18"}) {
+				t.Fatalf("status conflict: versions=%v error=%v", versions, err)
+			}
+		})
+	}
+}
+
 func TestApplyWaitsForCRDEstablishedBeforeReturning(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Group: "apiextensions.k8s.io", Version: "v1"}})
 	mapper.Add(customResourceDefinitionGVK, meta.RESTScopeRoot)
 	client := NewClient("run-1", &cluster.Cluster{Dynamic: dynamicClient, Mapper: mapper}, NewLedger())
 	watchStarted := make(chan struct{})
-	dynamicClient.PrependWatchReactor("customresourcedefinitions", func(ktesting.Action) (bool, watch.Interface, error) {
-		close(watchStarted)
-		return false, nil, nil
-	})
-	dynamicClient.PrependReactor("create", "customresourcedefinitions", func(action ktesting.Action) (bool, runtime.Object, error) {
-		object := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
-		object.SetUID("uid-crd")
-		object.Object["status"] = map[string]any{"conditions": nil}
-		if err := dynamicClient.Tracker().Create(customResourceDefinitionGVR, object, ""); err != nil {
-			return true, nil, err
-		}
-		return true, object, nil
-	})
+	dynamicClient.PrependWatchReactor(
+		"customresourcedefinitions",
+		func(ktesting.Action) (bool, watch.Interface, error) {
+			close(watchStarted)
+			return false, nil, nil
+		},
+	)
+	dynamicClient.PrependReactor(
+		"create",
+		"customresourcedefinitions",
+		func(action ktesting.Action) (bool, runtime.Object, error) {
+			object := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
+			object.SetUID("uid-crd")
+			object.Object["status"] = map[string]any{"conditions": nil}
+			if err := dynamicClient.Tracker().Create(customResourceDefinitionGVR, object, ""); err != nil {
+				return true, nil, err
+			}
+			return true, object, nil
+		},
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -263,7 +332,8 @@ func TestApplyWaitsForCRDEstablishedBeforeReturning(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("Apply() did not start waiting for the CRD: %v", ctx.Err())
 	}
-	live, err := dynamicClient.Resource(customResourceDefinitionGVR).Get(ctx, "trafficpolicies.agents.kruise.io", metav1.GetOptions{})
+	live, err := dynamicClient.Resource(customResourceDefinitionGVR).
+		Get(ctx, "trafficpolicies.agents.kruise.io", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +342,8 @@ func TestApplyWaitsForCRDEstablishedBeforeReturning(t *testing.T) {
 	}, "status", "conditions"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dynamicClient.Resource(customResourceDefinitionGVR).Update(ctx, live, metav1.UpdateOptions{}); err != nil {
+	if _, err := dynamicClient.Resource(customResourceDefinitionGVR).
+		Update(ctx, live, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -298,7 +369,13 @@ func installApplyReactor(t *testing.T, client *Client, uid types.UID) {
 	installResourceApplyReactor(t, client, "configmaps", configMapGVR, uid)
 }
 
-func installResourceApplyReactor(t *testing.T, client *Client, resource string, gvr schema.GroupVersionResource, uid types.UID) {
+func installResourceApplyReactor(
+	t *testing.T,
+	client *Client,
+	resource string,
+	gvr schema.GroupVersionResource,
+	uid types.UID,
+) {
 	t.Helper()
 	fakeClient := client.dynamic.(*dynamicfake.FakeDynamicClient)
 	fakeClient.PrependReactor("create", resource, func(action ktesting.Action) (bool, runtime.Object, error) {
@@ -316,8 +393,16 @@ var (
 	configMapGVR                = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	namespaceGVK                = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}
 	namespaceGVR                = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
-	customResourceDefinitionGVK = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}
-	customResourceDefinitionGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	customResourceDefinitionGVK = schema.GroupVersionKind{
+		Group:   "apiextensions.k8s.io",
+		Version: "v1",
+		Kind:    "CustomResourceDefinition",
+	}
+	customResourceDefinitionGVR = schema.GroupVersionResource{
+		Group:    "apiextensions.k8s.io",
+		Version:  "v1",
+		Resource: "customresourcedefinitions",
+	}
 )
 
 func configMap(namespace, name string) *unstructured.Unstructured {

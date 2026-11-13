@@ -1,21 +1,22 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Opt-in, identical-input baseline/candidate benchmark. Uses real local TLS ADS
-//! and ext_proc gRPC; the inventory server substitutes for Agentiod compilation.
+//! Opt-in local TCP benchmark using real TLS ADS and ext_proc gRPC.
+//! The inventory server substitutes for Agentiod compilation.
 
+use agentio_porter::wire::agentio::security::{
+    SniAction, SniMatch, SniPolicy as SniTrafficPolicy, SniRule, TcpAction, TcpMatch, TcpPolicy,
+    TcpRule,
+};
 use agentio_porter::{
     discovery::{CacheConfig, Client, TransportConfig},
     metrics::Metrics,
     processor::Processor,
     wire::{
-        ads,
-        agentio::security::{TrafficPolicy, traffic_policy as tp},
-        extproc,
+        ads, extproc,
         istio::workload::{Extension, Workload},
         kruise::networking::extensions::v1::{
-            PolicyReference, PolicyResourceReference, SniAction, SniMatch, SniRule,
-            SniTrafficPolicy, WorkloadMetadata,
+            PolicyReference, PolicyResourceReference, WorkloadMetadata,
         },
     },
 };
@@ -36,7 +37,7 @@ use tonic::{
 };
 
 const WDS: &str = "type.googleapis.com/istio.workload.Workload";
-const TP: &str = "type.googleapis.com/agentio.security.TrafficPolicy";
+const TCP: &str = "type.googleapis.com/kruise.networking.extensions.v1.TCPPolicy";
 
 // Match the allocator used by the Linux Porter binary.
 #[cfg(target_os = "linux")]
@@ -104,62 +105,32 @@ fn inventory(
                 format!(r#"{{"registry":"bench","uid":"{uid}"}}"#).into_bytes(),
             ));
         let certificate = certificate.self_signed(&key).unwrap().pem();
-        let references: Vec<String> = (0..policies).map(|j| format!("policy/{i}/{j}")).collect();
-        for (j, name) in references.iter().enumerate() {
-            let mut body = tp::RuleSet::default();
+        let mut tcp = TcpPolicy { rules: Vec::new() };
+        for j in 0..policies {
             for k in 0..rules {
                 let last = j == policies - 1 && k == rules - 1;
-                body.rules.push(tp::Rule {
+                tcp.rules.push(TcpRule {
+                    name: format!("profile-{j}-rule-{k}"),
                     action: if last {
-                        tp::Action::Allow
+                        TcpAction::Allow
                     } else {
-                        tp::Action::Deny
+                        TcpAction::Deny
                     } as i32,
-                    r#match: Some(tp::Match {
-                        destination_ips: vec![tp::Address {
-                            address: if last {
-                                vec![192, 0, 2, 1]
-                            } else {
-                                vec![198, 51, 100, (k % 256) as u8]
-                            },
-                            length: 32,
+                    r#match: vec![TcpMatch {
+                        cidrs: vec![if last {
+                            "192.0.2.1/32".into()
+                        } else {
+                            format!("198.51.100.{}/32", k % 256)
                         }],
-                        ports: vec![tp::PortMatch {
-                            protocol: tp::Protocol::Tcp as i32,
-                            port: Some(443),
-                            end_port: None,
-                        }],
-                        ..Default::default()
-                    }),
+                        ports: vec![443],
+                    }],
                 });
             }
-            resources.insert(
-                name.clone(),
-                pack(
-                    TP,
-                    TrafficPolicy {
-                        egress: Some(body),
-                        ..Default::default()
-                    },
-                ),
-            );
         }
         let extensions = vec![
             Extension {
-                name: "traffic-policy-reference".into(),
-                config: Some(pack(
-                    "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference",
-                    PolicyReference {
-                        type_url: TP.into(),
-                        resources: references
-                            .into_iter()
-                            .map(|name| PolicyResourceReference {
-                                name,
-                                ..Default::default()
-                            })
-                            .collect(),
-                    },
-                )),
+                name: "tcp".into(),
+                config: Some(pack(TCP, tcp)),
             },
             Extension {
                 name: "metadata".into(),
@@ -191,6 +162,57 @@ fn inventory(
                 )),
             },
         ];
+        let mut retained = Vec::new();
+        let mut tcp = TcpPolicy::default();
+        let mut sni = SniTrafficPolicy::default();
+        for extension in extensions {
+            let value = extension.config.as_ref().unwrap();
+            if value.type_url == TCP {
+                tcp = TcpPolicy::decode(value.value.as_slice()).unwrap();
+            } else if value.type_url.ends_with(".SniTrafficPolicy") {
+                sni = SniTrafficPolicy::decode(value.value.as_slice()).unwrap();
+            } else {
+                retained.push(extension);
+            }
+        }
+        let shared = std::env::var("PORTER_BENCH_SHARED").as_deref() == Ok("1");
+        let mut references = Vec::new();
+        // The zero-TCP case still has the same eight SNI rules as the inline baseline.
+        for j in 0..policies.max(1) {
+            let name = if shared {
+                format!("profiles/shared/{j}")
+            } else {
+                format!("profiles/{uid}/{j}")
+            };
+            let profile = agentio_porter::wire::agentio::security::SecurityProfile {
+                name: name.clone(),
+                uid: name.clone(),
+                tcp_policy: Some(TcpPolicy {
+                    rules: tcp.rules[j * rules..(j + 1) * rules].to_vec(),
+                }),
+                sni_policy: (j == 0).then(|| sni.clone()),
+                ..Default::default()
+            };
+            references.push(PolicyResourceReference {
+                name: name.clone(),
+                uid: name.clone(),
+                extensions: vec![],
+            });
+            resources
+                .entry(name)
+                .or_insert_with(|| pack(agentio_porter::view::SECURITY_PROFILE, profile));
+        }
+        retained.push(Extension {
+            name: "security-profile-reference".into(),
+            config: Some(pack(
+                "type.googleapis.com/kruise.networking.extensions.v1.PolicyReference",
+                PolicyReference {
+                    type_url: agentio_porter::view::SECURITY_PROFILE.into(),
+                    resources: references,
+                },
+            )),
+        });
+        let extensions = retained;
         resources.insert(
             format!("workload/bench/{uid}"),
             pack(
@@ -243,6 +265,21 @@ fn allowed(response: extproc::ProcessingResponse) {
         response.response,
         Some(extproc::processing_response::Response::RequestHeaders(_))
     ));
+    let metadata = response.dynamic_metadata.unwrap();
+    let Some(Kind::StructValue(agentio)) = &metadata.fields["agentio"].kind else {
+        panic!("missing agentio metadata")
+    };
+    assert!(!agentio.fields.contains_key("tcp") && !agentio.fields.contains_key("sni"));
+    let Some(Kind::StructValue(connection)) = &agentio.fields["connection"].kind else {
+        panic!("missing connection policy")
+    };
+    let Some(Kind::StructValue(policy)) = &connection.fields["policy"].kind else {
+        panic!("missing policy")
+    };
+    let Some(Kind::ListValue(profiles)) = &policy.fields["profiles"].kind else {
+        panic!("missing profiles")
+    };
+    assert!(!profiles.values.is_empty());
 }
 
 fn report(case: &str, mode: &str, mut samples: Vec<f64>, elapsed: Duration) {
@@ -258,7 +295,7 @@ fn report(case: &str, mode: &str, mut samples: Vec<f64>, elapsed: Duration) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "performance benchmark; run release build in isolation with --nocapture"]
-async fn connect_traffic_policy_benchmark() {
+async fn connect_tcp_policy_benchmark() {
     let samples: usize = std::env::var("PORTER_BENCH_REQUESTS")
         .unwrap_or_else(|_| "5000".into())
         .parse()
@@ -328,11 +365,10 @@ async fn connect_traffic_policy_benchmark() {
             client,
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_secs(4),
-            enable_traffic_policy: true,
             enable_sni_traffic_policy: true,
         };
 
-        // Unique Workload AND policy names: each sample requires fresh TLS ADS requests.
+        // Distinct profiles miss with each Workload; shared profiles warm after the first sample.
         let begin = Instant::now();
         let mut durations = Vec::new();
         for request in &requests[1..] {

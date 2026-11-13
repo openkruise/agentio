@@ -23,6 +23,21 @@ def address(port):
     return {"socket_address": {"address": "127.0.0.1", "port_value": port}}
 
 
+def policy_store():
+    return {"name": "agentio.connection_policy_store", "typed_config": typed(
+        "envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
+        dynamic_module_config={"name": "envoy_agentio_connection_policy", "do_not_close": True},
+        filter_name="envoy_agentio_connection_policy_store")}
+
+
+def policy_hash():
+    return {"name": "envoy.filters.http.set_filter_state", "typed_config": typed(
+        "envoy.extensions.filters.http.set_filter_state.v3.Config", on_request_headers=[{
+            "object_key": "agentio.connection.policy_hash", "factory_key": "envoy.hashable_string",
+            "shared_with_upstream": "ONCE", "read_only": True, "skip_if_empty": True,
+            "format_string": {"text_format_source": {"inline_string": "%DYNAMIC_METADATA(agentio.connection:policy_hash)%"}}}])}
+
+
 def config(port, legacy_port, plain_port, tls_port, cert, key):
     def relay(cluster):
         return [{"name": "envoy.filters.network.tcp_proxy", "typed_config": typed(
@@ -36,9 +51,20 @@ def config(port, legacy_port, plain_port, tls_port, cert, key):
                 "private_key": {"inline_string": key}}]})}},
         {"name": "forward-tcp", "filters": relay("tls-origin")},
         {"name": "cleartext", "filters": relay("plain")}]
+    chains.append({"name": "deny", "filters": [
+        {"name": "envoy.filters.network.set_filter_state", "typed_config": typed(
+            "envoy.extensions.filters.network.set_filter_state.v3.Config", on_new_connection=[{
+                "object_key": "agentio.egress.denial_reason", "factory_key": "envoy.string", "skip_if_empty": True,
+                "format_string": {"text_format_source": {"inline_string":
+                    "%CEL('agentio.egress.denial_reason' in filter_state ? '' : 'sni_policy_denied')%"}}}])},
+        {"name": "envoy.filters.network.direct_response", "typed_config": typed(
+            "envoy.extensions.filters.network.direct_response.v3.Config")}]})
     actions = {value: {"action": {"name": name, "typed_config": typed("google.protobuf.StringValue", value=name)}}
-               for value, name in [("terminate", "tls-terminate"), ("passthrough", "forward-tcp"), ("cleartext", "cleartext")]}
+               for value, name in [("terminate", "tls-terminate"), ("passthrough", "forward-tcp"), ("fallthrough", "forward-tcp"), ("cleartext", "cleartext"), ("deny", "deny")]}
     inner = {"name": "inner", "internal_listener": {}, "listener_filters_timeout": "1s",
+        "access_log": [{"name": "envoy.access_loggers.stdout", "typed_config": typed(
+            "envoy.extensions.access_loggers.stream.v3.StdoutAccessLog", log_format={"json_format": {
+                "denial_reason": "%FILTER_STATE(agentio.egress.denial_reason:PLAIN)%"}})}],
         "continue_on_listener_filters_timeout": False,
         "listener_filters": [
             {"name": "envoy.filters.listener.original_dst", "typed_config": typed("envoy.extensions.filters.listener.original_dst.v3.OriginalDst")},
@@ -46,7 +72,7 @@ def config(port, legacy_port, plain_port, tls_port, cert, key):
             {"name": "envoy.filters.listener.http_inspector", "typed_config": typed("envoy.extensions.filters.listener.http_inspector.v3.HttpInspector")},
             {"name": "envoy.filters.listener.dynamic_modules", "typed_config": typed(
                 "envoy.extensions.filters.listener.dynamic_modules.v3.DynamicModuleListenerFilter",
-                dynamic_module_config={"name": "envoy_agentio_sni_policy"}, filter_name="envoy_agentio_sni_policy")}],
+                dynamic_module_config={"name": "envoy_agentio_connection_policy"}, filter_name="envoy_agentio_sni_policy")}],
         "filter_chains": chains,
         "filter_chain_matcher": {"matcher_tree": {"input": {"name": "tls-action", "typed_config": typed(
             "envoy.extensions.matching.common_inputs.network.v3.FilterStateInput", key="agentio.tls.action")},
@@ -58,15 +84,15 @@ def config(port, legacy_port, plain_port, tls_port, cert, key):
             "object_key": "envoy.filters.listener.original_dst.local_ip",
             "shared_with_upstream": "ONCE",
             "format_string": {"text_format_source": {"inline_string": "%REQ(:AUTHORITY)%"}}}, {
-            "object_key": "agentio.sni.policy", "factory_key": "envoy.hashable_string",
-            "shared_with_upstream": "ONCE", "skip_if_empty": True,
-            "format_string": {"text_format_source": {"inline_string": "%REQ(x-agentio-sni-policy)%"}}}])}
+            "object_key": "agentio.connection.policy_json", "factory_key": "envoy.string",
+            "skip_if_empty": True,
+            "format_string": {"text_format_source": {"inline_string": "%REQ(x-test-connection-policy)%"}}}])}
     hcm = typed("envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
         stat_prefix="connect", codec_type="AUTO", upgrade_configs=[{"upgrade_type": "CONNECT"}],
         route_config={"name": "connect", "virtual_hosts": [{"name": "all", "domains": ["*"], "routes": [{
             "match": {"connect_matcher": {}}, "route": {"cluster": "internal", "timeout": "0s",
                 "upgrade_configs": [{"upgrade_type": "CONNECT", "connect_config": {}}]}}]}]},
-        http_filters=[state, {"name": "envoy.filters.http.router", "typed_config": typed("envoy.extensions.filters.http.router.v3.Router")}])
+        http_filters=[state, policy_store(), policy_hash(), {"name": "envoy.filters.http.router", "typed_config": typed("envoy.extensions.filters.http.router.v3.Router")}])
     outer = {"name": "connect", "address": address(port), "filter_chains": [{"filters": [
         {"name": "envoy.filters.network.http_connection_manager", "typed_config": hcm}]}]}
     # A separate test-only listener reproduces the conflicting legacy writer.
@@ -111,7 +137,7 @@ class Echo(socketserver.StreamRequestHandler):
 
 def connect(port, policy):
     sock = socket.create_connection(("127.0.0.1", port), timeout=5)
-    headers = "" if policy is None else f"x-agentio-sni-policy: {policy}\r\n"
+    headers = "" if policy is None else f"x-test-connection-policy: {policy}\r\n"
     sock.sendall((f"CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n{headers}\r\n").encode())
     response = bytearray()
     while not response.endswith(b"\r\n\r\n"):
@@ -119,12 +145,20 @@ def connect(port, policy):
         if not byte:
             raise AssertionError(f"CONNECT closed: {response!r}")
         response.extend(byte)
-    assert response.startswith(b"HTTP/1.1 200"), response
+    if not response.startswith(b"HTTP/1.1 200"):
+        sock.close()
+        raise ConnectionError(f"CONNECT denied: {response!r}")
     return sock
 
 
 def exercise(port, policy, host, want, cleartext=False):
-    with connect(port, policy) as tunnel:
+    try:
+        tunnel = connect(port, policy)
+    except ConnectionError:
+        if want == "deny":
+            return
+        raise
+    with tunnel:
         if cleartext:
             channel = tunnel
         else:
@@ -147,7 +181,7 @@ def exercise(port, policy, host, want, cleartext=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="agentio-envoy-sni-policy:dev")
+    parser.add_argument("--image", default="agentio-envoy-connection-policy:dev")
     args = parser.parse_args()
     policy = json.dumps(json.loads(Path(__file__).with_name("policy.json").read_text()), separators=(",", ":"))
     with tempfile.TemporaryDirectory(prefix="agentio-sni-") as directory:
@@ -193,14 +227,19 @@ def main():
                 ("no match", policy, "other.test", "tls", False),
                 ("no SNI", policy, None, "tls", False),
                 ("explicit deny", policy, "denied.example.com", "deny", False),
-                ("original port match", '{"rules":[{"match":{"sni":["*"],"ports":[443]},"action":"SNI_ACTION_DENY"}]}', "api.example.com", "deny", False),
-                ("original port mismatch", '{"rules":[{"match":{"sni":["*"],"ports":[8443]},"action":"SNI_ACTION_DENY"}]}', "api.example.com", "tls", False),
-                ("empty policy", "{}", "api.example.com", "tls", False),
+                ("TCP deny without SNI match", '{"profiles":[{"uid":"profile","tcpPolicy":{"rules":[{"name":"deny-all","match":[{}],"action":"TCP_ACTION_DENY"}]}}]}', "other.test", "deny", False),
+                ("original port match", '{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"],"ports":[443]},"action":"SNI_ACTION_DENY"}]}}]}', "api.example.com", "deny", False),
+                ("original port mismatch", '{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"],"ports":[8443]},"action":"SNI_ACTION_DENY"}]}}]}', "api.example.com", "tls", False),
+                ("empty policy", '{"profiles":[]}', "api.example.com", "tls", False),
                 ("missing policy", None, "api.example.com", "deny", False),
                 ("malformed policy", "not-json", "api.example.com", "deny", False),
-                ("cleartext", None, None, "plain", True),
+                ("invalid later SNI pattern rejects snapshot", '{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},{"match":{"sni":["bad*"]},"action":"SNI_ACTION_DENY"}]}}]}', "api.example.com", "deny", False),
+                ("invalid later SNI port rejects snapshot", '{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},{"match":{"sni":["*"],"ports":[65536]},"action":"SNI_ACTION_DENY"}]}}]}', "api.example.com", "deny", False),
+                ("flat SNI policy is rejected", '{"rules":[]}', "api.example.com", "deny", False),
+                ("cleartext", '{"profiles":[]}', None, "plain", True),
+                ("cleartext does not parse unused policy", "not-json", None, "plain", True),
                 # Alternate policies for the same SNI to detect stale policy reuse.
-                ("new policy on same SNI", "{}", "api.example.com", "tls", False),
+                ("new policy on same SNI", '{"profiles":[]}', "api.example.com", "tls", False),
                 ("restore policy on same SNI", policy, "api.example.com", "plain", False),
             ]
             for label, value, host, want, cleartext in cases:
@@ -208,6 +247,15 @@ def main():
                 print(f"PASS {label}", flush=True)
             exercise(legacy_port, policy, "denied.example.com", "deny")
             print("PASS legacy action cannot bypass policy", flush=True)
+            expected_reasons = {"sni_policy_denied", "tcp_policy_denied", "connection_policy_invalid"}
+            for _ in range(50):
+                logs = subprocess.check_output(["docker", "logs", container], stderr=subprocess.STDOUT, text=True)
+                reasons = {json.loads(line).get("denial_reason") for line in logs.splitlines() if line.startswith("{")}
+                if expected_reasons <= reasons:
+                    break
+                time.sleep(.1)
+            assert expected_reasons <= reasons, (expected_reasons, reasons)
+            print("PASS listener logs preserve SNI, TCP and policy-error reasons", flush=True)
         finally:
             logs = subprocess.check_output(["docker", "logs", container], stderr=subprocess.STDOUT, text=True)
             subprocess.run(["docker", "stop", "-t", "1", container], check=True, stdout=subprocess.DEVNULL)

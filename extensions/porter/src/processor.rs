@@ -35,7 +35,6 @@ pub struct Processor {
     pub authenticator: Arc<dyn Authenticator>,
     pub cluster_id: String,
     pub timeout: Duration,
-    pub enable_traffic_policy: bool,
     pub enable_sni_traffic_policy: bool,
     pub gateway: Gateway,
 }
@@ -146,16 +145,12 @@ impl Processor {
         let started = Instant::now();
         let attributes = message.attributes.get("envoy.filters.http.ext_proc");
         let parsed = match self.gateway {
-            Gateway::AgentioEgress => agentio_egress::parse(
-                message.request_headers.as_ref(),
-                attributes,
-                self.enable_traffic_policy,
-            ),
-            Gateway::Agentgateway => agentgateway::parse(
-                message.request_headers.as_ref(),
-                attributes,
-                self.enable_traffic_policy,
-            ),
+            Gateway::AgentioEgress => {
+                agentio_egress::parse(message.request_headers.as_ref(), attributes)
+            }
+            Gateway::Agentgateway => {
+                agentgateway::parse(message.request_headers.as_ref(), attributes)
+            }
         }?;
         // Identity resolution only borrows attributes; release headers before awaiting discovery.
         drop(message.request_headers);
@@ -322,7 +317,6 @@ mod tests {
                 ),
                 cluster_id: "Kubernetes".into(),
                 timeout: Duration::from_secs(1),
-                enable_traffic_policy: true,
                 enable_sni_traffic_policy: true,
             };
             let mut headers = vec![

@@ -1,12 +1,12 @@
 [package]
-name = "agentio-envoy-sni-policy"
+name = "agentio-envoy-connection-policy"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
 license = "Apache-2.0"
 
 [lib]
-name = "envoy_agentio_sni_policy"
+name = "envoy_agentio_connection_policy"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+hickory-resolver = { version = "0.26", default-features = false, features = ["system-config", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
 [dev-dependencies]
 envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust", features = ["mock"] }

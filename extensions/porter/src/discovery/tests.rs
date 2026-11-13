@@ -68,7 +68,6 @@ async fn workload_and_sandbox_share_connect_deadline() {
         client: client.clone(),
         cluster_id: "Kubernetes".into(),
         timeout: Duration::from_millis(100),
-        enable_traffic_policy: true,
         enable_sni_traffic_policy: true,
     };
     let mut processing = Box::pin(processor.handle(request));
@@ -139,9 +138,9 @@ fn workload_mode_skips_sandbox_on_initial_connection_and_reconnect() {
             .unwrap();
         assert!(!*c.readiness().borrow());
         c.apply(
-            ResourceKind::TrafficPolicy,
+            ResourceKind::SecurityProfile,
             &Response {
-                type_url: ResourceKind::TrafficPolicy.type_url().into(),
+                type_url: ResourceKind::SecurityProfile.type_url().into(),
                 ..Default::default()
             },
         )
@@ -511,7 +510,6 @@ async fn matches_wire_contract_corpus() {
             client: c.clone(),
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_millis(100),
-            enable_traffic_policy: true,
             enable_sni_traffic_policy: true,
         };
         let request =

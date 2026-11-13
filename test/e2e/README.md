@@ -83,6 +83,8 @@ go run ./cmd/product-e2e plan --group ambient-iptables --format=json
 go run ./cmd/product-e2e run --suites trafficpolicy --tests '^TestSandboxTrafficPolicyProtocol$'
 # Global EPE authorization and IPv4-only DNS (same image/cluster prerequisites).
 go run ./cmd/product-e2e run --suites epe --tests '^TestEPE(GlobalDeniedCIDRs|IPv4OnlyDNS|XDSTrafficPolicyLifecycle)$'
+# SecurityProfile TCP priority, resolved HTTP/TLS targets, and server-first authorization.
+go run ./cmd/product-e2e run --suites epe,gateway --tests '^(TestEPETCPPriorityAndResolvedDestination|TestSandboxTLSTCPResolvedDestination|TestSandboxServerFirstSecurityProfile)$'
 # HTTPCallout real-traffic scenarios (same image/cluster prerequisites).
 go run ./cmd/product-e2e run --suites epe --tests '^TestEPEHTTPCallout$'
 # Manually verify a supported backend beyond the required CI coverage.

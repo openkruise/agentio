@@ -48,16 +48,19 @@ func TestEnvoyDirectTCPDeny(t *testing.T) {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
 	}
 	for _, tc := range []struct {
-		name       string
-		reason     string
-		expression string
-		legacy     bool
-		disabled   bool
-		http       bool
-		internal   bool
-		logs       int
+		name           string
+		reason         string
+		capturedReason string
+		expression     string
+		legacy         bool
+		disabled       bool
+		http           bool
+		internal       bool
+		logs           int
 	}{
 		{name: "SNI", reason: "sni_policy_denied", logs: 1},
+		{name: "captured TCP reason", reason: "tcp_policy_denied", capturedReason: "tcp_policy_denied", logs: 1},
+		{name: "captured policy error", reason: "connection_policy_missing", capturedReason: "connection_policy_missing", internal: true, logs: 1},
 		{name: "internal listener", reason: "sni_policy_denied", internal: true, logs: 1},
 		{name: "ServiceEntry", reason: "service_entry_denied", logs: 1},
 		{name: "legacy", reason: "sni_policy_denied", legacy: true, logs: 1},
@@ -132,6 +135,11 @@ func TestEnvoyDirectTCPDeny(t *testing.T) {
 			})
 			b := &resourceBuilder{legacyGateway: tc.legacy}
 			chain := b.buildTCPDenyChain("deny", tc.reason)
+			if tc.capturedReason != "" {
+				chain = b.buildTCPDenyChain("deny", "sni_policy_denied")
+				capture := b.buildTCPDenyChain("capture", tc.capturedReason).GetFilters()[0]
+				chain.Filters = append([]*listenerv3.Filter{capture}, chain.Filters...)
+			}
 			if tc.http {
 				manager := &hcmv3.HttpConnectionManager{
 					StatPrefix: "http",

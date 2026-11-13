@@ -84,8 +84,7 @@ const (
 	originalPortFormat            = "%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:FIELD:port)%"
 	sniHostnamePattern            = `(?i)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.?`
 
-	sniPolicyMetadataFormat = "%DYNAMIC_METADATA(" + model.GatewayMetadataNamespace + ":sni:policy)%"
-	fqdnDialHostFormat      = `%CEL(request.method != 'CONNECT' ? ` +
+	fqdnDialHostFormat = `%CEL(request.method != 'CONNECT' ? ` +
 		`re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\1\2') : '')%`
 	fqdnTLSNameFormat = `%CEL(request.method != 'CONNECT' ? ` +
 		`re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\1') : '')%`
@@ -203,6 +202,9 @@ func (b *resourceBuilder) buildTCPDenyChain(name, reason string) *listenerv3.Fil
 	key := telemetry.DenialReasonFilterStateKey
 	if b.legacyGateway {
 		key = "io.kruise.egress_denial_reason"
+	} else {
+		// Preserve the decision's reason; only supply a fallback when none was captured.
+		reason = fmt.Sprintf("%%CEL('%s' in filter_state ? '' : '%s')%%", key, reason)
 	}
 	return &listenerv3.FilterChain{
 		Name: name,
@@ -217,7 +219,8 @@ func (b *resourceBuilder) buildTCPDenyChain(name, reason string) *listenerv3.Fil
 						Value: &setstatecommonv3.FilterStateValue_FormatString{
 							FormatString: formatString(reason),
 						},
-						ReadOnly: true,
+						ReadOnly:    true,
+						SkipIfEmpty: !b.legacyGateway,
 					},
 				},
 			})),
@@ -320,7 +323,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 				networkFilter("envoy.filters.network.http_connection_manager", b.pack(httpInternal)),
 			},
 		},
-		{Name: forwardTCPChain, Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, tcpSettings)},
+		{Name: forwardTCPChain, Filters: b.originalDestinationTCPFilters(config, nil, PassthroughCluster, tcpSettings)},
 	}
 	passthrough := forwardTCPChain
 	if !b.legacyGateway {
@@ -359,7 +362,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 	}
 	tcpForwardFilters := []*listenerv3.Filter{tcpTLSIdentityFilter}
 	if !b.legacyGateway {
-		tcpForwardFilters = append(tcpForwardFilters, b.sniDFPFilter())
+		tcpForwardFilters = append(tcpForwardFilters, b.tcpPolicyFilter(true, false), b.sniDFPFilter())
 	}
 	mainForward := &listenerv3.Listener{
 		Name: MainForward,
@@ -413,7 +416,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 			ListenerFilters:  []*listenerv3.ListenerFilter{originalDstFilter},
 			FilterChains: []*listenerv3.FilterChain{{
 				Name:    forwardTCPChain,
-				Filters: b.applicationTCPFilters(config, nil, PassthroughCluster, tcpSettings),
+				Filters: b.originalDestinationTCPFilters(config, nil, PassthroughCluster, tcpSettings),
 			}},
 		})
 	}
@@ -452,9 +455,7 @@ func (b *resourceBuilder) buildConnectHCM(config effectiveConfig) (*hcmv3.HttpCo
 	}
 	if !b.legacyGateway {
 		filters = append(filters, b.connectExtProcFilter(), connectWorkloadFilter())
-		if features.EnableSNITrafficPolicy {
-			filters = append(filters, connectPolicyFilter())
-		}
+		filters = append(filters, b.connectPolicyFilters()...)
 	}
 	// Identity-based descriptors must observe the Workload resolved by Porter.
 	if rateLimit := gateway.GetConnectRateLimit(); rateLimit != nil {
@@ -799,7 +800,7 @@ func (b *resourceBuilder) connectExtProcFilter() *hcmv3.HttpFilter {
 	}))
 }
 
-// Publish Porter's resolved identity before creating any internal connection.
+// Capture Porter's identity and policy before creating any internal connection.
 // Identity comes from the certificate or peer IP, independently of SNI policy.
 func connectWorkloadFilter() *hcmv3.HttpFilter {
 	config := &setstatehttpv3.Config{}
@@ -841,24 +842,15 @@ func connectWorkloadFilter() *hcmv3.HttpFilter {
 			SkipIfEmpty:        true,
 		})
 	}
-	return httpFilter("agentio.connect_workload", mustPack(config))
-}
-
-func connectPolicyFilter() *hcmv3.HttpFilter {
-	return httpFilter("agentio.connect_sni_policy", mustPack(&setstatehttpv3.Config{
-		OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
-			{
-				Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateSNIPolicy},
-				FactoryKey: "envoy.hashable_string",
-				Value: &setstatecommonv3.FilterStateValue_FormatString{
-					FormatString: formatString(sniPolicyMetadataFormat),
-				},
-				SharedWithUpstream: setstatecommonv3.FilterStateValue_ONCE,
-				ReadOnly:           true,
-				SkipIfEmpty:        true,
-			},
+	config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
+		Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: "agentio.connection.policy_json"},
+		FactoryKey: "envoy.string",
+		Value: &setstatecommonv3.FilterStateValue_FormatString{
+			FormatString: formatString("%DYNAMIC_METADATA(agentio:connection:policy)%"),
 		},
-	}))
+		SkipIfEmpty: true,
+	})
+	return httpFilter("agentio.connect_workload", mustPack(config))
 }
 
 func headerMode(
@@ -1098,7 +1090,7 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 		for _, key := range []string{
 			model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
 			model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
-			model.FilterStateWorkloadUID,
+			model.FilterStateWorkloadUID, model.FilterStateConnectionPolicyHash, model.FilterStatePolicyStart,
 		} {
 			downstreamRelayKeys = append(downstreamRelayKeys, struct {
 				key     string
@@ -1242,6 +1234,18 @@ func (b *resourceBuilder) tcpProxy(
 	return config
 }
 
+func (b *resourceBuilder) originalDestinationTCPFilters(
+	config effectiveConfig,
+	prefix []*listenerv3.Filter,
+	cluster string,
+	tcpSettings *configv1.TcpSettings,
+) []*listenerv3.Filter {
+	if !b.legacyGateway {
+		prefix = append(prefix, b.tcpPolicyFilter(false, false))
+	}
+	return b.applicationTCPFilters(config, prefix, cluster, tcpSettings)
+}
+
 func (b *resourceBuilder) applicationTCPFilters(
 	config effectiveConfig,
 	prefix []*listenerv3.Filter,
@@ -1326,7 +1330,7 @@ func (b *resourceBuilder) staticSNIMatcher(
 	}
 }
 
-// Reject malformed SNI before exclusions, TLS termination or DFP can use it as an authority.
+// Missing SNI reaches policy evaluation; reject malformed non-empty names before routing.
 func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmatcherv3.Matcher {
 	if b.legacyGateway {
 		return next
@@ -1360,6 +1364,9 @@ func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmat
 			},
 		},
 	}
+	// ServerNameInput reports no data for absent SNI, so an empty-string regex cannot match it.
+	nonempty := proto.Clone(hostname).(*xdsmatcherv3.Matcher_MatcherList_Predicate)
+	nonempty.GetSinglePredicate().GetValueMatch().GetSafeRegex().Regex = "(?s).+"
 	return &xdsmatcherv3.Matcher{
 		MatcherType: &xdsmatcherv3.Matcher_MatcherList_{MatcherList: &xdsmatcherv3.Matcher_MatcherList{
 			Matchers: []*xdsmatcherv3.Matcher_MatcherList_FieldMatcher{{
@@ -1368,7 +1375,9 @@ func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmat
 						OrMatcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_PredicateList{
 							Predicate: []*xdsmatcherv3.Matcher_MatcherList_Predicate{{
 								MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_NotMatcher{NotMatcher: tls},
-							}, hostname},
+							}, hostname, {
+								MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_NotMatcher{NotMatcher: nonempty},
+							}},
 						},
 					},
 				},
@@ -1399,12 +1408,19 @@ func (b *resourceBuilder) tlsActionMatcher(
 	gatewayDecision *xdsmatcherv3.Matcher_OnMatch,
 	passthrough string,
 ) *xdsmatcherv3.Matcher {
-	return exactMatcher(typedExtension("tls-action", b.pack(&matchinginputv3.FilterStateInput{Key: tlsActionKey})),
-		map[string]*xdsmatcherv3.Matcher_OnMatch{
-			"terminate":   b.toChain(tlsTerminateChain),
-			"passthrough": b.toChain(passthrough),
-			"deny":        b.toChain(sniDenyChain),
-		}, gatewayDecision)
+	values := map[string]*xdsmatcherv3.Matcher_OnMatch{
+		"terminate":   b.toChain(tlsTerminateChain),
+		"passthrough": b.toChain(passthrough),
+		"deny":        b.toChain(sniDenyChain),
+	}
+	if !b.legacyGateway {
+		values["fallthrough"] = b.toChain(forwardTCPChain)
+	}
+	return exactMatcher(
+		typedExtension("tls-action", b.pack(&matchinginputv3.FilterStateInput{Key: tlsActionKey})),
+		values,
+		gatewayDecision,
+	)
 }
 
 func exactMatcher(

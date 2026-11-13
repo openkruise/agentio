@@ -84,11 +84,11 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 		}
 		state.OnNewConnection = values
 	}
-	filters := append(
-		slices.Clone(prefix),
-		networkFilter(stateName, b.pack(state)),
-		b.sniDFPFilter(),
-	)
+	filters := append(slices.Clone(prefix), networkFilter(stateName, b.pack(state)))
+	if !b.legacyGateway {
+		filters = append(filters, b.tcpPolicyFilter(len(prefix) == 0, true))
+	}
+	filters = append(filters, b.sniDFPFilter())
 	return b.applicationTCPFilters(config, filters, cluster, config.gateway.GetTcp())
 }
 
@@ -136,6 +136,7 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 						networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
 							OnNewConnection: tlsDestinationState("%DOWNSTREAM_LOCAL_ADDRESS%"),
 						})),
+						b.tcpPolicyFilter(false, false),
 						b.sniDFPFilter(),
 					}, TLSProxyOriginate, config.gateway.GetTcp()),
 				})

@@ -65,6 +65,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 
+	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
 	workload "github.com/openkruise/agentio/api/workload/v1"
 )
 
@@ -117,7 +118,20 @@ func (s *shutdownDiscovery) DeltaAggregatedResources(
 						return stream.Context().Err()
 					}
 				}
-				body, err := anypb.New(&workload.Workload{Uid: name, Name: "shutdown-client", Namespace: "test"})
+				tcp, err := anypb.New(
+					&extensionsv1.PolicyReference{TypeUrl: "type.googleapis.com/agentio.security.SecurityProfile"},
+				)
+				if err != nil {
+					return err
+				}
+				body, err := anypb.New(
+					&workload.Workload{
+						Uid:        name,
+						Name:       "shutdown-client",
+						Namespace:  "test",
+						Extensions: []*workload.Extension{{Name: "security-profile-reference", Config: tcp}},
+					},
+				)
 				if err != nil {
 					return err
 				}
@@ -649,7 +663,7 @@ func TestPorterPodTermination(t *testing.T) {
 						Headers: &core.HeaderMap{
 							Headers: []*core.HeaderValue{
 								{Key: ":method", RawValue: []byte("CONNECT")},
-								{Key: ":authority", RawValue: []byte("backend:80")},
+								{Key: ":authority", RawValue: []byte(backend.Listener.Addr().String())},
 							},
 						},
 					},

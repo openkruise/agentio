@@ -115,7 +115,7 @@ func TestUDPProxyGraph(t *testing.T) {
 		t.Fatalf("connect-udp filters = %v, want %v", names, want)
 	}
 	state := &setstatehttpv3.Config{}
-	if err := upgrade.GetFilters()[4].GetTypedConfig().UnmarshalTo(state); err != nil {
+	if err := upgrade.GetFilters()[len(upgrade.GetFilters())-2].GetTypedConfig().UnmarshalTo(state); err != nil {
 		t.Fatalf("decode udp target state: %v", err)
 	}
 	values := state.GetOnRequestHeaders()

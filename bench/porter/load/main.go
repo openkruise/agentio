@@ -201,10 +201,12 @@ func workloadResource(i, revision int) model.Resource {
 	if instanceWireName {
 		wireName = src.WorkloadAlias()
 	}
+	extensions := w.Extensions
+	w.Extensions = nil
 	r, e := model.NewResource(
 		model.ResourceKey{TypeURL: model.AddressType, Name: uid(i)},
 		wireName,
-		anyOf(&workload.Address{Type: &workload.Address_Workload{Workload: w}}),
+		model.WorkloadContents(w, extensions),
 		[]string{"/" + ip(i), src.WorkloadAlias()},
 		model.ResourceFacts{
 			Workload: &model.WorkloadResourceFacts{
@@ -234,7 +236,7 @@ func resources(n int) []model.Resource {
 		r, e := model.NewResource(
 			model.ResourceKey{TypeURL: model.SandboxType, Name: name},
 			"",
-			anyOf(b),
+			model.Prebuilt(anyOf(b)),
 			nil,
 			model.ResourceFacts{Sandbox: &model.SandboxResourceFacts{AttesterWorkloadUID: uid(i)}},
 		)
@@ -262,7 +264,7 @@ func resources(n int) []model.Resource {
 				}
 				r, e := model.NewResource(
 					model.ResourceKey{TypeURL: model.TrafficPolicyType, Name: policy(group*trafficPolicies + j)},
-					"", anyOf(p), nil, model.ResourceFacts{},
+					"", model.Prebuilt(anyOf(p)), nil, model.ResourceFacts{},
 				)
 				must(e)
 				out = append(out, r)
@@ -719,14 +721,21 @@ func call(
 			m["workload"].GetStructValue().GetFields()["uid"].GetStringValue() != source(i).WorkloadAlias() {
 			return fmt.Errorf("wrong workload UID")
 		}
-		rules := m["sni"].GetStructValue().GetFields()["policy"].GetStructValue().GetFields()["rules"].GetListValue().
+		profiles := m["connection"].GetStructValue().GetFields()["policy"].GetStructValue().GetFields()["profiles"].GetListValue().
 			GetValues()
+		ruleCount := 0
+		for _, profile := range profiles {
+			ruleCount += len(
+				profile.GetStructValue().GetFields()["sniPolicy"].GetStructValue().GetFields()["rules"].GetListValue().
+					GetValues(),
+			)
+		}
 		want := 8
 		if mode == "sandbox" {
 			want = 16
 		}
-		if len(rules) != want {
-			return fmt.Errorf("SNI rules=%d want=%d", len(rules), want)
+		if ruleCount != want {
+			return fmt.Errorf("SNI rules=%d want=%d", ruleCount, want)
 		}
 	}
 	if _, e = stream.Recv(); !errors.Is(e, io.EOF) {

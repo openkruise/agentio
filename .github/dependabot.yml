@@ -7,7 +7,7 @@ updates:
       - /docker
       - /extensions/epe/docker
       - /extensions/porter/docker
-      - /extensions/envoy/sni-policy
+      - /extensions/envoy/connection-policy
       - /test/fixtures/clienttrust
       - /test/fixtures/extproc
       - /bench/xds

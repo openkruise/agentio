@@ -47,7 +47,8 @@ func TestSandboxUpstreamTLS(t *testing.T) {
 	}, "testdata/upstream-tls.yaml").ApplyOrFail(t, kube.CreateOnly)
 	readyCtx, readyCancel := e2e.Context(t, 2*time.Minute)
 	defer readyCancel()
-	if _, err := environment.Kube.WaitReadyPods(readyCtx, namespace, "app=upstream-tls", 1); err != nil {
+	pods, err := environment.Kube.WaitReadyPods(readyCtx, namespace, "app=upstream-tls", 1)
+	if err != nil {
 		t.Fatalf("TLS upstream not ready: %v", err)
 	}
 	applySettings := func(t *testing.T, settings string, trustCA bool) {
@@ -150,10 +151,20 @@ data:
 	t.Run("trust bundle updates", func(t *testing.T) {
 		ctx, cancel := e2e.Context(t, 10*time.Minute)
 		defer cancel()
-		token, err := environment.Cluster.Kube.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, "default",
-			&authenticationv1.TokenRequest{
-				Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}},
-			}, metav1.CreateOptions{})
+		token, err := environment.Cluster.Kube.CoreV1().
+			ServiceAccounts(namespace).
+			CreateToken(ctx, pods[0].Spec.ServiceAccountName,
+				&authenticationv1.TokenRequest{
+					Spec: authenticationv1.TokenRequestSpec{
+						Audiences: []string{"agentio-ca"},
+						BoundObjectRef: &authenticationv1.BoundObjectReference{
+							APIVersion: "v1",
+							Kind:       "Pod",
+							Name:       pods[0].Name,
+							UID:        pods[0].UID,
+						},
+					},
+				}, metav1.CreateOptions{})
 		if err != nil {
 			t.Fatalf("create config debug token: %v", err)
 		}

@@ -23,9 +23,9 @@ import (
 func sniPolicyListenerFilter() *listenerv3.ListenerFilter {
 	fields, err := structpb.NewStruct(map[string]any{
 		"dynamic_module_config": map[string]any{
-			"name": "envoy_agentio_sni_policy",
+			"name": "envoy_agentio_connection_policy",
 			"module": map[string]any{
-				"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_sni_policy.so"},
+				"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_connection_policy.so"},
 			},
 		},
 		"filter_name": "envoy_agentio_sni_policy",

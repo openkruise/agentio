@@ -138,7 +138,8 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 		"agentio.connect_authority",
 		"envoy.filters.http.ext_proc",
 		"agentio.connect_workload",
-		"agentio.connect_sni_policy",
+		"agentio.connection_policy_store",
+		"agentio.connect_policy",
 		"envoy.filters.http.local_ratelimit",
 		concurrencyFilterName, bandwidthFilterName,
 		"envoy.filters.http.router",
@@ -879,10 +880,15 @@ func TestSNIDenyAccessLogsHonorTelemetry(t *testing.T) {
 			if tc.legacy {
 				key = "io.kruise.egress_denial_reason"
 			}
+			reason := "sni_policy_denied"
+			if !tc.legacy {
+				reason = "%CEL('" + key + "' in filter_state ? '' : 'sni_policy_denied')%"
+			}
 			if len(values) != 1 || values[0].GetObjectKey() != key ||
 				values[0].GetFactoryKey() != "envoy.string" || !values[0].GetReadOnly() ||
+				values[0].GetSkipIfEmpty() != !tc.legacy ||
 				values[0].GetSharedWithUpstream() != 0 ||
-				values[0].GetFormatString().GetTextFormatSource().GetInlineString() != "sni_policy_denied" {
+				values[0].GetFormatString().GetTextFormatSource().GetInlineString() != reason {
 				t.Fatalf("denial reason must be set locally before closing: %v", values)
 			}
 			fileLog := &fileaccesslogv3.FileAccessLog{}

@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error};
 
 /// Canonical enum names from api/extensions/v1/snipolicy.proto.
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,8 @@ pub enum Action {
     Deny,
     #[serde(skip)]
     Cleartext,
+    #[serde(skip)]
+    Fallthrough,
 }
 
 impl Action {
@@ -23,15 +25,14 @@ impl Action {
             Self::Passthrough => b"passthrough",
             Self::Deny => b"deny",
             Self::Cleartext => b"cleartext",
+            Self::Fallthrough => b"fallthrough",
         }
     }
 }
 
 /// JSON emitted by protojson.Marshal(SniTrafficPolicy). Rules retain source order.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Default)]
 pub struct Policy {
-    #[serde(default)]
     rules: Vec<Rule>,
 }
 
@@ -52,23 +53,37 @@ struct SniMatch {
     ports: Vec<u32>,
 }
 
-impl Policy {
-    pub fn evaluate(&self, sni: Option<&str>, port: Option<u32>) -> Action {
-        // This JSON crosses the CONNECT boundary. Reject a malformed policy as a
-        // whole, including invalid rules after the first match.
-        if self
+impl<'de> Deserialize<'de> for Policy {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            #[serde(default)]
+            rules: Vec<Rule>,
+        }
+        let policy = Self {
+            rules: Input::deserialize(deserializer)?.rules,
+        };
+        // Validate the entire snapshot once, including rules after an early match.
+        if policy
             .rules
             .iter()
             .flat_map(|r| &r.r#match.sni)
             .any(|p| !valid_pattern(p))
-            || self
+            || policy
                 .rules
                 .iter()
                 .flat_map(|r| &r.r#match.ports)
                 .any(|p| !(1..=65535).contains(p))
         {
-            return Action::Deny;
+            return Err(D::Error::custom("invalid SNI policy"));
         }
+        Ok(policy)
+    }
+}
+
+impl Policy {
+    pub fn evaluate(&self, sni: Option<&str>, port: Option<u32>) -> Action {
         let name = sni.unwrap_or("");
         let name = name.strip_suffix('.').unwrap_or(name);
         self.rules
@@ -77,15 +92,12 @@ impl Policy {
                 (r.r#match.ports.is_empty() || port.is_some_and(|p| r.r#match.ports.contains(&p)))
                     && r.r#match.sni.iter().any(|p| pattern_matches(p, name))
             })
-            .map_or(Action::Passthrough, |r| r.action)
+            .map_or(Action::Fallthrough, |r| r.action)
     }
 }
 
 // Preserve Agentio/ztunnel suffix semantics: *.example.com matches a.b.example.com.
 fn pattern_matches(pattern: &str, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
     let pattern = pattern.strip_suffix('.').unwrap_or(pattern);
     pattern == "*"
         || pattern.eq_ignore_ascii_case(name)
@@ -137,15 +149,35 @@ mod tests {
             ("example.com", Action::Deny),
             ("badexample.com", Action::Deny),
             ("example.com.evil", Action::Deny),
-            ("", Action::Passthrough),
+            ("", Action::Deny),
         ] {
             assert_eq!(policy.evaluate(Some(name), None), want, "{name}");
         }
-        assert_eq!(policy.evaluate(None, None), Action::Passthrough);
+        assert_eq!(policy.evaluate(None, None), Action::Deny);
     }
 
     #[test]
-    fn explicit_empty_and_no_match_pass_through() {
+    fn catch_all_tls_matches_missing_sni_and_preserves_ports() {
+        for (action, expected) in [
+            ("SNI_ACTION_DENY", Action::Deny),
+            ("SNI_ACTION_PASSTHROUGH", Action::Passthrough),
+            ("SNI_ACTION_TLS_TERMINATION", Action::Terminate),
+        ] {
+            let policy: Policy = serde_json::from_value(serde_json::json!({"rules":[
+                {"match":{"sni":["exact.test", "*.example.com"]},"action":"SNI_ACTION_DENY"},
+                {"match":{"sni":["*"],"ports":[443]},"action":action}
+            ]}))
+            .unwrap();
+            for name in [None, Some("")] {
+                assert_eq!(policy.evaluate(name, Some(443)), expected);
+                assert_eq!(policy.evaluate(name, Some(8443)), Action::Fallthrough);
+                assert_eq!(policy.evaluate(name, None), Action::Fallthrough);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_and_no_match_fall_through() {
         for json in [
             "{}",
             r#"{"rules":[]}"#,
@@ -154,7 +186,7 @@ mod tests {
             let policy: Policy = serde_json::from_str(json).unwrap();
             assert_eq!(
                 policy.evaluate(Some("different.test"), None),
-                Action::Passthrough
+                Action::Fallthrough
             );
         }
     }
@@ -173,7 +205,7 @@ mod tests {
             (Some("api.example.com"), Some(443), Action::Terminate),
             (Some("api.example.com"), Some(8443), Action::Deny),
             (Some("api.example.com"), None, Action::Deny),
-            (None, Some(443), Action::Passthrough),
+            (None, Some(443), Action::Deny),
         ] {
             assert_eq!(policy.evaluate(name, port), want, "{name:?}:{port:?}");
         }
@@ -182,14 +214,12 @@ mod tests {
     #[test]
     fn invalid_later_port_rejects_entire_policy() {
         for port in [0, 65536] {
-            let policy: Policy = serde_json::from_value(serde_json::json!({"rules":[
-                {"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},
-                {"match":{"sni":["*"],"ports":[port]},"action":"SNI_ACTION_DENY"}
-            ]}))
-            .unwrap();
-            assert_eq!(
-                policy.evaluate(Some("api.example.com"), Some(443)),
-                Action::Deny
+            assert!(
+                serde_json::from_value::<Policy>(serde_json::json!({"rules":[
+                    {"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},
+                    {"match":{"sni":["*"],"ports":[port]},"action":"SNI_ACTION_DENY"}
+                ]}))
+                .is_err()
             );
         }
     }
@@ -224,12 +254,7 @@ mod tests {
                 {"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"},
                 {"match":{"sni":[pattern]},"action":"SNI_ACTION_TLS_TERMINATION"}
             ]});
-            let policy: Policy = serde_json::from_value(json).unwrap();
-            assert_eq!(
-                policy.evaluate(Some("allowed.test"), None),
-                Action::Deny,
-                "{pattern}"
-            );
+            assert!(serde_json::from_value::<Policy>(json).is_err(), "{pattern}");
         }
     }
 }

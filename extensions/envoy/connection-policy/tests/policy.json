@@ -1,0 +1,35 @@
+{
+  "profiles": [
+    {
+      "uid": "profile",
+      "sniPolicy": {
+        "rules": [
+          {
+            "match": {
+              "sni": [
+                "denied.example.com"
+              ]
+            },
+            "action": "SNI_ACTION_DENY"
+          },
+          {
+            "match": {
+              "sni": [
+                "skip.example.com"
+              ]
+            },
+            "action": "SNI_ACTION_PASSTHROUGH"
+          },
+          {
+            "match": {
+              "sni": [
+                "*.example.com"
+              ]
+            },
+            "action": "SNI_ACTION_TLS_TERMINATION"
+          }
+        ]
+      }
+    }
+  ]
+}

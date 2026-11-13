@@ -25,7 +25,6 @@ pub struct Config {
     pub request_timeout: Duration,
     pub worker_threads: usize,
     pub logging: telemetry::Config,
-    pub enable_traffic_policy: bool,
     pub enable_sni_traffic_policy: bool,
     pub sandbox_mode: bool,
 }
@@ -103,11 +102,6 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
     if worker_threads == 0 {
         bail!("TOKIO_WORKER_THREADS must be positive");
     }
-    let enable_traffic_policy = read_env("ENABLE_TRAFFIC_POLICY")?
-        .map(|value| value.parse::<bool>())
-        .transpose()
-        .context("invalid ENABLE_TRAFFIC_POLICY: expected true or false")?
-        .unwrap_or(false);
     let enable_sni_traffic_policy = read_env("AGENTIO_ENABLE_SNI_TRAFFIC_POLICY")?
         .map(|value| value.parse::<bool>())
         .transpose()
@@ -165,7 +159,6 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         request_timeout: args.request_timeout,
         worker_threads,
         logging,
-        enable_traffic_policy,
         enable_sni_traffic_policy,
         sandbox_mode,
     })
@@ -205,48 +198,6 @@ mod tests {
         assert_eq!(config.cache.max_entries, 0);
         assert_eq!(config.worker_threads, 2);
         assert_eq!(config.grpc_address.to_string(), "127.0.0.1:9002");
-    }
-
-    #[test]
-    fn selects_gateway_independently_of_traffic_policy() {
-        for gateway in ["agentio-egress", "agentgateway"] {
-            for enabled in ["false", "true"] {
-                let config = config(
-                    &["--gateway", gateway],
-                    &[("ENABLE_TRAFFIC_POLICY", enabled)],
-                )
-                .unwrap();
-                assert_eq!(
-                    config.gateway,
-                    if gateway == "agentgateway" {
-                        Gateway::Agentgateway
-                    } else {
-                        Gateway::AgentioEgress
-                    }
-                );
-                assert_eq!(config.enable_traffic_policy, enabled == "true");
-            }
-        }
-        assert!(config(&["--gateway", "unknown"], &[]).is_err());
-    }
-
-    #[test]
-    fn traffic_policy_requires_explicit_opt_in() {
-        assert!(!config(&[], &[]).unwrap().enable_traffic_policy);
-        assert!(
-            !config(&[], &[("ENABLE_TRAFFIC_POLICY", "false")])
-                .unwrap()
-                .enable_traffic_policy
-        );
-        assert!(
-            config(&[], &[("ENABLE_TRAFFIC_POLICY", "true")])
-                .unwrap()
-                .enable_traffic_policy
-        );
-        let error = config(&[], &[("ENABLE_TRAFFIC_POLICY", "invalid")])
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("ENABLE_TRAFFIC_POLICY"));
     }
 
     #[test]

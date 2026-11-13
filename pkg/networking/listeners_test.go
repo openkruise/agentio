@@ -409,6 +409,7 @@ func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 	chain := findFilterChain(t, listeners[MainInternal], forwardTLSChain)
 	want := []string{
 		"envoy.filters.network.set_filter_state",
+		"agentio.tcp_policy",
 		"envoy.filters.network.sni_dynamic_forward_proxy",
 		"envoy.filters.network.tcp_proxy",
 	}
@@ -427,7 +428,7 @@ func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 		t.Fatalf("TLS destination must use actual SNI and original port, without an empty-name fallback: %v", values)
 	}
 	filter := &dfpnetworkv3.FilterConfig{}
-	if err := chain.Filters[1].GetTypedConfig().UnmarshalTo(filter); err != nil {
+	if err := chain.Filters[2].GetTypedConfig().UnmarshalTo(filter); err != nil {
 		t.Fatal(err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
@@ -445,7 +446,7 @@ func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 		t.Fatal("TLS passthrough must share the complete filtered gateway DNS cache")
 	}
 	proxy := &tcpproxyv3.TcpProxy{}
-	if err := chain.Filters[2].GetTypedConfig().UnmarshalTo(proxy); err != nil {
+	if err := chain.Filters[3].GetTypedConfig().UnmarshalTo(proxy); err != nil {
 		t.Fatal(err)
 	}
 	if proxy.GetCluster() != TLSPassthrough {
@@ -480,6 +481,7 @@ func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 		if !legacy {
 			wantFilters = []string{
 				"envoy.filters.network.set_filter_state",
+				"agentio.tcp_policy",
 				"envoy.filters.network.sni_dynamic_forward_proxy",
 				"envoy.filters.network.tcp_proxy",
 			}
@@ -750,24 +752,33 @@ func TestSNIHostnameMatcher(t *testing.T) {
 				t.Fatal("invalid SNI must have no filter-chain fallback")
 			}
 			predicates := matcher.GetMatcherList().GetMatchers()[0].GetPredicate().GetOrMatcher().GetPredicate()
-			if len(predicates) != 2 ||
+			if len(predicates) != 3 ||
 				!proto.Equal(predicates[0].GetNotMatcher().GetSinglePredicate().GetInput(), transportProtocolInput) ||
 				predicates[0].GetNotMatcher().GetSinglePredicate().GetValueMatch().GetExact() != "tls" ||
-				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) {
-				t.Fatal("only cleartext or a valid TLS hostname may reach the routing matcher")
+				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) ||
+				!proto.Equal(predicates[2].GetNotMatcher().GetSinglePredicate().GetInput(), serverNameInput) {
+				t.Fatal("only cleartext, missing SNI or a valid TLS hostname may reach the routing matcher")
 			}
 			pattern := predicates[1].GetSinglePredicate().GetValueMatch().GetSafeRegex().GetRegex()
 			// Envoy StringMatcher uses a full match; anchor the Go equivalent.
 			hostname := regexp.MustCompile("^(?:" + pattern + ")$")
-			for _, name := range []string{"api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
-				if !hostname.MatchString(name) {
+			nonempty := regexp.MustCompile(
+				"^(?:" + predicates[2].GetNotMatcher().
+					GetSinglePredicate().
+					GetValueMatch().
+					GetSafeRegex().
+					GetRegex() +
+					")$",
+			)
+			for _, name := range []string{"", "api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
+				if !hostname.MatchString(name) && nonempty.MatchString(name) {
 					t.Errorf("valid SNI %q rejected", name)
 				}
 			}
-			for _, name := range []string{"", "api.example.com:8443", "api.example.com:443", "[::1]:443",
+			for _, name := range []string{"api.example.com:8443", "api.example.com:443", "[::1]:443",
 				"user@api.example.com", "api.example.com/path", "*.example.com", "a..example", "-api.example",
-				"api-.example", "api_example.com", "é.example"} {
-				if hostname.MatchString(name) {
+				"api-.example", "api_example.com", "é.example", "\n", "a\nb"} {
+				if hostname.MatchString(name) || !nonempty.MatchString(name) {
 					t.Errorf("invalid SNI %q accepted", name)
 				}
 			}

@@ -35,9 +35,9 @@ mod transport;
 pub use transport::TransportConfig;
 
 #[cfg(test)]
-mod tests;
+mod tcp_tests;
 #[cfg(test)]
-mod traffic_tests;
+mod tests;
 
 #[derive(Clone, Debug)]
 enum Outcome {
