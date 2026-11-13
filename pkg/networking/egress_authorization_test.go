@@ -170,7 +170,7 @@ func TestRouteUpstreamConsumerWithoutEPEOrServiceEntries(t *testing.T) {
 	}
 	if got := httpFilterNames(h); !slices.Equal(got, []string{
 		"agentio.route_upstream",
-		"agentio.connect_proxy_target",
+		"agentio.connect_proxy_authorization",
 		"envoy.filters.http.dynamic_forward_proxy",
 		"envoy.filters.http.router",
 	}) {

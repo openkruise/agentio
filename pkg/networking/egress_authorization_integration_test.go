@@ -157,7 +157,10 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				t.Helper()
 				b := &resourceBuilder{egressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: denied}}
 				settings := effectiveConfig{gateway: &configv1.EgressGateway{}}
-				clusters := []*anypb.Any{b.pack(b.buildDFPCluster(HTTPDynamicForwardProxy, true, false, nil))}
+				clusters := []*anypb.Any{
+					b.pack(b.buildDFPCluster(HTTPDynamicForwardProxy, true, false, nil)),
+					b.pack(b.buildPassthroughCluster()),
+				}
 				if pinned {
 					settings.extProc = provider
 					clusters = append(clusters, b.pack(b.buildExtProcCluster(provider, ExtProcCluster)))
@@ -177,6 +180,12 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 								Key: &common.FilterStateValue_ObjectKey{
 									ObjectKey: "envoy.filters.listener.original_dst.local_ip",
 								},
+								Value: &common.FilterStateValue_FormatString{
+									FormatString: formatString("%REQ(x-test-original-target)%"),
+								},
+							},
+							{
+								Key: &common.FilterStateValue_ObjectKey{ObjectKey: originalDstAddressKey},
 								Value: &common.FilterStateValue_FormatString{
 									FormatString: formatString("%REQ(x-test-original-target)%"),
 								},
@@ -283,22 +292,27 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				return response.StatusCode
 			}
 			for i, denied := range [][]string{nil, {originIP.String() + "/32"}, nil} {
-				want := http.StatusOK
+				want, proxyWant := http.StatusOK, http.StatusOK
 				if len(denied) > 0 {
 					want = http.StatusServiceUnavailable
+					proxyWant = http.StatusForbidden
 				}
 				if i > 0 {
 					update(fmt.Sprint(i+1), denied, port)
 				}
 				deadline := time.Now().Add(10 * time.Second)
-				for status := request(false); status != want; status = request(false) {
+				for {
+					status, proxyStatus := request(false), proxyRequest(false)
+					if status == want && proxyStatus == proxyWant {
+						break
+					}
 					if time.Now().After(deadline) {
-						t.Fatalf("update %d: status = %d, want %d", i, status, want)
+						t.Fatalf(
+							"update %d: HTTP/proxy status = %d/%d, want %d/%d",
+							i, status, proxyStatus, want, proxyWant,
+						)
 					}
 					time.Sleep(20 * time.Millisecond)
-				}
-				if status := proxyRequest(false); status != want {
-					t.Fatalf("proxy status = %d, want %d", status, want)
 				}
 				before, beforeEPE := originCalls.Load(), epeCalls.Load()
 				if status := request(true); status != http.StatusServiceUnavailable {
@@ -307,7 +321,7 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				if len(denied) > 0 && request(false) != want {
 					t.Fatal("denied upstream became reachable")
 				}
-				if status := proxyRequest(true); status != http.StatusServiceUnavailable {
+				if status := proxyRequest(true); status != http.StatusForbidden {
 					t.Fatalf("loopback proxy status = %d", status)
 				}
 				if originCalls.Load() != before {

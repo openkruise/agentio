@@ -144,14 +144,6 @@ var (
 	connectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(
 		outerSNIKey, "%FILTER_STATE("+outerSNIKey+":PLAIN)%:"+originalPortFormat,
 	)
-	connectProxyTargetHTTPFilter = buildConnectStateHTTPFilter("agentio.connect_proxy_target", &setstatehttpv3.Config{
-		OnRequestHeaders: []*setstatecommonv3.FilterStateValue{{
-			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-			Value: &setstatecommonv3.FilterStateValue_FormatString{
-				FormatString: formatString("%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:PLAIN)%"),
-			},
-		}},
-	})
 
 	connectAuthorityHTTPFilter = buildConnectAuthorityFilter(
 		"envoy.hashable_string",
@@ -566,7 +558,9 @@ func (b *resourceBuilder) buildForwardHCM(
 		if terminatedTLS {
 			filters = append(filters, connectProxyTLSIdentityHTTPFilter)
 		} else {
-			filters = append(filters, connectProxyTargetHTTPFilter)
+			// ORIGINAL_DST dials the proxy, independently of the inner CONNECT authority or EPE target.
+			filters = append(filters, buildConnectHTTPFilter("agentio.connect_proxy_authorization",
+				typedCoreExtension("envoy.filters.http.rbac", b.egressAuthorizationFilter().GetTypedConfig())))
 		}
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
@@ -671,10 +665,13 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 	if key == legacyOuterSNIKey {
 		name = "connect-proxy-tls-identity"
 	}
-	return buildConnectStateHTTPFilter(name, setIdentity)
+	return buildConnectHTTPFilter(
+		name,
+		typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(setIdentity)),
+	)
 }
 
-func buildConnectStateHTTPFilter(name string, config *setstatehttpv3.Config) *hcmv3.HttpFilter {
+func buildConnectHTTPFilter(name string, extension *corev3.TypedExtensionConfig) *hcmv3.HttpFilter {
 	connectMethod := &xdsmatcherv3.Matcher_MatcherList_Predicate{
 		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
 			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
@@ -712,7 +709,7 @@ func buildConnectStateHTTPFilter(name string, config *setstatehttpv3.Config) *hc
 				},
 			}},
 		},
-		ExtensionConfig: typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(config)),
+		ExtensionConfig: extension,
 	}
 	return httpFilter(name, mustPack(wrapper))
 }
