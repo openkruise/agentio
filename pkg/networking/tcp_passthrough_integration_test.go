@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	bootstrapv3 "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -34,6 +35,7 @@ import (
 	setstatehttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -88,10 +90,11 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 			})
 			port := uint32(origin.Addr().(*net.TCPAddr).Port)
 			for _, tc := range []struct {
-				name             string
-				matches          []*configv1.TcpPassthroughMatch
-				allowed          bool
-				zeroPrefixedPort bool
+				name              string
+				matches           []*configv1.TcpPassthroughMatch
+				allowed           bool
+				zeroPrefixedPort  bool
+				deniedDestination bool
 			}{
 				{name: "CIDR and port", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}, Ports: []uint32{port}}}, allowed: true},
 				{name: "CIDR only", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}}}, allowed: true},
@@ -105,6 +108,7 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 				{name: "CIDR miss", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{"192.0.2.0/24"}, Ports: []uint32{port}}}},
 				{name: "port miss", matches: []*configv1.TcpPassthroughMatch{{Cidrs: []string{cidr}, Ports: []uint32{1}}}},
 				{name: "unconfigured"},
+				{name: "denied destination", matches: []*configv1.TcpPassthroughMatch{{}}, deniedDestination: true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					gateway := &configv1.EgressGateway{TcpPassthrough: tc.matches}
@@ -177,6 +181,18 @@ func TestEnvoyTCPPassthroughServerFirst(t *testing.T) {
 					}
 					for _, listener := range listeners {
 						if listener.Name == TCPPassthrough {
+							// Routing cases allow loopback origins; the denied case retains production restrictions.
+							for _, filter := range listener.FilterChains[0].Filters {
+								if filter.Name == "agentio.tcp_policy" && !tc.deniedDestination {
+									module := new(udpatypev1.TypedStruct)
+									if err := filter.GetTypedConfig().UnmarshalTo(module); err != nil {
+										t.Fatal(err)
+									}
+									settings := module.Value.GetFields()["filter_config"].GetStructValue().GetFields()["value"].GetStructValue()
+									settings.Fields["deniedCidrs"] = structpb.NewListValue(&structpb.ListValue{})
+									filter.ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: b.pack(module)}
+								}
+							}
 							cfg.StaticResources.Listeners = append(cfg.StaticResources.Listeners, listener)
 							cfg.StaticResources.Clusters = append(
 								cfg.StaticResources.Clusters,

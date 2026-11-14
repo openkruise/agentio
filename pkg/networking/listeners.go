@@ -270,7 +270,7 @@ func tlsDestinationState(host string) []*setstatecommonv3.FilterStateValue {
 
 func (b *resourceBuilder) sniDFPFilter() *listenerv3.Filter {
 	return networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&dfpnetworkv3.FilterConfig{
-		DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+		DnsCacheConfig: b.dnsCacheConfig(),
 		PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
 	}))
 }
@@ -283,9 +283,6 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 	connectHCM, err := b.buildConnectHCM(config)
 	if err != nil {
 		return nil, err
-	}
-	if features.EnableUDPProxy {
-		configureUDPHCM(connectHCM)
 	}
 	httpInternal, err := b.buildForwardHCM(HTTPDynamicForwardProxy, config, false)
 	if err != nil {
@@ -554,12 +551,18 @@ func (b *resourceBuilder) buildForwardHCM(
 	if config.extProc != nil {
 		filters = append(filters, b.egressTargetFilters()...)
 	}
-	if terminatedTLS && !b.legacyGateway {
-		filters = append(filters, connectProxyTLSIdentityHTTPFilter)
+	if !b.legacyGateway {
+		if terminatedTLS {
+			filters = append(filters, connectProxyTLSIdentityHTTPFilter)
+		} else {
+			// ORIGINAL_DST dials the proxy, independently of the inner CONNECT authority or EPE target.
+			filters = append(filters, buildConnectHTTPFilter("agentio.connect_proxy_authorization",
+				typedCoreExtension("envoy.filters.http.rbac", b.egressAuthorizationFilter().GetTypedConfig())))
+		}
 	}
 	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
 		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+			DnsCacheConfig: b.dnsCacheConfig(),
 		},
 		AllowDynamicHostFromFilterState: true,
 	})))
@@ -655,6 +658,17 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 			},
 		})
 	}
+	name := connectProxyTLSIdentityFilter
+	if key == legacyOuterSNIKey {
+		name = "connect-proxy-tls-identity"
+	}
+	return buildConnectHTTPFilter(
+		name,
+		typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(setIdentity)),
+	)
+}
+
+func buildConnectHTTPFilter(name string, extension *corev3.TypedExtensionConfig) *hcmv3.HttpFilter {
 	connectMethod := &xdsmatcherv3.Matcher_MatcherList_Predicate{
 		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
 			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
@@ -692,11 +706,7 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 				},
 			}},
 		},
-		ExtensionConfig: typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(setIdentity)),
-	}
-	name := connectProxyTLSIdentityFilter
-	if key == legacyOuterSNIKey {
-		name = "connect-proxy-tls-identity"
+		ExtensionConfig: extension,
 	}
 	return httpFilter(name, mustPack(wrapper))
 }

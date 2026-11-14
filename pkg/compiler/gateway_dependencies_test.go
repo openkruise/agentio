@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	"google.golang.org/protobuf/proto"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -45,6 +46,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 	config := gatewayGlobalExtProc{Provider: &configv1.ExtProcProvider{Service: "global.demo.svc"}}
 	initial := config
 	global := krt.NewStatic(&initial, true, options.WithName("global")...)
+	authorizationConfig := krt.NewStatic(&configuration{}, true, options.WithName("configuration")...)
 	publish := func() {
 		next := config
 		global.Set(&next)
@@ -53,6 +55,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 		inputs,
 		newBaseIndexes(inputs),
 		global,
+		authorizationConfig,
 		gateways.AsCollection(),
 		newFailureRecorder(),
 		options.WithName,
@@ -131,5 +134,49 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 	settle()
 	if got := count() - before; got != 2 {
 		t.Fatalf("primary change rebuilt %d gateways after override removal, want 2", got)
+	}
+	for _, cidr := range []string{"192.0.2.0/24", "198.51.100.0/24", ""} {
+		settings := &configv1.EgressAuthorization{}
+		if cidr != "" {
+			settings.DeniedCidrs = []string{cidr}
+		}
+		authorizationConfig.Set(&configuration{Config: &configv1.AgentioConfig{EgressAuthorization: settings}})
+		testutil.Eventually(t, func() bool {
+			for _, gateway := range declarations {
+				resource := resources.GetKey(
+					gatewayResourceName(
+						model.ClusterType,
+						gateway.ResourceName()+"|agentio-egress",
+						networking.HTTPDynamicForwardProxy,
+					),
+				)
+				if resource == nil {
+					return false
+				}
+				cluster := new(clusterv3.Cluster)
+				if err := resource.Value.UnmarshalTo(cluster); err != nil {
+					t.Fatal(err)
+				}
+				dfp := new(dfpclusterv3.ClusterConfig)
+				if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(dfp); err != nil {
+					t.Fatal(err)
+				}
+				ranges := dfp.GetDnsCacheConfig().GetResolvedAddressFilter().GetRanges()
+				if cidr == "" {
+					if len(ranges) != 9 {
+						return false
+					}
+				} else if len(ranges) != 11 || ranges[9].GetAddressPrefix()+"/24" != cidr {
+					return false
+				}
+				legacy := resources.GetKey(
+					gatewayResourceName(model.ClusterType, gateway.ResourceName(), networking.HTTPDynamicForwardProxy),
+				)
+				if (legacy != nil) != (cidr == "") {
+					return false
+				}
+			}
+			return true
+		}, "egress authorization add/update/clear reached every gateway, including ext_proc disabled")
 	}
 }

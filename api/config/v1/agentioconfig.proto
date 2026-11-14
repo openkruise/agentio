@@ -21,6 +21,7 @@ syntax = "proto3";
 package agentio.config.v1;
 
 import "api/extensions/v1/egresspolicy.proto";
+import "api/config/v1/epeconfig.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "networking/v1alpha3/virtual_service.proto";
@@ -55,6 +56,11 @@ message AgentioConfig {
   // the epe node type; declaring an identity in node metadata is not sufficient.
   repeated string trusted_epe_identities = 6 [json_name = "trustedEPEIdentities"];
 
+  // Destination restrictions for all native Envoy egress gateways, independently
+  // of EPE. Checks original TCP/UDP destinations and resolved forwarding targets.
+  // Gateway-internal control connections are excluded. Omission/null inherits
+  // the lower layer; a supplied message replaces user entries. Built-ins remain.
+  EgressAuthorization egress_authorization = 7;
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same

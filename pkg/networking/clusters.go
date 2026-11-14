@@ -17,8 +17,8 @@ package networking
 import (
 	"fmt"
 	"math"
-	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
@@ -75,9 +75,6 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 	}
 	for _, provider := range config.additionalExtProcs {
 		result = append(result, b.buildExtProcCluster(provider, additionalExtProcName(provider)))
-	}
-	if features.EnableUDPProxy {
-		result = append(result, b.buildUDPCluster())
 	}
 	if config.telemetry != nil {
 		names := sets.NewWithLength[string](len(result) + len(config.telemetry.Clusters))
@@ -190,7 +187,7 @@ func (b *resourceBuilder) buildDFPCluster(
 ) *clusterv3.Cluster {
 	typed := b.pack(&dfpclusterv3.ClusterConfig{
 		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway),
+			DnsCacheConfig: b.dnsCacheConfig(),
 		},
 		AllowInsecureClusterOptions: allowInsecure,
 	})
@@ -355,28 +352,26 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 	return cluster
 }
 
-func dnsCacheConfig(legacy bool) *dfpcommonv3.DnsCacheConfig {
+func (b *resourceBuilder) dnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
 	config := &dfpcommonv3.DnsCacheConfig{Name: DNSCacheName, DnsLookupFamily: clusterv3.Cluster_V4_ONLY}
 	// Legacy gateways keep their frozen wire contract and may run an Envoy
 	// version without resolved_address_filter support.
-	if legacy {
+	if b.legacyGateway {
 		return config
 	}
 	filter := &matcherv3.AddressMatcher{}
-	for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
-		prefix := netip.MustParsePrefix(cidr)
+	denied := b.egressAuthorization.EffectiveDeniedCIDRs()
+	if len(denied) > len(configv1.MandatoryEgressDeniedCIDRs()) {
+		// Envoy rejects changed settings for an existing cache name. Canonical
+		// CIDRs identify the configuration without retaining stale allowed entries.
+		config.Name += "|" + strings.Join(denied, "|")
+	}
+	// shortcut: Envoy retains superseded caches until restart; revisit for frequent policy churn.
+	for _, cidr := range b.deniedIPRanges() {
 		filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
-			AddressPrefix: prefix.Addr().String(),
-			PrefixLen:     wrapperspb.UInt32(uint32(prefix.Bits())),
+			AddressPrefix: cidr.AddressPrefix,
+			PrefixLen:     cidr.PrefixLen,
 		})
-		if prefix.Addr().Is4() {
-			// EPE unmaps IPv4-in-IPv6 before evaluation. Envoy matches CIDRs
-			// by address family, so include the equivalent mapped IPv6 range.
-			filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
-				AddressPrefix: netip.AddrFrom16(prefix.Addr().As16()).String(),
-				PrefixLen:     wrapperspb.UInt32(uint32(96 + prefix.Bits())),
-			})
-		}
 	}
 	config.ResolvedAddressFilter = filter
 	return config

@@ -27,6 +27,7 @@ import (
 	"istio.io/istio/pkg/util/sets"
 
 	"github.com/openkruise/agentio/pkg/clienttrust"
+	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/networking"
@@ -111,10 +112,15 @@ func newGatewayResources(
 	inputs Inputs,
 	base baseIndexes,
 	globalExtProc krt.Singleton[gatewayGlobalExtProc],
+	configurations krt.Singleton[configuration],
 	gateways krt.Collection[model.Gateway],
 	failures *failureRecorder,
 	options collectionOptions,
 ) krt.Collection[model.Resource] {
+	authorization := krt.NewCollection(configurations.AsCollection(),
+		func(_ krt.HandlerContext, current configuration) *config.Config[*configv1.EgressAuthorization] {
+			return &config.Config[*configv1.EgressAuthorization]{Value: current.Config.GetEgressAuthorization()}
+		}, options("gateway-egress-authorization")...)
 	extProcs := globalExtProc.AsCollection()
 	// Overrides retain additional processors without depending on the global primary.
 	additionalExtProcs := krt.NewCollection(extProcs,
@@ -161,6 +167,10 @@ func newGatewayResources(
 					krt.FilterIndex(base.telemetryDefaultsByNamespace, inputs.RootNamespace))...)
 			}
 			providerOverride := krt.FetchOne(ctx, providerOverrides)
+			var egressAuthorization *configv1.EgressAuthorization
+			if current := krt.FetchOne(ctx, authorization); current != nil {
+				egressAuthorization = current.Value
+			}
 			var provider *configv1.ExtProcProvider
 			var additional []*configv1.ExtProcProvider
 			if override := item.Config.GetExtProc(); override == nil {
@@ -177,6 +187,7 @@ func newGatewayResources(
 				Gateway:                    item,
 				GlobalExtProc:              provider,
 				AdditionalExtProcs:         additional,
+				EgressAuthorization:        egressAuthorization,
 				DiscoveryAddress:           inputs.DiscoveryAddress,
 				TrustDomain:                inputs.TrustDomain,
 				UpstreamTrustBundle:        trustBundle,
@@ -320,8 +331,9 @@ func gatewayResourcesFor(inputs networking.Inputs) (*compiledGateway, error) {
 	var built []model.Resource
 	var bindings []networking.EndpointBinding
 	for _, legacy := range []bool{true, false} {
-		// Limits require the community module; do not publish an unprotected legacy variant.
-		if legacy && (item.Config.GetBandwidthLimit() != nil || item.Config.GetConnectConcurrencyLimit() != nil) {
+		// Native-only controls must not publish an unprotected legacy variant.
+		if legacy && (item.Config.GetBandwidthLimit() != nil || item.Config.GetConnectConcurrencyLimit() != nil ||
+			len(inputs.EgressAuthorization.GetDeniedCidrs()) > 0) {
 			continue
 		}
 		inputs.LegacyGateway = legacy

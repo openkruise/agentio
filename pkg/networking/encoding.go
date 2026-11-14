@@ -35,6 +35,7 @@ import (
 type resourceBuilder struct {
 	legacyGateway       bool
 	upstreamTrustBundle string
+	egressAuthorization *configv1.EgressAuthorization
 	extensions          []*corev3.TypedExtensionConfig
 	err                 error
 }

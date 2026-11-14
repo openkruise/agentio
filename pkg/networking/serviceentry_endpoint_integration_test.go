@@ -537,7 +537,8 @@ func endpointServiceEntryConfig(
 			Filters: []*listener.Filter{networkFilter("envoy.filters.network.http_connection_manager", b.pack(outer))},
 		}},
 	}
-	cache := dnsCacheConfig(true) // Loopback origins are a harness-only exception to native DFP restrictions.
+	// Loopback origins are a harness-only exception; destination restrictions have separate runtime tests.
+	cache := (&resourceBuilder{legacyGateway: true}).dnsCacheConfig()
 	cache.TypedDnsResolverConfig = typedCoreExtension(
 		"envoy.network.dns_resolver.cares",
 		b.pack(&cares.CaresDnsResolverConfig{
@@ -578,6 +579,9 @@ func endpointServiceEntryConfig(
 					if err := f.GetTypedConfig().UnmarshalTo(manager); err != nil {
 						t.Fatal(err)
 					}
+					manager.HttpFilters = slices.DeleteFunc(manager.HttpFilters, func(filter *hcm.HttpFilter) bool {
+						return filter.Name == "agentio.connect_proxy_authorization"
+					})
 					if rds := manager.GetRds(); rds != nil {
 						manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
 							RouteConfig: b.buildForwardRoute(rds.RouteConfigName, config.gateway),

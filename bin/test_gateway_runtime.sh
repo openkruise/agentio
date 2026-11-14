@@ -48,7 +48,7 @@ docker run --rm --platform linux/amd64 --user 1337:1337 \
   "${module_mount[@]}" \
   -e AGENTIO_TEST_ENVOY_BINARY=/usr/local/bin/envoy \
   "$image" -test.v -test.timeout=90s \
-  -test.run='^(TestEnvoyDirectTCPDeny|TestEnvoyEndpointServiceEntry|TestEnvoyPostTLSForwarding|TestEnvoyStaticSNIOverlap|TestEnvoyTCPPassthroughServerFirst)$'
+  -test.run='^(TestEnvoyDirectTCPDeny|TestEnvoyEndpointServiceEntry|TestEnvoyPostTLSForwarding|TestEnvoyStaticSNIOverlap|TestEnvoyTCPPassthroughServerFirst|TestEnvoyEgressAuthorizationUpdate|TestEnvoyEgressAuthorizationCONNECT)$'
 
 # Exercise production MITM signing and Delta SDS against real Envoy, including
 # an ADS outage that spans X.509 expiry. The large load run remains opt-in.

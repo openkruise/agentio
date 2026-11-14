@@ -114,9 +114,35 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `sandboxExtProc` | `ExtProcProvider` | Unset | Global external-processing provider used by egress gateways unless a gateway supplies an override. |
 | `additionalExtProcs` | `ExtProcProvider[]` | Empty | Ordered processors appended after the effective sandbox provider. Disabled when that provider is absent or explicitly disabled. |
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
+| `egressAuthorization` | `EgressAuthorization` | Built-in destination restrictions | Additional denied destination CIDRs for all native Envoy egress gateways, independently of EPE. |
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from Sandbox workload metadata to reduce configuration size. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
 | `trustedEPEIdentities` | `string[]` | Empty; Helm adds the managed EPE identity | Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy discovery. Empty disables EPE access. |
+
+## Egress authorization
+
+Use `egressAuthorization.deniedCIDRs` to prevent native gateways from connecting to selected destination networks. Put this fragment in ConfigMap `data.config`, or under `agentiod.config.values` when using Helm:
+
+```yaml
+egressAuthorization:
+  deniedCIDRs:
+    - 100.100.100.200/32
+    - 192.0.2.0/24
+```
+
+This applies to all native gateways, including gateways with EPE disabled. TCP and HTTP forwarding check the destination selected for the actual upstream connection, including ServiceEntry and EPE-selected targets. The outer TCP CONNECT tunnel does not reject its original destination before target selection; an allowed final target can differ from the original address. A matching `tcpPassthrough` entry or an EPE allow decision cannot override a denial of the final target. Plaintext application-level CONNECT uses `ORIGINAL_DST` with an HTTP RBAC check of the actual proxy IP before forwarding; HTTPS proxy connections use DFP with outer-SNI target selection. Destinations reached by the external proxy are outside this check. Internal connections to Porter, EPE, and the control plane are excluded.
+
+Loopback (`127.0.0.0/8`, `::1/128`), unspecified (`0.0.0.0/32`, `::/128`), and link-local (`169.254.0.0/16`, `fe80::/10`) destinations are always denied, including equivalent IPv4-mapped IPv6 addresses. This also applies to original TCP traffic that does not use DNS. Private service networks remain allowed unless listed. The Alibaba Cloud metadata address `100.100.100.200` requires an explicit entry, as shown above.
+
+Entries must be IPv4 or IPv6 CIDRs; use `/32` or `/128` for one address. Hostnames, bare IPs, scoped IPv6 addresses, and IPv4-mapped IPv6 CIDRs are invalid. An omitted or null block inherits the lower layer; a supplied block replaces inherited user entries. `egressAuthorization: {deniedCIDRs: []}` clears user entries while retaining built-ins. Invalid updates retain the last valid AgentioConfig.
+
+Custom EnvoyFilter patches must preserve the destination checks, including the HTTP RBAC filter for plaintext application-level CONNECT.
+
+Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. A changed effective list uses a separate DNS cache so previously cached targets cannot bypass the new list. Superseded caches remain allocated until Envoy restarts; restart gateways periodically if this list changes frequently.
+
+`EPEConfig.egressAuthorization` remains an independent setting. The gateway rejects a denied address even when EPE explicitly selected it, without trying a different address. Configure the same custom CIDRs in EPE when EPE should exclude them while choosing among DNS candidates, or when EPE is deployed independently. AgentioConfig does not distribute this list to EPE.
+
+Legacy proxyv2 gateways do not support this setting. A nonempty custom list suppresses the legacy gateway resource variant; upgrade gateways to the native image before configuring it. Native gateways always enforce the built-ins. See [destination restrictions](../design/egress-gateway-protocol-and-dfp.md#destination-restrictions) for DNS behavior.
 
 ## Trusted EPE identities
 
@@ -304,7 +330,7 @@ the Gateway API parametersRef configuration.
 
 TCP passthrough selects processing, not permission: Sandbox-side TrafficPolicy,
 CONNECT identity checks, admission limits, TCP timeouts and access logging remain
-in effect. CONNECT-UDP keeps its existing path.
+in effect.
 
 ### HTTP protocol
 
