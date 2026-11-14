@@ -60,6 +60,9 @@ func decodeEgressGateway(content string) (*configv1.EgressGateway, error) {
 	if value.GetName() != "" || value.GetNamespace() != "" {
 		return nil, fmt.Errorf("name and namespace must be omitted; Gateway metadata is authoritative")
 	}
+	if err := model.ValidateDnsCacheSettings(value.GetDnsCache()); err != nil {
+		return nil, err
+	}
 	if err := model.ValidateExtProcServiceRef(value.GetExtProc()); err != nil {
 		return nil, fmt.Errorf("extProc: %w", err)
 	}

@@ -442,7 +442,7 @@ func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !proto.Equal(filter.GetDnsCacheConfig(), cfg.GetDnsCacheConfig()) ||
-		!proto.Equal(cfg.GetDnsCacheConfig(), dnsCacheConfig(false)) {
+		!proto.Equal(cfg.GetDnsCacheConfig(), dnsCacheConfig(false, nil)) {
 		t.Fatal("TLS passthrough must share the complete filtered gateway DNS cache")
 	}
 	proxy := &tcpproxyv3.TcpProxy{}

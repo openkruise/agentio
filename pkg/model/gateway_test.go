@@ -17,8 +17,10 @@ package model
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
@@ -95,6 +97,46 @@ func TestGatewayValidateForUseAllowsExtProcDisable(t *testing.T) {
 			gateway := Gateway{Namespace: "demo", Name: "egress", Config: &configv1.EgressGateway{ExtProc: tc.provider}}
 			if err := gateway.ValidateForUse(); (err != nil) != tc.wantErr {
 				t.Fatalf("ValidateForUse() = %v, want error = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestGatewayDnsCacheValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings *configv1.DnsCacheSettings
+		wantErr  string
+	}{
+		{name: "omitted"},
+		{name: "empty", settings: &configv1.DnsCacheSettings{}},
+		{
+			name: "configured",
+			settings: &configv1.DnsCacheSettings{
+				MaxHosts:           new(uint32(16384)),
+				MaxPendingRequests: new(uint32(4096)),
+				HostTtl:            durationpb.New(5 * time.Minute),
+			},
+		},
+		{name: "zero hosts", settings: &configv1.DnsCacheSettings{MaxHosts: new(uint32)}, wantErr: "dnsCache.maxHosts"},
+		{name: "zero pending", settings: &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32)}, wantErr: "dnsCache.maxPendingRequests"},
+		{name: "zero TTL", settings: &configv1.DnsCacheSettings{HostTtl: durationpb.New(0)}, wantErr: "dnsCache.hostTtl"},
+		{name: "negative TTL", settings: &configv1.DnsCacheSettings{HostTtl: durationpb.New(-time.Second)}, wantErr: "dnsCache.hostTtl"},
+		{name: "invalid TTL", settings: &configv1.DnsCacheSettings{HostTtl: &durationpb.Duration{Nanos: 1000000000}}, wantErr: "dnsCache.hostTtl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := Gateway{
+				Namespace: "demo",
+				Name:      "egress",
+				Config:    &configv1.EgressGateway{DnsCache: tc.settings},
+			}
+			err := gateway.ValidateForUse()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("ValidateForUse() = %v, want %s", err, tc.wantErr)
 			}
 		})
 	}

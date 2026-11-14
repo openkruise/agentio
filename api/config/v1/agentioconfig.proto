@@ -126,6 +126,11 @@ message EgressGateway {
   // dimension matches any value. Empty entries match every TCP connection.
   // Existing transport access controls and CONNECT admission limits still apply.
   repeated TcpPassthroughMatch tcp_passthrough = 14;
+
+  // Dynamic forward proxy DNS cache settings, shared by all Sandbox traffic
+  // and DFP consumers in each gateway process. Omitted fields use Agentio defaults.
+  // Changes require a rolling restart of gateway Pods.
+  DnsCacheSettings dns_cache = 15;
 }
 
 // Configures the gateway's upstream CA union, independently of client trust.
@@ -534,4 +539,19 @@ message TcpPassthroughMatch {
   repeated string cidrs = 1;
   // Original destination ports in the range 1-65535.
   repeated uint32 ports = 2;
+}
+
+// DnsCacheSettings sizes the dynamic forward proxy DNS cache per gateway process.
+message DnsCacheSettings {
+  // Maximum cached host:port pairs per gateway process. Defaults to 16384;
+  // must be positive when set.
+  optional uint32 max_hosts = 1;
+
+  // Maximum requests waiting for DNS resolution, including requests for the
+  // same host. Defaults to 4096; must be positive when set.
+  optional uint32 max_pending_requests = 2;
+
+  // Idle lifetime of cached hosts, independent of DNS record TTL.
+  // Defaults to 120s; must be a positive duration when set.
+  google.protobuf.Duration host_ttl = 3;
 }
