@@ -73,7 +73,7 @@ func TestLoadCountsUnexpectedResponses(t *testing.T) {
 	old := os.Stdout
 	os.Stdout = output
 	defer func() { os.Stdout = old }()
-	err = run(listener.Addr().String(), "ns", "Kubernetes", "/block", 453, 2, load.Config{
+	err = run(listener.Addr().String(), "ns", "Kubernetes", "/block", 453, 2, false, load.Config{
 		Requests:    8,
 		Identities:  2,
 		Concurrency: 4,
@@ -97,5 +97,69 @@ func TestLoadCountsUnexpectedResponses(t *testing.T) {
 	if result.Operations != 8 || result.Errors != 4 || result.Connections != 2 || result.Responses["http_453"] != 4 ||
 		result.Responses["http_503"] != 4 {
 		t.Fatalf("incorrect error accounting: %+v", result)
+	}
+}
+
+type sandboxFixture struct {
+	extproc.UnimplementedExternalProcessorServer
+	received chan *extproc.ProcessingRequest
+}
+
+func (s sandboxFixture) Process(stream extproc.ExternalProcessor_ProcessServer) error {
+	request, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	s.received <- request
+	return stream.Send(
+		&extproc.ProcessingResponse{
+			Response: &extproc.ProcessingResponse_ImmediateResponse{
+				ImmediateResponse: &extproc.ImmediateResponse{Status: &typev3.HttpStatus{Code: typev3.StatusCode(451)}},
+			},
+		},
+	)
+}
+func TestSandboxInventoryCrossesNamespaceBoundary(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan *extproc.ProcessingRequest, 2)
+	server := grpc.NewServer()
+	extproc.RegisterExternalProcessorServer(server, sandboxFixture{received: received})
+	go func() {
+		if err := server.Serve(listener); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer server.Stop()
+	if err := run(
+		listener.Addr().String(),
+		"fixture",
+		"Kubernetes",
+		"/deny",
+		451,
+		1,
+		true,
+		load.Config{Requests: 2, Identities: 2, Offset: 999, Concurrency: 1, Duration: time.Second},
+	); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"Kubernetes//Pod/fixture-000/sandbox-000999": "kruise:sandbox-000999",
+		"Kubernetes//Pod/fixture-001/sandbox-001000": "kruise:sandbox-001000",
+	}
+	for range 2 {
+		request := <-received
+		fields := request.Attributes["envoy.filters.http.ext_proc"].Fields
+		uid := fields["filter_state['agentio.workload.uid']"].GetStringValue()
+		sandbox := fields["filter_state['agentio.sandbox.id']"].GetStringValue()
+		if expected, ok := want[uid]; !ok || sandbox != expected {
+			t.Fatalf("wrong workload or Sandbox identity: %q %q", uid, sandbox)
+		}
+		delete(want, uid)
+	}
+	if len(want) != 0 {
+		t.Fatal("missing identities", want)
 	}
 }

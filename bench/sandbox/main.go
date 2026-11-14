@@ -58,14 +58,16 @@ type options struct {
 	VirtualNodeCount int
 	ReuseConnections bool
 	Acknowledge      bool
+	SandboxPrepare   bool
 	ReadDelay        time.Duration
 	Duration         time.Duration
 }
 
 type runner struct {
 	options
-	kube    kubernetes.Interface
-	dynamic dynamic.Interface
+	kube        kubernetes.Interface
+	dynamic     dynamic.Interface
+	preparation *prepareController
 }
 
 func main() {
@@ -81,7 +83,7 @@ func parseOptions() options {
 		&o.Action,
 		"action",
 		"seed",
-		"seed, labels, recreate, delete, configure, traffic-policy, policy, lifecycle, watch, traffic, or backend",
+		"seed, labels, recreate, delete, configure, traffic-policy, policy, lifecycle, watch, watch-sidecar, prepare-rpc, traffic, or backend",
 	)
 	flag.StringVar(&o.Kubeconfig, "kubeconfig", "", "explicit test kubeconfig")
 	flag.StringVar(&o.Prefix, "prefix", "sandbox-scale", "owned namespace and node prefix")
@@ -109,6 +111,12 @@ func parseOptions() options {
 	)
 	flag.BoolVar(&o.ReuseConnections, "reuse-connections", false, "reuse HTTP/2 connections per traffic identity")
 	flag.BoolVar(&o.Acknowledge, "ack", true, "acknowledge ADS responses; false simulates a non-ACKing client")
+	flag.BoolVar(
+		&o.SandboxPrepare,
+		"sandbox-prepare",
+		false,
+		"simulate SandboxManager preparation over persistent named ADS; control HTTP :8081",
+	)
 	flag.DurationVar(&o.ReadDelay, "read-delay", 0, "delay the first ADS receive to simulate a slow receiver")
 	flag.DurationVar(&o.Duration, "duration", 3*time.Minute, "traffic deadline")
 	flag.StringVar(&o.StartFile, "start-file", "", "wait for this shared file after certificate preparation")
@@ -230,6 +238,8 @@ func (r *runner) execute(ctx context.Context) (any, error) {
 		result, err = r.policy(ctx)
 	case "lifecycle":
 		result, err = r.lifecycle(ctx)
+	case "prepare-rpc":
+		result, err = r.prepareRPC(ctx)
 	case "watch", "watch-sidecar":
 		result, err = r.watch(ctx)
 	case "traffic":

@@ -55,3 +55,5 @@ For the larger matrix, `seed.py --count 100000 --labels 20` creates 100,000
 actual Kubernetes Pod objects, each with 20 generated labels plus the selector
 label. Their IPs span multiple /24 networks. They remain inventory objects;
 there are no 100,000 business processes.
+
+To reuse the `bench/sandbox` inventory, pass `--sandbox-inventory --namespace=sandbox-scale`. The client uses `sandbox-NNNNNN` Pod names, groups namespaces in batches of 1,000, and supplies the matching explicit `kruise:` Sandbox identity. `--offset` and `--identities` select a disjoint shard. Keep expected policy status, warm/cold cache state, QPS and gRPC connection count explicit when comparing runs.
