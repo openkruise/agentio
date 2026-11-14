@@ -21,7 +21,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -58,8 +57,7 @@ func loadConfig(args []string, output io.Writer) (*config.Config, error) {
 		}
 	})
 	if value, ok := os.LookupEnv("INVALID_DROP"); ok {
-		// Preserve the legacy alias behavior: malformed values override with false.
-		cfg.DropInvalid, _ = strconv.ParseBool(value)
+		_ = fs.Set(constants.DropInvalid, value)
 	}
 	if len(args) > 0 && args[0] == "proxy-init" {
 		args = args[1:]
