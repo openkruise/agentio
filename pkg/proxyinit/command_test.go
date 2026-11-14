@@ -66,6 +66,7 @@ func TestRejectInvalidConfiguration(t *testing.T) {
 		{"--native-nftables-output-priority=-101"},
 		{"--envoy-port=18001"},
 		{"--agentio-service-cidr=*"},
+		{"--drop-invalid=invalid"},
 	} {
 		if _, err := loadConfig(args, io.Discard); err == nil {
 			t.Fatalf("accepted %v", args)
@@ -154,6 +155,8 @@ func TestDropInvalidPrecedence(t *testing.T) {
 		{"alias overrides environment", "false", nil, false},
 		{"CLI overrides alias", "false", []string{"--drop-invalid=true"}, true},
 		{"invalid alias matches upstream parsing", "invalid", nil, false},
+		{"empty alias matches upstream parsing", "", nil, false},
+		{"CLI overrides invalid alias", "invalid", []string{"--drop-invalid=true"}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("AGENTIO_DROP_INVALID", "true")
