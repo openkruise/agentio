@@ -128,7 +128,7 @@ message EgressGateway {
   repeated TcpPassthroughMatch tcp_passthrough = 14;
 
   // Dynamic forward proxy DNS cache settings, shared by all Sandbox traffic
-  // and DFP consumers in each gateway process. Omitted fields use Envoy defaults.
+  // and DFP consumers in each gateway process. Omitted fields use Agentio defaults.
   // Changes require a rolling restart of gateway Pods.
   DnsCacheSettings dns_cache = 15;
 }
@@ -543,12 +543,12 @@ message TcpPassthroughMatch {
 
 // DnsCacheSettings sizes the dynamic forward proxy DNS cache per gateway process.
 message DnsCacheSettings {
-  // Maximum cached host:port pairs per gateway process. Defaults to 1024;
+  // Maximum cached host:port pairs per gateway process. Defaults to 16384;
   // must be positive when set.
   optional uint32 max_hosts = 1;
 
   // Maximum requests waiting for DNS resolution, including requests for the
-  // same host. Defaults to 1024; must be positive when set.
+  // same host. Defaults to 4096; must be positive when set.
   optional uint32 max_pending_requests = 2;
 
   // Idle lifetime of cached hosts, independent of DNS record TTL.

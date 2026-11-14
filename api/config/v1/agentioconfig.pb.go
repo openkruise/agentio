@@ -351,7 +351,7 @@ type EgressGateway struct {
 	// Existing transport access controls and CONNECT admission limits still apply.
 	TcpPassthrough []*TcpPassthroughMatch `protobuf:"bytes,14,rep,name=tcp_passthrough,json=tcpPassthrough,proto3" json:"tcp_passthrough,omitempty"`
 	// Dynamic forward proxy DNS cache settings, shared by all Sandbox traffic
-	// and DFP consumers in each gateway process. Omitted fields use Envoy defaults.
+	// and DFP consumers in each gateway process. Omitted fields use Agentio defaults.
 	// Changes require a rolling restart of gateway Pods.
 	DnsCache      *DnsCacheSettings `protobuf:"bytes,15,opt,name=dns_cache,json=dnsCache,proto3" json:"dns_cache,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2623,11 +2623,11 @@ func (x *TcpPassthroughMatch) GetPorts() []uint32 {
 // DnsCacheSettings sizes the dynamic forward proxy DNS cache per gateway process.
 type DnsCacheSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Maximum cached host:port pairs per gateway process. Defaults to 1024;
+	// Maximum cached host:port pairs per gateway process. Defaults to 16384;
 	// must be positive when set.
 	MaxHosts *uint32 `protobuf:"varint,1,opt,name=max_hosts,json=maxHosts,proto3,oneof" json:"max_hosts,omitempty"`
 	// Maximum requests waiting for DNS resolution, including requests for the
-	// same host. Defaults to 1024; must be positive when set.
+	// same host. Defaults to 4096; must be positive when set.
 	MaxPendingRequests *uint32 `protobuf:"varint,2,opt,name=max_pending_requests,json=maxPendingRequests,proto3,oneof" json:"max_pending_requests,omitempty"`
 	// Idle lifetime of cached hosts, independent of DNS record TTL.
 	// Defaults to 300s; must be a positive duration when set.

@@ -262,7 +262,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
 | `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
-| `dnsCache` | `DnsCacheSettings` | Envoy defaults | Shared DFP DNS cache capacity, pending-request budget, and host idle lifetime per gateway process. |
+| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `300s` idle lifetime | Shared DFP DNS cache budgets per gateway process. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
@@ -291,22 +291,29 @@ egressGateways:
 
 | Field | Default when omitted | Description |
 | --- | --- | --- |
-| `maxHosts` | `1024` | Maximum cached distinct `host:port` pairs. Must be positive. |
-| `maxPendingRequests` | `1024` | Maximum requests waiting for DNS resolution, including multiple requests for the same host. Must be positive. |
+| `maxHosts` | `16384` | Maximum cached distinct `host:port` pairs. Must be positive. |
+| `maxPendingRequests` | `4096` | Maximum requests waiting for DNS resolution, including multiple requests for the same host. Must be positive. |
 | `hostTtl` | `300s` | Positive idle lifetime before a cached host is eligible for removal; independent of DNS record TTL. |
 
-Omitting `dnsCache`, using `{}`, or omitting individual fields preserves Envoy's
-defaults. A full cache rejects new uncached targets until entries are removed;
+Omitting `dnsCache`, using `{}`, or omitting individual fields uses the Agentio
+defaults above, including on legacy gateways. These raise Envoy's defaults of
+1024 hosts and 1024 pending requests while retaining the five-minute idle lifetime.
+A full cache rejects new uncached targets until entries are removed;
 increasing `maxHosts` does not increase the independent pending-request budget.
 Size both limits for the targets and burst traffic seen by a single gateway Pod.
-The example values are starting points for capacity testing, not new defaults.
+The limits bound cached destinations and waiting requests; they do not reserve
+that capacity at startup or limit total gateway memory and connections. Monitor
+`dns_cache.agentio_dns_cache.num_hosts`, `host_overflow`, and
+`dns_rq_pending_overflow`, together with Pod memory and DNS load, when sizing a
+gateway for larger workloads.
 See [Envoy DNS cache configuration](https://www.envoyproxy.io/docs/envoy/v1.39.4/api-v3/extensions/common/dynamic_forward_proxy/v3/dns_cache.proto).
 
 Gateway API `parametersRef` ConfigMaps accept the same `dnsCache` block in
 `data.config`, without the `egressGateways` wrapper or embedded gateway name and
 namespace. Invalid updates retain the last valid configuration.
 
-After changing or removing `dnsCache` settings, roll the affected gateway Pods
+When upgrading from the previous implicit Envoy defaults, or after changing or
+removing `dnsCache` settings, roll the affected gateway Pods
 to apply them. Envoy cannot change the settings of an existing named DNS cache
 within a running process; it rejects the updated consumers with
 `config specified DNS cache 'agentio_dns_cache' with different settings` until

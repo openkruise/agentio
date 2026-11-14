@@ -38,23 +38,26 @@ import (
 // gateways without an EPE provider.
 func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 	configured := &configv1.DnsCacheSettings{
-		MaxHosts:           new(uint32(16384)),
-		MaxPendingRequests: new(uint32(4096)),
+		MaxHosts:           new(uint32(8192)),
+		MaxPendingRequests: new(uint32(2048)),
 		HostTtl:            durationpb.New(2 * time.Minute),
 	}
 	for _, tc := range []struct {
 		name     string
 		legacy   bool
 		settings *configv1.DnsCacheSettings
+		hosts    uint32
+		pending  uint32
+		ttl      time.Duration
 	}{
-		{name: "native defaults"},
-		{name: "legacy defaults", legacy: true},
-		{name: "empty settings", settings: &configv1.DnsCacheSettings{}},
-		{name: "native configured", settings: configured},
-		{name: "legacy configured", legacy: true, settings: configured},
-		{name: "capacity only", settings: &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}},
-		{name: "pending only", settings: &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}},
-		{name: "TTL only", settings: &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}},
+		{"native defaults", false, nil, 16384, 4096, 5 * time.Minute},
+		{"legacy defaults", true, nil, 16384, 4096, 5 * time.Minute},
+		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 5 * time.Minute},
+		{"native configured", false, configured, 8192, 2048, 2 * time.Minute},
+		{"legacy configured", true, configured, 8192, 2048, 2 * time.Minute},
+		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 5 * time.Minute},
+		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 5 * time.Minute},
+		{"TTL only", false, &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}, 16384, 4096, time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			legacy := tc.legacy
@@ -128,14 +131,10 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 						t.Fatal("DFP consumers disagree on the shared DNS cache configuration")
 					}
 					pending := cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests()
-					if cache.GetMaxHosts().GetValue() != tc.settings.GetMaxHosts() ||
-						pending.GetValue() != tc.settings.GetMaxPendingRequests() ||
-						!proto.Equal(cache.GetHostTtl(), tc.settings.GetHostTtl()) {
+					if cache.GetMaxHosts().GetValue() != tc.hosts ||
+						pending.GetValue() != tc.pending ||
+						cache.GetHostTtl().AsDuration() != tc.ttl {
 						t.Fatalf("DNS cache settings were not propagated: %v", cache)
-					}
-					if tc.settings.GetMaxHosts() == 0 && cache.GetMaxHosts() != nil ||
-						tc.settings.GetMaxPendingRequests() == 0 && cache.GetDnsCacheCircuitBreaker() != nil {
-						t.Fatal("omitted limits must retain Envoy defaults")
 					}
 					if legacy {
 						if cache.GetResolvedAddressFilter() != nil {

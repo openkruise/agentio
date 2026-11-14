@@ -107,6 +107,11 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
+              "hostTtl": "300s",
+              "maxHosts": 16384,
+              "dnsCacheCircuitBreaker": {
+                "maxPendingRequests": 4096
+              },
               "resolvedAddressFilter": {
                 "ranges": [
                   {
@@ -375,6 +380,11 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
+              "hostTtl": "300s",
+              "maxHosts": 16384,
+              "dnsCacheCircuitBreaker": {
+                "maxPendingRequests": 4096
+              },
               "resolvedAddressFilter": {
                 "ranges": [
                   {
@@ -492,6 +502,11 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
+              "hostTtl": "300s",
+              "maxHosts": 16384,
+              "dnsCacheCircuitBreaker": {
+                "maxPendingRequests": 4096
+              },
               "resolvedAddressFilter": {
                 "ranges": [
                   {
@@ -563,6 +578,11 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
+              "hostTtl": "300s",
+              "maxHosts": 16384,
+              "dnsCacheCircuitBreaker": {
+                "maxPendingRequests": 4096
+              },
               "resolvedAddressFilter": {
                 "ranges": [
                   {
@@ -1654,6 +1674,11 @@
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
                           "dnsLookupFamily": "V4_ONLY",
+                          "hostTtl": "300s",
+                          "maxHosts": 16384,
+                          "dnsCacheCircuitBreaker": {
+                            "maxPendingRequests": 4096
+                          },
                           "resolvedAddressFilter": {
                             "ranges": [
                               {
@@ -1818,6 +1843,11 @@
                   "dnsCacheConfig": {
                     "name": "agentio_dns_cache",
                     "dnsLookupFamily": "V4_ONLY",
+                    "hostTtl": "300s",
+                    "maxHosts": 16384,
+                    "dnsCacheCircuitBreaker": {
+                      "maxPendingRequests": 4096
+                    },
                     "resolvedAddressFilter": {
                       "ranges": [
                         {
@@ -2078,6 +2108,11 @@
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
                           "dnsLookupFamily": "V4_ONLY",
+                          "hostTtl": "300s",
+                          "maxHosts": 16384,
+                          "dnsCacheCircuitBreaker": {
+                            "maxPendingRequests": 4096
+                          },
                           "resolvedAddressFilter": {
                             "ranges": [
                               {
@@ -2263,6 +2298,11 @@
                   "dnsCacheConfig": {
                     "name": "agentio_dns_cache",
                     "dnsLookupFamily": "V4_ONLY",
+                    "hostTtl": "300s",
+                    "maxHosts": 16384,
+                    "dnsCacheCircuitBreaker": {
+                      "maxPendingRequests": 4096
+                    },
                     "resolvedAddressFilter": {
                       "ranges": [
                         {

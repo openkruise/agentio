@@ -292,8 +292,8 @@ func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
 
 	updated := proto.Clone(config).(*configv1.AgentioConfig)
 	updated.EgressGateways[0].DnsCache = &configv1.DnsCacheSettings{
-		MaxHosts:           new(uint32(16384)),
-		MaxPendingRequests: new(uint32(4096)),
+		MaxHosts:           new(uint32(8192)),
+		MaxPendingRequests: new(uint32(2048)),
 		HostTtl:            durationpb.New(2 * time.Minute),
 	}
 	fixture.agentioConfig.ConditionalUpdateObject(
@@ -313,8 +313,8 @@ func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
 			t.Fatal(err)
 		}
 		cache := cfg.GetDnsCacheConfig()
-		return cache.GetMaxHosts().GetValue() == 16384 &&
-			cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests().GetValue() == 4096 &&
+		return cache.GetMaxHosts().GetValue() == 8192 &&
+			cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests().GetValue() == 2048 &&
 			cache.GetHostTtl().AsDuration() == 2*time.Minute
 	}, "DNS cache update to publish the gateway's new limits")
 	customA := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
@@ -337,7 +337,7 @@ func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
 	testutil.Eventually(t, func() bool {
 		_, failed := fixture.compiler.Failures()["Gateway/demo/egress-a"]
 		return !failed && maps.Equal(beforeA, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a"))
-	}, "removing DNS cache overrides to restore Envoy defaults")
+	}, "removing DNS cache overrides to restore Agentio defaults")
 	settle()
 	if !maps.Equal(beforeB, gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-b")) {
 		t.Fatal("DNS cache settings changed an unrelated gateway")
