@@ -40,7 +40,7 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 	configured := &configv1.DnsCacheSettings{
 		MaxHosts:           new(uint32(8192)),
 		MaxPendingRequests: new(uint32(2048)),
-		HostTtl:            durationpb.New(2 * time.Minute),
+		HostTtl:            durationpb.New(3 * time.Minute),
 	}
 	for _, tc := range []struct {
 		name     string
@@ -50,13 +50,13 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 		pending  uint32
 		ttl      time.Duration
 	}{
-		{"native defaults", false, nil, 16384, 4096, 5 * time.Minute},
-		{"legacy defaults", true, nil, 16384, 4096, 5 * time.Minute},
-		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 5 * time.Minute},
-		{"native configured", false, configured, 8192, 2048, 2 * time.Minute},
-		{"legacy configured", true, configured, 8192, 2048, 2 * time.Minute},
-		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 5 * time.Minute},
-		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 5 * time.Minute},
+		{"native defaults", false, nil, 16384, 4096, 2 * time.Minute},
+		{"legacy defaults", true, nil, 16384, 4096, 2 * time.Minute},
+		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 2 * time.Minute},
+		{"native configured", false, configured, 8192, 2048, 3 * time.Minute},
+		{"legacy configured", true, configured, 8192, 2048, 3 * time.Minute},
+		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 2 * time.Minute},
+		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 2 * time.Minute},
 		{"TTL only", false, &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}, 16384, 4096, time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

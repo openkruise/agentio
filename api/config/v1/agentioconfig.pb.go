@@ -2630,7 +2630,7 @@ type DnsCacheSettings struct {
 	// same host. Defaults to 4096; must be positive when set.
 	MaxPendingRequests *uint32 `protobuf:"varint,2,opt,name=max_pending_requests,json=maxPendingRequests,proto3,oneof" json:"max_pending_requests,omitempty"`
 	// Idle lifetime of cached hosts, independent of DNS record TTL.
-	// Defaults to 300s; must be a positive duration when set.
+	// Defaults to 120s; must be a positive duration when set.
 	HostTtl       *duration.Duration `protobuf:"bytes,3,opt,name=host_ttl,json=hostTtl,proto3" json:"host_ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

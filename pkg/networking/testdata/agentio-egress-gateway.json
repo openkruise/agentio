@@ -107,7 +107,7 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
-              "hostTtl": "300s",
+              "hostTtl": "120s",
               "maxHosts": 16384,
               "dnsCacheCircuitBreaker": {
                 "maxPendingRequests": 4096
@@ -380,7 +380,7 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
-              "hostTtl": "300s",
+              "hostTtl": "120s",
               "maxHosts": 16384,
               "dnsCacheCircuitBreaker": {
                 "maxPendingRequests": 4096
@@ -502,7 +502,7 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
-              "hostTtl": "300s",
+              "hostTtl": "120s",
               "maxHosts": 16384,
               "dnsCacheCircuitBreaker": {
                 "maxPendingRequests": 4096
@@ -578,7 +578,7 @@
             "dnsCacheConfig": {
               "name": "agentio_dns_cache",
               "dnsLookupFamily": "V4_ONLY",
-              "hostTtl": "300s",
+              "hostTtl": "120s",
               "maxHosts": 16384,
               "dnsCacheCircuitBreaker": {
                 "maxPendingRequests": 4096
@@ -1674,7 +1674,7 @@
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
                           "dnsLookupFamily": "V4_ONLY",
-                          "hostTtl": "300s",
+                          "hostTtl": "120s",
                           "maxHosts": 16384,
                           "dnsCacheCircuitBreaker": {
                             "maxPendingRequests": 4096
@@ -1843,7 +1843,7 @@
                   "dnsCacheConfig": {
                     "name": "agentio_dns_cache",
                     "dnsLookupFamily": "V4_ONLY",
-                    "hostTtl": "300s",
+                    "hostTtl": "120s",
                     "maxHosts": 16384,
                     "dnsCacheCircuitBreaker": {
                       "maxPendingRequests": 4096
@@ -2108,7 +2108,7 @@
                         "dnsCacheConfig": {
                           "name": "agentio_dns_cache",
                           "dnsLookupFamily": "V4_ONLY",
-                          "hostTtl": "300s",
+                          "hostTtl": "120s",
                           "maxHosts": 16384,
                           "dnsCacheCircuitBreaker": {
                             "maxPendingRequests": 4096
@@ -2298,7 +2298,7 @@
                   "dnsCacheConfig": {
                     "name": "agentio_dns_cache",
                     "dnsLookupFamily": "V4_ONLY",
-                    "hostTtl": "300s",
+                    "hostTtl": "120s",
                     "maxHosts": 16384,
                     "dnsCacheCircuitBreaker": {
                       "maxPendingRequests": 4096

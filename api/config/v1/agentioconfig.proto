@@ -552,6 +552,6 @@ message DnsCacheSettings {
   optional uint32 max_pending_requests = 2;
 
   // Idle lifetime of cached hosts, independent of DNS record TTL.
-  // Defaults to 300s; must be a positive duration when set.
+  // Defaults to 120s; must be a positive duration when set.
   google.protobuf.Duration host_ttl = 3;
 }

@@ -363,7 +363,7 @@ func dnsCacheConfig(legacy bool, settings *configv1.DnsCacheSettings) *dfpcommon
 		DnsCacheCircuitBreaker: &dfpcommonv3.DnsCacheCircuitBreakers{
 			MaxPendingRequests: wrapperspb.UInt32(4096),
 		},
-		HostTtl: durationpb.New(5 * time.Minute),
+		HostTtl: durationpb.New(2 * time.Minute),
 	}
 	if settings != nil {
 		if settings.MaxHosts != nil {

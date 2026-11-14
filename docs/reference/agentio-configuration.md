@@ -262,7 +262,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
 | `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
-| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `300s` idle lifetime | Shared DFP DNS cache budgets per gateway process. |
+| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `120s` idle lifetime | Shared DFP DNS cache budgets per gateway process. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
@@ -286,18 +286,23 @@ egressGateways:
   dnsCache:
     maxHosts: 16384
     maxPendingRequests: 4096
-    hostTtl: 300s
+    hostTtl: 120s
 ```
 
 | Field | Default when omitted | Description |
 | --- | --- | --- |
 | `maxHosts` | `16384` | Maximum cached distinct `host:port` pairs. Must be positive. |
 | `maxPendingRequests` | `4096` | Maximum requests waiting for DNS resolution, including multiple requests for the same host. Must be positive. |
-| `hostTtl` | `300s` | Positive idle lifetime before a cached host is eligible for removal; independent of DNS record TTL. |
+| `hostTtl` | `120s` | Positive idle lifetime before a cached host is eligible for removal; independent of DNS record TTL. |
 
 Omitting `dnsCache`, using `{}`, or omitting individual fields uses the Agentio
 defaults above, including on legacy gateways. These raise Envoy's defaults of
-1024 hosts and 1024 pending requests while retaining the five-minute idle lifetime.
+1024 hosts and 1024 pending requests, and shorten the idle lifetime from five
+minutes to two minutes so one-off destinations become eligible for removal sooner.
+Frequently used destinations remain cached as traffic renews their last-used time.
+Shorter idle lifetimes can increase cold DNS lookups when destinations are revisited.
+Envoy checks eligibility on DNS refresh timers, so `hostTtl` is not a strict
+deletion deadline; long DNS record TTLs can delay removal beyond this interval.
 A full cache rejects new uncached targets until entries are removed;
 increasing `maxHosts` does not increase the independent pending-request budget.
 Size both limits for the targets and burst traffic seen by a single gateway Pod.

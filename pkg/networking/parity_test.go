@@ -830,7 +830,7 @@ func readNormalizedGatewayGolden(t *testing.T, path string) map[string]proto.Mes
 		data = bytes.ReplaceAll(data, []byte(`"name": "agentio_dns_cache",`), []byte(`"name": "agentio_dns_cache",
             "max_hosts": 16384,
             "dns_cache_circuit_breaker": {"max_pending_requests": 4096},
-            "host_ttl": "300s",`))
+            "host_ttl": "120s",`))
 	}
 	if err := json.Unmarshal(data, &golden); err != nil {
 		t.Fatalf("decode gateway golden %s: %v", path, err)

@@ -294,7 +294,7 @@ func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
 	updated.EgressGateways[0].DnsCache = &configv1.DnsCacheSettings{
 		MaxHosts:           new(uint32(8192)),
 		MaxPendingRequests: new(uint32(2048)),
-		HostTtl:            durationpb.New(2 * time.Minute),
+		HostTtl:            durationpb.New(3 * time.Minute),
 	}
 	fixture.agentioConfig.ConditionalUpdateObject(
 		model.AgentioConfiguration{ResourceVersion: "custom-cache", Value: updated},
@@ -315,7 +315,7 @@ func TestGatewayDnsCacheUpdateAndReset(t *testing.T) {
 		cache := cfg.GetDnsCacheConfig()
 		return cache.GetMaxHosts().GetValue() == 8192 &&
 			cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests().GetValue() == 2048 &&
-			cache.GetHostTtl().AsDuration() == 2*time.Minute
+			cache.GetHostTtl().AsDuration() == 3*time.Minute
 	}, "DNS cache update to publish the gateway's new limits")
 	customA := gatewayGraphHashes(currentSnapshot(t, fixture.compiler), "demo/egress-a")
 	invalid := proto.Clone(updated).(*configv1.AgentioConfig)
