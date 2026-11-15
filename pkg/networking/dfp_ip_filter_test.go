@@ -15,10 +15,10 @@
 package networking
 
 import (
-	"net/netip"
-	"slices"
 	"testing"
 	"time"
+
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -49,23 +49,32 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 		hosts    uint32
 		pending  uint32
 		ttl      time.Duration
+		custom   bool
 	}{
-		{"native defaults", false, nil, 16384, 4096, 2 * time.Minute},
-		{"legacy defaults", true, nil, 16384, 4096, 2 * time.Minute},
-		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 2 * time.Minute},
-		{"native configured", false, configured, 8192, 2048, 3 * time.Minute},
-		{"legacy configured", true, configured, 8192, 2048, 3 * time.Minute},
-		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 2 * time.Minute},
-		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 2 * time.Minute},
-		{"TTL only", false, &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}, 16384, 4096, time.Minute},
+		{"native defaults", false, nil, 16384, 4096, 2 * time.Minute, false},
+		{"legacy defaults", true, nil, 16384, 4096, 2 * time.Minute, false},
+		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 2 * time.Minute, false},
+		{"native configured", false, configured, 8192, 2048, 3 * time.Minute, false},
+		{"legacy configured", true, configured, 8192, 2048, 3 * time.Minute, false},
+		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 2 * time.Minute, false},
+		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 2 * time.Minute, false},
+		{"TTL only", false, &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}, 16384, 4096, time.Minute, false},
+		{"configured custom restrictions", false, configured, 8192, 2048, 3 * time.Minute, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			legacy := tc.legacy
+			var authorization *configv1.EgressAuthorization
+			if tc.custom {
+				authorization = &configv1.EgressAuthorization{
+					DeniedCidrs: []string{"100.100.100.200/32", "2001:db8::/64"},
+				}
+			}
 			resources, err := Build(Inputs{
-				Gateway:          testGateway(&configv1.EgressGateway{DnsCache: tc.settings}),
-				LegacyGateway:    legacy,
-				DiscoveryAddress: "agentiod:15012",
-				TrustDomain:      "cluster.local",
+				EgressAuthorization: authorization,
+				Gateway:             testGateway(&configv1.EgressGateway{DnsCache: tc.settings}),
+				LegacyGateway:       legacy,
+				DiscoveryAddress:    "agentiod:15012",
+				TrustDomain:         "cluster.local",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -122,6 +131,34 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 					}
 				}
 			}
+			if !legacy {
+				if len(caches) != 0 {
+					t.Fatalf("native gateway still uses DFP: %v", caches)
+				}
+				for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate, TLSProxyOriginate, TLSPassthrough} {
+					if clusters[name].GetType() != clusterv3.Cluster_ORIGINAL_DST {
+						t.Fatalf("%s must use ORIGINAL_DST", name)
+					}
+				}
+				for _, listener := range listeners {
+					for _, chain := range listener.FilterChains {
+						for _, filter := range chain.Filters {
+							if filter.Name != "agentio.tcp_policy" {
+								continue
+							}
+							typed := &udpatypev1.TypedStruct{}
+							if err := filter.GetTypedConfig().UnmarshalTo(typed); err != nil {
+								t.Fatal(err)
+							}
+							dns := typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue().Fields["dns"].GetStructValue()
+							if dns.Fields["max_hosts"].GetNumberValue() != float64(tc.hosts) ||
+								dns.Fields["max_pending_requests"].GetNumberValue() != float64(tc.pending) {
+								t.Fatalf("native DNS limits were not propagated: %v", dns)
+							}
+						}
+					}
+				}
+			}
 			for name, cache := range caches {
 				t.Run(name, func(t *testing.T) {
 					if err := cache.ValidateAll(); err != nil {
@@ -136,37 +173,38 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 						cache.GetHostTtl().AsDuration() != tc.ttl {
 						t.Fatalf("DNS cache settings were not propagated: %v", cache)
 					}
-					if legacy {
-						if cache.GetResolvedAddressFilter() != nil {
-							t.Fatal("legacy gateway received an unsupported DNS cache field")
-						}
-						return
-					}
-					if cache.GetResolvedAddressFilter() == nil {
-						t.Fatal("DFP destination IP filter is missing")
-					}
-					if cache.GetResolvedAddressFilter().GetInvertMatch() {
-						t.Fatal("denied ranges must not be inverted")
-					}
-					var ranges []string
-					for _, cidr := range cache.GetResolvedAddressFilter().GetRanges() {
-						ranges = append(
-							ranges,
-							netip.PrefixFrom(netip.MustParseAddr(cidr.AddressPrefix), int(cidr.PrefixLen.GetValue())).
-								String(),
-						)
-					}
-					want := []string{
-						"127.0.0.0/8", "::1/128", "0.0.0.0/32", "::/128", "169.254.0.0/16", "fe80::/10",
-						"::ffff:127.0.0.0/104", "::ffff:0.0.0.0/128", "::ffff:169.254.0.0/112",
-					}
-					slices.Sort(ranges)
-					slices.Sort(want)
-					if !slices.Equal(ranges, want) {
-						t.Fatalf("denied IP ranges = %v, want %v", ranges, want)
+					if cache.GetResolvedAddressFilter() != nil || cache.GetName() != DNSCacheName {
+						t.Fatal("address authorization must not change the shared DNS cache")
 					}
 				})
 			}
 		})
+	}
+}
+
+func TestEgressAuthorizationCacheIdentity(t *testing.T) {
+	name := func(cidrs ...string) string {
+		return (&resourceBuilder{egressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: cidrs}}).dnsCacheConfig().Name
+	}
+	if name("192.0.2.1/24", "2001:db8::/64") != name("2001:db8::1/64", "192.0.2.0/24", "192.0.2.0/24") {
+		t.Fatal("equivalent restrictions must reuse the cache")
+	}
+	if name("192.0.2.0/24") != name("192.0.3.0/24") || name() != DNSCacheName {
+		t.Fatal("authorization update changed cache identity")
+	}
+	if name("127.0.0.0/8") != name() {
+		t.Fatal("repeating a built-in restriction changes the cache")
+	}
+	for _, tc := range []struct {
+		legacy bool
+		cidr   string
+	}{{false, "invalid"}, {true, "192.0.2.0/24"}} {
+		_, err := Build(Inputs{
+			Gateway:             testGateway(nil),
+			LegacyGateway:       tc.legacy,
+			EgressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: []string{tc.cidr}}})
+		if err == nil {
+			t.Fatalf("accepted unsupported authorization: %+v", tc)
+		}
 	}
 }

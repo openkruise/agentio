@@ -19,11 +19,14 @@ import (
 	"testing"
 
 	xdsmatcher "github.com/cncf/xds/go/xds/type/matcher/v3"
+	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	matching "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	networkstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
+	tcp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
 
@@ -105,7 +108,11 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 					t.Fatal(err)
 				}
 				state := target.OnRequestHeaders[0]
-				if state.GetObjectKey() != model.FilterStateRouteUpstream || !state.ReadOnly ||
+				key := model.FilterStateUpstreamAddress
+				if legacy {
+					key = model.FilterStateRouteUpstream
+				}
+				if state.GetObjectKey() != key || state.ReadOnly != legacy ||
 					state.GetFormatString().GetTextFormatSource().GetInlineString() != "%DOWNSTREAM_LOCAL_ADDRESS%" {
 					t.Fatal("endpoint target must retain the authenticated original IP:port")
 				}
@@ -126,14 +133,52 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 				}
 			}
 			if !legacy {
-				chain := findFilterChain(t, listeners[MainForward], "service-entry|"+ip+"|tcp")
-				state := &networkstate.Config{}
-				if err := chain.Filters[1].GetTypedConfig().UnmarshalTo(state); err != nil {
-					t.Fatal(err)
-				}
-				if state.OnNewConnection[0].GetFormatString().GetTextFormatSource().GetInlineString() !=
-					"%DOWNSTREAM_LOCAL_ADDRESS%" {
-					t.Fatal("post-TLS TCP must preserve the bound endpoint")
+				clusters := messagesOf(
+					t,
+					resources,
+					model.ClusterType,
+					func() *cluster.Cluster { return &cluster.Cluster{} },
+				)
+				for _, tc := range []struct {
+					listener string
+					suffix   string
+					cluster  string
+				}{
+					{MainInternal, "|tls", PassthroughCluster},
+					{MainForward, "|tcp", TLSEndpointOriginate},
+				} {
+					chain := findFilterChain(t, listeners[tc.listener], "service-entry|"+ip+tc.suffix)
+					for _, filter := range chain.Filters {
+						if filter.Name == "envoy.filters.network.sni_dynamic_forward_proxy" {
+							t.Fatal("fixed endpoint must not use DFP")
+						}
+					}
+					proxy := &tcp.TcpProxy{}
+					if err := chain.Filters[len(chain.Filters)-1].GetTypedConfig().UnmarshalTo(proxy); err != nil {
+						t.Fatal(err)
+					}
+					if proxy.GetCluster() != tc.cluster ||
+						clusters[tc.cluster].GetType() != cluster.Cluster_ORIGINAL_DST {
+						t.Fatal("fixed endpoint must use ORIGINAL_DST")
+					}
+					if tc.listener == MainForward {
+						identity := &networkstate.Config{}
+						if err := chain.Filters[0].GetTypedConfig().UnmarshalTo(identity); err != nil {
+							t.Fatal(err)
+						}
+						if len(identity.OnNewConnection) != 2 {
+							t.Fatal("TLS identity must not select a dynamic target")
+						}
+						context := &tls.UpstreamTlsContext{}
+						if err := clusters[tc.cluster].TransportSocket.GetTypedConfig().
+							UnmarshalTo(context); err != nil {
+							t.Fatal(err)
+						}
+						if context.CommonTlsContext.GetValidationContext().GetTrustedCa() == nil ||
+							len(context.CommonTlsContext.AlpnProtocols) != 0 {
+							t.Fatal("endpoint TCP must validate TLS without advertising HTTP")
+						}
+					}
 				}
 			}
 		}

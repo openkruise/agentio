@@ -114,9 +114,35 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `sandboxExtProc` | `ExtProcProvider` | Unset | Global external-processing provider used by egress gateways unless a gateway supplies an override. |
 | `additionalExtProcs` | `ExtProcProvider[]` | Empty | Ordered processors appended after the effective sandbox provider. Disabled when that provider is absent or explicitly disabled. |
 | `egressPolicies` | `EgressPolicy[]` | Empty | Ordered egress routing rules. The first matching policy is applied. |
+| `egressAuthorization` | `EgressAuthorization` | Built-in destination restrictions | Additional denied destination CIDRs for all native Envoy egress gateways, independently of EPE. |
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from Sandbox workload metadata to reduce configuration size. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
 | `trustedEPEIdentities` | `string[]` | Empty; Helm adds the managed EPE identity | Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy discovery. Empty disables EPE access. |
+
+## Egress authorization
+
+Use `egressAuthorization.deniedCIDRs` to prevent native gateways from connecting to selected destination networks. Put this fragment in ConfigMap `data.config`, or under `agentiod.config.values` when using Helm:
+
+```yaml
+egressAuthorization:
+  deniedCIDRs:
+    - 100.100.100.200/32
+    - 192.0.2.0/24
+```
+
+This applies to all native gateways, including gateways with EPE disabled. TCP and HTTP forwarding check the destination selected for the actual upstream connection, including ServiceEntry and EPE-selected targets. The outer TCP CONNECT tunnel does not reject its original destination before target selection; an allowed final target can differ from the original address. A matching `tcpPassthrough` entry or an EPE allow decision cannot override a denial of the final target. Application-level CONNECT checks the actual proxy address in the Rust HTTP module: plaintext uses the original address, and HTTPS resolves the outer SNI unless a ServiceEntry endpoint is fixed. Both forward through `ORIGINAL_DST`. Destinations reached by the external proxy are outside this check. Internal connections to Porter, EPE, and the control plane are excluded.
+
+Loopback (`127.0.0.0/8`, `::1/128`), unspecified (`0.0.0.0/32`, `::/128`), and link-local (`169.254.0.0/16`, `fe80::/10`) destinations are always denied, including equivalent IPv4-mapped IPv6 addresses. This also applies to original TCP traffic that does not use DNS. Private service networks remain allowed unless listed. The Alibaba Cloud metadata address `100.100.100.200` requires an explicit entry, as shown above.
+
+Entries must be IPv4 or IPv6 CIDRs; use `/32` or `/128` for one address. Hostnames, bare IPs, scoped IPv6 addresses, and IPv4-mapped IPv6 CIDRs are invalid. An omitted or null block inherits the lower layer; a supplied block replaces inherited user entries. `egressAuthorization: {deniedCIDRs: []}` clears user entries while retaining built-ins. Invalid updates retain the last valid AgentioConfig.
+
+Custom EnvoyFilter patches must preserve the destination checks, including the HTTP RBAC filter for plaintext application-level CONNECT.
+
+Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. A changed effective list uses a separate DNS cache so previously cached targets cannot bypass the new list. Superseded caches remain allocated until Envoy restarts; restart gateways periodically if this list changes frequently.
+
+`EPEConfig.egressAuthorization` remains an independent setting. The gateway rejects a denied address even when EPE explicitly selected it, without trying a different address. Configure the same custom CIDRs in EPE when EPE should exclude them while choosing among DNS candidates, or when EPE is deployed independently. AgentioConfig does not distribute this list to EPE.
+
+Legacy proxyv2 gateways do not support this setting. A nonempty custom list suppresses the legacy gateway resource variant; upgrade gateways to the native image before configuring it. Native gateways always enforce the built-ins. See [destination restrictions](../design/egress-gateway-protocol-and-dfp.md#destination-restrictions) for DNS behavior.
 
 ## Trusted EPE identities
 
@@ -258,11 +284,11 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `name` | String | Empty | Gateway name and expected ServiceAccount name. |
 | `namespace` | String | Empty | Namespace of the gateway workload. Gateways may run outside `agentio-system`. |
 | `tlsTermination.includeHosts` | `string[]` | Empty | SNI host patterns selected for TLS termination. Wildcards such as `*.example.com` are supported. On-demand certificate issuance is authorized by gateway identity, not by this list. |
-| `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. Wildcards are supported. In static SNI matching, an identical pattern in both lists belongs to `excludeHosts` (case-insensitive); repeated patterns are registered once. Different overlapping patterns retain Envoy's most-specific-match precedence. |
+| `tlsTermination.excludeHosts` | `string[]` | Empty | SNI host patterns forwarded without TLS termination. With native SNI policy enabled, exclusions cannot override a policy denial; an excluded termination checks the complete TCP policy chain. Wildcards are supported. In static SNI matching, an identical pattern in both lists belongs to `excludeHosts` (case-insensitive); repeated patterns are registered once. Different overlapping patterns retain Envoy's most-specific-match precedence. |
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
 | `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
-| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `120s` idle lifetime | Shared DFP DNS cache budgets per gateway process. |
+| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `120s` idle lifetime | Shared DNS cache budgets per gateway process; idle lifetime applies only to legacy DFP. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
@@ -275,9 +301,11 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 
 ### DNS cache
 
-Set `egressGateways[].dnsCache` to size the dynamic forward proxy DNS cache for
-each gateway process. All Sandbox traffic and HTTP, TLS, and SNI DFP consumers
-in that process share the same cache and limits.
+Set `egressGateways[].dnsCache` to size the shared resolver in each gateway process.
+Native HTTP and TCP modules share DNS answers and a pending-request budget across
+listeners and policy updates. Rust selects and authorizes an IP:port, then Envoy's
+`ORIGINAL_DST` cluster connects to it; HTTP Host and TLS identity remain unchanged.
+Legacy proxyv2 gateways continue to use Envoy DFP.
 
 ```yaml
 egressGateways:
@@ -286,43 +314,28 @@ egressGateways:
   dnsCache:
     maxHosts: 16384
     maxPendingRequests: 4096
-    hostTtl: 120s
 ```
 
 | Field | Default when omitted | Description |
 | --- | --- | --- |
-| `maxHosts` | `16384` | Maximum cached distinct `host:port` pairs. Must be positive. |
-| `maxPendingRequests` | `4096` | Maximum requests waiting for DNS resolution, including multiple requests for the same host. Must be positive. |
-| `hostTtl` | `120s` | Positive idle lifetime before a cached host is eligible for removal; independent of DNS record TTL. |
+| `maxHosts` | `16384` | Native: maximum cached DNS records, shared across ports; reaching capacity evicts cache entries. Legacy DFP: maximum cached distinct `host:port` pairs, rejecting new hosts when full. Must be positive. |
+| `maxPendingRequests` | `4096` | Maximum requests waiting for DNS, including multiple requests for the same host. Native HTTP and TCP share this budget; cached answers do not consume it. Must be positive. |
+| `hostTtl` | `120s` | Legacy DFP only: positive idle lifetime before a cached host is eligible for removal. Native gateways ignore this field and expire DNS answers according to record TTL. |
 
-Omitting `dnsCache`, using `{}`, or omitting individual fields uses the Agentio
-defaults above, including on legacy gateways. These raise Envoy's defaults of
-1024 hosts and 1024 pending requests, and shorten the idle lifetime from five
-minutes to two minutes so one-off destinations become eligible for removal sooner.
-Frequently used destinations remain cached as traffic renews their last-used time.
-Shorter idle lifetimes can increase cold DNS lookups when destinations are revisited.
-Envoy checks eligibility on DNS refresh timers, so `hostTtl` is not a strict
-deletion deadline; long DNS record TTLs can delay removal beyond this interval.
-A full cache rejects new uncached targets until entries are removed;
-increasing `maxHosts` does not increase the independent pending-request budget.
-Size both limits for the targets and burst traffic seen by a single gateway Pod.
-The limits bound cached destinations and waiting requests; they do not reserve
-that capacity at startup or limit total gateway memory and connections. Monitor
-`dns_cache.agentio_dns_cache.num_hosts`, `host_overflow`, and
-`dns_rq_pending_overflow`, together with Pod memory and DNS load, when sizing a
-gateway for larger workloads.
-See [Envoy DNS cache configuration](https://www.envoyproxy.io/docs/envoy/v1.39.4/api-v3/extensions/common/dynamic_forward_proxy/v3/dns_cache.proto).
+Omitting `dnsCache`, using `{}`, or omitting individual fields uses these defaults.
+Native DNS is IPv4-only for hostname lookups; explicit numeric targets support both
+IP families. DNS cache capacity does not limit Envoy's upstream connection pools or
+`ORIGINAL_DST` host map. Envoy reclaims unused original-destination hosts separately.
+Monitor gateway memory, DNS load, errors and upstream connections when sizing it.
 
-Gateway API `parametersRef` ConfigMaps accept the same `dnsCache` block in
-`data.config`, without the `egressGateways` wrapper or embedded gateway name and
-namespace. Invalid updates retain the last valid configuration.
+Gateway API `parametersRef` ConfigMaps accept the same block in `data.config`,
+without the `egressGateways` wrapper or gateway name and namespace.
 
-When upgrading from the previous implicit Envoy defaults, or after changing or
-removing `dnsCache` settings, roll the affected gateway Pods
-to apply them. Envoy cannot change the settings of an existing named DNS cache
-within a running process; it rejects the updated consumers with
-`config specified DNS cache 'agentio_dns_cache' with different settings` until
-the process restarts. A restart also starts with a cold DNS cache.
+Roll affected gateway Pods when changing DNS capacity, pending limits or resolver
+configuration. Both the native shared resolver and legacy named DFP cache reject
+incompatible settings within a running process. Changing `deniedCIDRs` requires
+no resolver replacement or restart: each request checks cached answers against its
+accepted policy snapshot. Existing TCP connections retain their original policy.
 
 ### TCP passthrough
 
@@ -356,7 +369,7 @@ the Gateway API parametersRef configuration.
 
 TCP passthrough selects processing, not permission: Sandbox-side TrafficPolicy,
 CONNECT identity checks, admission limits, TCP timeouts and access logging remain
-in effect. CONNECT-UDP keeps its existing path.
+in effect.
 
 ### HTTP protocol
 

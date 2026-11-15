@@ -22,6 +22,7 @@ import (
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	setstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
@@ -168,5 +169,53 @@ func TestStaticSNIOverlapExcludesWin(t *testing.T) {
 	}
 	if !proto.Equal(config, before) {
 		t.Fatal("input configuration mutated")
+	}
+}
+
+func TestNativeSNIExclusionsOnlyOverrideTermination(t *testing.T) {
+	resources := buildGatewayGraph(t, false)
+	listeners := messagesOf(
+		t,
+		resources,
+		model.ListenerType,
+		func() *listenerv3.Listener { return &listenerv3.Listener{} },
+	)
+	internal := listeners[MainInternal]
+	module := &udpatypev1.TypedStruct{}
+	if err := internal.ListenerFilters[len(internal.ListenerFilters)-1].GetTypedConfig().
+		UnmarshalTo(module); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := module.Value.Fields["filter_config"]; found {
+		t.Fatal("SNI policy module must not receive gateway exclusions")
+	}
+	decision := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()["tls"].GetMatcher()
+	input := &matchinginputv3.FilterStateInput{}
+	if err := decision.GetMatcherTree().GetInput().GetTypedConfig().UnmarshalTo(input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Key != tlsActionKey {
+		t.Fatal("routing must consume the policy decision")
+	}
+	actions := decision.GetMatcherTree().GetExactMatchMap().GetMap()
+	for action, chain := range map[string]string{
+		"deny":        sniDenyChain,
+		"passthrough": forwardTLSChain,
+		"fallthrough": forwardTCPChain,
+	} {
+		if actions[action].GetAction().GetName() != chain {
+			t.Fatalf("%s must select %s without consulting exclusions", action, chain)
+		}
+	}
+	exclusions := actions["terminate"].GetMatcher()
+	domains := &xdsmatcherv3.ServerNameMatcher{}
+	if err := exclusions.GetMatcherTree().GetCustomMatch().GetTypedConfig().UnmarshalTo(domains); err != nil {
+		t.Fatal(err)
+	}
+	if len(domains.DomainMatchers) != 1 ||
+		!reflect.DeepEqual(domains.DomainMatchers[0].Domains, []string{"legacy.example.com", "legacy.example.com."}) ||
+		domains.DomainMatchers[0].OnMatch.GetAction().GetName() != forwardTLSChain ||
+		exclusions.OnNoMatch.GetAction().GetName() != tlsTerminateChain {
+		t.Fatal("only excluded termination may switch to TLS passthrough")
 	}
 }

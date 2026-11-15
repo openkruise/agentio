@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod connection;
+mod destination;
 mod dns;
+mod egress_http;
 mod http;
 mod network;
 mod policy;
@@ -73,10 +75,10 @@ fn decide(envoy: &mut impl EnvoyListenerFilter) -> Result<Action, &'static str> 
         Err(_) => return Err("sni_invalid"),
     };
     let (action, start) = policy.evaluate_sni(name, target)?;
-    if let Some(start) = start {
+    if let Some(start) = start.filter(|_| action == Action::Passthrough) {
         let start = start.to_owned();
-        if !envoy.set_filter_state_bytes(connection::START_KEY, start.as_bytes()) {
-            return Err("policy_continuation_write_failed");
+        if !envoy.set_filter_state_bytes(connection::TCP_END_BEFORE_KEY, start.as_bytes()) {
+            return Err("tcp_policy_range_write_failed");
         }
     }
     Ok(action)
@@ -109,7 +111,7 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for Filter {
     }
 }
 
-declare_all_init_functions!(init, http: http::new_config, listener: new_config, network: network::new_config);
+declare_all_init_functions!(init, http: http::new_config, http_per_route: egress_http::new_route_config, listener: new_config, network: network::new_config);
 
 fn init() -> bool {
     true
@@ -159,10 +161,6 @@ mod tests {
                     .as_ref()
                     .map(|(_, hash)| EnvoyBuffer::new(hash.as_bytes()))
             });
-        envoy
-            .expect_set_filter_state_bytes()
-            .withf(|key, value| key == connection::START_KEY && value == b"profile")
-            .return_const(true);
         envoy
             .expect_get_requested_server_name()
             .returning(move || sni.map(EnvoyBuffer::new));
@@ -234,6 +232,66 @@ mod tests {
             assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
             // Data callbacks never reread policy or rewrite the action.
             assert_eq!(Filter.on_data(&mut envoy, 10), Status::Continue);
+        }
+    }
+
+    #[test]
+    fn only_explicit_passthrough_restricts_tcp_scope() {
+        const PASS: &[u8] = br#"{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_PASSTHROUGH"}]}}]}"#;
+        const DENY: &[u8] = br#"{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_DENY"}]}}]}"#;
+        const TCP_DENY: &[u8] = br#"{"profiles":[{"uid":"first","tcpPolicy":{"rules":[{"name":"deny","match":[{}],"action":"TCP_ACTION_DENY"}]}},{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_TLS_TERMINATION"}]}}]}"#;
+        for (policy, host, action, restricted) in [
+            (
+                Some(POLICY),
+                b"API.EXAMPLE.COM.".as_slice(),
+                Action::Terminate,
+                false,
+            ),
+            (
+                Some(PASS),
+                b"api.example.com".as_slice(),
+                Action::Passthrough,
+                true,
+            ),
+            (
+                Some(DENY),
+                b"api.example.com".as_slice(),
+                Action::Deny,
+                false,
+            ),
+            (
+                Some(TCP_DENY),
+                b"api.example.com".as_slice(),
+                Action::Deny,
+                false,
+            ),
+            (
+                Some(POLICY),
+                b"other.test".as_slice(),
+                Action::Fallthrough,
+                false,
+            ),
+            (None, b"api.example.com".as_slice(), Action::Deny, false),
+        ] {
+            let mut envoy = tls_filter(policy, Some(host));
+            envoy
+                .expect_set_filter_state_bytes()
+                .withf(|k, v| k == connection::TCP_END_BEFORE_KEY && v == b"profile")
+                .times(usize::from(restricted))
+                .return_const(true);
+            if action == Action::Deny {
+                envoy
+                    .expect_set_filter_state_bytes()
+                    .withf(|k, _| k == DENIAL_REASON_KEY)
+                    .times(1)
+                    .return_const(true);
+            }
+            envoy
+                .expect_set_filter_state_bytes()
+                .withf(move |k, v| k == ACTION_KEY && v == action.as_bytes())
+                .times(1)
+                .return_const(true);
+            assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
         }
     }
 
@@ -370,5 +428,13 @@ mod tests {
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, FILTER_NAME, b"").is_some());
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, "typo", b"").is_none());
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, FILTER_NAME, b"{}").is_none());
+        assert!(
+            new_config::<_, MockEnvoyListenerFilter>(
+                &mut envoy,
+                FILTER_NAME,
+                br#"{"exclude_hosts":["*"]}"#
+            )
+            .is_none()
+        );
     }
 }

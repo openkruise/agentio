@@ -70,6 +70,37 @@ impl SharedPolicy {
     }
 }
 
+// A connection borrows a prefix of its immutable snapshot without copying profiles.
+pub struct TcpPolicyView {
+    shared: SharedPolicy,
+    end: usize,
+}
+
+impl SharedPolicy {
+    pub fn tcp_view(self, end_before: Option<&[u8]>) -> Result<TcpPolicyView, String> {
+        let policy = self.policy().map_err(str::to_owned)?;
+        let end = match end_before {
+            Some(uid) => {
+                let uid = std::str::from_utf8(uid).map_err(|_| "invalid TCP policy range")?;
+                policy
+                    .start(uid)
+                    .map_err(|_| "TCP policy range is unavailable")?
+            }
+            None => policy.profiles.len(),
+        };
+        Ok(TcpPolicyView { shared: self, end })
+    }
+}
+
+impl TcpPolicyView {
+    pub fn permits(&self, target: std::net::SocketAddr) -> bool {
+        self.shared
+            .policy()
+            .expect("validated TCP policy view")
+            .permits(target, self.end)
+    }
+}
+
 impl Drop for SharedPolicy {
     fn drop(&mut self) {
         // The final consumer and the table are the only remaining owners.
@@ -140,6 +171,24 @@ mod tests {
         assert!(SharedPolicy::insert(1, b"different").is_err());
         let found = SharedPolicy::lookup(b"1").unwrap();
         assert!(Rc::ptr_eq(&old.0, &found.0));
+    }
+
+    #[test]
+    fn tcp_views_retain_the_snapshot_and_validate_their_range() {
+        let owner = SharedPolicy::intern(br#"{"profiles":[{"uid":"first"},{"uid":"matched","tcpPolicy":{"rules":[{"name":"deny","match":[{}],"action":"TCP_ACTION_DENY"}]}}]}"#).unwrap();
+        let hash = owner.hash().to_string();
+        let prefix = owner.clone().tcp_view(Some(b"matched")).unwrap();
+        let full = owner.clone().tcp_view(None).unwrap();
+        assert!(owner.clone().tcp_view(Some(b"missing")).is_err());
+        assert!(owner.clone().tcp_view(Some(b"\xff")).is_err());
+        drop(owner);
+        let target = "203.0.113.8:443".parse().unwrap();
+        assert!(prefix.permits(target));
+        assert!(!full.permits(target));
+        drop(full);
+        assert!(SharedPolicy::lookup(hash.as_bytes()).is_some());
+        drop(prefix);
+        assert!(SharedPolicy::lookup(hash.as_bytes()).is_none());
     }
 
     #[test]

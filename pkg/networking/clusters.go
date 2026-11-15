@@ -17,11 +17,9 @@ package networking
 import (
 	"fmt"
 	"math"
-	"net/netip"
 	"slices"
 	"time"
 
-	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -55,17 +53,23 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildInternalCluster(MainInternal),
 		b.buildInternalCluster(MainForward),
 		b.buildPassthroughCluster(),
-		b.buildDFPCluster(HTTPDynamicForwardProxy, true, false, nil),
-		b.buildDFPCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
-		b.buildTLSProxyOriginateCluster(config.gateway.GetTls().GetOrigination()),
+		b.buildForwardCluster(HTTPDynamicForwardProxy, true, false, nil),
+		b.buildForwardCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
+		b.buildTLSOriginateCluster(TLSProxyOriginate, config.gateway.GetTls().GetOrigination()),
 	}
 	if len(config.gateway.GetTcpPassthrough()) > 0 {
 		result = append(result, b.buildInternalCluster(TCPPassthrough))
 	}
 	if !b.legacyGateway {
-		passthrough := b.buildDFPCluster(TLSPassthrough, true, false, nil)
+		passthrough := b.buildForwardCluster(TLSPassthrough, true, false, nil)
 		passthrough.TypedExtensionProtocolOptions = nil
 		result = append(result, passthrough)
+		if len(config.gateway.GetServiceEntries()) > 0 {
+			result = append(
+				result,
+				b.buildTLSOriginateCluster(TLSEndpointOriginate, config.gateway.GetTls().GetOrigination()),
+			)
+		}
 		cluster := b.buildExtProcCluster(&configv1.ExtProcProvider{Service: "127.0.0.1", Port: 9002}, PorterCluster)
 		cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC}
 		result = append(result, cluster)
@@ -75,9 +79,6 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 	}
 	for _, provider := range config.additionalExtProcs {
 		result = append(result, b.buildExtProcCluster(provider, additionalExtProcName(provider)))
-	}
-	if features.EnableUDPProxy {
-		result = append(result, b.buildUDPCluster())
 	}
 	if config.telemetry != nil {
 		names := sets.NewWithLength[string](len(result) + len(config.telemetry.Clusters))
@@ -146,14 +147,14 @@ func (b *resourceBuilder) buildPassthroughCluster() *clusterv3.Cluster {
 
 // Filter state supplies the outer TLS destination and certificate identity for
 // application CONNECT and non-HTTP payloads.
-func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.UpstreamTlsSettings) *clusterv3.Cluster {
+func (b *resourceBuilder) buildTLSOriginateCluster(
+	name string,
+	settings *configv1.UpstreamTlsSettings,
+) *clusterv3.Cluster {
 	cluster := b.buildPassthroughCluster()
-	if !b.legacyGateway {
-		// TLS identity is set explicitly; HTTP auto-SNI would use the inner CONNECT authority.
-		cluster = b.buildDFPCluster(TLSProxyOriginate, true, false, nil)
-	}
-	cluster.Name = TLSProxyOriginate
-	cluster.AltStatName = delimitedStatsPrefix(TLSProxyOriginate)
+
+	cluster.Name = name
+	cluster.AltStatName = delimitedStatsPrefix(name)
 	options := b.pack(&httpupstreamv3.HttpProtocolOptions{
 		CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{IdleTimeout: durationpb.New(upstreamHTTPIdleTimeout)},
 		UpstreamProtocolOptions: &httpupstreamv3.HttpProtocolOptions_AutoConfig{
@@ -164,6 +165,9 @@ func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.Upstr
 		},
 	})
 	cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{httpProtocolOptionsType: options}
+	if name == TLSEndpointOriginate {
+		cluster.TypedExtensionProtocolOptions = nil
+	}
 	// Envoy 1.40+ scopes the default upstream session cache by effective SNI.
 	tlsConfig := b.pack(&tlsv3.UpstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
@@ -183,28 +187,27 @@ func (b *resourceBuilder) buildTLSProxyOriginateCluster(settings *configv1.Upstr
 	return cluster
 }
 
-func (b *resourceBuilder) buildDFPCluster(
+func (b *resourceBuilder) buildForwardCluster(
 	name string,
 	allowInsecure, originateTLS bool,
 	settings *configv1.UpstreamTlsSettings,
 ) *clusterv3.Cluster {
-	typed := b.pack(&dfpclusterv3.ClusterConfig{
-		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway, b.dnsCacheSettings),
-		},
-		AllowInsecureClusterOptions: allowInsecure,
-	})
-	cluster := &clusterv3.Cluster{
-		Name:            name,
-		AltStatName:     delimitedStatsPrefix(name),
-		ConnectTimeout:  durationpb.New(features.GatewayConnectTimeout),
-		LbPolicy:        clusterv3.Cluster_CLUSTER_PROVIDED,
-		CircuitBreakers: defaultCircuitBreakers(),
-		ClusterDiscoveryType: &clusterv3.Cluster_ClusterType{ClusterType: &clusterv3.Cluster_CustomClusterType{
+	cluster := b.buildPassthroughCluster()
+	cluster.Name = name
+	cluster.AltStatName = delimitedStatsPrefix(name)
+	if b.legacyGateway {
+		typed := b.pack(&dfpclusterv3.ClusterConfig{
+			ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
+				DnsCacheConfig: b.dnsCacheConfig(),
+			},
+			AllowInsecureClusterOptions: allowInsecure,
+		})
+		cluster.ClusterDiscoveryType = &clusterv3.Cluster_ClusterType{ClusterType: &clusterv3.Cluster_CustomClusterType{
 			Name:        "envoy.clusters.dynamic_forward_proxy",
 			TypedConfig: typed,
-		}},
+		}}
 	}
+
 	if !originateTLS {
 		cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
 			httpProtocolOptionsType: b.downstreamHTTPOptions(),
@@ -355,7 +358,7 @@ func (b *resourceBuilder) buildExtProcCluster(provider *configv1.ExtProcProvider
 	return cluster
 }
 
-func dnsCacheConfig(legacy bool, settings *configv1.DnsCacheSettings) *dfpcommonv3.DnsCacheConfig {
+func (b *resourceBuilder) dnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
 	config := &dfpcommonv3.DnsCacheConfig{
 		Name:            DNSCacheName,
 		DnsLookupFamily: clusterv3.Cluster_V4_ONLY,
@@ -365,7 +368,7 @@ func dnsCacheConfig(legacy bool, settings *configv1.DnsCacheSettings) *dfpcommon
 		},
 		HostTtl: durationpb.New(2 * time.Minute),
 	}
-	if settings != nil {
+	if settings := b.dnsCacheSettings; settings != nil {
 		if settings.MaxHosts != nil {
 			config.MaxHosts = wrapperspb.UInt32(settings.GetMaxHosts())
 		}
@@ -378,27 +381,7 @@ func dnsCacheConfig(legacy bool, settings *configv1.DnsCacheSettings) *dfpcommon
 			config.HostTtl = settings.GetHostTtl()
 		}
 	}
-	// Legacy gateways may run an Envoy version without resolved_address_filter support.
-	if legacy {
-		return config
-	}
-	filter := &matcherv3.AddressMatcher{}
-	for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
-		prefix := netip.MustParsePrefix(cidr)
-		filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
-			AddressPrefix: prefix.Addr().String(),
-			PrefixLen:     wrapperspb.UInt32(uint32(prefix.Bits())),
-		})
-		if prefix.Addr().Is4() {
-			// EPE unmaps IPv4-in-IPv6 before evaluation. Envoy matches CIDRs
-			// by address family, so include the equivalent mapped IPv6 range.
-			filter.Ranges = append(filter.Ranges, &xdscorev3.CidrRange{
-				AddressPrefix: netip.AddrFrom16(prefix.Addr().As16()).String(),
-				PrefixLen:     wrapperspb.UInt32(uint32(96 + prefix.Bits())),
-			})
-		}
-	}
-	config.ResolvedAddressFilter = filter
+
 	return config
 }
 

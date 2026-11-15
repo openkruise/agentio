@@ -730,27 +730,6 @@ async fn omitted_hbone_id_preserves_inline_tcp_and_sni_profiles() {
                     }),
                 )])
             );
-            let mut udp = request(id);
-            let headers = &mut udp
-                .request_headers
-                .as_mut()
-                .unwrap()
-                .headers
-                .as_mut()
-                .unwrap()
-                .headers;
-            headers[0].value = "GET".into();
-            headers.push(extproc::HeaderValue {
-                key: "upgrade".into(),
-                value: "connect-udp".into(),
-                ..Default::default()
-            });
-            let udp_metadata = metadata(p.handle(udp).await.unwrap());
-            assert_eq!(
-                udp_metadata.fields["sandbox"],
-                view::object([("id".into(), view::string(SANDBOX))])
-            );
-            assert!(!udp_metadata.fields.contains_key("connection"));
             seed(
                 &p.client,
                 ResourceKind::Sandbox,

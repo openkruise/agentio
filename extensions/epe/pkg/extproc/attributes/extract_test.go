@@ -701,3 +701,33 @@ func TestExtractUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractNativeUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		ip   string
+		port int
+		want string
+	}{
+		{"192.0.2.10", 8443, "192.0.2.10:8443"},
+		{"2001:db8::1", 443, "[2001:db8::1]:443"},
+		{"service.example", 443, ""},
+		{"192.0.2.1", 0, ""},
+		{"192.0.2.1", 65536, ""},
+		{"fe80::1%eth0", 443, ""},
+	} {
+		t.Run(tc.ip, func(t *testing.T) {
+			target, err := ExtractUpstream(
+				makeAttrs(t, map[string]any{FilterStateUpstreamIP: tc.ip, FilterStateUpstreamPort: tc.port}),
+			)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("accepted invalid native target")
+				}
+				return
+			}
+			if err != nil || target == nil || target.Address.String() != tc.want {
+				t.Fatalf("target=%v error=%v", target, err)
+			}
+		})
+	}
+}

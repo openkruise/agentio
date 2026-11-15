@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,19 +144,25 @@ spec:
 					"Namespace": resolvedAgentioConfig.Namespace,
 					"Exclude":   true,
 				}, gatewayConfig)
+				waitForGatewayConfig(t, environment, 200*time.Millisecond, func(dump string) error {
+					var compact bytes.Buffer
+					if err := json.Compact(&compact, []byte(dump)); err != nil {
+						return err
+					}
+					if !strings.Contains(compact.String(), `"domain_matchers":[{"domains":["*"]`) {
+						return fmt.Errorf("gateway has not applied the TLS exclusion")
+					}
+					return nil
+				})
 			}
-			portCheck := check.Error()
-			if excluded {
-				portCheck = check.OK()
-			}
-			// Wait for the actual policy or exclusion to reach the gateway before sending the attack.
+			// Excluding TLS termination must not override the explicit SNI deny on port 9443.
 			src.CallOrFail(t, echo.CallOptions{
 				Protocol:   echo.HTTPS,
 				Address:    dst.Address(),
 				Port:       9443,
 				ServerName: dst.Address(),
 				Count:      1,
-				Check:      portCheck,
+				Check:      check.Error(),
 				Retry:      harness.FixedRetry(2*time.Minute, time.Second),
 			})
 			src.CallOrFail(t, echo.CallOptions{

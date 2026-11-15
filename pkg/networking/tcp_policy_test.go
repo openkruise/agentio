@@ -15,12 +15,14 @@
 package networking
 
 import (
+	"slices"
 	"testing"
 
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	tcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
@@ -28,14 +30,14 @@ func TestTCPPolicyRunsBeforeProxy(t *testing.T) {
 	listeners := messagesOf(t, buildCompleteGatewayGraph(t), model.ListenerType,
 		func() *listenerv3.Listener { return &listenerv3.Listener{} })
 	for _, tc := range []struct {
-		listener   string
-		chain      string
-		cluster    string
-		resolveSNI bool
+		listener string
+		chain    string
+		cluster  string
+		mode     tcpDestinationMode
 	}{
-		{MainInternal, forwardTCPChain, PassthroughCluster, false},
-		{MainInternal, forwardTLSChain, TLSPassthrough, true},
-		{MainForward, forwardTCPChain, TLSProxyOriginate, true},
+		{MainInternal, forwardTCPChain, PassthroughCluster, tcpOriginalDst},
+		{MainInternal, forwardTLSChain, TLSPassthrough, tcpDynamicForward},
+		{MainForward, forwardTCPChain, TLSProxyOriginate, tcpDynamicForward},
 	} {
 		t.Run(tc.listener+"/"+tc.chain, func(t *testing.T) {
 			chain := findFilterChain(t, listeners[tc.listener], tc.chain)
@@ -60,8 +62,15 @@ func TestTCPPolicyRunsBeforeProxy(t *testing.T) {
 				t.Fatalf("TCP policy module path = %q", library)
 			}
 			settings := module.Value.GetFields()["filter_config"].GetStructValue().GetFields()["value"].GetStructValue()
-			if settings.GetFields()["resolveSni"].GetBoolValue() != tc.resolveSNI {
-				t.Fatalf("resolveSni=%v, want %v", settings.GetFields()["resolveSni"], tc.resolveSNI)
+			if settings.GetFields()["mode"].GetStringValue() != string(tc.mode) {
+				t.Fatalf("mode=%v, want %v", settings.GetFields()["mode"], tc.mode)
+			}
+			var denied []string
+			for _, cidr := range settings.GetFields()["denied_cidrs"].GetListValue().GetValues() {
+				denied = append(denied, cidr.GetStringValue())
+			}
+			if !slices.Equal(denied, configv1.MandatoryEgressDeniedCIDRs()) {
+				t.Fatalf("TCP destination restrictions = %v", denied)
 			}
 			proxy := new(tcpv3.TcpProxy)
 			if err := chain.Filters[len(chain.Filters)-1].GetTypedConfig().UnmarshalTo(proxy); err != nil {

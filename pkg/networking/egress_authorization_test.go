@@ -19,9 +19,14 @@ import (
 	"slices"
 	"testing"
 
+	matching "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
+
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
@@ -46,15 +51,23 @@ func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
 				lastWriter := map[string]string{}
 				for _, filter := range h.HttpFilters {
 					cfg := &state.Config{}
-					if !filter.GetTypedConfig().MessageIs(cfg) {
+					typed := filter.GetTypedConfig()
+					if typed.MessageIs(&matching.ExtensionWithMatcher{}) {
+						wrapped := &matching.ExtensionWithMatcher{}
+						if err := typed.UnmarshalTo(wrapped); err != nil {
+							t.Fatal(err)
+						}
+						typed = wrapped.GetExtensionConfig().GetTypedConfig()
+					}
+					if !typed.MessageIs(cfg) {
 						continue
 					}
-					if err := filter.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+					if err := typed.UnmarshalTo(cfg); err != nil {
 						t.Fatal(err)
 					}
 					for _, value := range cfg.OnRequestHeaders {
 						key := value.GetObjectKey()
-						if key != dynamicHostKey && key != dynamicPortKey {
+						if key != dynamicHostKey && key != dynamicPortKey && key != model.FilterStateUpstreamAddress {
 							continue
 						}
 						if previous, exists := writes[key]; exists && (previous || previous != value.ReadOnly) {
@@ -66,16 +79,19 @@ func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
 						writes[key], lastWriter[key] = value.ReadOnly, filter.Name
 					}
 				}
-				if lastWriter[dynamicHostKey] != "agentio.egress_target" ||
-					lastWriter[dynamicPortKey] != "agentio.egress_target" {
+				if legacy && (lastWriter[dynamicHostKey] != "agentio.egress_target" ||
+					lastWriter[dynamicPortKey] != "agentio.egress_target") {
 					t.Fatal("EPE must select the final DFP address")
+				}
+				if !legacy && lastWriter[model.FilterStateUpstreamAddress] != "agentio.egress_target" {
+					t.Fatal("missing native upstream writer")
 				}
 			})
 		}
 	}
 }
 
-func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
+func TestEgressAuthorizationPinsOriginalDstTarget(t *testing.T) {
 	in := Inputs{
 		Gateway: testGateway(
 			&configv1.EgressGateway{
@@ -115,7 +131,11 @@ func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 			}
 			if f.Name == "agentio.egress_target" {
 				cfg := &state.Config{}
-				if err := f.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+				wrapped := &matching.ExtensionWithMatcher{}
+				if err := f.GetTypedConfig().UnmarshalTo(wrapped); err != nil {
+					t.Fatal(err)
+				}
+				if err := wrapped.GetExtensionConfig().GetTypedConfig().UnmarshalTo(cfg); err != nil {
 					t.Fatal(err)
 				}
 				for _, value := range cfg.OnRequestHeaders {
@@ -133,7 +153,8 @@ func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 					cfg.GetProcessingMode().GetRequestHeaderMode() != extproc.ProcessingMode_SKIP {
 					t.Fatal("provider failure and header modes must be preserved")
 				}
-				if !slices.Contains(cfg.RequestAttributes, model.AttributeRouteUpstream) {
+				if !slices.Contains(cfg.RequestAttributes, model.AttributeUpstreamIP) ||
+					!slices.Contains(cfg.RequestAttributes, model.AttributeUpstreamPort) {
 					t.Fatal("route candidate not forwarded")
 				}
 				if !slices.Contains(cfg.GetMetadataOptions().GetReceivingNamespaces().GetUntyped(), "agentio.route") {
@@ -145,46 +166,88 @@ func TestEgressAuthorizationPinsDFPTarget(t *testing.T) {
 			slices.Index(names, "agentio.endpoint_upstream") >= slices.Index(names, "envoy.filters.http.ext_proc") {
 			t.Fatalf("candidate must precede EPE: %v", names)
 		}
-		if slices.Index(names, "agentio.route_upstream") <= slices.Index(names, "envoy.filters.http.ext_proc") ||
-			slices.Index(names, "agentio.route_upstream") >= slices.Index(names, "agentio.egress_target") {
-			t.Fatalf("explicit target consumption must follow EPE and precede authorized override: %v", names)
-		}
+
 		if slices.Index(names, "agentio.egress_target") <= slices.Index(names, "envoy.filters.http.ext_proc") ||
 			slices.Index(
 				names,
 				"agentio.egress_target",
 			) >= slices.Index(
 				names,
-				"envoy.filters.http.dynamic_forward_proxy",
+				"agentio.egress_authorization",
 			) {
 			t.Fatalf("filter order %v", names)
 		}
 	}
 }
 
-func TestRouteUpstreamConsumerWithoutEPEOrServiceEntries(t *testing.T) {
+func TestNativeForwardingWithoutEPEOrServiceEntries(t *testing.T) {
 	b := &resourceBuilder{}
 	h, err := b.buildForwardHCM(HTTPDynamicForwardProxy, effectiveConfig{gateway: &configv1.EgressGateway{}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := httpFilterNames(h); !slices.Equal(got, []string{
-		"agentio.route_upstream",
-		"envoy.filters.http.dynamic_forward_proxy",
-		"envoy.filters.http.router",
-	}) {
+	if got := httpFilterNames(
+		h,
+	); !slices.Equal(
+		got,
+		[]string{"agentio.egress_authorization", "envoy.filters.http.router"},
+	) {
 		t.Fatalf("unexpected filters: %v", got)
 	}
-	cfg := &state.Config{}
-	if err := h.HttpFilters[0].GetTypedConfig().UnmarshalTo(cfg); err != nil {
+}
+
+// CIDR updates belong in RDS, so requests on existing HCM connections see them.
+func TestHTTPAuthorizationUsesRouteSnapshots(t *testing.T) {
+	b := &resourceBuilder{}
+	cfg := effectiveConfig{gateway: &configv1.EgressGateway{}}
+	before, err := b.buildForwardHCM(HTTPDynamicForwardProxy, cfg, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	value := cfg.OnRequestHeaders[0]
-	if value.GetObjectKey() != dynamicHostKey || !value.SkipIfEmpty || value.ReadOnly ||
-		value.GetFormatString().
-			GetTextFormatSource().
-			GetInlineString() !=
-			"%FILTER_STATE(agentio.route.upstream:PLAIN)%" {
-		t.Fatalf("explicit target must allow EPE overrides and leave absent targets alone: %v", value)
+	oldRoute := b.buildForwardRoute(HTTPDynamicForwardProxy, cfg.gateway)
+	b.egressAuthorization = &configv1.EgressAuthorization{DeniedCidrs: []string{"192.0.2.0/24"}}
+	after, err := b.buildForwardHCM(HTTPDynamicForwardProxy, cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(before, after) {
+		t.Fatal("CIDR update changed HTTP listener configuration")
+	}
+	decode := func(value *anypb.Any) map[string]any {
+		t.Helper()
+		config := &udpatypev1.TypedStruct{}
+		if err := value.UnmarshalTo(config); err != nil {
+			t.Fatal(err)
+		}
+		return config.Value.AsMap()["filter_config"].(map[string]any)["value"].(map[string]any)
+	}
+	for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+		route := b.buildForwardRoute(name, cfg.gateway)
+		policy := route.TypedPerFilterConfig["agentio.egress_authorization"]
+		if proto.Equal(oldRoute.TypedPerFilterConfig["agentio.egress_authorization"], policy) {
+			t.Fatal("CIDR update missing from RDS")
+		}
+		settings := decode(policy)
+		if settings["mode"] != "DYNAMIC_FORWARD" ||
+			!slices.Contains(settings["denied_cidrs"].([]any), any("192.0.2.0/24")) {
+			t.Fatalf("route policy = %v", settings)
+		}
+		port := float64(80)
+		if name == TLSConnectOriginate {
+			port = 443
+		}
+		if settings["default_port"] != port {
+			t.Fatalf("default port = %v", settings)
+		}
+		for _, host := range route.VirtualHosts {
+			override := host.Routes[0].TypedPerFilterConfig["agentio.egress_authorization"]
+			if name == TLSConnectOriginate {
+				if override != nil {
+					t.Fatal("HTTPS proxy CONNECT must inherit dynamic forwarding")
+				}
+			} else if decode(override)["mode"] != "ORIGINAL_DST" {
+				t.Fatal("HTTP proxy CONNECT must authorize the original proxy endpoint")
+			}
+		}
 	}
 }

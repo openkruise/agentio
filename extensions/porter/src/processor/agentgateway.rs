@@ -29,7 +29,6 @@ pub(super) fn parse<'a>(
             identity,
             connection_policy: false,
         },
-        protocol: "tcp",
     })
 }
 

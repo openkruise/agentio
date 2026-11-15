@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	xdscorev3 "github.com/cncf/xds/go/xds/core/v3"
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
@@ -114,35 +115,8 @@ var (
 
 	sniHostMatchRBACFilter = buildHostMatchRBACFilter(sniHostMismatchExpr, "deny-sni-host-mismatch")
 
-	// Normalize dialing and TLS names independently of the original HTTP authority.
-	fqdnUpstreamHTTPFilter = httpFilter("agentio.fqdn_upstream", mustPack(&setstatehttpv3.Config{
-		OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
-			{
-				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-				Value: &setstatecommonv3.FilterStateValue_FormatString{
-					FormatString: formatString(fqdnDialHostFormat),
-				},
-				SkipIfEmpty: true,
-			},
-			{
-				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamServerNameKey},
-				Value: &setstatecommonv3.FilterStateValue_FormatString{
-					FormatString: formatString(fqdnTLSNameFormat),
-				},
-				SkipIfEmpty: true,
-			},
-			{
-				Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: upstreamSubjectAltNamesKey},
-				Value: &setstatecommonv3.FilterStateValue_FormatString{
-					FormatString: formatString(fqdnTLSNameFormat),
-				},
-				SkipIfEmpty: true,
-			},
-		},
-	}))
-
 	connectProxyTLSIdentityHTTPFilter = buildConnectProxyTLSIdentityHTTPFilter(
-		outerSNIKey, "%FILTER_STATE("+outerSNIKey+":PLAIN)%:"+originalPortFormat,
+		outerSNIKey, "",
 	)
 
 	connectAuthorityHTTPFilter = buildConnectAuthorityFilter(
@@ -247,30 +221,12 @@ func buildOuterTLSIdentityFilter(key string) *listenerv3.Filter {
 			},
 		},
 	}
-	if key == outerSNIKey {
-		config.OnNewConnection = append(config.OnNewConnection, tlsDestinationState("%FILTER_STATE("+key+":PLAIN)%")...)
-	}
 	return networkFilter("envoy.filters.network.set_filter_state", mustPack(config))
-}
-
-func tlsDestinationState(host string) []*setstatecommonv3.FilterStateValue {
-	return []*setstatecommonv3.FilterStateValue{
-		{
-			Key:   &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-			Value: &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(host)},
-		},
-		{
-			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicPortKey},
-			Value: &setstatecommonv3.FilterStateValue_FormatString{
-				FormatString: formatString(originalPortFormat),
-			},
-		},
-	}
 }
 
 func (b *resourceBuilder) sniDFPFilter() *listenerv3.Filter {
 	return networkFilter("envoy.filters.network.sni_dynamic_forward_proxy", b.pack(&dfpnetworkv3.FilterConfig{
-		DnsCacheConfig: dnsCacheConfig(b.legacyGateway, b.dnsCacheSettings),
+		DnsCacheConfig: b.dnsCacheConfig(),
 		PortSpecifier:  &dfpnetworkv3.FilterConfig_PortValue{PortValue: 443},
 	}))
 }
@@ -283,9 +239,6 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 	connectHCM, err := b.buildConnectHCM(config)
 	if err != nil {
 		return nil, err
-	}
-	if features.EnableUDPProxy {
-		configureUDPHCM(connectHCM)
 	}
 	httpInternal, err := b.buildForwardHCM(HTTPDynamicForwardProxy, config, false)
 	if err != nil {
@@ -357,12 +310,12 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 	if features.EnableSNITrafficPolicy && !b.legacyGateway {
 		mainInternal.ListenerFilters = append(
 			append([]*listenerv3.ListenerFilter{}, inspectorsHTTPFirst...),
-			sniPolicyListenerFilter(),
+			b.sniPolicyListenerFilter(),
 		)
 	}
 	tcpForwardFilters := []*listenerv3.Filter{tcpTLSIdentityFilter}
 	if !b.legacyGateway {
-		tcpForwardFilters = append(tcpForwardFilters, b.tcpPolicyFilter(true, false), b.sniDFPFilter())
+		tcpForwardFilters = append(tcpForwardFilters, b.tcpPolicyFilter(tcpDynamicForward))
 	}
 	mainForward := &listenerv3.Listener{
 		Name: MainForward,
@@ -546,23 +499,29 @@ func (b *resourceBuilder) buildForwardHCM(
 		filters = append(filters, filter)
 	}
 	if terminatedTLS {
-		filters = append(filters, fqdnUpstreamHTTPFilter)
+		filters = append(filters, b.fqdnUpstreamFilter())
 	}
-	if !b.legacyGateway || len(config.gateway.GetServiceEntries()) > 0 {
+	if b.legacyGateway && len(config.gateway.GetServiceEntries()) > 0 {
 		filters = append(filters, b.routeUpstreamFilter())
 	}
 	if config.extProc != nil {
 		filters = append(filters, b.egressTargetFilters()...)
 	}
-	if terminatedTLS && !b.legacyGateway {
-		filters = append(filters, connectProxyTLSIdentityHTTPFilter)
+	if !b.legacyGateway {
+		if terminatedTLS {
+			filters = append(filters, connectProxyTLSIdentityHTTPFilter)
+		}
+		filters = append(filters, b.egressAuthorizationFilter())
 	}
-	filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
-		ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
-			DnsCacheConfig: dnsCacheConfig(b.legacyGateway, b.dnsCacheSettings),
-		},
-		AllowDynamicHostFromFilterState: true,
-	})))
+	if b.legacyGateway {
+		filters = append(filters, httpFilter("envoy.filters.http.dynamic_forward_proxy", b.pack(&dfphttpv3.FilterConfig{
+			ImplementationSpecifier: &dfphttpv3.FilterConfig_DnsCacheConfig{
+				DnsCacheConfig: b.dnsCacheConfig(),
+			},
+			AllowDynamicHostFromFilterState: true,
+		})))
+	}
+
 	if terminatedTLS && b.legacyGateway {
 		filters = append(filters, legacyConnectProxyTLSIdentityHTTPFilter)
 	}
@@ -629,9 +588,31 @@ func mustParseCEL(expression string) *exprpb.Expr {
 	return parsed.GetExpr()
 }
 
+// Normalize TLS identity without changing the HTTP authority.
+func (b *resourceBuilder) fqdnUpstreamFilter() *hcmv3.HttpFilter {
+	config := &setstatehttpv3.Config{}
+	if b.legacyGateway {
+		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
+			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+			Value: &setstatecommonv3.FilterStateValue_FormatString{
+				FormatString: formatString(fqdnDialHostFormat),
+			},
+			SkipIfEmpty: true,
+		})
+	}
+	for _, key := range []string{upstreamServerNameKey, upstreamSubjectAltNamesKey} {
+		config.OnRequestHeaders = append(config.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
+			Key:         &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: key},
+			Value:       &setstatecommonv3.FilterStateValue_FormatString{FormatString: formatString(fqdnTLSNameFormat)},
+			SkipIfEmpty: true,
+		})
+	}
+	return httpFilter("agentio.fqdn_upstream", b.pack(config))
+}
+
 // buildConnectProxyTLSIdentityHTTPFilter copies the outer proxy SNI into Envoy's
 // upstream TLS identity keys only for CONNECT. Ordinary HTTPS requests retain
-// DFP auto-SNI/SAN behavior.
+// auto-SNI/SAN behavior.
 func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilter {
 	outerSNI := formatString(fmt.Sprintf("%%FILTER_STATE(%s:PLAIN)%%", key))
 	setIdentity := &setstatehttpv3.Config{OnRequestHeaders: []*setstatecommonv3.FilterStateValue{
@@ -647,14 +628,25 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 		},
 	}}
 	if target != "" {
-		// The embedded proxy port overrides any EPE-pinned inner CONNECT port.
+		// Fixed proxy endpoints preserve the intercepted address and port.
 		setIdentity.OnRequestHeaders = append(setIdentity.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
-			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
+			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateUpstreamAddress},
 			Value: &setstatecommonv3.FilterStateValue_FormatString{
 				FormatString: formatString(target),
 			},
 		})
 	}
+	name := connectProxyTLSIdentityFilter
+	if key == legacyOuterSNIKey {
+		name = "connect-proxy-tls-identity"
+	}
+	return buildConnectHTTPFilter(
+		name,
+		typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(setIdentity)),
+	)
+}
+
+func buildConnectHTTPFilter(name string, extension *corev3.TypedExtensionConfig) *hcmv3.HttpFilter {
 	connectMethod := &xdsmatcherv3.Matcher_MatcherList_Predicate{
 		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
 			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
@@ -692,11 +684,7 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 				},
 			}},
 		},
-		ExtensionConfig: typedCoreExtension("envoy.filters.http.set_filter_state", mustPack(setIdentity)),
-	}
-	name := connectProxyTLSIdentityFilter
-	if key == legacyOuterSNIKey {
-		name = "connect-proxy-tls-identity"
+		ExtensionConfig: extension,
 	}
 	return httpFilter(name, mustPack(wrapper))
 }
@@ -746,10 +734,18 @@ func (b *resourceBuilder) extProcFilter(
 			attributes = append(attributes, attribute)
 		}
 	}
-	if (!b.legacyGateway || len(config.gateway.GetServiceEntries()) > 0) &&
-		!slices.Contains(attributes, model.AttributeRouteUpstream) {
-		attributes = append(attributes, model.AttributeRouteUpstream)
+	upstreamAttributes := []string{model.AttributeRouteUpstream}
+	if !b.legacyGateway {
+		upstreamAttributes = []string{model.AttributeUpstreamIP, model.AttributeUpstreamPort}
 	}
+	if !b.legacyGateway || len(config.gateway.GetServiceEntries()) > 0 {
+		for _, attribute := range upstreamAttributes {
+			if !slices.Contains(attributes, attribute) {
+				attributes = append(attributes, attribute)
+			}
+		}
+	}
+
 	return httpFilter(name, b.pack(&extprocv3.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
@@ -1090,7 +1086,7 @@ func buildRelayDownstreamFilter(factory, peerPrincipal, localPrincipal string) *
 		for _, key := range []string{
 			model.FilterStateSandboxID, "sandbox.token", "agentio.sandbox.metadata",
 			model.FilterStateWorkloadName, model.FilterStateWorkloadNamespace,
-			model.FilterStateWorkloadUID, model.FilterStateConnectionPolicyHash, model.FilterStatePolicyStart,
+			model.FilterStateWorkloadUID, model.FilterStateConnectionPolicyHash,
 		} {
 			downstreamRelayKeys = append(downstreamRelayKeys, struct {
 				key     string
@@ -1241,7 +1237,7 @@ func (b *resourceBuilder) originalDestinationTCPFilters(
 	tcpSettings *configv1.TcpSettings,
 ) []*listenerv3.Filter {
 	if !b.legacyGateway {
-		prefix = append(prefix, b.tcpPolicyFilter(false, false))
+		prefix = append(prefix, b.tcpPolicyFilter(tcpOriginalDst))
 	}
 	return b.applicationTCPFilters(config, prefix, cluster, tcpSettings)
 }
@@ -1261,8 +1257,8 @@ func (b *resourceBuilder) applicationTCPFilters(
 	return append(result, networkFilter("envoy.filters.network.tcp_proxy", b.pack(tcp)))
 }
 
-// sniTrafficPolicyMatcher preserves gateway exclusions before consulting the
-// listener module decision. Legacy proxies retain their policy-runtime fallback.
+// Native exclusions only disable termination; they cannot override policy denial.
+// Legacy proxies retain gateway exclusions and their policy-runtime fallback.
 func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string, passthrough string) *xdsmatcherv3.Matcher {
 	fallback := b.toChain(sniDenyChain)
 	if b.legacyGateway {
@@ -1272,11 +1268,31 @@ func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string, passthr
 	if len(excludeHosts) == 0 {
 		return policy
 	}
+	if !b.legacyGateway {
+		// Keep Rust's case-insensitive, optional trailing-dot matching semantics.
+		domains := make([]string, 0, len(excludeHosts)*2)
+		seen := make(map[string]bool)
+		for _, host := range excludeHosts {
+			host = strings.TrimSuffix(host, ".")
+			// Leave malformed text intact so protobuf encoding still rejects it.
+			if utf8.ValidString(host) {
+				host = strings.ToLower(host)
+			}
+			if !seen[host] {
+				seen[host] = true
+				domains = append(domains, host)
+				if host != "*" {
+					domains = append(domains, host+".")
+				}
+			}
+		}
+		excludeHosts = domains
+	}
 	domains := &xdsmatcherv3.ServerNameMatcher{DomainMatchers: []*xdsmatcherv3.ServerNameMatcher_DomainMatcher{{
 		Domains: excludeHosts,
 		OnMatch: b.toChain(passthrough),
 	}}}
-	return &xdsmatcherv3.Matcher{
+	exclusions := &xdsmatcherv3.Matcher{
 		MatcherType: &xdsmatcherv3.Matcher_MatcherTree_{MatcherTree: &xdsmatcherv3.Matcher_MatcherTree{
 			Input: serverNameInput,
 			TreeType: &xdsmatcherv3.Matcher_MatcherTree_CustomMatch{
@@ -1285,6 +1301,12 @@ func (b *resourceBuilder) sniTrafficPolicyMatcher(excludeHosts []string, passthr
 		}},
 		OnNoMatch: toMatcher(policy),
 	}
+	if !b.legacyGateway {
+		exclusions.OnNoMatch = b.toChain(tlsTerminateChain)
+		policy.GetMatcherTree().GetExactMatchMap().Map["terminate"] = toMatcher(exclusions)
+		return policy
+	}
+	return exclusions
 }
 
 func (b *resourceBuilder) staticSNIMatcher(

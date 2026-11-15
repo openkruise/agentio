@@ -21,6 +21,7 @@ syntax = "proto3";
 package agentio.config.v1;
 
 import "api/extensions/v1/egresspolicy.proto";
+import "api/config/v1/epeconfig.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "networking/v1alpha3/virtual_service.proto";
@@ -55,6 +56,11 @@ message AgentioConfig {
   // the epe node type; declaring an identity in node metadata is not sufficient.
   repeated string trusted_epe_identities = 6 [json_name = "trustedEPEIdentities"];
 
+  // Destination restrictions for all native Envoy egress gateways, independently
+  // of EPE. Checks original TCP destinations and resolved forwarding targets.
+  // Gateway-internal control connections are excluded. Omission/null inherits
+  // the lower layer; a supplied message replaces user entries. Built-ins remain.
+  EgressAuthorization egress_authorization = 7;
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same
@@ -541,9 +547,10 @@ message TcpPassthroughMatch {
   repeated uint32 ports = 2;
 }
 
-// DnsCacheSettings sizes the dynamic forward proxy DNS cache per gateway process.
+// DnsCacheSettings sizes the shared DNS resolver per gateway process.
 message DnsCacheSettings {
-  // Maximum cached host:port pairs per gateway process. Defaults to 16384;
+  // Maximum cached DNS records (native) or host:port pairs (legacy DFP).
+  // Native caches evict entries at capacity. Defaults to 16384;
   // must be positive when set.
   optional uint32 max_hosts = 1;
 
@@ -551,7 +558,8 @@ message DnsCacheSettings {
   // same host. Defaults to 4096; must be positive when set.
   optional uint32 max_pending_requests = 2;
 
-  // Idle lifetime of cached hosts, independent of DNS record TTL.
+  // Legacy DFP only: idle lifetime of cached hosts, independent of DNS record TTL.
+  // Native gateways ignore this field and expire DNS answers by record TTL.
   // Defaults to 120s; must be a positive duration when set.
   google.protobuf.Duration host_ttl = 3;
 }

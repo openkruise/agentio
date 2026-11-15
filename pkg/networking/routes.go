@@ -37,7 +37,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
-	"github.com/openkruise/agentio/pkg/features"
 )
 
 var previousHostsRetryPredicate = func() *routev3.RetryPolicy_RetryHostPredicate {
@@ -100,10 +99,6 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 			}
 			tcp.TypedPerFilterConfig[name] = b.pack(&routev3.FilterConfig{Config: &anypb.Any{}})
 		}
-	}
-	if features.EnableUDPProxy {
-		vhost := connect.VirtualHosts[0]
-		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)
 	}
 	if len(gateway.GetTcpPassthrough()) > 0 {
 		vhost := connect.VirtualHosts[0]
@@ -223,6 +218,15 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		ValidateClusters:         wrapperspb.Bool(false),
 		IgnorePortInHostMatching: true,
 	}
+	if !b.legacyGateway {
+		defaultPort := uint32(80)
+		if name == TLSConnectOriginate {
+			defaultPort = 443
+		}
+		result.TypedPerFilterConfig = map[string]*anypb.Any{
+			"agentio.egress_authorization": b.egressAuthorizationRouteConfig(tcpDynamicForward, defaultPort),
+		}
+	}
 	settings := gateway.GetHttp().GetRouting()
 	defaultSettings := settings.GetFallback()
 	for index, override := range settings.GetHostOverrides() {
@@ -253,7 +257,13 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		connectCluster = TLSProxyOriginate
 	}
 	for _, virtualHost := range result.VirtualHosts {
-		virtualHost.Routes = append([]*routev3.Route{forwardProxyConnectRoute(connectCluster)}, virtualHost.Routes...)
+		connect := forwardProxyConnectRoute(connectCluster)
+		if !b.legacyGateway && name != TLSConnectOriginate {
+			connect.TypedPerFilterConfig = map[string]*anypb.Any{
+				"agentio.egress_authorization": b.egressAuthorizationRouteConfig(tcpOriginalDst, 80),
+			}
+		}
+		virtualHost.Routes = append([]*routev3.Route{connect}, virtualHost.Routes...)
 	}
 	return result
 }

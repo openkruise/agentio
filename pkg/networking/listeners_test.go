@@ -23,7 +23,6 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	extensionmatchingv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/matching/v3"
 	localratelimitv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
@@ -31,7 +30,6 @@ import (
 	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
-	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	rlexprv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/rate_limit_descriptors/expr/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -177,10 +175,10 @@ func TestGatewayForwardProxyConnectSemantics(t *testing.T) {
 	if proxyTLS == nil {
 		t.Fatal("TLS proxy origination cluster not found")
 	}
-	if proxyTLS.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
+	if proxyTLS.GetType() != clusterv3.Cluster_ORIGINAL_DST ||
 		proxyTLS.GetLbPolicy() != clusterv3.Cluster_CLUSTER_PROVIDED {
 		t.Fatalf(
-			"TLS proxy cluster type/lb = %v/%v, want DFP/CLUSTER_PROVIDED",
+			"TLS proxy cluster type/lb = %v/%v, want ORIGINAL_DST/CLUSTER_PROVIDED",
 			proxyTLS.GetType(),
 			proxyTLS.GetLbPolicy(),
 		)
@@ -276,11 +274,8 @@ func TestGatewayForwardProxyConnectSemantics(t *testing.T) {
 		t.Fatalf("decode TLS identity set-filter-state: %v", err)
 	}
 	values := setState.GetOnRequestHeaders()
-	if len(values) != 3 || values[0].GetObjectKey() != "envoy.network.upstream_server_name" ||
-		values[1].GetObjectKey() != "envoy.network.upstream_subject_alt_names" ||
-		values[2].GetObjectKey() != dynamicHostKey ||
-		values[2].GetFormatString().GetTextFormatSource().GetInlineString() !=
-			"%FILTER_STATE("+outerSNIKey+":PLAIN)%:"+originalPortFormat {
+	if len(values) != 2 || values[0].GetObjectKey() != "envoy.network.upstream_server_name" ||
+		values[1].GetObjectKey() != "envoy.network.upstream_subject_alt_names" {
 		t.Fatalf("TLS identity values = %+v", values)
 	}
 }
@@ -398,7 +393,7 @@ func TestBuildStaticSNIMatcherOmitsEmptyHostGroups(t *testing.T) {
 	}
 }
 
-func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
+func TestTLSPassthroughUsesAuthorizedDestination(t *testing.T) {
 	resources := buildGatewayGraph(t, false)
 	listeners := messagesOf(
 		t,
@@ -407,46 +402,23 @@ func TestTLSPassthroughUsesSNIAndOriginalPort(t *testing.T) {
 		func() *listenerv3.Listener { return &listenerv3.Listener{} },
 	)
 	chain := findFilterChain(t, listeners[MainInternal], forwardTLSChain)
-	want := []string{
-		"envoy.filters.network.set_filter_state",
+	if want := []string{
 		"agentio.tcp_policy",
-		"envoy.filters.network.sni_dynamic_forward_proxy",
 		"envoy.filters.network.tcp_proxy",
-	}
-	if !equalStrings(networkFilterNames(chain), want) {
+	}; !equalStrings(
+		networkFilterNames(chain),
+		want,
+	) {
 		t.Fatalf("TLS passthrough filters = %v", networkFilterNames(chain))
-	}
-	state := &setstatenetworkv3.Config{}
-	if err := chain.Filters[0].GetTypedConfig().UnmarshalTo(state); err != nil {
-		t.Fatal(err)
-	}
-	values := state.GetOnNewConnection()
-	if len(values) != 2 || values[0].GetObjectKey() != dynamicHostKey || values[0].SkipIfEmpty ||
-		values[0].GetFormatString().GetTextFormatSource().GetInlineString() != "%REQUESTED_SERVER_NAME%" ||
-		values[1].GetObjectKey() != dynamicPortKey ||
-		values[1].GetFormatString().GetTextFormatSource().GetInlineString() != originalPortFormat {
-		t.Fatalf("TLS destination must use actual SNI and original port, without an empty-name fallback: %v", values)
-	}
-	filter := &dfpnetworkv3.FilterConfig{}
-	if err := chain.Filters[2].GetTypedConfig().UnmarshalTo(filter); err != nil {
-		t.Fatal(err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
 	cluster := clusters[TLSPassthrough]
-	if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
-		cluster.TransportSocket != nil || len(cluster.TypedExtensionProtocolOptions) != 0 {
-		t.Fatalf("TLS passthrough must use a raw DFP cluster: %v", cluster)
-	}
-	cfg := &dfpclusterv3.ClusterConfig{}
-	if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(filter.GetDnsCacheConfig(), cfg.GetDnsCacheConfig()) ||
-		!proto.Equal(cfg.GetDnsCacheConfig(), dnsCacheConfig(false, nil)) {
-		t.Fatal("TLS passthrough must share the complete filtered gateway DNS cache")
+	if cluster.GetType() != clusterv3.Cluster_ORIGINAL_DST || cluster.TransportSocket != nil ||
+		len(cluster.TypedExtensionProtocolOptions) != 0 {
+		t.Fatalf("TLS passthrough must use a raw ORIGINAL_DST cluster: %v", cluster)
 	}
 	proxy := &tcpproxyv3.TcpProxy{}
-	if err := chain.Filters[3].GetTypedConfig().UnmarshalTo(proxy); err != nil {
+	if err := chain.Filters[1].GetTypedConfig().UnmarshalTo(proxy); err != nil {
 		t.Fatal(err)
 	}
 	if proxy.GetCluster() != TLSPassthrough {
@@ -482,10 +454,8 @@ func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 			wantFilters = []string{
 				"envoy.filters.network.set_filter_state",
 				"agentio.tcp_policy",
-				"envoy.filters.network.sni_dynamic_forward_proxy",
 				"envoy.filters.network.tcp_proxy",
 			}
-			wantValues = 4
 		}
 		if !equalStrings(
 			networkFilterNames(chain),
@@ -530,21 +500,8 @@ func TestPostTLSForwardingUsesOuterSNI(t *testing.T) {
 			func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
 		)
 		cluster := clusters[TLSProxyOriginate]
-		if legacy {
-			if cluster.GetType() != clusterv3.Cluster_ORIGINAL_DST {
-				t.Fatal("legacy TCP must preserve the original destination")
-			}
-		} else {
-			if cluster.GetClusterType().GetName() != "envoy.clusters.dynamic_forward_proxy" ||
-				values[2].GetObjectKey() != dynamicHostKey ||
-				values[2].GetFormatString().
-					GetTextFormatSource().
-					GetInlineString() !=
-					"%FILTER_STATE("+outerSNIKey+":PLAIN)%" ||
-				values[3].GetObjectKey() != dynamicPortKey ||
-				values[3].GetFormatString().GetTextFormatSource().GetInlineString() != originalPortFormat {
-				t.Fatal("TCP must resolve the outer SNI on the original port")
-			}
+		if cluster.GetType() != clusterv3.Cluster_ORIGINAL_DST {
+			t.Fatal("TCP must use the authorized numeric destination")
 		}
 		context := &tlsv3.UpstreamTlsContext{}
 		if err := cluster.GetTransportSocket().GetTypedConfig().UnmarshalTo(context); err != nil {

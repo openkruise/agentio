@@ -8,7 +8,7 @@ use crate::{
 use serde::Deserialize;
 use std::net::SocketAddr;
 
-pub const START_KEY: &[u8] = b"agentio.policy.start";
+pub const TCP_END_BEFORE_KEY: &[u8] = b"agentio.tcp_policy.end_before";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

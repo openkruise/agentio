@@ -15,7 +15,6 @@
 package main
 
 import (
-	"fmt"
 	"net/netip"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -30,13 +29,7 @@ func validateEPEConfig(cfg *configv1.EPEConfig) error {
 	if err := extensionprovider.Validate(cfg); err != nil {
 		return err
 	}
-	for _, raw := range cfg.GetEgressAuthorization().GetDeniedCidrs() {
-		prefix, err := netip.ParsePrefix(raw)
-		if err != nil || prefix.Addr().Is4In6() {
-			return fmt.Errorf("egressAuthorization.deniedCIDRs: invalid or IPv4-mapped CIDR %q", raw)
-		}
-	}
-	return nil
+	return cfg.GetEgressAuthorization().Validate()
 }
 
 func newRequestAuthorizer(

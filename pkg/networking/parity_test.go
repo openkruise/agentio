@@ -33,7 +33,6 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	setstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	dfphttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -98,17 +97,6 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			delete(got, key)
 			continue
 		}
-		// The legacy oracle predates DFP destination filtering. The complete
-		// cache configuration is covered by TestDFPAddressFilterInGatewayGraph.
-		if cluster := message.(*clusterv3.Cluster); cluster.GetName() == HTTPDynamicForwardProxy ||
-			cluster.GetName() == TLSConnectOriginate {
-			cfg := &dfpclusterv3.ClusterConfig{}
-			if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
-				t.Fatal(err)
-			}
-			cfg.GetDnsCacheConfig().ResolvedAddressFilter = nil
-			cluster.GetClusterType().TypedConfig = mustGatewayAny(t, cfg)
-		}
 		// The legacy oracle predates explicit compatible TLS defaults, which
 		// are covered by the TLS origination regression tests.
 		if cluster, ok := message.(*clusterv3.Cluster); ok &&
@@ -136,7 +124,11 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			cluster.ConnectTimeout = nil
 		}
 	}
-	for key := range want {
+	for key, value := range want {
+		if cluster, ok := value.(*clusterv3.Cluster); ok &&
+			(cluster.Name == HTTPDynamicForwardProxy || cluster.Name == TLSConnectOriginate) {
+			cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_ORIGINAL_DST}
+		}
 		if !strings.HasPrefix(key, model.ClusterType+"\x00") {
 			delete(want, key)
 		}
@@ -219,8 +211,8 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 		}
 	}
 	for listenerName, want := range map[string][]string{
-		MainInternal: {"envoy.filters.http.ext_proc", "agentio.route_upstream", "agentio.egress_target", "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
-		MainForward:  {"envoy.filters.http.rbac", "envoy.filters.http.ext_proc", "agentio.fqdn_upstream", "agentio.route_upstream", "agentio.egress_target", connectProxyTLSIdentityFilter, "envoy.filters.http.dynamic_forward_proxy", "envoy.filters.http.router"},
+		MainInternal: {"envoy.filters.http.ext_proc", "agentio.egress_target", "agentio.egress_authorization", "envoy.filters.http.router"},
+		MainForward:  {"envoy.filters.http.rbac", "envoy.filters.http.ext_proc", "agentio.fqdn_upstream", "agentio.egress_target", connectProxyTLSIdentityFilter, "agentio.egress_authorization", "envoy.filters.http.router"},
 	} {
 		if got := httpFilterNames(findHCM(t, listeners[listenerName])); !equalStrings(got, want) {
 			t.Errorf("listener %s HTTP filter order = %v, want %v", listenerName, got, want)
@@ -278,7 +270,6 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	if got, want := networkFilterNames(rawTCP), []string{
 		"envoy.filters.network.set_filter_state",
 		"agentio.tcp_policy",
-		"envoy.filters.network.sni_dynamic_forward_proxy",
 		"envoy.filters.network.tcp_proxy",
 	}; !equalStrings(got, want) {
 		t.Errorf("MainForward raw-TCP filter order = %v, want %v", got, want)
@@ -287,7 +278,6 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 	const (
 		transportProtocolInputType   = "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.TransportProtocolInput"
 		applicationProtocolInputType = "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ApplicationProtocolInput"
-		serverNameInputType          = "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ServerNameInput"
 	)
 	if got := forwardApp.GetMatcherTree().
 		GetInput().
@@ -313,39 +303,21 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 		{"MainForward TCP fallback", forwardApp.GetOnNoMatch().GetAction().GetName(), forwardTCPChain},
 	}
 
-	// Gateway exclusions retain precedence over both ztunnel actions and
-	// gateway policy. tls_action_test.go covers the action branch.
+	// Gateway exclusions only affect the native policy's termination branch.
 	internalMatcher := routingMatcher(listeners[MainInternal])
 	internalTree := internalMatcher.GetMatcherTree()
 	if got := internalTree.GetInput().GetTypedConfig().GetTypeUrl(); got != transportProtocolInputType {
 		t.Errorf("MainInternal outer matcher input = %q, want %q", got, transportProtocolInputType)
 	}
-	excludeMatcher := internalTree.GetExactMatchMap().GetMap()["tls"].GetMatcher()
-	if got := excludeMatcher.GetMatcherTree().GetInput().GetTypedConfig().GetTypeUrl(); got != serverNameInputType {
-		t.Errorf("MainInternal exclusion matcher input = %q, want %q", got, serverNameInputType)
-	}
-	excludes := &xdsmatcherv3.ServerNameMatcher{}
-	if err := excludeMatcher.GetMatcherTree().GetCustomMatch().GetTypedConfig().UnmarshalTo(excludes); err != nil {
-		t.Fatalf("decode MainInternal SNI exclusions: %v", err)
-	}
-	if len(excludes.GetDomainMatchers()) != 1 ||
-		!equalStrings(excludes.GetDomainMatchers()[0].GetDomains(), []string{"legacy.example.com"}) {
-		t.Fatalf("MainInternal SNI exclusions = %+v", excludes.GetDomainMatchers())
-	}
-	decisions = append(decisions, struct {
-		name string
-		got  string
-		want string
-	}{
-		"MainInternal excluded SNI",
-		excludes.GetDomainMatchers()[0].GetOnMatch().GetAction().GetName(),
-		forwardTLSChain,
-	})
-	policyMatcher := excludeMatcher.GetOnNoMatch().GetMatcher()
+	policyMatcher := internalTree.GetExactMatchMap().GetMap()["tls"].GetMatcher()
 	if policyMatcher.GetOnNoMatch().GetAction().GetName() != sniDenyChain {
 		t.Fatal("missing native module output must deny")
 	}
 	for action, chain := range map[string]string{"terminate": tlsTerminateChain, "passthrough": forwardTLSChain, "deny": sniDenyChain} {
+		decision := policyMatcher.GetMatcherTree().GetExactMatchMap().GetMap()[action]
+		if action == "terminate" {
+			decision = decision.GetMatcher().GetOnNoMatch()
+		}
 		decisions = append(
 			decisions,
 			struct {
@@ -354,7 +326,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 				want string
 			}{
 				"MainInternal " + action,
-				policyMatcher.GetMatcherTree().GetExactMatchMap().GetMap()[action].GetAction().GetName(),
+				decision.GetAction().GetName(),
 				chain,
 			},
 		)

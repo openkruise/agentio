@@ -93,13 +93,10 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 			t.Errorf("cluster %q invalid: %v", name, err)
 		}
 	}
-	httpDFP := &dfpclusterv3.ClusterConfig{}
-	if err := clusters[HTTPDynamicForwardProxy].GetClusterType().GetTypedConfig().UnmarshalTo(httpDFP); err != nil {
-		t.Fatalf("unmarshal HTTP DFP cluster: %v", err)
+	if clusters[HTTPDynamicForwardProxy].GetType() != clusterv3.Cluster_ORIGINAL_DST {
+		t.Fatal("HTTP forwarding must use the authorized numeric destination")
 	}
-	if httpDFP.GetDnsCacheConfig().GetName() != DNSCacheName {
-		t.Fatalf("HTTP DFP cache = %q", httpDFP.GetDnsCacheConfig().GetName())
-	}
+
 	for name, cluster := range clusters {
 		if _, found := cluster.GetTypedExtensionProtocolOptions()["type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions"]; found {
 			t.Fatalf("cluster %s uses an Any type URL as protocol-options map key", name)
@@ -152,7 +149,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 	forwardHCM := findHCM(t, listeners[MainForward])
 	if !hasHTTPFilter(forwardHCM, "envoy.filters.http.rbac") ||
 		!hasHTTPFilter(forwardHCM, "envoy.filters.http.ext_proc") ||
-		!hasHTTPFilter(forwardHCM, "envoy.filters.http.dynamic_forward_proxy") {
+		!hasHTTPFilter(forwardHCM, "agentio.egress_authorization") {
 		t.Fatalf("main_forward filters = %v", httpFilterNames(forwardHCM))
 	}
 	for _, filter := range forwardHCM.GetHttpFilters() {
@@ -317,7 +314,7 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
 		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-2 {
-			t.Fatal("proxy target and TLS identity must precede DFP")
+			t.Fatal("proxy TLS identity must precede authorization")
 		}
 	}
 
@@ -611,6 +608,7 @@ func TestBuildSupportsDeployedIPv4DynamicForwardProxyPatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	resources, err := Build(Inputs{
+		LegacyGateway:    true,
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 		TrustDomain:      "cluster.local",
 		Gateway:          testGateway(nil),

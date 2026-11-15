@@ -171,7 +171,8 @@ func (x *EPEConfig) GetEgressAuthorization() *EgressAuthorization {
 	return nil
 }
 
-// EgressAuthorization applies to every request processed by EPE authorization.
+// EgressAuthorization restricts destinations in the component consuming it.
+// AgentioConfig applies it to native gateways; EPEConfig applies it to EPE requests.
 // Examples below are EPEConfig content for a watched ConfigMap's data.config.
 //
 // Example: deny additional IPv4/IPv6 IPs. Built-in restrictions are appended
@@ -194,10 +195,10 @@ func (x *EPEConfig) GetEgressAuthorization() *EgressAuthorization {
 //	  deniedCIDRs: []
 type EgressAuthorization struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Deny these destination CIDRs on every port, before any TrafficPolicy rules.
+	// Deny these destination CIDRs on every port, before workload policy allows.
 	// Use /32 for a single IPv4 address or /128 for a single IPv6 address.
 	// IPv4-mapped IPv6 prefixes are not accepted; use the IPv4 prefix instead.
-	// EPE always appends 127.0.0.0/8, ::1/128, 0.0.0.0/32, ::/128,
+	// Both consumers always append 127.0.0.0/8, ::1/128, 0.0.0.0/32, ::/128,
 	// 169.254.0.0/16, and fe80::/10.
 	// Alibaba Cloud metadata (100.100.100.200/32) requires an explicit operator entry.
 	// An empty list removes only user restrictions; built-ins cannot be disabled.
