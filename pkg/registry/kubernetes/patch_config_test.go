@@ -34,7 +34,7 @@ const validPatchConfig = `targetGateways: [demo/egress]
 patches:
 - target: cluster
   operation: MERGE
-  match: {name: http_forward_proxy}
+  match: {name: PassthroughCluster}
   value: {connect_timeout: 3s}
 `
 
@@ -153,9 +153,9 @@ func TestPatchConfigRejectsMalformedInput(t *testing.T) {
 		{"array value", replace("{connect_timeout: 3s}", "[]"), "requires an object"},
 		{"missing value", replace("  value: {connect_timeout: 3s}\n", ""), "requires an object"},
 		{"remove value", replace("operation: MERGE", "operation: REMOVE"), "REMOVE must omit value"},
-		{"null match", replace("{name: http_forward_proxy}", "null"), "expected an object"},
-		{"unknown match", replace("{name: http_forward_proxy}", "{service: example.com}"), "unknown field"},
-		{"wrong match family", replace("{name: http_forward_proxy}", "{filterChain: {}}"), "unknown field"},
+		{"null match", replace("{name: PassthroughCluster}", "null"), "expected an object"},
+		{"unknown match", replace("{name: PassthroughCluster}", "{service: example.com}"), "unknown field"},
+		{"wrong match family", replace("{name: PassthroughCluster}", "{filterChain: {}}"), "unknown field"},
 		{"unknown protobuf field", replace("connect_timeout", "connect_timout"), "unknown field"},
 		{"bad duration", replace("connect_timeout: 3s", "connect_timeout: three"), "Duration"},
 		{"unknown Any", replace("connect_timeout: 3s", "typed_extension_protocol_options: {test: {'@type': type.googleapis.com/unknown.Config}}"), "unable to resolve"},

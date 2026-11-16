@@ -157,7 +157,6 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				b := &resourceBuilder{egressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: denied}}
 				settings := effectiveConfig{gateway: &configv1.EgressGateway{}}
 				clusters := []*anypb.Any{
-					b.pack(b.buildForwardCluster(HTTPForwardProxy, true, false, nil)),
 					b.pack(b.buildPassthroughCluster()),
 				}
 				if pinned {

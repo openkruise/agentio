@@ -96,39 +96,6 @@
     },
     {
       "type_url": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-      "name": "http_forward_proxy",
-      "resource": {
-        "name": "http_forward_proxy",
-        "altStatName": "http_forward_proxy;",
-        "type": "ORIGINAL_DST",
-        "connectTimeout": "7s",
-        "lbPolicy": "CLUSTER_PROVIDED",
-        "circuitBreakers": {
-          "thresholds": [
-            {
-              "maxConnections": 4294967295,
-              "maxPendingRequests": 4294967295,
-              "maxRequests": 4294967295,
-              "maxRetries": 4294967295
-            }
-          ]
-        },
-        "typedExtensionProtocolOptions": {
-          "envoy.extensions.upstreams.http.v3.HttpProtocolOptions": {
-            "@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
-            "commonHttpProtocolOptions": {
-              "idleTimeout": "300s"
-            },
-            "useDownstreamProtocolConfig": {
-              "httpProtocolOptions": {},
-              "http2ProtocolOptions": {}
-            }
-          }
-        }
-      }
-    },
-    {
-      "type_url": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
       "name": "main_forward",
       "resource": {
         "name": "main_forward",
@@ -2565,7 +2532,7 @@
                   "prefix": "/"
                 },
                 "route": {
-                  "cluster": "http_forward_proxy",
+                  "cluster": "PassthroughCluster",
                   "timeout": "4s",
                   "retryPolicy": {
                     "retryOn": "connect-failure,refused-stream",
@@ -2653,7 +2620,7 @@
                   "prefix": "/"
                 },
                 "route": {
-                  "cluster": "http_forward_proxy",
+                  "cluster": "PassthroughCluster",
                   "timeout": "12s",
                   "retryPolicy": {
                     "retryOn": "reset-before-request",

@@ -257,6 +257,11 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		connectCluster = TLSProxyOriginate
 	}
 	for _, virtualHost := range result.VirtualHosts {
+		if !b.legacyGateway && name == HTTPForwardProxy {
+			for _, route := range virtualHost.Routes {
+				route.GetRoute().ClusterSpecifier = &routev3.RouteAction_Cluster{Cluster: PassthroughCluster}
+			}
+		}
 		connect := forwardProxyConnectRoute(connectCluster)
 		if !b.legacyGateway && name != TLSConnectOriginate {
 			connect.TypedPerFilterConfig = map[string]*anypb.Any{

@@ -34,14 +34,8 @@ func (b *resourceBuilder) tcpPolicyFilter(mode tcpDestinationMode) *listenerv3.F
 	return networkFilter("agentio.tcp_policy", b.pack(&udpatypev1.TypedStruct{
 		TypeUrl: "type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter",
 		Value: b.structure(map[string]any{
-			"dynamic_module_config": map[string]any{
-				"name":         "envoy_agentio_connection_policy",
-				"do_not_close": true,
-				"module": map[string]any{
-					"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_connection_policy.so"},
-				},
-			},
-			"filter_name": "envoy_agentio_tcp_policy",
+			"dynamic_module_config": egressModuleConfig(),
+			"filter_name":           "envoy_agentio_tcp_policy",
 			"filter_config": map[string]any{
 				"@type": "type.googleapis.com/google.protobuf.Struct",
 				"value": map[string]any{

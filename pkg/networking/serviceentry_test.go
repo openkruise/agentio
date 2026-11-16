@@ -86,9 +86,13 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 			}
 			policy := domains.DomainMatchers[0].GetOnMatch().GetMatcher().GetMatcherTree().GetExactMatchMap().GetMap()["tls"].GetMatcher()
 			actions := policy.GetMatcherTree().GetExactMatchMap().GetMap()
+			passthrough := forwardTCPChain
+			if legacy {
+				passthrough = "service-entry|" + ip + "|tls"
+			}
 			if actions["deny"].GetAction().GetName() != sniDenyChain ||
 				actions["terminate"].GetAction().GetName() != tlsTerminateChain ||
-				actions["passthrough"].GetAction().GetName() != "service-entry|"+ip+"|tls" {
+				actions["passthrough"].GetAction().GetName() != passthrough {
 				t.Fatal("endpoint binding bypassed the TLS policy decision")
 			}
 			for _, name := range []string{MainInternal, MainForward} {
@@ -138,13 +142,13 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 				)
 				for _, tc := range []struct {
 					listener string
-					suffix   string
+					chain    string
 					cluster  string
 				}{
-					{MainInternal, "|tls", PassthroughCluster},
-					{MainForward, "|tcp", TLSEndpointOriginate},
+					{MainInternal, forwardTCPChain, PassthroughCluster},
+					{MainForward, serviceEntryTCPChain, TLSEndpointOriginate},
 				} {
-					chain := findFilterChain(t, listeners[tc.listener], "service-entry|"+ip+tc.suffix)
+					chain := findFilterChain(t, listeners[tc.listener], tc.chain)
 					for _, filter := range chain.Filters {
 						if filter.Name == "envoy.filters.network.sni_dynamic_forward_proxy" {
 							t.Fatal("fixed endpoint must not use DFP")
@@ -176,6 +180,21 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 							t.Fatal("endpoint TCP must validate TLS without advertising HTTP")
 						}
 					}
+				}
+				forward := routingMatcher(listeners[MainForward]).GetMatcherTree().GetExactMatchMap().GetMap()
+				if forward[ip].GetMatcher().GetOnNoMatch().GetAction().GetName() != serviceEntryTCPChain {
+					t.Fatal("fixed endpoints must share the original-destination TCP chain after termination")
+				}
+			}
+		}
+		if !legacy {
+			for _, name := range []string{MainInternal, MainForward} {
+				baseChains := 5
+				if name == MainForward {
+					baseChains = 3
+				}
+				if got, want := len(listeners[name].FilterChains), baseChains+len(endpoints)+1; got != want {
+					t.Fatalf("%s has %d chains, want %d without per-endpoint TCP/TLS copies", name, got, want)
 				}
 			}
 		}

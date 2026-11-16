@@ -53,9 +53,11 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildInternalCluster(MainInternal),
 		b.buildInternalCluster(MainForward),
 		b.buildPassthroughCluster(),
-		b.buildForwardCluster(b.httpForwardName(), true, false, nil),
 		b.buildForwardCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
 		b.buildTLSOriginateCluster(TLSProxyOriginate, config.gateway.GetTls().GetOrigination()),
+	}
+	if b.legacyGateway {
+		result = append(result, b.buildForwardCluster(HTTPDynamicForwardProxy, true, false, nil))
 	}
 	if len(config.gateway.GetTcpPassthrough()) > 0 {
 		result = append(result, b.buildInternalCluster(TCPPassthrough))

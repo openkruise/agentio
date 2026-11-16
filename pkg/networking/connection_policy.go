@@ -28,14 +28,8 @@ func (b *resourceBuilder) connectPolicyFilters() []*hcmv3.HttpFilter {
 	store := httpFilter("agentio.connection_policy_store", b.pack(&udpatypev1.TypedStruct{
 		TypeUrl: "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
 		Value: b.structure(map[string]any{
-			"dynamic_module_config": map[string]any{
-				"name":         "envoy_agentio_connection_policy",
-				"do_not_close": true,
-				"module": map[string]any{
-					"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_connection_policy.so"},
-				},
-			},
-			"filter_name": "envoy_agentio_connection_policy_store",
+			"dynamic_module_config": egressModuleConfig(),
+			"filter_name":           "envoy_agentio_connection_policy_store",
 		}),
 	}))
 	output := httpFilter("agentio.connect_policy", b.pack(&setstatehttpv3.Config{

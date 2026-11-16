@@ -132,7 +132,9 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 				if len(caches) != 0 {
 					t.Fatalf("native gateway still uses DFP: %v", caches)
 				}
-				for _, name := range []string{HTTPForwardProxy, TLSConnectOriginate, TLSProxyOriginate, TLSPassthrough} {
+				for _, name := range []string{
+					PassthroughCluster, TLSConnectOriginate, TLSProxyOriginate, TLSPassthrough,
+				} {
 					if clusters[name].GetType() != clusterv3.Cluster_ORIGINAL_DST {
 						t.Fatalf("%s must use ORIGINAL_DST", name)
 					}

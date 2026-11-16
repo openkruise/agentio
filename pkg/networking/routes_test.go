@@ -70,6 +70,14 @@ func TestGatewayRouteOverridesUseOneWildcardAndIgnoreRequestPort(t *testing.T) {
 			}
 			seen := map[string]bool{}
 			for _, vh := range rc.GetVirtualHosts() {
+				forward := vh.GetRoutes()[1]
+				wantCluster := name
+				if !legacy && name == HTTPForwardProxy {
+					wantCluster = PassthroughCluster
+				}
+				if forward.GetRoute().GetCluster() != wantCluster || forward.GetDecorator().GetOperation() != name {
+					t.Fatalf("%s must use %s without changing its trace operation", name, wantCluster)
+				}
 				for _, domain := range vh.GetDomains() {
 					if seen[domain] {
 						t.Fatalf("duplicate virtual-host domain %q", domain)

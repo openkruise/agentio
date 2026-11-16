@@ -125,14 +125,10 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 		}
 	}
 	legacyHTTPKey := gatewayResourceKey(model.ClusterType, HTTPDynamicForwardProxy)
-	http := want[legacyHTTPKey].(*clusterv3.Cluster)
 	delete(want, legacyHTTPKey)
-	http.Name = HTTPForwardProxy
-	http.AltStatName = delimitedStatsPrefix(HTTPForwardProxy)
-	want[gatewayResourceKey(model.ClusterType, HTTPForwardProxy)] = http
 	for key, value := range want {
 		if cluster, ok := value.(*clusterv3.Cluster); ok &&
-			(cluster.Name == HTTPForwardProxy || cluster.Name == TLSConnectOriginate) {
+			cluster.Name == TLSConnectOriginate {
 			cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_ORIGINAL_DST}
 		}
 		if !strings.HasPrefix(key, model.ClusterType+"\x00") {

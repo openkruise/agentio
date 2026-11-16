@@ -47,7 +47,7 @@ func TestGatewayClustersUseConfiguredConnectTimeoutAndRootCA(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
-	for _, name := range []string{PassthroughCluster, HTTPForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{PassthroughCluster, TLSConnectOriginate} {
 		if got := clusters[name].GetConnectTimeout().AsDuration(); got != 7*time.Second {
 			t.Errorf("cluster %s connect timeout = %s, want 7s", name, got)
 		}
@@ -160,7 +160,7 @@ func TestGatewayClustersUseAgentioStatsAndCircuitBreakers(t *testing.T) {
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
 	for _, name := range []string{
 		MainInternal, MainForward, PassthroughCluster,
-		HTTPForwardProxy, TLSConnectOriginate, TLSProxyOriginate, ExtProcCluster,
+		TLSConnectOriginate, TLSProxyOriginate, ExtProcCluster,
 	} {
 		cluster := clusters[name]
 		if got, want := cluster.GetAltStatName(), name+";"; got != want {
@@ -187,7 +187,7 @@ func TestGatewayClustersUseAgentioDownstreamIdleTimeout(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
-	for _, name := range []string{MainInternal, MainForward, PassthroughCluster, TLSProxyOriginate, HTTPForwardProxy} {
+	for _, name := range []string{MainInternal, MainForward, PassthroughCluster, TLSProxyOriginate} {
 		protocol := &httpupstreamv3.HttpProtocolOptions{}
 		if err := clusters[name].GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(
 			protocol,

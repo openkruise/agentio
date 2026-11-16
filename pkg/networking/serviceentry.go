@@ -37,7 +37,10 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-const serviceEntryDenyChain = "service-entry-deny"
+const (
+	serviceEntryDenyChain = "service-entry-deny"
+	serviceEntryTCPChain  = "service-entry-tcp"
+)
 
 func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrough string) *xdsmatcher.Matcher {
 	if features.EnableSNITrafficPolicy {
@@ -97,6 +100,15 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 	if len(hostsByIP) == 0 {
 		return
 	}
+	if terminated && !b.legacyGateway {
+		l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+			Name: serviceEntryTCPChain,
+			Filters: b.applicationTCPFilters(config, []*listener.Filter{
+				outerTLSIdentityFilter,
+				b.tcpPolicyFilter(tcpOriginalDst),
+			}, TLSEndpointOriginate, config.gateway.GetTcp()),
+		})
+	}
 	addresses := make(map[string]*xdsmatcher.Matcher_OnMatch, len(hostsByIP))
 	for _, ip := range slices.Sorted(maps.Keys(hostsByIP)) {
 		hosts := hostsByIP[ip]
@@ -120,35 +132,29 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 			// Non-HTTP bytes keep the TLS identity and original destination chosen upstream.
 			http.OnNoMatch = b.toChain(forwardTCPChain)
 			if !b.legacyGateway {
-				l.FilterChains = append(l.FilterChains, &listener.FilterChain{
-					Name: name + "|tcp",
-					Filters: b.applicationTCPFilters(config, []*listener.Filter{
-						outerTLSIdentityFilter,
-						b.tcpPolicyFilter(tcpOriginalDst),
-					}, TLSEndpointOriginate, config.gateway.GetTcp()),
-				})
-				http.OnNoMatch = b.toChain(name + "|tcp")
+				http.OnNoMatch = b.toChain(serviceEntryTCPChain)
 			}
 			addresses[ip] = toMatcher(http)
 			continue
 		}
-		var filters []*listener.Filter
+		passthrough := forwardTCPChain
 		if b.legacyGateway {
 			pin := networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
 				OnNewConnection: []*common.FilterStateValue{b.serviceEntryTarget()},
 			}))
-			filters = b.sniForwardFilters(config, []*listener.Filter{pin})
-		} else {
-			filters = b.originalDestinationTCPFilters(config, nil, PassthroughCluster, config.gateway.GetTcp())
+			passthrough = name + "|tls"
+			l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+				Name:    passthrough,
+				Filters: b.sniForwardFilters(config, []*listener.Filter{pin}),
+			})
 		}
-		l.FilterChains = append(l.FilterChains, &listener.FilterChain{Name: name + "|tls", Filters: filters})
 		domains := make([]string, 0, len(hosts)*2)
 		for _, host := range hosts {
 			domains = append(domains, host, host+".")
 		}
 		sni := &xdsmatcher.ServerNameMatcher{DomainMatchers: []*xdsmatcher.ServerNameMatcher_DomainMatcher{{
 			Domains: domains,
-			OnMatch: toMatcher(b.internalChainMatcher(config, name+"|tls")),
+			OnMatch: toMatcher(b.internalChainMatcher(config, passthrough)),
 		}}}
 		binding := &xdsmatcher.Matcher{
 			MatcherType: &xdsmatcher.Matcher_MatcherTree_{MatcherTree: &xdsmatcher.Matcher_MatcherTree{
