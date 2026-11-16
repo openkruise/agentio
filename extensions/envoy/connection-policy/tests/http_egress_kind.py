@@ -250,6 +250,17 @@ async def verify(host):
     assert (await pending)[0] == 200
     assert (await request(host, slow_name))[0] == 403
     update(host, {})
+    # A different spelling can hit Hickory's cache with a rounded remaining TTL.
+    ttl_name = f'ttl.cache-rounding.{time.time_ns()}.test'
+    alternate = ttl_name[:-4] + 'TEST'
+    query_count = lambda: sum(n for key, n in state()['dns'].items() if key.lower() == ttl_name)
+    assert (await request(host, ttl_name + ':18082'))[0] == 200
+    await asyncio.sleep(.65)
+    assert (await request(host, alternate + ':18082'))[0] == 200
+    assert query_count() == 1
+    await asyncio.sleep(.5)
+    assert (await request(host, alternate + ':18082'))[0] == 200
+    assert query_count() == 2
     rebind = f'ttl.rebind.{time.time_ns()}.test'
     assert (await request(host, rebind + ':18082'))[0] == 200
     await asyncio.sleep(1.2)
@@ -261,7 +272,7 @@ async def verify(host):
     print(json.dumps({'result': 'PASS', 'checks': ['literal and mapped IPv6 denial', 'per-request keepalive authorization',
         'hostname and port precedence', 'original proxy CONNECT', 'Host preserved', 'request body buffering',
         '16 configs share DNS', '40 RDS replacements update existing keepalive connections and preserve cache and threads', 'deny before origin',
-        'other config isolated', 'invalid RDS retains accepted policy', 'in-flight DNS snapshot survives', 'in-flight request survives', 'DNS rebinding denied', 'mixed answers', 'DNS failure'],
+        'other config isolated', 'invalid RDS retains accepted policy', 'in-flight DNS snapshot survives', 'in-flight request survives', 'DNS rebinding denied', 'cached TTL is not extended', 'mixed answers', 'DNS failure'],
         'before': start, 'after': final['process'], 'queries': {name: final['dns'][name], rebind: final['dns'][rebind]}}))
 
 

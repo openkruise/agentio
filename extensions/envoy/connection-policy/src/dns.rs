@@ -3,13 +3,14 @@
 
 use envoy_proxy_dynamic_modules_rust_sdk::envoy_log_error;
 use hickory_resolver::{TokioResolver, config::LookupIpStrategy};
+use moka::sync::Cache;
 use serde::Deserialize;
 use std::{
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::Semaphore, task::JoinHandle};
 
@@ -28,9 +29,17 @@ impl Default for Settings {
     }
 }
 
+#[derive(Clone)]
+struct Answer {
+    ips: Arc<[IpAddr]>,
+    valid_until: Instant,
+}
+
 pub struct Resolver {
     runtime: Arc<Runtime>,
     resolver: TokioResolver,
+    // Reuse immutable answers without rebuilding queries or cloning DNS response messages.
+    answers: Cache<String, Answer>,
     settings: Settings,
     pending: Arc<Semaphore>,
 }
@@ -73,6 +82,7 @@ impl Resolver {
         Ok(Self {
             runtime: Arc::new(runtime),
             resolver,
+            answers: Cache::new(settings.max_hosts as u64),
             pending: Arc::new(Semaphore::new(settings.max_pending_requests)),
             settings,
         })
@@ -84,14 +94,28 @@ impl Resolver {
         port: u16,
         make_notify: impl FnOnce() -> N,
     ) -> Lookup {
+        if let Some(answer) = self.answers.get(&name)
+            && answer.valid_until > Instant::now()
+        {
+            return Lookup::Ready(Ok(socket_addresses(&answer, port)));
+        }
+        let answers = self.answers.clone();
         let resolver = self.resolver.clone();
+        let query_name = name.clone();
         let mut query = Box::pin(async move {
-            match tokio::time::timeout(Duration::from_secs(5), resolver.lookup_ip(name)).await {
-                Ok(Ok(answer)) => Ok(answer
-                    .iter()
-                    .filter(|ip| ip.is_ipv4())
-                    .map(|ip| SocketAddr::new(ip, port))
-                    .collect()),
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                resolver.lookup_ip(query_name.as_str()),
+            )
+            .await
+            {
+                Ok(Ok(answer)) => {
+                    let answer = Answer {
+                        ips: answer.iter().filter(|ip| ip.is_ipv4()).collect(),
+                        valid_until: answer.valid_until(),
+                    };
+                    Ok(answer)
+                }
                 Ok(Err(error)) => Err(error.to_string()),
                 Err(error) => Err(error.to_string()),
             }
@@ -102,7 +126,10 @@ impl Resolver {
             query.as_mut().poll(&mut Context::from_waker(Waker::noop()))
         };
         match ready {
-            Poll::Ready(result) => Lookup::Ready(result),
+            // Hickory rounds cached TTLs to seconds; do not cache them again and extend expiry.
+            Poll::Ready(result) => {
+                Lookup::Ready(result.map(|answer| socket_addresses(&answer, port)))
+            }
             Poll::Pending => {
                 let Ok(permit) = self.pending.clone().try_acquire_owned() else {
                     return Lookup::Ready(Err("DNS pending request limit exceeded".into()));
@@ -111,13 +138,25 @@ impl Resolver {
                     self.runtime.clone(),
                     async move {
                         let _permit = permit;
-                        query.await
+                        let answer = query.await?;
+                        let addresses = socket_addresses(&answer, port);
+                        answers.insert(name, answer);
+                        Ok(addresses)
                     },
                     make_notify(),
                 ))
             }
         }
     }
+}
+
+fn socket_addresses(answer: &Answer, port: u16) -> Vec<SocketAddr> {
+    answer
+        .ips
+        .iter()
+        .copied()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect()
 }
 
 pub enum Lookup {
@@ -215,6 +254,57 @@ mod tests {
             panic!("localhost must complete inline")
         };
         assert_eq!(result.unwrap(), vec!["127.0.0.1:8443".parse().unwrap()]);
+    }
+
+    #[test]
+    fn hosts_aliases_preserve_request_ports() {
+        let mut hosts = hickory_resolver::Hosts::default();
+        hosts
+            .read_hosts_conf(
+                b"192.0.2.1 service.test alias.test\n2001:db8::1 service.test alias.test\n"
+                    .as_slice(),
+            )
+            .unwrap();
+        let mut resolver = Resolver::new(Settings::default()).unwrap();
+        resolver.resolver.set_hosts(Arc::new(hosts));
+        for (name, port) in [
+            ("service.test", 80),
+            ("service.test", 443),
+            ("ALIAS.test.", 443),
+        ] {
+            let Lookup::Ready(result) = resolver.resolve(name.into(), port, || -> fn() {
+                panic!("hosts lookup scheduled")
+            }) else {
+                panic!("hosts must complete inline")
+            };
+            assert_eq!(
+                result.unwrap(),
+                vec![SocketAddr::from(([192, 0, 2, 1], port))]
+            );
+        }
+    }
+
+    #[test]
+    fn expired_answer_is_never_used() {
+        let resolver = Resolver::new(Settings::default()).unwrap();
+        for (deadline, expected) in [
+            (Instant::now() + Duration::from_secs(60), [192, 0, 2, 1]),
+            (Instant::now(), [127, 0, 0, 1]),
+        ] {
+            resolver.answers.insert(
+                "localhost".into(),
+                Answer {
+                    ips: Arc::from([IpAddr::from([192, 0, 2, 1])]),
+                    valid_until: deadline,
+                },
+            );
+            let Lookup::Ready(result) = resolver.resolve("localhost".into(), 443, || -> fn() {
+                panic!("cached or localhost lookup scheduled")
+            }) else {
+                panic!("lookup must complete inline")
+            };
+            assert_eq!(result.unwrap(), vec![SocketAddr::from((expected, 443))]);
+        }
     }
 
     #[test]

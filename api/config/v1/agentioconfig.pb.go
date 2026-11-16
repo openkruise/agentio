@@ -2635,7 +2635,7 @@ func (x *TcpPassthroughMatch) GetPorts() []uint32 {
 // DnsCacheSettings sizes the shared DNS resolver per gateway process.
 type DnsCacheSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Maximum cached DNS records (native) or host:port pairs (legacy DFP).
+	// Maximum entries per native DNS cache, or host:port pairs (legacy DFP).
 	// Native caches evict entries at capacity. Defaults to 16384;
 	// must be positive when set.
 	MaxHosts *uint32 `protobuf:"varint,1,opt,name=max_hosts,json=maxHosts,proto3,oneof" json:"max_hosts,omitempty"`

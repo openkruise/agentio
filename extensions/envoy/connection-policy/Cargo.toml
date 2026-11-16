@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+moka = { version = "0.12", features = ["sync"] }
 hickory-resolver = { version = "0.26", default-features = false, features = ["system-config", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 

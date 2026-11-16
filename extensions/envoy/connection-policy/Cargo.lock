@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "envoy-proxy-dynamic-modules-rust-sdk",
  "hickory-resolver",
+ "moka",
  "serde",
  "serde_json",
  "tokio",
