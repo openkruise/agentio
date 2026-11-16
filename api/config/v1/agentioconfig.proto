@@ -558,8 +558,7 @@ message DnsCacheSettings {
   // same host. Defaults to 4096; must be positive when set.
   optional uint32 max_pending_requests = 2;
 
-  // Legacy DFP only: idle lifetime of cached hosts, independent of DNS record TTL.
-  // Native gateways ignore this field and expire DNS answers by record TTL.
-  // Defaults to 120s; must be a positive duration when set.
-  google.protobuf.Duration host_ttl = 3;
+  // Retired DFP idle expiration; native DNS answers expire by record TTL.
+  reserved 3;
+  reserved "host_ttl", "hostTtl";
 }

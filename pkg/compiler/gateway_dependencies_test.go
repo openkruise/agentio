@@ -149,7 +149,7 @@ func TestGatewayExtProcDependenciesFollowOverrides(t *testing.T) {
 					gatewayResourceName(
 						model.RouteType,
 						gateway.ResourceName()+"|agentio-egress",
-						networking.HTTPDynamicForwardProxy,
+						networking.HTTPForwardProxy,
 					),
 				)
 				if resource == nil {

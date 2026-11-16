@@ -157,19 +157,19 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				b := &resourceBuilder{egressAuthorization: &configv1.EgressAuthorization{DeniedCidrs: denied}}
 				settings := effectiveConfig{gateway: &configv1.EgressGateway{}}
 				clusters := []*anypb.Any{
-					b.pack(b.buildForwardCluster(HTTPDynamicForwardProxy, true, false, nil)),
+					b.pack(b.buildForwardCluster(HTTPForwardProxy, true, false, nil)),
 					b.pack(b.buildPassthroughCluster()),
 				}
 				if pinned {
 					settings.extProc = provider
 					clusters = append(clusters, b.pack(b.buildExtProcCluster(provider, ExtProcCluster)))
 				}
-				manager, err := b.buildForwardHCM(HTTPDynamicForwardProxy, settings, false)
+				manager, err := b.buildForwardHCM(HTTPForwardProxy, settings, false)
 				if err != nil {
 					t.Fatal(err)
 				}
 				manager.RouteSpecifier = &hcmv3.HttpConnectionManager_RouteConfig{
-					RouteConfig: b.buildForwardRoute(HTTPDynamicForwardProxy, settings.gateway),
+					RouteConfig: b.buildForwardRoute(HTTPForwardProxy, settings.gateway),
 				}
 				// Model the original destination restored from the outer HBONE tunnel.
 				manager.HttpFilters = append(

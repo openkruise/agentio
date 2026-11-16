@@ -53,7 +53,7 @@ spec:
   configPatches:
   - applyTo: CLUSTER
     match:
-      cluster: {name: http_dynamic_forward_proxy}
+      cluster: {name: http_forward_proxy}
     patch:
       operation: MERGE
       value: {connect_timeout: 3s}
@@ -449,7 +449,7 @@ func TestConfigMapPatchOrderingAcrossSources(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, resource := range resources {
-				if resource.Key.TypeURL != model.ClusterType || resource.XDSName != networking.HTTPDynamicForwardProxy {
+				if resource.Key.TypeURL != model.ClusterType || resource.XDSName != networking.HTTPForwardProxy {
 					continue
 				}
 				cluster := &clusterv3.Cluster{}
@@ -619,7 +619,7 @@ func patchGatewayTimeout(t *testing.T, c *compiler.Compiler, gateway string) tim
 		if err := resource.Value.UnmarshalTo(cluster); err != nil {
 			t.Fatal(err)
 		}
-		if cluster.Name == networking.HTTPDynamicForwardProxy {
+		if cluster.Name == networking.HTTPForwardProxy {
 			return cluster.GetConnectTimeout().AsDuration()
 		}
 	}
@@ -654,7 +654,7 @@ func TestPatchExampleBuildsTypedGatewayResources(t *testing.T) {
 			if err := resource.Value.UnmarshalTo(cluster); err != nil {
 				t.Fatal(err)
 			}
-			if cluster.Name == networking.HTTPDynamicForwardProxy {
+			if cluster.Name == networking.HTTPForwardProxy {
 				foundCluster = cluster.GetConnectTimeout().AsDuration() == 3*time.Second
 			}
 		case model.ListenerType:

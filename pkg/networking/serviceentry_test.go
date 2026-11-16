@@ -189,7 +189,7 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 			model.RouteType,
 			func() *route.RouteConfiguration { return &route.RouteConfiguration{} },
 		)
-		for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+		for _, name := range []string{(&resourceBuilder{legacyGateway: legacy}).httpForwardName(), TLSConnectOriginate} {
 			if got := routes[name].VirtualHosts; len(got) != 1 || !slices.Equal(got[0].Domains, []string{"*"}) {
 				t.Fatalf("ServiceEntries generated host-selected routes: %v", got)
 			}

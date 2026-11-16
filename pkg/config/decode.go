@@ -30,8 +30,8 @@ import (
 
 // Apply decodes YAML/JSON onto a copy of base, which must be non-nil. Omitted
 // and null fields preserve base; supplied fields replace lists and submessages.
-// Unknown fields are ignored with a warning. Invalid known fields, duplicate
-// YAML keys, and conflicting oneof members are errors.
+// Unknown fields are ignored with a warning; reserved fields are rejected.
+// Invalid known fields, duplicate YAML keys, and conflicting oneof members are errors.
 func Apply[T proto.Message](content string, base T) (T, error) {
 	var zero T
 	data, err := yaml.YAMLToJSONStrict([]byte(content))
@@ -96,6 +96,10 @@ func discardUnknownFields(value any, message protoreflect.MessageDescriptor, pat
 			field = message.Fields().ByName(protoreflect.Name(name))
 		}
 		if field == nil {
+			// Keep explicitly retired fields for strict protojson rejection.
+			if message.ReservedNames().Has(protoreflect.Name(name)) {
+				continue
+			}
 			delete(object, name)
 			unknown = append(unknown, fieldPath)
 			continue

@@ -63,7 +63,7 @@ func TestGatewayRouteOverridesUseOneWildcardAndIgnoreRequestPort(t *testing.T) {
 			model.RouteType,
 			func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 		)
-		for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+		for _, name := range []string{(&resourceBuilder{legacyGateway: legacy}).httpForwardName(), TLSConnectOriginate} {
 			rc := routes[name]
 			if !rc.GetIgnorePortInHostMatching() {
 				t.Fatalf("%s must match api.example.com:8443 and api.example.com identically", name)
@@ -121,7 +121,7 @@ func TestGatewayRoutesUseSupportedAgentioRetries(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{HTTPForwardProxy, TLSConnectOriginate} {
 		config := routes[name]
 		configured := config.GetVirtualHosts()[0].GetRoutes()[1]
 		if got := configured.GetRoute().GetTimeout().AsDuration(); got != 0 {

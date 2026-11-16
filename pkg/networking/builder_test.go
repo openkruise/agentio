@@ -83,7 +83,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
 	for _, name := range []string{MainInternal, MainForward, PassthroughCluster,
-		HTTPDynamicForwardProxy, TLSConnectOriginate, ExtProcCluster} {
+		HTTPForwardProxy, TLSConnectOriginate, ExtProcCluster} {
 		cluster := clusters[name]
 		if cluster == nil {
 			t.Errorf("cluster %q not found", name)
@@ -93,7 +93,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 			t.Errorf("cluster %q invalid: %v", name, err)
 		}
 	}
-	if clusters[HTTPDynamicForwardProxy].GetType() != clusterv3.Cluster_ORIGINAL_DST {
+	if clusters[HTTPForwardProxy].GetType() != clusterv3.Cluster_ORIGINAL_DST {
 		t.Fatal("HTTP forwarding must use the authorized numeric destination")
 	}
 
@@ -183,7 +183,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	for _, name := range []string{ConnectTerminate, HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{ConnectTerminate, HTTPForwardProxy, TLSConnectOriginate} {
 		if routes[name] == nil {
 			t.Errorf("route %q not found", name)
 			continue
@@ -663,7 +663,7 @@ func TestBuildSupportsDeployedSandboxConnectPatch(t *testing.T) {
 		Operation: model.PatchInsertBefore,
 		Target: model.HTTPRoutePatch{
 			Match: &model.RouteConfigurationMatch{
-				Name:        HTTPDynamicForwardProxy,
+				Name:        HTTPForwardProxy,
 				VirtualHost: &model.VirtualHostMatch{Route: &model.RouteMatch{Name: "default"}},
 			},
 			Value: &routev3.Route{
@@ -701,7 +701,7 @@ func TestBuildSupportsDeployedSandboxConnectPatch(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	got := routes[HTTPDynamicForwardProxy].GetVirtualHosts()[0].GetRoutes()
+	got := routes[HTTPForwardProxy].GetVirtualHosts()[0].GetRoutes()
 	if len(got) != 3 || got[0].GetName() != "sandbox-connect" || got[1].GetName() != "sandbox-connect" ||
 		got[2].GetName() != "default" {
 		t.Fatalf("HTTP DFP routes = %+v", got)

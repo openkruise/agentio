@@ -96,10 +96,10 @@
     },
     {
       "type_url": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-      "name": "http_dynamic_forward_proxy",
+      "name": "http_forward_proxy",
       "resource": {
-        "name": "http_dynamic_forward_proxy",
-        "altStatName": "http_dynamic_forward_proxy;",
+        "name": "http_forward_proxy",
+        "altStatName": "http_forward_proxy;",
         "type": "ORIGINAL_DST",
         "connectTimeout": "7s",
         "lbPolicy": "CLUSTER_PROVIDED",
@@ -1674,7 +1674,7 @@
                       "ads": {},
                       "resourceApiVersion": "V3"
                     },
-                    "routeConfigName": "http_dynamic_forward_proxy"
+                    "routeConfigName": "http_forward_proxy"
                   },
                   "httpFilters": [
                     {
@@ -2496,9 +2496,9 @@
     },
     {
       "type_url": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
-      "name": "http_dynamic_forward_proxy",
+      "name": "http_forward_proxy",
       "resource": {
-        "name": "http_dynamic_forward_proxy",
+        "name": "http_forward_proxy",
         "virtualHosts": [
           {
             "name": "sandbox|override|0",
@@ -2565,7 +2565,7 @@
                   "prefix": "/"
                 },
                 "route": {
-                  "cluster": "http_dynamic_forward_proxy",
+                  "cluster": "http_forward_proxy",
                   "timeout": "4s",
                   "retryPolicy": {
                     "retryOn": "connect-failure,refused-stream",
@@ -2584,7 +2584,7 @@
                   "maxGrpcTimeout": "4s"
                 },
                 "decorator": {
-                  "operation": "http_dynamic_forward_proxy"
+                  "operation": "http_forward_proxy"
                 }
               }
             ]
@@ -2653,7 +2653,7 @@
                   "prefix": "/"
                 },
                 "route": {
-                  "cluster": "http_dynamic_forward_proxy",
+                  "cluster": "http_forward_proxy",
                   "timeout": "12s",
                   "retryPolicy": {
                     "retryOn": "reset-before-request",
@@ -2662,7 +2662,7 @@
                   "maxGrpcTimeout": "12s"
                 },
                 "decorator": {
-                  "operation": "http_dynamic_forward_proxy"
+                  "operation": "http_forward_proxy"
                 }
               }
             ]

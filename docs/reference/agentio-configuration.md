@@ -288,7 +288,7 @@ Each entry in `egressGateways` matches a running gateway by verified workload id
 | `extProc` | `ExtProcProvider` | Inherit global | Per-gateway external-processing override. An explicitly empty provider disables it for this gateway. |
 | `tls.origination` | `UpstreamTlsSettings` | TLS 1.2–1.3 and eight cipher suites | Per-gateway upstream TLS defaults and overrides; see below. |
 | `upstreamTrustBundle` | `UpstreamTrustBundle` | Built-in public CA package | Additional CA sources for destination and HTTPS proxy TLS verification. |
-| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests / `120s` idle lifetime | Shared DNS cache budgets per gateway process; idle lifetime applies only to legacy DFP. |
+| `dnsCache` | `DnsCacheSettings` | `16384` hosts / `4096` pending requests | Shared DNS cache budgets per gateway process. |
 | `http.acceptHttp10` | Boolean | `true` | Accept HTTP/1.0 on business HTTP listeners; explicitly `false` rejects it. |
 | `http` | `GatewayHttpSettings` | See below | Business HTTP protocol, stream timeout, and routing settings. |
 | `tcp` | `TcpSettings` | See below | TCP forwarding connection timeouts, including the TLS termination relay. |
@@ -320,9 +320,12 @@ egressGateways:
 | --- | --- | --- |
 | `maxHosts` | `16384` | Native: maximum cached DNS records, shared across ports; reaching capacity evicts cache entries. Legacy DFP: maximum cached distinct `host:port` pairs, rejecting new hosts when full. Must be positive. |
 | `maxPendingRequests` | `4096` | Maximum requests waiting for DNS, including multiple requests for the same host. Native HTTP and TCP share this budget; cached answers do not consume it. Must be positive. |
-| `hostTtl` | `120s` | Legacy DFP only: positive idle lifetime before a cached host is eligible for removal. Native gateways ignore this field and expire DNS answers according to record TTL. |
 
 Omitting `dnsCache`, using `{}`, or omitting individual fields uses these defaults.
+`hostTtl` has been removed; remove it from existing configuration. YAML/JSON
+updates containing this field are rejected. Native DNS answers expire by record
+TTL; legacy DFP retains its fixed 120-second idle lifetime.
+
 Native DNS is IPv4-only for hostname lookups; explicit numeric targets support both
 IP families. DNS cache capacity does not limit Envoy's upstream connection pools or
 `ORIGINAL_DST` host map. Envoy reclaims unused original-destination hosts separately.

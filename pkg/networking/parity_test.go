@@ -124,9 +124,15 @@ func TestSupportedGatewayClusterParity(t *testing.T) {
 			cluster.ConnectTimeout = nil
 		}
 	}
+	legacyHTTPKey := gatewayResourceKey(model.ClusterType, HTTPDynamicForwardProxy)
+	http := want[legacyHTTPKey].(*clusterv3.Cluster)
+	delete(want, legacyHTTPKey)
+	http.Name = HTTPForwardProxy
+	http.AltStatName = delimitedStatsPrefix(HTTPForwardProxy)
+	want[gatewayResourceKey(model.ClusterType, HTTPForwardProxy)] = http
 	for key, value := range want {
 		if cluster, ok := value.(*clusterv3.Cluster); ok &&
-			(cluster.Name == HTTPDynamicForwardProxy || cluster.Name == TLSConnectOriginate) {
+			(cluster.Name == HTTPForwardProxy || cluster.Name == TLSConnectOriginate) {
 			cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_ORIGINAL_DST}
 		}
 		if !strings.HasPrefix(key, model.ClusterType+"\x00") {
@@ -203,7 +209,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 
 	for listenerName, routeName := range map[string]string{
 		ConnectTerminate: ConnectTerminate,
-		MainInternal:     HTTPDynamicForwardProxy,
+		MainInternal:     HTTPForwardProxy,
 		MainForward:      TLSConnectOriginate,
 	} {
 		if got := findHCM(t, listeners[listenerName]).GetRds().GetRouteConfigName(); got != routeName {
@@ -374,7 +380,7 @@ func TestSupportedGatewayRuntimeInvariants(t *testing.T) {
 		}
 	}
 
-	for _, routeName := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, routeName := range []string{HTTPForwardProxy, TLSConnectOriginate} {
 		for _, virtualHost := range routes[routeName].GetVirtualHosts() {
 			for _, route := range virtualHost.GetRoutes() {
 				action := route.GetRoute()

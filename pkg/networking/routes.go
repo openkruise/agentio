@@ -202,7 +202,7 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 		}
 		vhost.Routes = nil
 	}
-	http := b.buildForwardRoute(HTTPDynamicForwardProxy, gateway)
+	http := b.buildForwardRoute(b.httpForwardName(), gateway)
 	tls := b.buildForwardRoute(TLSConnectOriginate, gateway)
 	for _, route := range []*routev3.RouteConfiguration{connect, http, tls} {
 		if err := route.ValidateAll(); err != nil {

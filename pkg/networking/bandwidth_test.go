@@ -65,7 +65,7 @@ func TestBandwidthOnlyShapesTCPConnect(t *testing.T) {
 			}
 		}
 	}
-	inner := routes[HTTPDynamicForwardProxy].GetVirtualHosts()[0].GetRoutes()
+	inner := routes[HTTPForwardProxy].GetVirtualHosts()[0].GetRoutes()
 	if inner[len(inner)-1].GetRoute().GetRetryPolicy().GetRetryOn() != "5xx" {
 		t.Fatal("bandwidth shaping changed retries on the separate inner HTTP chain")
 	}

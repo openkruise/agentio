@@ -28,7 +28,6 @@ import (
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	dfpnetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/model"
@@ -40,7 +39,6 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 	configured := &configv1.DnsCacheSettings{
 		MaxHosts:           new(uint32(8192)),
 		MaxPendingRequests: new(uint32(2048)),
-		HostTtl:            durationpb.New(3 * time.Minute),
 	}
 	for _, tc := range []struct {
 		name     string
@@ -54,12 +52,11 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 		{"native defaults", false, nil, 16384, 4096, 2 * time.Minute, false},
 		{"legacy defaults", true, nil, 16384, 4096, 2 * time.Minute, false},
 		{"empty settings", false, &configv1.DnsCacheSettings{}, 16384, 4096, 2 * time.Minute, false},
-		{"native configured", false, configured, 8192, 2048, 3 * time.Minute, false},
-		{"legacy configured", true, configured, 8192, 2048, 3 * time.Minute, false},
+		{"native configured", false, configured, 8192, 2048, 2 * time.Minute, false},
+		{"legacy configured", true, configured, 8192, 2048, 2 * time.Minute, false},
 		{"capacity only", false, &configv1.DnsCacheSettings{MaxHosts: new(uint32(2048))}, 2048, 4096, 2 * time.Minute, false},
 		{"pending only", false, &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(2048))}, 16384, 2048, 2 * time.Minute, false},
-		{"TTL only", false, &configv1.DnsCacheSettings{HostTtl: durationpb.New(time.Minute)}, 16384, 4096, time.Minute, false},
-		{"configured custom restrictions", false, configured, 8192, 2048, 3 * time.Minute, true},
+		{"configured custom restrictions", false, configured, 8192, 2048, 2 * time.Minute, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			legacy := tc.legacy
@@ -135,7 +132,7 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 				if len(caches) != 0 {
 					t.Fatalf("native gateway still uses DFP: %v", caches)
 				}
-				for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate, TLSProxyOriginate, TLSPassthrough} {
+				for _, name := range []string{HTTPForwardProxy, TLSConnectOriginate, TLSProxyOriginate, TLSPassthrough} {
 					if clusters[name].GetType() != clusterv3.Cluster_ORIGINAL_DST {
 						t.Fatalf("%s must use ORIGINAL_DST", name)
 					}

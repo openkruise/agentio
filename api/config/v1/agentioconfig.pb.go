@@ -2642,12 +2642,8 @@ type DnsCacheSettings struct {
 	// Maximum requests waiting for DNS resolution, including requests for the
 	// same host. Defaults to 4096; must be positive when set.
 	MaxPendingRequests *uint32 `protobuf:"varint,2,opt,name=max_pending_requests,json=maxPendingRequests,proto3,oneof" json:"max_pending_requests,omitempty"`
-	// Legacy DFP only: idle lifetime of cached hosts, independent of DNS record TTL.
-	// Native gateways ignore this field and expire DNS answers by record TTL.
-	// Defaults to 120s; must be a positive duration when set.
-	HostTtl       *duration.Duration `protobuf:"bytes,3,opt,name=host_ttl,json=hostTtl,proto3" json:"host_ttl,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *DnsCacheSettings) Reset() {
@@ -2692,13 +2688,6 @@ func (x *DnsCacheSettings) GetMaxPendingRequests() uint32 {
 		return *x.MaxPendingRequests
 	}
 	return 0
-}
-
-func (x *DnsCacheSettings) GetHostTtl() *duration.Duration {
-	if x != nil {
-		return x.HostTtl
-	}
-	return nil
 }
 
 var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
@@ -2878,14 +2867,13 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\vorigination\x18\x01 \x01(\v2&.agentio.config.v1.UpstreamTlsSettingsR\vorigination\"A\n" +
 	"\x13TcpPassthroughMatch\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\x12\x14\n" +
-	"\x05ports\x18\x02 \x03(\rR\x05ports\"\xc8\x01\n" +
+	"\x05ports\x18\x02 \x03(\rR\x05ports\"\xab\x01\n" +
 	"\x10DnsCacheSettings\x12 \n" +
 	"\tmax_hosts\x18\x01 \x01(\rH\x00R\bmaxHosts\x88\x01\x01\x125\n" +
-	"\x14max_pending_requests\x18\x02 \x01(\rH\x01R\x12maxPendingRequests\x88\x01\x01\x124\n" +
-	"\bhost_ttl\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\ahostTtlB\f\n" +
+	"\x14max_pending_requests\x18\x02 \x01(\rH\x01R\x12maxPendingRequests\x88\x01\x01B\f\n" +
 	"\n" +
 	"_max_hostsB\x17\n" +
-	"\x15_max_pending_requests*1\n" +
+	"\x15_max_pending_requestsJ\x04\b\x03\x10\x04R\bhost_ttlR\ahostTtl*1\n" +
 	"\x0eHeaderSendMode\x12\v\n" +
 	"\aDEFAULT\x10\x00\x12\b\n" +
 	"\x04SEND\x10\x01\x12\b\n" +
@@ -3013,12 +3001,11 @@ var file_api_config_v1_agentioconfig_proto_depIdxs = []int32{
 	44, // 56: agentio.config.v1.GatewayHttpSettings.stream_idle_timeout:type_name -> google.protobuf.Duration
 	30, // 57: agentio.config.v1.GatewayHttpSettings.routing:type_name -> agentio.config.v1.HttpRoutingSettings
 	19, // 58: agentio.config.v1.GatewayTlsSettings.origination:type_name -> agentio.config.v1.UpstreamTlsSettings
-	44, // 59: agentio.config.v1.DnsCacheSettings.host_ttl:type_name -> google.protobuf.Duration
-	60, // [60:60] is the sub-list for method output_type
-	60, // [60:60] is the sub-list for method input_type
-	60, // [60:60] is the sub-list for extension type_name
-	60, // [60:60] is the sub-list for extension extendee
-	0,  // [0:60] is the sub-list for field type_name
+	59, // [59:59] is the sub-list for method output_type
+	59, // [59:59] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_api_config_v1_agentioconfig_proto_init() }

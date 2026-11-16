@@ -36,12 +36,15 @@ import (
 	"github.com/openkruise/agentio/pkg/networking/telemetry"
 )
 
+// Gateway resource names identify the listeners, routes and clusters emitted below.
 const (
-	ConnectTerminate        = "connect_terminate"
-	MainInternal            = "main_internal"
-	MainForward             = "main_forward"
-	TCPPassthrough          = "tcp_passthrough"
-	PassthroughCluster      = "PassthroughCluster"
+	ConnectTerminate   = "connect_terminate"
+	MainInternal       = "main_internal"
+	MainForward        = "main_forward"
+	TCPPassthrough     = "tcp_passthrough"
+	PassthroughCluster = "PassthroughCluster"
+	HTTPForwardProxy   = "http_forward_proxy"
+	// HTTPDynamicForwardProxy is the legacy proxyv2 cluster and route name.
 	HTTPDynamicForwardProxy = "http_dynamic_forward_proxy"
 	TLSConnectOriginate     = "tls_connect_originate"
 	TLSProxyOriginate       = "tls_proxy_originate"
@@ -350,4 +353,11 @@ func scopedResource(gateway model.Gateway, typeURL, name string, message proto.M
 
 func additionalExtProcName(provider *configv1.ExtProcProvider) string {
 	return "agentio.additional-ext-proc." + provider.GetName()
+}
+
+func (b *resourceBuilder) httpForwardName() string {
+	if b.legacyGateway {
+		return HTTPDynamicForwardProxy
+	}
+	return HTTPForwardProxy
 }

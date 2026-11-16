@@ -53,7 +53,7 @@ func (b *resourceBuilder) buildClusters(config effectiveConfig) ([]*clusterv3.Cl
 		b.buildInternalCluster(MainInternal),
 		b.buildInternalCluster(MainForward),
 		b.buildPassthroughCluster(),
-		b.buildForwardCluster(HTTPDynamicForwardProxy, true, false, nil),
+		b.buildForwardCluster(b.httpForwardName(), true, false, nil),
 		b.buildForwardCluster(TLSConnectOriginate, false, true, config.gateway.GetTls().GetOrigination()),
 		b.buildTLSOriginateCluster(TLSProxyOriginate, config.gateway.GetTls().GetOrigination()),
 	}
@@ -376,9 +376,6 @@ func (b *resourceBuilder) dnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
 			config.DnsCacheCircuitBreaker = &dfpcommonv3.DnsCacheCircuitBreakers{
 				MaxPendingRequests: wrapperspb.UInt32(settings.GetMaxPendingRequests()),
 			}
-		}
-		if settings.GetHostTtl() != nil {
-			config.HostTtl = settings.GetHostTtl()
 		}
 	}
 

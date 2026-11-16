@@ -37,7 +37,7 @@ func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
 		for _, terminatedTLS := range []bool{false, true} {
 			t.Run(fmt.Sprintf("legacy=%t/tls=%t", legacy, terminatedTLS), func(t *testing.T) {
 				b := &resourceBuilder{legacyGateway: legacy}
-				h, err := b.buildForwardHCM(HTTPDynamicForwardProxy, effectiveConfig{
+				h, err := b.buildForwardHCM(HTTPForwardProxy, effectiveConfig{
 					gateway: &configv1.EgressGateway{ServiceEntries: []*configv1.EgressServiceEntry{{
 						Hosts:     []string{"test.invalid"},
 						Endpoints: []*configv1.EgressServiceEntryEndpoint{{Address: "192.0.2.1"}},
@@ -182,7 +182,7 @@ func TestEgressAuthorizationPinsOriginalDstTarget(t *testing.T) {
 
 func TestNativeForwardingWithoutEPEOrServiceEntries(t *testing.T) {
 	b := &resourceBuilder{}
-	h, err := b.buildForwardHCM(HTTPDynamicForwardProxy, effectiveConfig{gateway: &configv1.EgressGateway{}}, false)
+	h, err := b.buildForwardHCM(HTTPForwardProxy, effectiveConfig{gateway: &configv1.EgressGateway{}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,13 +200,13 @@ func TestNativeForwardingWithoutEPEOrServiceEntries(t *testing.T) {
 func TestHTTPAuthorizationUsesRouteSnapshots(t *testing.T) {
 	b := &resourceBuilder{}
 	cfg := effectiveConfig{gateway: &configv1.EgressGateway{}}
-	before, err := b.buildForwardHCM(HTTPDynamicForwardProxy, cfg, false)
+	before, err := b.buildForwardHCM(HTTPForwardProxy, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldRoute := b.buildForwardRoute(HTTPDynamicForwardProxy, cfg.gateway)
+	oldRoute := b.buildForwardRoute(HTTPForwardProxy, cfg.gateway)
 	b.egressAuthorization = &configv1.EgressAuthorization{DeniedCidrs: []string{"192.0.2.0/24"}}
-	after, err := b.buildForwardHCM(HTTPDynamicForwardProxy, cfg, false)
+	after, err := b.buildForwardHCM(HTTPForwardProxy, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestHTTPAuthorizationUsesRouteSnapshots(t *testing.T) {
 		}
 		return config.Value.AsMap()["filter_config"].(map[string]any)["value"].(map[string]any)
 	}
-	for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{HTTPForwardProxy, TLSConnectOriginate} {
 		route := b.buildForwardRoute(name, cfg.gateway)
 		policy := route.TypedPerFilterConfig["agentio.egress_authorization"]
 		if proto.Equal(oldRoute.TypedPerFilterConfig["agentio.egress_authorization"], policy) {

@@ -240,7 +240,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 	if err != nil {
 		return nil, err
 	}
-	httpInternal, err := b.buildForwardHCM(HTTPDynamicForwardProxy, config, false)
+	httpInternal, err := b.buildForwardHCM(b.httpForwardName(), config, false)
 	if err != nil {
 		return nil, err
 	}
