@@ -17,7 +17,7 @@ use std::{
 pub const FILTER_NAME: &str = "envoy_agentio_egress_authorization";
 const SNI_KEY: &[u8] = b"agentio.tls.outer_sni";
 const ORIGINAL_KEY: &[u8] = b"envoy.filters.listener.original_dst.local_ip";
-const PIN_KEY: &[u8] = b"envoy.network.transport_socket.original_dst_address";
+use crate::destination::{PIN_KEY, UPSTREAM_KEY};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -168,7 +168,8 @@ impl RouteConfig {
             }
             return Ok((addr.ip().to_string(), addr.port()));
         }
-        if let Some(value) = envoy.get_filter_state_typed(PIN_KEY) {
+
+        if let Some(value) = envoy.get_filter_state_bytes(UPSTREAM_KEY) {
             let addr: SocketAddr = std::str::from_utf8(value.as_slice())
                 .map_err(|_| "invalid upstream address")?
                 .parse()
@@ -332,8 +333,8 @@ mod tests {
     fn explicit_endpoint_overrides_authority_and_default_port() {
         let mut envoy = MockEnvoyHttpFilter::new();
         envoy
-            .expect_get_filter_state_typed()
-            .withf(|key| key == PIN_KEY)
+            .expect_get_filter_state_bytes()
+            .withf(|key| key == UPSTREAM_KEY)
             .returning(|_| Some(EnvoyBuffer::new(b"127.0.0.1:8443")));
         let route = new_route_config(FILTER_NAME, br#"{"mode":"DYNAMIC_FORWARD"}"#).unwrap();
         assert_eq!(
@@ -346,12 +347,32 @@ mod tests {
     }
 
     #[test]
-    fn connect_uses_outer_proxy_name_and_original_port() {
+    fn original_destination_mode_ignores_the_tunnel_target() {
         let mut envoy = MockEnvoyHttpFilter::new();
         envoy
             .expect_get_filter_state_typed()
+            .withf(|key| key == ORIGINAL_KEY)
+            .returning(|_| Some(EnvoyBuffer::new(b"192.0.2.1:8443")));
+        let route = new_route_config(FILTER_NAME, br#"{"mode":"ORIGINAL_DST"}"#).unwrap();
+        assert_eq!(
+            route
+                .downcast_ref::<Arc<RouteConfig>>()
+                .unwrap()
+                .target(&envoy),
+            Ok(("192.0.2.1".into(), 8443))
+        );
+    }
+
+    #[test]
+    fn connect_uses_outer_proxy_name_and_original_port() {
+        let mut envoy = MockEnvoyHttpFilter::new();
+        envoy
+            .expect_get_filter_state_bytes()
+            .withf(|key| key == UPSTREAM_KEY)
+            .returning(|_| None);
+        envoy
+            .expect_get_filter_state_typed()
             .returning(|key| match key {
-                PIN_KEY => None,
                 ORIGINAL_KEY => Some(EnvoyBuffer::new(b"192.0.2.1:8443")),
                 SNI_KEY => Some(EnvoyBuffer::new(b"proxy.test")),
                 _ => panic!("unexpected filter state"),

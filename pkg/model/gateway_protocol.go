@@ -35,9 +35,8 @@ const (
 	FilterStateLocalPrincipal    = "agentio.local.principal"
 	// FilterStateConnectionPolicyHash must match HASH_KEY in extensions/envoy/connection-policy.
 	FilterStateConnectionPolicyHash = "agentio.connection.policy_hash"
-	// FilterStateRouteUpstream is the legacy string target; native gateways use the typed address below.
-	FilterStateRouteUpstream   = "agentio.route.upstream"
-	FilterStateUpstreamAddress = "envoy.network.transport_socket.original_dst_address"
+	// FilterStateRouteUpstream carries the selected numeric IP:port between routing modules.
+	FilterStateRouteUpstream = "agentio.route.upstream"
 )
 
 // ExtProc attributes requested by Envoy and consumed by Porter and EPE.
@@ -46,8 +45,6 @@ const (
 	AttributeWorkloadUID       = "filter_state['" + FilterStateWorkloadUID + "']"
 	AttributeWorkloadName      = "filter_state['" + FilterStateWorkloadName + "']"
 	AttributeWorkloadNamespace = "filter_state['" + FilterStateWorkloadNamespace + "']"
-	AttributeUpstreamIP        = "filter_state['" + FilterStateUpstreamAddress + "'].ip"
-	AttributeUpstreamPort      = "filter_state['" + FilterStateUpstreamAddress + "'].port"
 	AttributeRouteUpstream     = "filter_state['" + FilterStateRouteUpstream + "']"
 	AttributeSandboxID         = "filter_state['" + FilterStateSandboxID + "']"
 	AttributePeerCertificate   = "filter_state['" + FilterStatePeerCertificate + "']"

@@ -2690,11 +2690,60 @@ func (x *DnsCacheSettings) GetMaxPendingRequests() uint32 {
 	return 0
 }
 
+// EgressAuthorization restricts the final destination of native gateway traffic.
+type EgressAuthorization struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Additional denied CIDRs on every port. Use /32 for IPv4 or /128 for IPv6.
+	// IPv4-mapped IPv6 prefixes are not accepted; use IPv4 prefixes instead.
+	// Loopback, unspecified and link-local addresses are always denied.
+	// Alibaba Cloud metadata (100.100.100.200/32) requires an explicit entry.
+	DeniedCidrs   []string `protobuf:"bytes,1,rep,name=denied_cidrs,json=deniedCIDRs,proto3" json:"denied_cidrs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressAuthorization) Reset() {
+	*x = EgressAuthorization{}
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressAuthorization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressAuthorization) ProtoMessage() {}
+
+func (x *EgressAuthorization) ProtoReflect() protoreflect.Message {
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressAuthorization.ProtoReflect.Descriptor instead.
+func (*EgressAuthorization) Descriptor() ([]byte, []int) {
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *EgressAuthorization) GetDeniedCidrs() []string {
+	if x != nil {
+		return x.DeniedCidrs
+	}
+	return nil
+}
+
 var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
 
 const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\n" +
-	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1dapi/config/v1/epeconfig.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x90\x04\n" +
+	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x90\x04\n" +
 	"\rAgentioConfig\x12L\n" +
 	"\x10sandbox_ext_proc\x18\x01 \x01(\v2\".agentio.config.v1.ExtProcProviderR\x0esandboxExtProc\x12I\n" +
 	"\x0fegress_policies\x18\x02 \x03(\v2 .agentio.extensions.EgressPolicyR\x0eegressPolicies\x124\n" +
@@ -2867,13 +2916,15 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\vorigination\x18\x01 \x01(\v2&.agentio.config.v1.UpstreamTlsSettingsR\vorigination\"A\n" +
 	"\x13TcpPassthroughMatch\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\x12\x14\n" +
-	"\x05ports\x18\x02 \x03(\rR\x05ports\"\xab\x01\n" +
+	"\x05ports\x18\x02 \x03(\rR\x05ports\"\x92\x01\n" +
 	"\x10DnsCacheSettings\x12 \n" +
 	"\tmax_hosts\x18\x01 \x01(\rH\x00R\bmaxHosts\x88\x01\x01\x125\n" +
 	"\x14max_pending_requests\x18\x02 \x01(\rH\x01R\x12maxPendingRequests\x88\x01\x01B\f\n" +
 	"\n" +
 	"_max_hostsB\x17\n" +
-	"\x15_max_pending_requestsJ\x04\b\x03\x10\x04R\bhost_ttlR\ahostTtl*1\n" +
+	"\x15_max_pending_requests\"8\n" +
+	"\x13EgressAuthorization\x12!\n" +
+	"\fdenied_cidrs\x18\x01 \x03(\tR\vdeniedCIDRs*1\n" +
 	"\x0eHeaderSendMode\x12\v\n" +
 	"\aDEFAULT\x10\x00\x12\b\n" +
 	"\x04SEND\x10\x01\x12\b\n" +
@@ -2892,7 +2943,7 @@ func file_api_config_v1_agentioconfig_proto_rawDescGZIP() []byte {
 }
 
 var file_api_config_v1_agentioconfig_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(HeaderSendMode)(0),                      // 0: agentio.config.v1.HeaderSendMode
 	(UpstreamTlsSettings_ProtocolVersion)(0), // 1: agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
@@ -2935,18 +2986,18 @@ var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(*GatewayTlsSettings)(nil),               // 38: agentio.config.v1.GatewayTlsSettings
 	(*TcpPassthroughMatch)(nil),              // 39: agentio.config.v1.TcpPassthroughMatch
 	(*DnsCacheSettings)(nil),                 // 40: agentio.config.v1.DnsCacheSettings
-	(*v1.EgressPolicy)(nil),                  // 41: agentio.extensions.EgressPolicy
-	(*EgressAuthorization)(nil),              // 42: agentio.config.v1.EgressAuthorization
+	(*EgressAuthorization)(nil),              // 41: agentio.config.v1.EgressAuthorization
+	(*v1.EgressPolicy)(nil),                  // 42: agentio.extensions.EgressPolicy
 	(*_struct.Struct)(nil),                   // 43: google.protobuf.Struct
 	(*duration.Duration)(nil),                // 44: google.protobuf.Duration
 	(*v1alpha3.HTTPRetry)(nil),               // 45: istio.networking.v1alpha3.HTTPRetry
 }
 var file_api_config_v1_agentioconfig_proto_depIdxs = []int32{
 	23, // 0: agentio.config.v1.AgentioConfig.sandbox_ext_proc:type_name -> agentio.config.v1.ExtProcProvider
-	41, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> agentio.extensions.EgressPolicy
+	42, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> agentio.extensions.EgressPolicy
 	4,  // 2: agentio.config.v1.AgentioConfig.egress_gateways:type_name -> agentio.config.v1.EgressGateway
 	23, // 3: agentio.config.v1.AgentioConfig.additional_ext_procs:type_name -> agentio.config.v1.ExtProcProvider
-	42, // 4: agentio.config.v1.AgentioConfig.egress_authorization:type_name -> agentio.config.v1.EgressAuthorization
+	41, // 4: agentio.config.v1.AgentioConfig.egress_authorization:type_name -> agentio.config.v1.EgressAuthorization
 	22, // 5: agentio.config.v1.EgressGateway.tls_termination:type_name -> agentio.config.v1.TlsTerminationConfig
 	23, // 6: agentio.config.v1.EgressGateway.ext_proc:type_name -> agentio.config.v1.ExtProcProvider
 	33, // 7: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings
@@ -3013,7 +3064,6 @@ func file_api_config_v1_agentioconfig_proto_init() {
 	if File_api_config_v1_agentioconfig_proto != nil {
 		return
 	}
-	file_api_config_v1_epeconfig_proto_init()
 	file_api_config_v1_agentioconfig_proto_msgTypes[3].OneofWrappers = []any{
 		(*UpstreamTrustSource_ConfigMapRef)(nil),
 		(*UpstreamTrustSource_SecretRef)(nil),
@@ -3030,7 +3080,7 @@ func file_api_config_v1_agentioconfig_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_config_v1_agentioconfig_proto_rawDesc), len(file_api_config_v1_agentioconfig_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   38,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

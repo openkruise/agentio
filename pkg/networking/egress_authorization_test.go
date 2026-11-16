@@ -67,7 +67,7 @@ func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
 					}
 					for _, value := range cfg.OnRequestHeaders {
 						key := value.GetObjectKey()
-						if key != dynamicHostKey && key != dynamicPortKey && key != model.FilterStateUpstreamAddress {
+						if key != dynamicHostKey && key != dynamicPortKey && key != model.FilterStateRouteUpstream {
 							continue
 						}
 						if previous, exists := writes[key]; exists && (previous || previous != value.ReadOnly) {
@@ -83,7 +83,7 @@ func TestEgressTargetFilterStateWritersCompatible(t *testing.T) {
 					lastWriter[dynamicPortKey] != "agentio.egress_target") {
 					t.Fatal("EPE must select the final DFP address")
 				}
-				if !legacy && lastWriter[model.FilterStateUpstreamAddress] != "agentio.egress_target" {
+				if !legacy && lastWriter[model.FilterStateRouteUpstream] != "agentio.egress_target" {
 					t.Fatal("missing native upstream writer")
 				}
 			})
@@ -153,8 +153,7 @@ func TestEgressAuthorizationPinsOriginalDstTarget(t *testing.T) {
 					cfg.GetProcessingMode().GetRequestHeaderMode() != extproc.ProcessingMode_SKIP {
 					t.Fatal("provider failure and header modes must be preserved")
 				}
-				if !slices.Contains(cfg.RequestAttributes, model.AttributeUpstreamIP) ||
-					!slices.Contains(cfg.RequestAttributes, model.AttributeUpstreamPort) {
+				if !slices.Contains(cfg.RequestAttributes, model.AttributeRouteUpstream) {
 					t.Fatal("route candidate not forwarded")
 				}
 				if !slices.Contains(cfg.GetMetadataOptions().GetReceivingNamespaces().GetUntyped(), "agentio.route") {

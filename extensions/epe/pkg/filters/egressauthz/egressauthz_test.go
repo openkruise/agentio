@@ -28,6 +28,8 @@ import (
 	"github.com/openkruise/agentio/pkg/dns"
 )
 
+type authorizeFunc func(context.Context, *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error)
+
 func run(t *testing.T, f authorizeFunc, host string, port int32) *filter.RouteMutation {
 	t.Helper()
 	target, reply, err := f(
@@ -131,103 +133,6 @@ func TestInputFailuresDoNotProduceMutations(t *testing.T) {
 	}
 }
 
-func TestAuthorizationSelectsAndPinsAllowedCandidate(t *testing.T) {
-	client := dns.NewClient(nil, time.Second)
-	if err := client.SetRecord("example.com", []netip.Addr{
-		netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}}
-	f := NewAggregate(client, cfg).Authorize
-	if route := run(t, f, "example.com", 443); route.Upstream.Address.String() != "192.0.2.2:443" || route.ClearCache {
-		t.Fatalf("unauthorized or changed target: %+v", route)
-	}
-	if route := run(t, f, "example.com", 80); route.Upstream.Address.String() != "192.0.2.2:80" {
-		t.Fatal("unexpected target", route)
-	}
-	// A catch-all CIDR denies every IPv4 destination.
-	empty := NewAggregate(client, Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}}).Authorize
-	assertDenied(t, empty, "example.com", 443)
-	assertDenied(t, empty, "192.0.2.1", 443)
-}
-
-func assertDenied(t *testing.T, f authorizeFunc, host string, port int32) {
-	t.Helper()
-	target, reply, err := f(
-		context.Background(),
-		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: host, Port: port}}},
-	)
-	if err != nil || reply == nil || reply.Status != 403 || reply.Details != "epe_egress_denied" || target != nil {
-		t.Fatalf("target=%v reply=%v err=%v", target, reply, err)
-	}
-}
-
-type authorizeFunc func(context.Context, *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error)
-
-func TestAuthorizationAuditDecision(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		ips         []string
-		original    string
-		allowSecond bool
-		wantAllowed bool
-		want        string
-	}{
-		{name: "single deny", ips: []string{"192.0.2.1"}, want: filter.AuthorizationReasonPolicyDenied},
-		{name: "multiple denied", ips: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.99:80", want: filter.AuthorizationReasonPolicyDenied},
-		{name: "allowed candidate", ips: []string{"192.0.2.1", "192.0.2.2"}, allowSecond: true, wantAllowed: true},
-		{name: "denied original does not fall back", ips: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.1:80", allowSecond: true, want: filter.AuthorizationReasonPolicyDenied},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := dns.NewClient(nil, time.Second)
-			ips := make([]netip.Addr, 0, len(tc.ips))
-			for _, ip := range tc.ips {
-				ips = append(ips, netip.MustParseAddr(ip))
-			}
-			if err := client.SetRecord("example.com", ips); err != nil {
-				t.Fatal(err)
-			}
-			cfg := Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}}
-			if !tc.allowSecond {
-				cfg.DeniedCIDRs = append(cfg.DeniedCIDRs, netip.MustParsePrefix("192.0.2.2/32"))
-			}
-			stream := &filter.Stream{
-				RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: "example.com", Port: 80}},
-				StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
-			}
-			if tc.original != "" {
-				stream.Request.OriginalDestination = netip.MustParseAddrPort(tc.original)
-			}
-			target, reply, err := NewAggregate(client, cfg).Authorize(t.Context(), stream)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := stream.Info.Authorization
-			if got == nil || got.Reason != tc.want {
-				t.Fatalf("audit: %+v", got)
-			}
-			if tc.wantAllowed {
-				if reply != nil || got.Action != "allow" || got.Policy != "" ||
-					got.Destination != "192.0.2.2:80" {
-					t.Fatalf("allow: %+v reply=%v", got, reply)
-				}
-			} else if tc.original == "192.0.2.1:80" {
-				if target != nil || reply == nil || reply.Status != 403 || got.Action != "deny" ||
-					got.Destination != tc.original || got.Policy != "EPEConfig/egressAuthorization" ||
-					got.RuleIndex == nil || *got.RuleIndex != 0 {
-					t.Fatalf("original denial: target=%v reply=%v audit=%+v", target, reply, got)
-				}
-			} else if tc.name == "multiple denied" {
-				if target != nil || reply == nil || reply.Status != 403 || got.Action != "deny" ||
-					got.Policy != "" || got.RuleIndex != nil || got.Destination != "" {
-					t.Fatalf("host denial: target=%v reply=%v audit=%+v", target, reply, got)
-				}
-			}
-		})
-	}
-}
-
 func TestAuthorizationAuditResolutionFailure(t *testing.T) {
 	client := dns.NewClient(dns.LookupFunc(func(context.Context, string, dns.Family) (dns.LookupResult, error) {
 		return dns.LookupResult{}, errors.New("DNS unavailable")
@@ -249,19 +154,15 @@ func TestAggregateIPv4DNSAndDirectIPv6Destinations(t *testing.T) {
 		host     string
 		answers  []string
 		upstream string
-		denied   string
 		want     string
 		wantErr  error
 	}{
 		{name: "IPv4 DNS", host: "dual.example", answers: []string{"192.0.2.1"}, want: "192.0.2.1:443"},
 		{name: "IPv6-only hostname has no address", host: "dual.example", answers: []string{"2001:db8::1"}, wantErr: dns.ErrNoAddresses},
 		{name: "IPv6 answer is excluded", host: "dual.example", answers: []string{"2001:db8::1", "192.0.2.1"}, want: "192.0.2.1:443"},
-		{name: "denied IPv4 cannot fall back to IPv6", host: "dual.example", answers: []string{"192.0.2.1", "2001:db8::1"}, denied: "0.0.0.0/0"},
 		{name: "IPv4 literal skips DNS", host: "192.0.2.1", want: "192.0.2.1:443"},
 		{name: "IPv6 literal skips DNS", host: "2001:db8::1", want: "[2001:db8::1]:443"},
-		{name: "IPv6 literal is authorized", host: "::1", denied: "::1/128"},
 		{name: "explicit IPv6 skips DNS", host: "unresolved.example", upstream: "[2001:db8::1]:8443", want: "[2001:db8::1]:8443"},
-		{name: "explicit IPv6 is authorized", host: "unresolved.example", upstream: "[::1]:8443", denied: "::1/128"},
 	} {
 		for _, custom := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/custom=%t", tc.name, custom), func(t *testing.T) {
@@ -285,10 +186,7 @@ func TestAggregateIPv4DNSAndDirectIPv6Destinations(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				cfg := Config{}
-				if tc.denied != "" {
-					cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix(tc.denied)}
-				}
+
 				stream := &filter.Stream{
 					RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{Host: tc.host, Port: 443}},
 					StreamRuntime:  filter.StreamRuntime{Info: filter.NewStreamInfo()},
@@ -297,7 +195,7 @@ func TestAggregateIPv4DNSAndDirectIPv6Destinations(t *testing.T) {
 					address := netip.MustParseAddrPort(tc.upstream)
 					stream.Upstream = &filter.UpstreamTarget{Address: &address}
 				}
-				target, reply, err := NewAggregate(client, cfg).Authorize(t.Context(), stream)
+				target, reply, err := NewAggregate(client).Authorize(t.Context(), stream)
 				switch {
 				case tc.wantErr != nil:
 					if !errors.Is(err, tc.wantErr) || target != nil || reply != nil ||
@@ -329,7 +227,6 @@ func TestAggregateRandomSelectionWithinPreferredFamily(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		answers []string
-		denied  []string
 		want    []string
 	}{
 		{
@@ -342,18 +239,6 @@ func TestAggregateRandomSelectionWithinPreferredFamily(t *testing.T) {
 			answers: []string{"2001:db8::1", "192.0.2.1", "2001:db8::2", "192.0.2.2", "2001:db8::3"},
 			want:    []string{"192.0.2.1", "192.0.2.2"},
 		},
-		{
-			name:    "denied candidates excluded before selection",
-			answers: []string{"192.0.2.1", "2001:db8::1", "192.0.2.2", "2001:db8::2", "2001:db8::3"},
-			denied:  []string{"192.0.2.1/32", "2001:db8::2/128"},
-			want:    []string{"192.0.2.2"},
-		},
-		{
-			name:    "later authorizer filters IPv4 candidates",
-			answers: []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"},
-			denied:  []string{"192.0.2.1/32", "192.0.2.2/32"},
-			want:    []string{"192.0.2.3", "192.0.2.4"},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			addresses := make([]netip.Addr, 0, len(tc.answers))
@@ -365,11 +250,7 @@ func TestAggregateRandomSelectionWithinPreferredFamily(t *testing.T) {
 				lookups++
 				return dns.LookupResult{Addresses: addresses, TTL: time.Minute}, nil
 			}), 0)
-			authorizers := make([]Authorizer, 0, len(tc.denied))
-			for _, cidr := range tc.denied {
-				authorizers = append(authorizers, Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix(cidr)}})
-			}
-			a := NewAggregate(client, authorizers...)
+			a := NewAggregate(client)
 			seen := make(map[string]bool)
 			// Check every eligible IP is reachable without imposing an exact random
 			// distribution. With at most three IPs, 128 draws make a miss negligible.
@@ -415,7 +296,7 @@ func TestAggregateRandomSelectionPreservesFixedTargets(t *testing.T) {
 					TTL: time.Minute,
 				}, nil
 			}), 0)
-			a := NewAggregate(client, Config{})
+			a := NewAggregate(client)
 			for range 128 {
 				stream := &filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 					Host:                "multiple.example",

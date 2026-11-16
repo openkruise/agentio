@@ -21,7 +21,6 @@ syntax = "proto3";
 package agentio.config.v1;
 
 import "api/extensions/v1/egresspolicy.proto";
-import "api/config/v1/epeconfig.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "networking/v1alpha3/virtual_service.proto";
@@ -557,8 +556,13 @@ message DnsCacheSettings {
   // Maximum requests waiting for DNS resolution, including requests for the
   // same host. Defaults to 4096; must be positive when set.
   optional uint32 max_pending_requests = 2;
+}
 
-  // Retired DFP idle expiration; native DNS answers expire by record TTL.
-  reserved 3;
-  reserved "host_ttl", "hostTtl";
+// EgressAuthorization restricts the final destination of native gateway traffic.
+message EgressAuthorization {
+  // Additional denied CIDRs on every port. Use /32 for IPv4 or /128 for IPv6.
+  // IPv4-mapped IPv6 prefixes are not accepted; use IPv4 prefixes instead.
+  // Loopback, unspecified and link-local addresses are always denied.
+  // Alibaba Cloud metadata (100.100.100.200/32) requires an explicit entry.
+  repeated string denied_cidrs = 1 [json_name = "deniedCIDRs"];
 }

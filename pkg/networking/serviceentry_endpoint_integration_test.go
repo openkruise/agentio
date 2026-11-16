@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -208,11 +207,10 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 						if stream.Request.OriginalDestination.Addr().String() == "127.0.0.3" && stream.Upstream != nil {
 							t.Error("an unmatched endpoint acquired a pinned target")
 						}
-						cfg := egressauthz.Config{}
 						if stream.Request.Path == "/deny" {
-							cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+							return nil, &filter.Reply{Status: 403}, nil
 						}
-						return egressauthz.NewAggregate(dnsClient, cfg).Authorize(ctx, stream)
+						return egressauthz.NewAggregate(dnsClient).Authorize(ctx, stream)
 					},
 				}))
 				rpc, err := net.Listen("tcp4", "127.0.0.1:0")

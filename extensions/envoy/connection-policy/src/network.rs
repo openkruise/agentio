@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 
 const FILTER_NAME: &str = "envoy_agentio_tcp_policy";
-const PIN_KEY: &[u8] = b"envoy.network.transport_socket.original_dst_address";
+use crate::destination::{PIN_KEY, UPSTREAM_KEY};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +136,17 @@ impl<N: EnvoyNetworkFilter> NetworkFilter<N> for Filter {
                 return deny(envoy, "agentio_tcp_policy_invalid");
             }
         };
+        if let Some(value) = envoy.get_filter_state_bytes(UPSTREAM_KEY) {
+            let target = std::str::from_utf8(value.as_slice())
+                .ok()
+                .and_then(|value| value.parse::<SocketAddr>().ok())
+                .filter(|target| target.port() > 0);
+            let Some(target) = target else {
+                return deny(envoy, "agentio_tcp_destination_invalid");
+            };
+            self.original = Some(target);
+            return self.authorize(envoy, vec![target]);
+        }
         let (ip, port) = envoy.get_local_address();
         let target = match ip
             .parse::<std::net::IpAddr>()
@@ -240,6 +251,7 @@ mod tests {
                     connection::TCP_END_BEFORE_KEY => {
                         prefix_only.then(|| EnvoyBuffer::new(b"matched"))
                     }
+                    UPSTREAM_KEY => None,
                     b"agentio.tls.outer_sni" => Some(EnvoyBuffer::new(b"203.0.113.8")),
                     _ => panic!("unexpected filter state key"),
                 });
@@ -262,6 +274,48 @@ mod tests {
             assert_eq!(
                 filter.on_new_connection(&mut envoy),
                 if prefix_only {
+                    Status::Continue
+                } else {
+                    Status::StopIteration
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_upstream_is_authorized_without_sni_or_local_address_fallback() {
+        for (target, allowed) in [
+            ("203.0.113.8:8443", true),
+            ("10.1.2.3:8443", false),
+            ("invalid", false),
+            ("203.0.113.8:0", false),
+        ] {
+            let owner = store::SharedPolicy::intern(br#"{"profiles":[]}"#).unwrap();
+            let hash = owner.hash().to_string();
+            let mut filter = filter();
+            filter.dns = Some(dns::Resolver::shared(&dns::Settings::default()).unwrap());
+            filter.denied_cidrs = serde_json::from_str(r#"["10.0.0.0/8"]"#).unwrap();
+            let mut envoy = MockEnvoyNetworkFilter::new();
+            envoy
+                .expect_get_filter_state_bytes()
+                .returning(move |key| match key {
+                    store::HASH_KEY => Some(EnvoyBuffer::new(hash.as_bytes())),
+                    connection::TCP_END_BEFORE_KEY => None,
+                    UPSTREAM_KEY => Some(EnvoyBuffer::new(target.as_bytes())),
+                    _ => panic!("unexpected fallback"),
+                });
+            if allowed {
+                envoy
+                    .expect_set_filter_state_typed()
+                    .withf(|key, value| key == PIN_KEY && value == b"203.0.113.8:8443")
+                    .times(1)
+                    .return_const(true);
+            } else {
+                envoy.expect_close_with_details().times(1).return_const(());
+            }
+            assert_eq!(
+                filter.on_new_connection(&mut envoy),
+                if allowed {
                     Status::Continue
                 } else {
                     Status::StopIteration
@@ -319,7 +373,7 @@ mod tests {
                 .returning(move |_| Some(EnvoyBuffer::new(hash.as_bytes())));
             envoy
                 .expect_get_filter_state_bytes()
-                .withf(|k| k == connection::TCP_END_BEFORE_KEY)
+                .withf(|k| k == connection::TCP_END_BEFORE_KEY || k == UPSTREAM_KEY)
                 .returning(|_| None);
             envoy
                 .expect_get_local_address()

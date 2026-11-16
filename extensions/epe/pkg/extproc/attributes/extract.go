@@ -58,8 +58,6 @@ const (
 	FilterStateSandboxLabels   = "filter_state['sandbox.labels']"
 	FilterStateSandboxToken    = "filter_state['sandbox.token']"
 	FilterStateSandboxMetadata = "filter_state['agentio.sandbox.metadata']"
-	FilterStateUpstreamIP      = "filter_state['envoy.network.transport_socket.original_dst_address'].ip"
-	FilterStateUpstreamPort    = "filter_state['envoy.network.transport_socket.original_dst_address'].port"
 	FilterStateRouteUpstream   = "filter_state['agentio.route.upstream']"
 
 	AttrDestinationPort    = "destination.port"
@@ -282,24 +280,13 @@ func extractHeaderMap(headers *extProcPb.HttpHeaders) map[string]string {
 // ExtractUpstream parses the gateway-selected target, returning nil when absent.
 func ExtractUpstream(attrs map[string]*structpb.Struct) (*filter.UpstreamTarget, error) {
 	fields := attrs[ExtProcAttrsKey].GetFields()
-	var address netip.AddrPort
-	if value, present := fields[FilterStateUpstreamIP]; present {
-		ip, err := netip.ParseAddr(value.GetStringValue())
-		port := extractAttributeInt(attrs, FilterStateUpstreamPort)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("invalid route upstream address or port")
-		}
-		address = netip.AddrPortFrom(ip, uint16(port))
-	} else {
-		value, present := fields[FilterStateRouteUpstream]
-		if !present {
-			return nil, nil
-		}
-		var err error
-		address, err = netip.ParseAddrPort(value.GetStringValue())
-		if err != nil {
-			return nil, fmt.Errorf("invalid route upstream: %w", err)
-		}
+	value, present := fields[FilterStateRouteUpstream]
+	if !present {
+		return nil, nil
+	}
+	address, err := netip.ParseAddrPort(value.GetStringValue())
+	if err != nil {
+		return nil, fmt.Errorf("invalid route upstream: %w", err)
 	}
 
 	target := &filter.UpstreamTarget{Address: &address}

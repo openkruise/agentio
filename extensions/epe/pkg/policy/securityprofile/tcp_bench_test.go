@@ -67,7 +67,7 @@ func BenchmarkTCPPolicyRequest(b *testing.B) {
 						}),
 						0,
 					)
-					targets := egressauthz.NewAggregate(client, egressauthz.NewStaticAuthorizer(egressauthz.Config{}))
+					targets := egressauthz.NewAggregate(client)
 					resolve := NewResolver(benchStore{profiles: profiles}, regs, nil, targets)
 					e := engine.NewEngine(regs, 0)
 					req := testRequest(host)

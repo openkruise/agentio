@@ -174,16 +174,10 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 }
 
 func (b *resourceBuilder) serviceEntryTarget() *common.FilterStateValue {
-	if !b.legacyGateway {
-		return &common.FilterStateValue{
-			Key:   &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateUpstreamAddress},
-			Value: &common.FilterStateValue_FormatString{FormatString: formatString("%DOWNSTREAM_LOCAL_ADDRESS%")},
-		}
-	}
 	return &common.FilterStateValue{
 		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateRouteUpstream},
 		FactoryKey: "envoy.string",
-		ReadOnly:   true,
+		ReadOnly:   b.legacyGateway,
 		Value:      &common.FilterStateValue_FormatString{FormatString: formatString("%DOWNSTREAM_LOCAL_ADDRESS%")},
 	}
 }

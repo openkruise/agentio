@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,168 +29,6 @@ import (
 	"github.com/openkruise/agentio/test/e2e/kube"
 	"github.com/openkruise/agentio/test/e2e/suites/internal/harness"
 )
-
-// Run without TrafficPolicy authorization so neither TrafficPolicy nor ztunnel
-// authorization can account for a rejection from the global EPE configuration.
-func TestEPEGlobalDeniedCIDRs(t *testing.T) {
-	fixture, scope := newEgressEPE(t)
-	serverIP := trafficFixture.Server.ServiceIPOrFail(t)
-	clientIP := trafficFixture.Client.ServiceIPOrFail(t)
-	target := net.JoinHostPort(serverIP, "80")
-	otherTarget := net.JoinHostPort(clientIP, "80")
-	anonymous := *fixture
-	anonymous.pod, anonymous.namespace = "", ""
-	otherWorkload := *fixture
-	serverPod := trafficFixture.Server.WorkloadsOrFail(t)[0].Name
-	otherWorkload.pod = serverPod
-	callers := []*egressEPE{fixture, &anonymous, &otherWorkload}
-	step := func(name string, fn func(*testing.T)) {
-		t.Helper()
-		if !t.Run(name, fn) {
-			t.FailNow()
-		}
-	}
-	checkDefaults := func(t *testing.T) {
-		t.Helper()
-		for _, host := range []string{"127.0.0.1", "127.0.0.2", "::1", "0.0.0.0", "::", "169.254.1.1", "fe80::1", "::ffff:127.0.0.1"} {
-			destination := net.JoinHostPort(host, "15000")
-			response, err := anonymous.headers(t.Context(), destination, "/global-egress", true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := checkEPEHeaders(response, destination, 403); err != nil {
-				t.Fatal(err)
-			}
-			if response.GetImmediateResponse().GetDetails() != "epe_egress_denied" {
-				t.Fatalf("unexpected rejection: %v", response)
-			}
-		}
-		// Only invoke ext_proc; never send an actual request to cloud metadata.
-		anonymous.wantHeaders(t, "100.100.100.200:80", "/global-egress", true, 0)
-	}
-	gateway := func(t *testing.T, status int) {
-		t.Helper()
-		harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error {
-			ctx, cancel := e2e.Context(t, 15*time.Second)
-			defer cancel()
-			stdout, stderr, err := trafficFixture.Client.Exec(ctx, []string{
-				"curl", "-sS", "--max-time", "10", "-w", "\n%{http_code}",
-				"http://" + trafficFixture.Server.Address() + "/global-egress",
-			})
-			if err != nil {
-				return fmt.Errorf("gateway: stdout=%q stderr=%q: %w", stdout, stderr, err)
-			}
-			if !strings.HasSuffix(stdout, "\n"+strconv.Itoa(status)) {
-				return fmt.Errorf("gateway: stdout=%q stderr=%q, want status %d", stdout, stderr, status)
-			}
-			want := "Hostname=" + serverPod
-			if status == 403 {
-				want = `"code":"epe_egress_denied"`
-			}
-			if !strings.Contains(stdout, want) {
-				return fmt.Errorf("gateway response %q lacks %q", stdout, want)
-			}
-			return nil
-		})
-	}
-	step("defaults_without_trafficpolicy_or_identity", func(t *testing.T) {
-		for _, caller := range callers {
-			caller.wantHeaders(t, target, "/global-egress", true, 0)
-		}
-		checkDefaults(t)
-	})
-	// A profile bypass must not bypass destination authorization.
-	e2econfig.New(scope).YAML(trafficFixture.Namespace.Name(), `
-apiVersion: agents.kruise.io/v1alpha1
-kind: SecurityProfile
-metadata:
-  name: epe-global-bypass
-spec:
-  selector: {}
-  rules:
-  - name: bypass
-    match:
-    - domains: ["*"]
-      paths: [{type: Exact, value: /global-egress}]
-    actions:
-      bypass: true
-  - name: unreachable-block
-    match:
-    - domains: ["*"]
-      paths: [{type: Exact, value: /global-egress}]
-    actions:
-      block: {statusCode: 451, body: bypass-was-not-applied}
-  - name: convergence-marker
-    match:
-    - domains: ["*"]
-      paths: [{type: Exact, value: /global-egress-profile-ready}]
-    actions:
-      block: {statusCode: 452, body: profile-ready}
-`).ApplyOrFail(t, kube.CreateOnly)
-	fixture.wantHeaders(t, target, "/global-egress-profile-ready", true, 452)
-	applyEPEProviderConfig(t, scope, "epe-egressauthz")
-	gateway(t, 200)
-	base := egressEPEConfig(
-		scope,
-		"epe-egressauthz",
-		fmt.Sprintf("egressAuthorization: {deniedCIDRs: [%s/32]}", serverIP),
-	)
-	primary := egressEPEConfig(
-		scope,
-		"epe-egressauthz-primary",
-		fmt.Sprintf("egressAuthorization: {deniedCIDRs: [%s/32]}", clientIP),
-	)
-	step("create_global_deny_for_all_callers", func(t *testing.T) {
-		base.ApplyOrFail(t, kube.CreateOnly)
-		for _, caller := range callers {
-			caller.wantHeaders(t, target, "/global-egress", true, 403)
-		}
-		checkDefaults(t)
-		gateway(t, 403)
-	})
-	step("primary_replaces_user_entries", func(t *testing.T) {
-		primary.ApplyOrFail(t, kube.CreateOnly)
-		fixture.wantHeaders(t, otherTarget, "/global-egress", true, 403)
-		fixture.wantHeaders(t, target, "/global-egress", true, 0)
-		checkDefaults(t)
-		gateway(t, 200)
-	})
-	step("empty_list_retains_mandatory_denies", func(t *testing.T) {
-		egressEPEConfig(
-			scope,
-			"epe-egressauthz-primary",
-			"egressAuthorization: {deniedCIDRs: []}",
-		).ApplyOrFail(t, kube.ReconcileOwned)
-		fixture.wantHeaders(t, otherTarget, "/global-egress", true, 0)
-		checkDefaults(t)
-		gateway(t, 200)
-	})
-	step("delete_primary_restores_base", func(t *testing.T) {
-		primary.DeleteOrFail(t)
-		fixture.wantHeaders(t, target, "/global-egress", true, 403)
-		gateway(t, 403)
-	})
-	step("delete_base_restores_defaults", func(t *testing.T) {
-		base.DeleteOrFail(t)
-		fixture.wantHeaders(t, target, "/global-egress", true, 0)
-		checkDefaults(t)
-		gateway(t, 200)
-	})
-}
-
-func egressEPEConfig(scope *kube.ResourceScope, name, content string) *e2econfig.Plan {
-	return e2econfig.New(scope).Eval(resolvedAgentioConfig.Namespace, map[string]string{
-		"Name":   name,
-		"Config": content,
-	}, `
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Name }}
-data:
-  config: {{ printf "%q" .Config }}
-`)
-}
 
 // Headless Services provide controlled A/AAAA records in the cluster DNS. No
 // external DNS service or IPv6 connectivity is needed: IPv6 is never dialed.
@@ -306,14 +142,10 @@ func TestEPEIPv4OnlyDNS(t *testing.T) {
 			t.Fatalf("unexpected resolution failure: %v", response)
 		}
 	})
-	step("ipv6_literal_and_explicit_upstream_still_authorized", func(t *testing.T) {
+	step("ipv6_literal_and_explicit_upstream_skip_dns", func(t *testing.T) {
 		for _, ip := range []string{"2001:db8::1", "::1"} {
 			target := net.JoinHostPort(ip, "18080")
-			status := 0
-			if ip == "::1" {
-				status = 403
-			}
-			fixture.wantHeaders(t, target, "/dns", true, status)
+			fixture.wantHeaders(t, target, "/dns", true, 0)
 			request := fixture.request(net.JoinHostPort(v6Only, "18080"), "/dns", true)
 			request.Attributes["envoy.filters.http.ext_proc"].Fields["filter_state['agentio.route.upstream']"] = structpb.NewStringValue(
 				target,
@@ -322,19 +154,32 @@ func TestEPEIPv4OnlyDNS(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := checkEPEHeaders(response, target, status); err != nil {
+			if err := checkEPEHeaders(response, target, 0); err != nil {
 				t.Fatal(err)
 			}
 		}
 	})
+	denyTarget := func(cidr string) *e2econfig.Plan {
+		return e2econfig.New(scope).
+			Eval(namespace, map[string]string{"CIDR": cidr, "Client": trafficFixture.Client.Name()}, `
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata:
+  name: dns-target-policy
+spec:
+  selector:
+    matchLabels: {app: "{{ .Client }}"}
+  tcpRules:
+  - name: denied-destination
+    action: Deny
+    match:
+    - cidrs: ["{{ .CIDR }}"]
+`)
+	}
 	// Deny one IPv4 target, keeping the other allowed: a denied original must
 	// not switch to either the other IPv4 candidate or the AAAA candidate.
 	step("denied_original_does_not_fall_back", func(t *testing.T) {
-		egressEPEConfig(
-			scope,
-			"epe-egressauthz",
-			fmt.Sprintf("egressAuthorization: {deniedCIDRs: [%s/32]}", v4[0]),
-		).ApplyOrFail(t, kube.CreateOnly)
+		denyTarget(v4[0]+"/32").ApplyOrFail(t, kube.CreateOnly)
 		fixture.wantHeaders(t, net.JoinHostPort(v4[0], "18080"), "/dns", true, 403)
 		request := fixture.request(net.JoinHostPort(mixed, "18080"), "/dns", true)
 		request.Attributes["envoy.filters.http.ext_proc"].Fields["destination.address"] = structpb.NewStringValue(
@@ -350,11 +195,7 @@ func TestEPEIPv4OnlyDNS(t *testing.T) {
 		fixture.wantHeaders(t, net.JoinHostPort(v4[1], "18080"), "/dns", true, 0)
 	})
 	step("denied_ipv4_never_falls_back_to_aaaa", func(t *testing.T) {
-		egressEPEConfig(
-			scope,
-			"epe-egressauthz",
-			"egressAuthorization: {deniedCIDRs: [0.0.0.0/0]}",
-		).ApplyOrFail(t, kube.ReconcileOwned)
+		denyTarget("0.0.0.0/0").ApplyOrFail(t, kube.ReconcileOwned)
 		fixture.wantHeaders(t, net.JoinHostPort(v4[1], "18080"), "/dns", true, 403)
 		response, err := fixture.headers(t.Context(), net.JoinHostPort(mixed, "18080"), "/dns", true)
 		if err != nil {

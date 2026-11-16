@@ -67,9 +67,9 @@ def listeners(denied, generation):
         ranges = ['127.0.0.2/32'] + denied.get(str(slot), [])
         cache = dict(CACHE)
         values = []
-        for key, header, readonly in [('envoy.network.transport_socket.original_dst_address' if VARIANT == 'candidate' else 'envoy.upstream.dynamic_host', 'x-test-target', False),
+        for key, header, readonly in [('agentio.route.upstream' if VARIANT == 'candidate' else 'envoy.upstream.dynamic_host', 'x-test-target', False),
                 ('envoy.filters.listener.original_dst.local_ip', 'x-test-original', True)]:
-            values.append({'object_key': key, 'skip_if_empty': True, 'read_only': readonly,
+            values.append({'object_key': key, **({'factory_key': 'envoy.string'} if key == 'agentio.route.upstream' else {}), 'skip_if_empty': True, 'read_only': readonly,
                 'format_string': {'omit_empty_values': True, 'text_format_source': {'inline_string': f'%REQ({header})%'}}})
         filters = [{'name': 'target', 'typed_config': typed('envoy.extensions.filters.http.set_filter_state.v3.Config', on_request_headers=values)}]
         if VARIANT in ('candidate', 'baseline'):

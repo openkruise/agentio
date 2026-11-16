@@ -74,7 +74,8 @@ func (b *resourceBuilder) egressTargetFilters() []*hcm.HttpFilter {
 		filter := httpFilter(
 			"agentio.egress_target",
 			b.pack(&state.Config{OnRequestHeaders: []*common.FilterStateValue{{
-				Key: &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateUpstreamAddress},
+				Key:        &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateRouteUpstream},
+				FactoryKey: "envoy.string",
 				Value: &common.FilterStateValue_FormatString{
 					FormatString: formatString("%DYNAMIC_METADATA(agentio.route:upstream:address)%"),
 				},

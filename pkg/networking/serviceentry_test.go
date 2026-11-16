@@ -108,10 +108,7 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 					t.Fatal(err)
 				}
 				state := target.OnRequestHeaders[0]
-				key := model.FilterStateUpstreamAddress
-				if legacy {
-					key = model.FilterStateRouteUpstream
-				}
+				key := model.FilterStateRouteUpstream
 				if state.GetObjectKey() != key || state.ReadOnly != legacy ||
 					state.GetFormatString().GetTextFormatSource().GetInlineString() != "%DOWNSTREAM_LOCAL_ADDRESS%" {
 					t.Fatal("endpoint target must retain the authenticated original IP:port")

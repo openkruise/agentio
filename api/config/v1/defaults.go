@@ -45,8 +45,8 @@ func (x *EgressAuthorization) EffectiveDeniedCIDRs() []string {
 	return append(denied, slices.Compact(additional)...)
 }
 
-// MandatoryEgressDeniedCIDRs returns the destination restrictions shared by EPE
-// and native gateway forwarding. Private service networks remain
+// MandatoryEgressDeniedCIDRs returns the native gateway destination restrictions.
+// Private service networks remain
 // operator-owned. Each caller receives its own slice.
 func MandatoryEgressDeniedCIDRs() []string {
 	return []string{

@@ -1272,8 +1272,7 @@
                           "source.address",
                           "destination.address",
                           "destination.port",
-                          "filter_state['envoy.network.transport_socket.original_dst_address'].ip",
-                          "filter_state['envoy.network.transport_socket.original_dst_address'].port"
+                          "filter_state['agentio.route.upstream']"
                         ],
                         "responseAttributes": [
                           "response.code"
@@ -1357,14 +1356,15 @@
                             "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",
                             "onRequestHeaders": [
                               {
-                                "objectKey": "envoy.network.transport_socket.original_dst_address",
+                                "objectKey": "agentio.route.upstream",
                                 "formatString": {
                                   "textFormatSource": {
                                     "inlineString": "%DYNAMIC_METADATA(agentio.route:upstream:address)%"
                                   },
                                   "omitEmptyValues": true
                                 },
-                                "skipIfEmpty": true
+                                "skipIfEmpty": true,
+                                "factoryKey": "envoy.string"
                               }
                             ]
                           }
@@ -1700,8 +1700,7 @@
                           "source.address",
                           "destination.address",
                           "destination.port",
-                          "filter_state['envoy.network.transport_socket.original_dst_address'].ip",
-                          "filter_state['envoy.network.transport_socket.original_dst_address'].port"
+                          "filter_state['agentio.route.upstream']"
                         ],
                         "responseAttributes": [
                           "response.code"
@@ -1757,14 +1756,15 @@
                             "@type": "type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config",
                             "onRequestHeaders": [
                               {
-                                "objectKey": "envoy.network.transport_socket.original_dst_address",
+                                "objectKey": "agentio.route.upstream",
                                 "formatString": {
                                   "textFormatSource": {
                                     "inlineString": "%DYNAMIC_METADATA(agentio.route:upstream:address)%"
                                   },
                                   "omitEmptyValues": true
                                 },
-                                "skipIfEmpty": true
+                                "skipIfEmpty": true,
+                                "factoryKey": "envoy.string"
                               }
                             ]
                           }

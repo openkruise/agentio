@@ -17,6 +17,7 @@
 package securityprofile
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/enginetest"
 	"github.com/openkruise/agentio/pkg/dns"
@@ -198,13 +200,21 @@ func TestScenario_AuditAuthorizationConditions(t *testing.T) {
 			); err != nil {
 				t.Fatal(err)
 			}
-			cfg := egressauthz.Config{}
-			if tc.deny {
-				cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
-			}
+
 			h := New(t, Options{
-				AuditRouter:      wiring.Router,
-				AuthorizeRequest: egressauthz.NewAggregate(client, cfg).Authorize,
+				AuditRouter: wiring.Router,
+				AuthorizeRequest: func(ctx context.Context, stream *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
+					if tc.deny {
+						stream.Info.RecordAuthorization(
+							filter.AuthorizationDecision{
+								Action: "deny",
+								Reason: filter.AuthorizationReasonPolicyDenied,
+							},
+						)
+						return nil, &filter.Reply{Status: 403}, nil
+					}
+					return egressauthz.NewAggregate(client).Authorize(ctx, stream)
+				},
 			})
 			profile := strings.NewReplacer(
 				`result == "blocked"`, fmt.Sprintf(`result == %q`, tc.when),

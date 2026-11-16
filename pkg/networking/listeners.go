@@ -630,7 +630,8 @@ func buildConnectProxyTLSIdentityHTTPFilter(key, target string) *hcmv3.HttpFilte
 	if target != "" {
 		// Fixed proxy endpoints preserve the intercepted address and port.
 		setIdentity.OnRequestHeaders = append(setIdentity.OnRequestHeaders, &setstatecommonv3.FilterStateValue{
-			Key: &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateUpstreamAddress},
+			Key:        &setstatecommonv3.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateRouteUpstream},
+			FactoryKey: "envoy.string",
 			Value: &setstatecommonv3.FilterStateValue_FormatString{
 				FormatString: formatString(target),
 			},
@@ -735,9 +736,6 @@ func (b *resourceBuilder) extProcFilter(
 		}
 	}
 	upstreamAttributes := []string{model.AttributeRouteUpstream}
-	if !b.legacyGateway {
-		upstreamAttributes = []string{model.AttributeUpstreamIP, model.AttributeUpstreamPort}
-	}
 	if !b.legacyGateway || len(config.gateway.GetServiceEntries()) > 0 {
 		for _, attribute := range upstreamAttributes {
 			if !slices.Contains(attributes, attribute) {

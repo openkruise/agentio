@@ -53,10 +53,6 @@ func TestGatewayDnsCacheSettings(t *testing.T) {
 		{name: "zero pending", content: "dnsCache: {maxPendingRequests: 0}", invalid: true},
 		{name: "negative hosts", content: "dnsCache: {maxHosts: -1}", invalid: true},
 		{name: "overflow hosts", content: "dnsCache: {maxHosts: 4294967296}", invalid: true},
-		{name: "retired TTL", content: "dnsCache: {hostTtl: 120s}", invalid: true},
-		{name: "retired proto TTL name", content: "dnsCache: {host_ttl: 120s}", invalid: true},
-		{name: "negative TTL", content: "dnsCache: {hostTtl: -1s}", invalid: true},
-		{name: "invalid TTL", content: "dnsCache: {hostTtl: invalid}", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){

@@ -4,6 +4,9 @@
 use crate::tcp::Prefix;
 use std::net::SocketAddr;
 
+pub const UPSTREAM_KEY: &[u8] = b"agentio.route.upstream";
+pub const PIN_KEY: &[u8] = b"envoy.network.transport_socket.original_dst_address";
+
 pub fn select(
     candidates: Vec<SocketAddr>,
     denied: &[Prefix],

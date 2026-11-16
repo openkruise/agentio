@@ -49,6 +49,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/audit/sinks/webhook"
 	"github.com/openkruise/agentio/extensions/epe/pkg/certs/certsource"
 	"github.com/openkruise/agentio/extensions/epe/pkg/extensionprovider"
+	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	_ "github.com/openkruise/agentio/extensions/epe/pkg/filters/httpcallout" // Register environment settings.
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/tokentransform"
 	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
@@ -130,7 +131,7 @@ var (
 			"enabling this disables server identity verification and is unsafe")
 	failClosedOnMissingIdentity = flag.Bool("fail-closed-on-missing-identity", false,
 		"Deny requests when the caller Workload/Sandbox identity is missing from filter_state "+
-			"(e.g. a misconfigured metadata exchange); by default global destination authorization still runs")
+			"(e.g. a misconfigured metadata exchange)")
 	tlsSource = flag.String("tls-source", "none", "Serving certificate source: none, ca or file")
 	caAddress = flag.String(
 		"ca-address",
@@ -286,8 +287,8 @@ func run() error {
 		Namespace: *systemNamespace,
 		Names:     []string{*epeConfigName, *epeConfigPrimaryName},
 		Defaults:  defaults,
-		Apply:     wiring.ApplyEPEConfig,
-		Validate:  validateEPEConfig,
+		Apply:     extensionprovider.ApplyConfig,
+		Validate:  extensionprovider.Validate,
 	}, krt.WithName("EPEConfig"), krt.WithStop(ctx.Done())).AsCollection()
 	providerConfigs := extensionprovider.NewCollection(client, *systemNamespace,
 		configs, configMaps, nil, ctx.Done())
@@ -336,7 +337,7 @@ func run() error {
 	group.Add(runnable.Func(nativeStore.Run))
 	group.Add(runnable.Func(resourceStore.Run))
 	group.Add(runnable.Func(xds.Run))
-	authorize, authorizationReg := newRequestAuthorizer(configs, dns.NewClient(nil, 0))
+	authorize := egressauthz.NewAggregate(dns.NewClient(nil, 0))
 	var profileStore profilestore.Store
 	var matcher securityprofile.Matcher
 	var profileReg krt.HandlerRegistration
@@ -360,8 +361,7 @@ func run() error {
 	health.SetServingStatus("liveness", healthPb.HealthCheckResponse_SERVING)
 	updateReadiness := func() {
 		state := healthPb.HealthCheckResponse_SERVING
-		if !authorizationReg.HasSynced() ||
-			!providerReg.HasSynced() ||
+		if !providerReg.HasSynced() ||
 			!profileReg.HasSynced() ||
 			!secrets.HasSynced() ||
 			servingTLS.Ready() != nil ||
@@ -435,7 +435,7 @@ func run() error {
 		Registrations:               registrations,
 	}, ctrllog.Log.WithName("ext-proc"))
 	group.Add(runnable.Func(func(ctx context.Context) error {
-		return startExtProc(ctx, extProcServer, authorizationReg, providerReg, profileReg, secrets)
+		return startExtProc(ctx, extProcServer, providerReg, profileReg, secrets)
 	}))
 
 	// Start pprof server if enabled.

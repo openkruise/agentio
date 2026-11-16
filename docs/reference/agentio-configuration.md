@@ -140,7 +140,7 @@ Custom EnvoyFilter patches must preserve the destination checks, including the H
 
 Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. A changed effective list uses a separate DNS cache so previously cached targets cannot bypass the new list. Superseded caches remain allocated until Envoy restarts; restart gateways periodically if this list changes frequently.
 
-`EPEConfig.egressAuthorization` remains an independent setting. The gateway rejects a denied address even when EPE explicitly selected it, without trying a different address. Configure the same custom CIDRs in EPE when EPE should exclude them while choosing among DNS candidates, or when EPE is deployed independently. AgentioConfig does not distribute this list to EPE.
+`EPEConfig.egressAuthorization` has been removed. Configure destination restrictions only here. The gateway checks EPE-selected endpoints after SecurityProfile evaluation; a denial does not choose another address. Independent EPE deployments must enforce platform CIDRs in their forwarding proxy.
 
 Legacy proxyv2 gateways do not support this setting. A nonempty custom list suppresses the legacy gateway resource variant; upgrade gateways to the native image before configuring it. Native gateways always enforce the built-ins. See [destination restrictions](../design/egress-gateway-protocol-and-dfp.md#destination-restrictions) for DNS behavior.
 
@@ -322,9 +322,8 @@ egressGateways:
 | `maxPendingRequests` | `4096` | Maximum requests waiting for DNS, including multiple requests for the same host. Native HTTP and TCP share this budget; cached answers do not consume it. Must be positive. |
 
 Omitting `dnsCache`, using `{}`, or omitting individual fields uses these defaults.
-`hostTtl` has been removed; remove it from existing configuration. YAML/JSON
-updates containing this field are rejected. Native DNS answers expire by record
-TTL; legacy DFP retains its fixed 120-second idle lifetime.
+`hostTtl` has been removed and no longer affects DNS behavior. Native DNS answers
+expire by record TTL; legacy DFP retains its fixed 120-second idle lifetime.
 
 Native DNS is IPv4-only for hostname lookups; explicit numeric targets support both
 IP families. DNS cache capacity does not limit Envoy's upstream connection pools or
