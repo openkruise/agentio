@@ -78,11 +78,11 @@ impl Resolver {
         })
     }
 
-    pub fn resolve(
+    pub fn resolve<N: FnOnce() + Send + 'static>(
         &self,
         name: String,
         port: u16,
-        notify: impl FnOnce() + Send + 'static,
+        make_notify: impl FnOnce() -> N,
     ) -> Lookup {
         let resolver = self.resolver.clone();
         let mut query = Box::pin(async move {
@@ -113,7 +113,7 @@ impl Resolver {
                         let _permit = permit;
                         query.await
                     },
-                    notify,
+                    make_notify(),
                 ))
             }
         }
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn immediately_available_lookup_preserves_port_without_scheduling() {
         let resolver = Resolver::new(Settings::default()).unwrap();
-        let result = resolver.resolve("localhost".into(), 8443, || {
+        let result = resolver.resolve("localhost".into(), 8443, || -> fn() {
             panic!("ready lookup scheduled")
         });
         let Lookup::Ready(result) = result else {
@@ -241,20 +241,24 @@ mod tests {
             .unwrap();
         }
         let first = resolver.resolve("pending.test.".into(), 80, || {
-            panic!("cancelled query notified")
+            || panic!("cancelled query notified")
         });
         assert!(matches!(&first, Lookup::Pending(_)));
         assert!(matches!(
-            resolver.resolve("pending.test.".into(), 443, || panic!("overflow notified")),
+            resolver.resolve("pending.test.".into(), 443, || -> fn() {
+                panic!("overflow scheduler created")
+            }),
             Lookup::Ready(Err(_))
         ));
         assert!(matches!(
-            resolver.resolve("localhost".into(), 80, || panic!("cache hit notified")),
+            resolver.resolve("localhost".into(), 80, || -> fn() {
+                panic!("cache hit scheduler created")
+            }),
             Lookup::Ready(Ok(_))
         ));
         drop(first);
         let next = resolver.resolve("next.test.".into(), 443, || {
-            panic!("cancelled query notified")
+            || panic!("cancelled query notified")
         });
         assert!(matches!(&next, Lookup::Pending(_)));
         drop(next);

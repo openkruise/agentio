@@ -175,8 +175,10 @@ impl<N: EnvoyNetworkFilter> NetworkFilter<N> for Filter {
         if let Ok(ip) = name.parse::<std::net::IpAddr>() {
             return self.authorize(envoy, vec![SocketAddr::new(ip, target.port())]);
         }
-        let scheduler = envoy.new_scheduler();
-        match dns.resolve(name, target.port(), move || scheduler.commit(0)) {
+        match dns.resolve(name, target.port(), || {
+            let scheduler = envoy.new_scheduler();
+            move || scheduler.commit(0)
+        }) {
             dns::Lookup::Ready(Ok(candidates)) => self.authorize(envoy, candidates),
             dns::Lookup::Ready(Err(error)) => {
                 envoy_log_error!("TCP DNS resolution failed: {}", error);

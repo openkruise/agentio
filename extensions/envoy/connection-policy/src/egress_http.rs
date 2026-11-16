@@ -98,21 +98,27 @@ fn reject(envoy: &mut impl EnvoyHttpFilter, status: u32, reason: &str) -> Status
     Status::StopIteration
 }
 
+#[derive(Debug, PartialEq)]
+enum Target {
+    Address(SocketAddr),
+    Hostname(String, u16),
+}
+
 // Embedded ports override the fallback, matching DFP's host normalization.
-fn target(value: &str, fallback: u16) -> Result<(String, u16), &'static str> {
+fn target(value: &str, fallback: u16) -> Result<Target, &'static str> {
     if let Ok(ip) = value.parse::<IpAddr>() {
-        return Ok((ip.to_string(), fallback));
+        return Ok(Target::Address(SocketAddr::new(ip, fallback)));
     }
     if let Ok(addr) = value.parse::<SocketAddr>() {
         if addr.port() == 0 {
             return Err("zero port");
         }
-        return Ok((addr.ip().to_string(), addr.port()));
+        return Ok(Target::Address(addr));
     }
     if let Some(ip) = value.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         return ip
             .parse::<std::net::Ipv6Addr>()
-            .map(|ip| (ip.to_string(), fallback))
+            .map(|ip| Target::Address(SocketAddr::new(ip.into(), fallback)))
             .map_err(|_| "invalid IPv6 address");
     }
     let (host, port) = match value.rsplit_once(':') {
@@ -132,15 +138,15 @@ fn target(value: &str, fallback: u16) -> Result<(String, u16), &'static str> {
     {
         return Err("invalid hostname");
     }
-    Ok((host.into(), port))
+    Ok(Target::Hostname(host.into(), port))
 }
 
 impl Filter {
-    fn authorize(&self, envoy: &mut impl EnvoyHttpFilter, candidates: Vec<SocketAddr>) -> Status {
-        let route = self.route.borrow();
-        let route = route
-            .as_ref()
-            .expect("route installed before authorization");
+    fn authorize(
+        envoy: &mut impl EnvoyHttpFilter,
+        route: &RouteConfig,
+        candidates: impl IntoIterator<Item = SocketAddr>,
+    ) -> Status {
         let Some(selected) =
             destination::select(candidates, &route.settings.denied_cidrs, |_| true)
         else {
@@ -154,7 +160,7 @@ impl Filter {
 }
 
 impl RouteConfig {
-    fn target(&self, envoy: &impl EnvoyHttpFilter) -> Result<(String, u16), &'static str> {
+    fn target(&self, envoy: &impl EnvoyHttpFilter) -> Result<Target, &'static str> {
         if self.dns.is_none() {
             let value = envoy
                 .get_filter_state_typed(ORIGINAL_KEY)
@@ -166,7 +172,7 @@ impl RouteConfig {
             if addr.port() == 0 {
                 return Err("zero port");
             }
-            return Ok((addr.ip().to_string(), addr.port()));
+            return Ok(Target::Address(addr));
         }
 
         if let Some(value) = envoy.get_filter_state_bytes(UPSTREAM_KEY) {
@@ -177,7 +183,7 @@ impl RouteConfig {
             if addr.port() == 0 {
                 return Err("zero port");
             }
-            return Ok((addr.ip().to_string(), addr.port()));
+            return Ok(Target::Address(addr));
         }
         if envoy
             .get_request_header_value(":method")
@@ -214,27 +220,25 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
         };
         let route = route
             .downcast_ref::<Arc<RouteConfig>>()
-            .expect("egress route config type")
-            .clone();
-        // Snapshot the accepted RDS policy once per request, including async DNS completion.
-        self.route.replace(Some(route.clone()));
+            .expect("egress route config type");
         let (host, port) = match route.target(envoy) {
-            Ok(target) => target,
+            Ok(Target::Address(addr)) => return Self::authorize(envoy, route, [addr]),
+            Ok(Target::Hostname(host, port)) => (host, port),
             Err(_) => return reject(envoy, 400, "agentio_egress_destination_invalid"),
         };
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return self.authorize(envoy, vec![SocketAddr::new(ip, port)]);
-        }
-        let scheduler = envoy.new_scheduler();
         match route
             .dns
             .as_ref()
             .expect("hostname requires dynamic forwarding")
-            .resolve(host, port, move || scheduler.commit(0))
-        {
-            dns::Lookup::Ready(Ok(candidates)) => self.authorize(envoy, candidates),
+            .resolve(host, port, || {
+                let scheduler = envoy.new_scheduler();
+                move || scheduler.commit(0)
+            }) {
+            dns::Lookup::Ready(Ok(candidates)) => Self::authorize(envoy, route, candidates),
             dns::Lookup::Ready(Err(_)) => reject(envoy, 503, "agentio_egress_dns_failed"),
             dns::Lookup::Pending(pending) => {
+                // Retain the accepted RDS policy only while DNS is pending.
+                self.route.replace(Some(route.clone()));
                 self.resolution.replace(Some(pending));
                 Status::StopAllIterationAndWatermark
             }
@@ -249,7 +253,12 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
             .finish();
         match result {
             Ok(candidates) => {
-                if self.authorize(envoy, candidates) == Status::Continue {
+                let route = self
+                    .route
+                    .borrow_mut()
+                    .take()
+                    .expect("pending route config");
+                if Self::authorize(envoy, &route, candidates) == Status::Continue {
                     envoy.continue_decoding();
                 }
             }
@@ -296,18 +305,8 @@ mod tests {
             br#"{"mode":"ORIGINAL_DST","denied_cidrs":["127.0.0.0/8"]}"#,
         )
         .unwrap();
-        let old = Filter {
-            route: RefCell::new(Some(
-                allowed.downcast_ref::<Arc<RouteConfig>>().unwrap().clone(),
-            )),
-            resolution: RefCell::new(None),
-        };
-        let current = Filter {
-            route: RefCell::new(Some(
-                denied.downcast_ref::<Arc<RouteConfig>>().unwrap().clone(),
-            )),
-            resolution: RefCell::new(None),
-        };
+        let old = allowed.downcast_ref::<Arc<RouteConfig>>().unwrap().clone();
+        let current = denied.downcast_ref::<Arc<RouteConfig>>().unwrap().clone();
         let mut envoy = MockEnvoyHttpFilter::new();
         envoy
             .expect_set_filter_state_typed()
@@ -320,13 +319,85 @@ mod tests {
             .times(1)
             .return_const(());
         assert_eq!(
-            current.authorize(&mut envoy, vec!["127.0.0.1:80".parse().unwrap()]),
+            Filter::authorize(&mut envoy, &current, ["127.0.0.1:80".parse().unwrap()]),
             Status::StopIteration
         );
         assert_eq!(
-            old.authorize(&mut envoy, vec!["127.0.0.1:80".parse().unwrap()]),
+            Filter::authorize(&mut envoy, &old, ["127.0.0.1:80".parse().unwrap()]),
             Status::Continue
         );
+    }
+
+    #[test]
+    fn ready_requests_authorize_the_current_route_without_creating_a_scheduler() {
+        let filter = Filter {
+            route: RefCell::new(None),
+            resolution: RefCell::new(None),
+        };
+        for authority in ["localhost:8080", "127.0.0.1:8080", "[::1]:8080"] {
+            for denied in [true, false] {
+                let cidrs = if denied {
+                    r#", "denied_cidrs":["127.0.0.0/8", "::1/128"]"#
+                } else {
+                    ""
+                };
+                let config: Arc<dyn std::any::Any> = Arc::from(
+                    new_route_config(
+                        FILTER_NAME,
+                        format!(r#"{{"mode":"DYNAMIC_FORWARD"{cidrs}}}"#).as_bytes(),
+                    )
+                    .unwrap(),
+                );
+                let mut envoy = MockEnvoyHttpFilter::new();
+                envoy
+                    .expect_get_most_specific_route_config()
+                    .returning_st(move || Some(config.clone()));
+                envoy.expect_get_filter_state_bytes().returning(|_| None);
+                envoy
+                    .expect_get_request_header_value()
+                    .returning(move |key| {
+                        Some(EnvoyBuffer::new(if key == ":method" {
+                            b"GET"
+                        } else {
+                            authority.as_bytes()
+                        }))
+                    });
+                envoy.expect_new_scheduler().times(0);
+                if denied {
+                    envoy
+                        .expect_send_response()
+                        .withf(|code, _, _, detail| {
+                            *code == 403 && *detail == Some("agentio_egress_denied")
+                        })
+                        .times(1)
+                        .return_const(());
+                } else {
+                    envoy
+                        .expect_set_filter_state_typed()
+                        .withf(move |key, value| {
+                            key == PIN_KEY
+                                && value
+                                    == if authority == "[::1]:8080" {
+                                        b"[::1]:8080".as_slice()
+                                    } else {
+                                        b"127.0.0.1:8080".as_slice()
+                                    }
+                        })
+                        .times(1)
+                        .return_const(true);
+                }
+                assert_eq!(
+                    filter.on_request_headers(&mut envoy, true),
+                    if denied {
+                        Status::StopIteration
+                    } else {
+                        Status::Continue
+                    }
+                );
+                assert!(filter.route.borrow().is_none());
+                assert!(filter.resolution.borrow().is_none());
+            }
+        }
     }
 
     #[test]
@@ -342,7 +413,7 @@ mod tests {
                 .downcast_ref::<Arc<RouteConfig>>()
                 .unwrap()
                 .target(&envoy),
-            Ok(("127.0.0.1".into(), 8443))
+            Ok(Target::Address("127.0.0.1:8443".parse().unwrap()))
         );
     }
 
@@ -359,7 +430,7 @@ mod tests {
                 .downcast_ref::<Arc<RouteConfig>>()
                 .unwrap()
                 .target(&envoy),
-            Ok(("192.0.2.1".into(), 8443))
+            Ok(Target::Address("192.0.2.1:8443".parse().unwrap()))
         );
     }
 
@@ -387,7 +458,7 @@ mod tests {
                 .downcast_ref::<Arc<RouteConfig>>()
                 .unwrap()
                 .target(&envoy),
-            Ok(("proxy.test".into(), 8443))
+            Ok(Target::Hostname("proxy.test".into(), 8443))
         );
     }
 
@@ -409,9 +480,14 @@ mod tests {
             ("example.test:8080", "example.test", 8080),
             ("[2001:db8::1]:8443", "2001:db8::1", 8443),
             ("[::1]", "::1", 443),
+            ("192.0.2.1:8080", "192.0.2.1", 8080),
             ("192.0.2.1", "192.0.2.1", 443),
         ] {
-            assert_eq!(target(input, 443), Ok((host.into(), port)));
+            let expected = match host.parse::<IpAddr>() {
+                Ok(ip) => Target::Address(SocketAddr::new(ip, port)),
+                Err(_) => Target::Hostname(host.into(), port),
+            };
+            assert_eq!(target(input, 443), Ok(expected));
         }
         for invalid in [
             "",
