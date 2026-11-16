@@ -25,7 +25,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.74.0
-	github.com/prometheus/procfs v0.21.0
+	github.com/prometheus/procfs v0.23.0
 	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
 	github.com/vishvananda/netns v0.0.5
