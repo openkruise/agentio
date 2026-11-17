@@ -4,6 +4,12 @@ Use a ConfigMap to patch the Envoy resources generated for an Agentio egress gat
 
 Use the [gateway configuration fields](agentio-configuration.md) for settings they already cover. Patches provide access to lower-level Envoy configuration.
 
+The native gateway's plain HTTP route is named `http_forward_proxy`. Its HTTP
+and raw TCP traffic share the ORIGINAL_DST cluster `PassthroughCluster`, including
+cluster statistics and circuit breakers. Match `PassthroughCluster` in cluster
+patches; the former `http_forward_proxy` cluster is no longer generated. Legacy
+proxyv2 resources retain the `http_dynamic_forward_proxy` cluster and route.
+
 Configure CONNECT bandwidth through AgentioConfig's `bandwidthLimit`. When applying other patches to that CONNECT chain, preserve the [module's placement restrictions](../../extensions/envoy/network-limits/README.md): do not enable router retries or retain already-forwarded data for replay.
 
 ## Apply a configuration
@@ -26,7 +32,7 @@ data:
       - target: cluster
         operation: MERGE
         match:
-          name: http_dynamic_forward_proxy
+          name: PassthroughCluster
         value:
           connect_timeout: 3s
 ```

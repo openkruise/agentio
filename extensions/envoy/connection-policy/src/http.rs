@@ -58,10 +58,13 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
 }
 
 pub fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
-    _: &mut C,
+    envoy: &mut C,
     name: &str,
     config: &[u8],
 ) -> Option<Box<dyn HttpFilterConfig<H>>> {
+    if name == crate::egress_http::FILTER_NAME {
+        return crate::egress_http::new_config(envoy, config);
+    }
     (name == FILTER_NAME && config.is_empty())
         .then(|| Box::new(Config) as Box<dyn HttpFilterConfig<H>>)
 }

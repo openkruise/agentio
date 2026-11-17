@@ -54,14 +54,18 @@ func TestSandboxTLSWithoutSNI(t *testing.T) {
 	src, target := trafficFixture.Client, trafficFixture.Server
 	address := target.ServiceIPOrFail(t)
 	backend := target.WorkloadsOrFail(t)[0].Name
-	call := func(denied bool) error {
+	call := func(withoutSNI bool) error {
 		ctx, cancel := e2e.Context(t, 15*time.Second)
 		defer cancel()
-		// A literal IP URL makes curl omit SNI; the HTTP payload must remain encrypted at the gateway.
+		// A hostname verifies the healthy TLS path; a literal IP makes curl omit SNI.
+		host := target.Address()
+		if withoutSNI {
+			host = address
+		}
 		stdout, stderr, err := src.Exec(ctx, []string{"curl", "-ksS", "--noproxy", "*", "--http1.1",
 			"--connect-timeout", "5", "--max-time", "10", "-H", "Connection: close", "-w", "\n%{http_code}",
-			"https://" + net.JoinHostPort(address, "443") + "/"})
-		if denied {
+			"https://" + net.JoinHostPort(host, "443") + "/"})
+		if withoutSNI {
 			exit, ok := errors.AsType[utilexec.ExitError](err)
 			if ok && (exit.ExitStatus() == 35 || exit.ExitStatus() == 56) && strings.TrimSpace(stdout) == "000" {
 				return nil
@@ -78,6 +82,7 @@ func TestSandboxTLSWithoutSNI(t *testing.T) {
 		return nil
 	}
 	harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(false) })
+	harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(true) })
 	var active *e2econfig.Plan
 	for index, tc := range []struct {
 		name      string
@@ -85,15 +90,14 @@ func TestSandboxTLSWithoutSNI(t *testing.T) {
 		tlsAction string
 		tcpAction string
 		port      int
-		denied    bool
 	}{
-		{"exact SNI does not match absence", target.Address(), "Deny", "Allow", 443, false},
-		{"suffix wildcard does not match absence", "*.example.com", "Deny", "Allow", 443, false},
-		{"TLS deny all includes absent SNI", "*", "Deny", "Allow", 443, true},
-		{"TLS passthrough skips own TCP deny", "*", "Passthrough", "Deny", 443, false},
-		{"TLS port mismatch falls through", "*", "Deny", "Allow", 8443, false},
-		{"unmatched TLS uses TCP deny", target.Address(), "Deny", "Deny", 443, true},
-		{"unmatched TLS uses TCP allow", target.Address(), "Deny", "Allow", 443, false},
+		{"exact SNI with TCP allow cannot admit absent SNI", target.Address(), "Deny", "Allow", 443},
+		{"suffix wildcard with TCP allow cannot admit absent SNI", "*.example.com", "Deny", "Allow", 443},
+		{"TLS deny rejects absent SNI", "*", "Deny", "Allow", 443},
+		{"TLS passthrough cannot admit absent SNI", "*", "Passthrough", "Deny", 443},
+		{"TLS port mismatch cannot admit absent SNI", "*", "Deny", "Allow", 8443},
+		{"unmatched TLS with TCP deny rejects absent SNI", target.Address(), "Deny", "Deny", 443},
+		{"TLS passthrough with TCP allow cannot admit absent SNI", "*", "Passthrough", "Allow", 443},
 	} {
 		if !t.Run(tc.name, func(t *testing.T) {
 			active = e2econfig.New(scope).Eval(src.Namespace(), map[string]any{
@@ -124,12 +128,13 @@ spec:
 				mode = kube.CreateOnly
 			}
 			active.ApplyOrFail(t, mode)
-			harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(tc.denied) })
+			harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(true) })
 		}) {
 			return
 		}
 	}
 	active.DeleteOrFail(t)
+	harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(true) })
 	harness.RetryAssertion(t, 2*time.Minute, time.Second, func() error { return call(false) })
 }
 

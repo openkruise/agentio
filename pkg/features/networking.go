@@ -41,12 +41,6 @@ var (
 		false,
 		"If enabled, enforce SNI traffic policies in egress gateways, using HBONE TLS action headers when present.",
 	).Get()
-	EnableUDPProxy = env.Register(
-		"AGENTIO_GATEWAY_ENABLE_UDP_PROXY",
-		false,
-		"If enabled, egress gateways terminate experimental IPv4 CONNECT-UDP sessions from ztunnel "+
-			"and forward datagrams directly to the MASQUE target without inspection.",
-	).Get()
 	MeshInternalTrafficPolicy = meshInternalTrafficPolicyFromString(env.Register(
 		"AGENTIO_MESH_INTERNAL_TRAFFIC_POLICY",
 		"PEER_AWARE",

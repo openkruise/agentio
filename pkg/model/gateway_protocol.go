@@ -35,9 +35,7 @@ const (
 	FilterStateLocalPrincipal    = "agentio.local.principal"
 	// FilterStateConnectionPolicyHash must match HASH_KEY in extensions/envoy/connection-policy.
 	FilterStateConnectionPolicyHash = "agentio.connection.policy_hash"
-	// FilterStatePolicyStart identifies the matched profile for SNI destination authorization.
-	FilterStatePolicyStart = "agentio.policy.start"
-	// FilterStateRouteUpstream holds the gateway-selected IP:port for this request.
+	// FilterStateRouteUpstream carries the selected numeric IP:port between routing modules.
 	FilterStateRouteUpstream = "agentio.route.upstream"
 )
 

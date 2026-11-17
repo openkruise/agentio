@@ -37,7 +37,10 @@ import (
 	"github.com/openkruise/agentio/pkg/model"
 )
 
-const serviceEntryDenyChain = "service-entry-deny"
+const (
+	serviceEntryDenyChain = "service-entry-deny"
+	serviceEntryTCPChain  = "service-entry-tcp"
+)
 
 func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrough string) *xdsmatcher.Matcher {
 	if features.EnableSNITrafficPolicy {
@@ -45,14 +48,27 @@ func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrou
 			toMatcher(b.sniTrafficPolicyMatcher(config.gateway.GetTlsTermination().GetExcludeHosts(), passthrough)),
 		)
 	}
+	routing := b.protocolMatcher(b.toChain(passthrough))
 	if termination := config.gateway.GetTlsTermination(); termination != nil {
-		return b.staticSNIMatcher(termination, passthrough)
+		routing = b.staticSNIMatcher(termination, passthrough)
 	}
-	return b.protocolMatcher(b.toChain(passthrough))
+	if b.legacyGateway {
+		return routing
+	}
+	// The Rust listener still validates TLS when SNI policy evaluation is disabled.
+	return exactMatcher(
+		typedExtension("tls-action", b.pack(&input.FilterStateInput{Key: tlsActionKey})),
+		map[string]*xdsmatcher.Matcher_OnMatch{"deny": b.toChain(sniDenyChain)},
+		toMatcher(routing),
+	)
 }
 
-// The SNI and HTTP filters share the DFP cache and explicit-target convention.
+// Native SNI forwarding authorizes and pins a numeric endpoint before TCP proxy.
 func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*listener.Filter) []*listener.Filter {
+	if !b.legacyGateway {
+		filters := append(slices.Clone(prefix), b.tcpPolicyFilter(tcpDynamicForward))
+		return b.applicationTCPFilters(config, filters, TLSPassthrough, config.gateway.GetTcp())
+	}
 	state := &networkstate.Config{
 		OnNewConnection: []*common.FilterStateValue{
 			{
@@ -75,21 +91,8 @@ func (b *resourceBuilder) sniForwardFilters(config effectiveConfig, prefix []*li
 			},
 		},
 	}
-	stateName, cluster := "agentio.route_upstream", HTTPDynamicForwardProxy
-	if !b.legacyGateway {
-		stateName, cluster = "envoy.filters.network.set_filter_state", TLSPassthrough
-		values := tlsDestinationState("%REQUESTED_SERVER_NAME%")
-		if len(config.gateway.GetServiceEntries()) > 0 {
-			values = append(values, state.OnNewConnection[1])
-		}
-		state.OnNewConnection = values
-	}
-	filters := append(slices.Clone(prefix), networkFilter(stateName, b.pack(state)))
-	if !b.legacyGateway {
-		filters = append(filters, b.tcpPolicyFilter(len(prefix) == 0, true))
-	}
-	filters = append(filters, b.sniDFPFilter())
-	return b.applicationTCPFilters(config, filters, cluster, config.gateway.GetTcp())
+	filters := append(slices.Clone(prefix), networkFilter("agentio.route_upstream", b.pack(state)), b.sniDFPFilter())
+	return b.applicationTCPFilters(config, filters, HTTPDynamicForwardProxy, config.gateway.GetTcp())
 }
 
 // Each address accepts the union of names from entries sharing that endpoint.
@@ -105,6 +108,15 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 	}
 	if len(hostsByIP) == 0 {
 		return
+	}
+	if terminated && !b.legacyGateway {
+		l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+			Name: serviceEntryTCPChain,
+			Filters: b.applicationTCPFilters(config, []*listener.Filter{
+				outerTLSIdentityFilter,
+				b.tcpPolicyFilter(tcpOriginalDst),
+			}, TLSEndpointOriginate, config.gateway.GetTcp()),
+		})
 	}
 	addresses := make(map[string]*xdsmatcher.Matcher_OnMatch, len(hostsByIP))
 	for _, ip := range slices.Sorted(maps.Keys(hostsByIP)) {
@@ -129,39 +141,29 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 			// Non-HTTP bytes keep the TLS identity and original destination chosen upstream.
 			http.OnNoMatch = b.toChain(forwardTCPChain)
 			if !b.legacyGateway {
-				l.FilterChains = append(l.FilterChains, &listener.FilterChain{
-					Name: name + "|tcp",
-					Filters: b.applicationTCPFilters(config, []*listener.Filter{
-						outerTLSIdentityFilter,
-						networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
-							OnNewConnection: tlsDestinationState("%DOWNSTREAM_LOCAL_ADDRESS%"),
-						})),
-						b.tcpPolicyFilter(false, false),
-						b.sniDFPFilter(),
-					}, TLSProxyOriginate, config.gateway.GetTcp()),
-				})
-				http.OnNoMatch = b.toChain(name + "|tcp")
+				http.OnNoMatch = b.toChain(serviceEntryTCPChain)
 			}
 			addresses[ip] = toMatcher(http)
 			continue
 		}
-		pin := networkFilter(
-			"agentio.endpoint_upstream",
-			b.pack(&networkstate.Config{OnNewConnection: []*common.FilterStateValue{
-				serviceEntryTarget(),
-			}}),
-		)
-		l.FilterChains = append(
-			l.FilterChains,
-			&listener.FilterChain{Name: name + "|tls", Filters: b.sniForwardFilters(config, []*listener.Filter{pin})},
-		)
+		passthrough := forwardTCPChain
+		if b.legacyGateway {
+			pin := networkFilter("agentio.endpoint_upstream", b.pack(&networkstate.Config{
+				OnNewConnection: []*common.FilterStateValue{b.serviceEntryTarget()},
+			}))
+			passthrough = name + "|tls"
+			l.FilterChains = append(l.FilterChains, &listener.FilterChain{
+				Name:    passthrough,
+				Filters: b.sniForwardFilters(config, []*listener.Filter{pin}),
+			})
+		}
 		domains := make([]string, 0, len(hosts)*2)
 		for _, host := range hosts {
 			domains = append(domains, host, host+".")
 		}
 		sni := &xdsmatcher.ServerNameMatcher{DomainMatchers: []*xdsmatcher.ServerNameMatcher_DomainMatcher{{
 			Domains: domains,
-			OnMatch: toMatcher(b.internalChainMatcher(config, name+"|tls")),
+			OnMatch: toMatcher(b.internalChainMatcher(config, passthrough)),
 		}}}
 		binding := &xdsmatcher.Matcher{
 			MatcherType: &xdsmatcher.Matcher_MatcherTree_{MatcherTree: &xdsmatcher.Matcher_MatcherTree{
@@ -186,11 +188,11 @@ func (b *resourceBuilder) bindServiceEntryEndpoints(
 	)
 }
 
-func serviceEntryTarget() *common.FilterStateValue {
+func (b *resourceBuilder) serviceEntryTarget() *common.FilterStateValue {
 	return &common.FilterStateValue{
 		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: model.FilterStateRouteUpstream},
 		FactoryKey: "envoy.string",
-		ReadOnly:   true,
+		ReadOnly:   b.legacyGateway,
 		Value:      &common.FilterStateValue_FormatString{FormatString: formatString("%DOWNSTREAM_LOCAL_ADDRESS%")},
 	}
 }
@@ -221,24 +223,10 @@ func (b *resourceBuilder) serviceEntryHCM(
 	guard.Name = "agentio.service_entry_host"
 	target := httpFilter(
 		"agentio.endpoint_upstream",
-		b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{serviceEntryTarget()}}),
+		b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{b.serviceEntryTarget()}}),
 	)
 	// Application CONNECT names the tunnel target, not the intercepted proxy.
-	target = b.skipHTTPFilter(target, &xdsmatcher.Matcher_MatcherList_Predicate{
-		MatchType: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate_{
-			SinglePredicate: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate{
-				Input: typedExtension(
-					"request-headers",
-					b.pack(&matcher.HttpRequestHeaderMatchInput{HeaderName: ":method"}),
-				),
-				Matcher: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
-					ValueMatch: &xdsmatcher.StringMatcher{
-						MatchPattern: &xdsmatcher.StringMatcher_Exact{Exact: "CONNECT"},
-					},
-				},
-			},
-		},
-	})
+	target = b.skipHTTPFilter(target, b.connectMethodPredicate())
 	manager.HttpFilters = append([]*hcm.HttpFilter{guard, target}, manager.HttpFilters...)
 	return manager
 }
@@ -260,4 +248,22 @@ func (b *resourceBuilder) skipHTTPFilter(
 			}},
 		},
 	}))
+}
+
+func (b *resourceBuilder) connectMethodPredicate() *xdsmatcher.Matcher_MatcherList_Predicate {
+	return &xdsmatcher.Matcher_MatcherList_Predicate{
+		MatchType: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate_{
+			SinglePredicate: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate{
+				Input: typedExtension(
+					"request-headers",
+					b.pack(&matcher.HttpRequestHeaderMatchInput{HeaderName: ":method"}),
+				),
+				Matcher: &xdsmatcher.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
+					ValueMatch: &xdsmatcher.StringMatcher{
+						MatchPattern: &xdsmatcher.StringMatcher_Exact{Exact: "CONNECT"},
+					},
+				},
+			},
+		},
+	}
 }

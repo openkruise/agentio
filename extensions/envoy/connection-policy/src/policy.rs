@@ -97,7 +97,7 @@ impl Policy {
 }
 
 // Preserve Agentio/ztunnel suffix semantics: *.example.com matches a.b.example.com.
-fn pattern_matches(pattern: &str, name: &str) -> bool {
+pub fn pattern_matches(pattern: &str, name: &str) -> bool {
     let pattern = pattern.strip_suffix('.').unwrap_or(pattern);
     pattern == "*"
         || pattern.eq_ignore_ascii_case(name)
@@ -109,7 +109,7 @@ fn pattern_matches(pattern: &str, name: &str) -> bool {
         })
 }
 
-fn valid_pattern(pattern: &str) -> bool {
+pub fn valid_pattern(pattern: &str) -> bool {
     let pattern = pattern.strip_suffix('.').unwrap_or(pattern);
     if pattern == "*" {
         return true;

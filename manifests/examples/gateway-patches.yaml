@@ -13,7 +13,7 @@ data:
       - target: cluster
         operation: MERGE
         match:
-          name: http_dynamic_forward_proxy
+          name: PassthroughCluster
         value:
           connect_timeout: 3s
       - target: networkFilter

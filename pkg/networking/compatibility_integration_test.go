@@ -184,70 +184,105 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This direct TLS fixture has no CONNECT context; test static SNI precedence alone.
-	b := &resourceBuilder{legacyGateway: true}
-	matcher := b.staticSNIMatcher(&configv1.TlsTerminationConfig{
-		IncludeHosts: []string{
-			"same.test",
-			"SAME.test",
-			"*.overlap.test",
-			"*.overlap.test",
-			"include.test",
-			"include.test",
-			"specific.overlap.test",
-		},
-		ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
-	}, forwardTLSChain)
-	if b.err != nil {
-		t.Fatal(b.err)
-	}
-	matcherJSON, err := protojson.Marshal(matcher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	business, _ := runCompatibilityEnvoy(t, binary, fmt.Sprintf(`{
-      "static_resources":{
-        "clusters":[{"name":"origin","connect_timeout":"1s","type":"STATIC","load_assignment":{"cluster_name":"origin","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"127.0.0.1","port_value":%s}}}}]}]}}],
-        "listeners":[{"name":"business","address":{"socket_address":{"address":"127.0.0.1","port_value":0}},
-          "listener_filters":[{"name":"envoy.filters.listener.tls_inspector","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"}}],
-          "filter_chain_matcher":%s,
-          "filter_chains":[
-            {"name":"forward-tls","filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"pass","cluster":"origin"}}]},
-            {"name":"tls-terminate","transport_socket":{"name":"envoy.transport_sockets.tls","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext","common_tls_context":{"tls_certificates":[{"certificate_chain":{"inline_string":%s},"private_key":{"inline_string":%s}}]}}},
-              "filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager","stat_prefix":"terminate","route_config":{"name":"all","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"prefix":"/"},"direct_response":{"status":200,"body":{"inline_string":"terminated"}}}]}]},"http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]}}]},
-            {"name":"forward-http","filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"http-fallback","cluster":"origin"}}]}
-          ]
-        }]
-      },"admin":{"address":{"socket_address":{"address":"127.0.0.1","port_value":0}}}
-    }`, port, matcherJSON, certJSON, keyJSON))
-	for _, tc := range []struct {
-		host string
-		want string
-	}{
-		{"same.test", "passthrough"}, {"SAME.test", "passthrough"},
-		{"api.overlap.test", "passthrough"}, {"a.b.overlap.test", "passthrough"},
-		{"include.test", "terminated"}, {"unmatched.test", "passthrough"},
-		{"specific.overlap.test", "terminated"},
-	} {
-		t.Run(tc.host, func(t *testing.T) {
-			client := &http.Client{
-				Timeout:   2 * time.Second,
-				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: tc.host}},
+	for _, mode := range []string{"static", "native", "wildcard"} {
+		t.Run(mode, func(t *testing.T) {
+			// Exercise the production terminate subtree without a CONNECT policy producer.
+			b := &resourceBuilder{legacyGateway: true}
+			matcher := b.staticSNIMatcher(&configv1.TlsTerminationConfig{
+				IncludeHosts: []string{
+					"same.test",
+					"SAME.test",
+					"*.overlap.test",
+					"*.overlap.test",
+					"include.test",
+					"include.test",
+					"specific.overlap.test",
+				},
+				ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
+			}, forwardTLSChain)
+			if mode != "static" {
+				b.legacyGateway = false
+				excluded := []string{"same.test", "SAME.test.", "*.overlap.test", "*.OVERLAP.test."}
+				if mode == "wildcard" {
+					excluded = []string{"*"}
+				}
+				matcher = b.sniTrafficPolicyMatcher(excluded, forwardTLSChain).
+					GetMatcherTree().GetExactMatchMap().GetMap()["terminate"].GetMatcher()
 			}
-			defer client.CloseIdleConnections()
-			r, err := client.Get("https://" + business)
+			if b.err != nil {
+				t.Fatal(b.err)
+			}
+			matcherJSON, err := protojson.Marshal(matcher)
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := io.ReadAll(r.Body)
-			if err := r.Body.Close(); err != nil {
-				t.Fatal(err)
+			business, _ := runCompatibilityEnvoy(t, binary, fmt.Sprintf(`{
+		      "static_resources":{
+		        "clusters":[{"name":"origin","connect_timeout":"1s","type":"STATIC","load_assignment":{"cluster_name":"origin","endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"127.0.0.1","port_value":%s}}}}]}]}}],
+		        "listeners":[{"name":"business","address":{"socket_address":{"address":"127.0.0.1","port_value":0}},
+		          "listener_filters":[{"name":"envoy.filters.listener.tls_inspector","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"}}],
+		          "filter_chain_matcher":%s,
+		          "filter_chains":[
+		            {"name":"forward-tls","filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"pass","cluster":"origin"}}]},
+		            {"name":"tls-terminate","transport_socket":{"name":"envoy.transport_sockets.tls","typed_config":{"@type":"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext","common_tls_context":{"tls_certificates":[{"certificate_chain":{"inline_string":%s},"private_key":{"inline_string":%s}}]}}},
+		              "filters":[{"name":"envoy.filters.network.http_connection_manager","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager","stat_prefix":"terminate","route_config":{"name":"all","virtual_hosts":[{"name":"all","domains":["*"],"routes":[{"match":{"prefix":"/"},"direct_response":{"status":200,"body":{"inline_string":"terminated"}}}]}]},"http_filters":[{"name":"envoy.filters.http.router","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}}]}}]},
+		            {"name":"forward-http","filters":[{"name":"envoy.filters.network.tcp_proxy","typed_config":{"@type":"type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy","stat_prefix":"http-fallback","cluster":"origin"}}]}
+		          ]
+		        }]
+		      },"admin":{"address":{"socket_address":{"address":"127.0.0.1","port_value":0}}}
+		    }`, port, matcherJSON, certJSON, keyJSON))
+			type testCase struct {
+				host string
+				want string
 			}
-			if err != nil || string(body) != tc.want {
-				t.Fatalf("got %q, error %v; want %s", body, err, tc.want)
+			cases := []testCase{
+				{"same.test", "passthrough"}, {"SAME.test", "passthrough"},
+				{"api.overlap.test", "passthrough"}, {"a.b.overlap.test", "passthrough"},
+				{"include.test", "terminated"}, {"unmatched.test", "passthrough"},
+				{"specific.overlap.test", "terminated"},
+			}
+			if mode != "static" {
+				cases = append(cases, testCase{"same.test.", "passthrough"},
+					testCase{"A.B.OVERLAP.TEST.", "passthrough"},
+					testCase{"overlap.test", "terminated"},
+					testCase{"", "terminated"})
+				for i := range cases {
+					switch cases[i].host {
+					case "unmatched.test":
+						cases[i].want = "terminated"
+					case "specific.overlap.test":
+						cases[i].want = "passthrough"
+					}
+					if mode == "wildcard" && cases[i].host != "" {
+						cases[i].want = "passthrough"
+					}
+				}
+			}
+			for _, tc := range cases {
+				t.Run(tc.host, func(t *testing.T) {
+					client := &http.Client{
+						Timeout: 2 * time.Second,
+						Transport: &http.Transport{
+							TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: tc.host},
+						},
+					}
+					defer client.CloseIdleConnections()
+					r, err := client.Get("https://" + business)
+					if err != nil {
+						t.Fatal(err)
+					}
+					body, err := io.ReadAll(r.Body)
+					if err := r.Body.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err != nil || string(body) != tc.want {
+						t.Fatalf("got %q, error %v; want %s", body, err, tc.want)
+					}
+				})
 			}
 		})
 	}
+
 }
 
 // Both tests exercise production-generated extensions in a minimal real Envoy bootstrap.

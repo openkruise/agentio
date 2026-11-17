@@ -14,7 +14,7 @@ enrolled workload
 
 ## Control-plane boundaries
 
-`TrafficPolicy` and `GlobalTrafficPolicy` govern L3/L4 egress authorization for selected workloads. `agentiod` compiles and distributes those resources to the Agentio data plane. Independently, EPE always checks its global `EPEConfig.egressAuthorization.deniedCIDRs` restrictions and pins allowed HTTP destinations.
+`TrafficPolicy` and `GlobalTrafficPolicy` govern L3/L4 egress authorization for selected workloads. `agentiod` compiles and distributes those resources to the Agentio data plane. The native gateway enforces `AgentioConfig.egressAuthorization.deniedCIDRs` on final destinations, including those selected by EPE. EPE retains ordered SecurityProfile TCP rules and target selection.
 
 The ordered `AgentioConfig.egressPolicies` list independently decides whether matching traffic uses `PASSTHROUGH` or `GATEWAY`. A Sandbox — an OpenKruise Sandbox workload, the unit of identity and policy in Agentio — cannot use the legacy egress `DENY` through its native routing; express rejection in `TrafficPolicy`. A `GATEWAY` decision sends traffic to an egress gateway whose Envoy configuration invokes EPE, but EPE does not select that route.
 

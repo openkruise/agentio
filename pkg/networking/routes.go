@@ -37,7 +37,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
-	"github.com/openkruise/agentio/pkg/features"
 )
 
 var previousHostsRetryPredicate = func() *routev3.RetryPolicy_RetryHostPredicate {
@@ -100,10 +99,6 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 			}
 			tcp.TypedPerFilterConfig[name] = b.pack(&routev3.FilterConfig{Config: &anypb.Any{}})
 		}
-	}
-	if features.EnableUDPProxy {
-		vhost := connect.VirtualHosts[0]
-		vhost.Routes = append([]*routev3.Route{connectUDPRoute()}, vhost.Routes...)
 	}
 	if len(gateway.GetTcpPassthrough()) > 0 {
 		vhost := connect.VirtualHosts[0]
@@ -207,7 +202,7 @@ func (b *resourceBuilder) buildRoutes(gateway *configv1.EgressGateway) ([]*route
 		}
 		vhost.Routes = nil
 	}
-	http := b.buildForwardRoute(HTTPDynamicForwardProxy, gateway)
+	http := b.buildForwardRoute(b.httpForwardName(), gateway)
 	tls := b.buildForwardRoute(TLSConnectOriginate, gateway)
 	for _, route := range []*routev3.RouteConfiguration{connect, http, tls} {
 		if err := route.ValidateAll(); err != nil {
@@ -222,6 +217,15 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		Name:                     name,
 		ValidateClusters:         wrapperspb.Bool(false),
 		IgnorePortInHostMatching: true,
+	}
+	if !b.legacyGateway {
+		defaultPort := uint32(80)
+		if name == TLSConnectOriginate {
+			defaultPort = 443
+		}
+		result.TypedPerFilterConfig = map[string]*anypb.Any{
+			"agentio.egress_authorization": b.egressAuthorizationRouteConfig(tcpDynamicForward, defaultPort),
+		}
 	}
 	settings := gateway.GetHttp().GetRouting()
 	defaultSettings := settings.GetFallback()
@@ -253,7 +257,18 @@ func (b *resourceBuilder) buildForwardRoute(name string, gateway *configv1.Egres
 		connectCluster = TLSProxyOriginate
 	}
 	for _, virtualHost := range result.VirtualHosts {
-		virtualHost.Routes = append([]*routev3.Route{forwardProxyConnectRoute(connectCluster)}, virtualHost.Routes...)
+		if !b.legacyGateway && name == HTTPForwardProxy {
+			for _, route := range virtualHost.Routes {
+				route.GetRoute().ClusterSpecifier = &routev3.RouteAction_Cluster{Cluster: PassthroughCluster}
+			}
+		}
+		connect := forwardProxyConnectRoute(connectCluster)
+		if !b.legacyGateway && name != TLSConnectOriginate {
+			connect.TypedPerFilterConfig = map[string]*anypb.Any{
+				"agentio.egress_authorization": b.egressAuthorizationRouteConfig(tcpOriginalDst, 80),
+			}
+		}
+		virtualHost.Routes = append([]*routev3.Route{connect}, virtualHost.Routes...)
 	}
 	return result
 }

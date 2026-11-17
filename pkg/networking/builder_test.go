@@ -83,7 +83,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
 	for _, name := range []string{MainInternal, MainForward, PassthroughCluster,
-		HTTPDynamicForwardProxy, TLSConnectOriginate, ExtProcCluster} {
+		TLSConnectOriginate, ExtProcCluster} {
 		cluster := clusters[name]
 		if cluster == nil {
 			t.Errorf("cluster %q not found", name)
@@ -93,13 +93,13 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 			t.Errorf("cluster %q invalid: %v", name, err)
 		}
 	}
-	httpDFP := &dfpclusterv3.ClusterConfig{}
-	if err := clusters[HTTPDynamicForwardProxy].GetClusterType().GetTypedConfig().UnmarshalTo(httpDFP); err != nil {
-		t.Fatalf("unmarshal HTTP DFP cluster: %v", err)
+	if clusters[PassthroughCluster].GetType() != clusterv3.Cluster_ORIGINAL_DST {
+		t.Fatal("HTTP forwarding must use the authorized numeric destination")
 	}
-	if httpDFP.GetDnsCacheConfig().GetName() != DNSCacheName {
-		t.Fatalf("HTTP DFP cache = %q", httpDFP.GetDnsCacheConfig().GetName())
+	if clusters[HTTPForwardProxy] != nil {
+		t.Fatal("HTTP forwarding must reuse PassthroughCluster")
 	}
+
 	for name, cluster := range clusters {
 		if _, found := cluster.GetTypedExtensionProtocolOptions()["type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions"]; found {
 			t.Fatalf("cluster %s uses an Any type URL as protocol-options map key", name)
@@ -152,7 +152,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 	forwardHCM := findHCM(t, listeners[MainForward])
 	if !hasHTTPFilter(forwardHCM, "envoy.filters.http.rbac") ||
 		!hasHTTPFilter(forwardHCM, "envoy.filters.http.ext_proc") ||
-		!hasHTTPFilter(forwardHCM, "envoy.filters.http.dynamic_forward_proxy") {
+		!hasHTTPFilter(forwardHCM, "agentio.egress_authorization") {
 		t.Fatalf("main_forward filters = %v", httpFilterNames(forwardHCM))
 	}
 	for _, filter := range forwardHCM.GetHttpFilters() {
@@ -186,7 +186,7 @@ func TestBuildProducesProductionGatewayGraph(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	for _, name := range []string{ConnectTerminate, HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{ConnectTerminate, HTTPForwardProxy, TLSConnectOriginate} {
 		if routes[name] == nil {
 			t.Errorf("route %q not found", name)
 			continue
@@ -317,7 +317,7 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
 		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-2 {
-			t.Fatal("proxy target and TLS identity must precede DFP")
+			t.Fatal("proxy TLS identity must precede authorization")
 		}
 	}
 
@@ -611,6 +611,7 @@ func TestBuildSupportsDeployedIPv4DynamicForwardProxyPatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	resources, err := Build(Inputs{
+		LegacyGateway:    true,
 		DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 		TrustDomain:      "cluster.local",
 		Gateway:          testGateway(nil),
@@ -665,7 +666,7 @@ func TestBuildSupportsDeployedSandboxConnectPatch(t *testing.T) {
 		Operation: model.PatchInsertBefore,
 		Target: model.HTTPRoutePatch{
 			Match: &model.RouteConfigurationMatch{
-				Name:        HTTPDynamicForwardProxy,
+				Name:        HTTPForwardProxy,
 				VirtualHost: &model.VirtualHostMatch{Route: &model.RouteMatch{Name: "default"}},
 			},
 			Value: &routev3.Route{
@@ -703,7 +704,7 @@ func TestBuildSupportsDeployedSandboxConnectPatch(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	got := routes[HTTPDynamicForwardProxy].GetVirtualHosts()[0].GetRoutes()
+	got := routes[HTTPForwardProxy].GetVirtualHosts()[0].GetRoutes()
 	if len(got) != 3 || got[0].GetName() != "sandbox-connect" || got[1].GetName() != "sandbox-connect" ||
 		got[2].GetName() != "default" {
 		t.Fatalf("HTTP DFP routes = %+v", got)

@@ -23,15 +23,12 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
-	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
-	test.SetForTest(t, &features.EnableUDPProxy, true)
 	settings := new(configv1.EgressGateway)
 	if err := protojson.Unmarshal([]byte(`{
  "connectRateLimit":{"tokenBucket":{"maxTokens":10,"fillInterval":"1s"}},
@@ -77,15 +74,6 @@ func TestConcurrencyIndependentTCPAdmission(t *testing.T) {
 	if !found ||
 		modulePolicy(networkLimitExtension(t, resources, bandwidthFilterName)).Fields["enabled"].GetBoolValue() {
 		t.Fatal("concurrency must work without bandwidth")
-	}
-	for _, upgrade := range hcm.UpgradeConfigs {
-		if upgrade.UpgradeType == connectUDPUpgradeType {
-			for _, filter := range upgrade.Filters {
-				if filter.Name == concurrencyFilterName {
-					t.Fatal("TCP admission leaked into UDP")
-				}
-			}
-		}
 	}
 	inputs.LegacyGateway = true
 	if _, err := Build(inputs); err == nil {

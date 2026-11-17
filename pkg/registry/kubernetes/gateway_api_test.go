@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -42,23 +41,18 @@ func TestGatewayDnsCacheSettings(t *testing.T) {
 		{name: "empty", content: "dnsCache: {}", want: &configv1.DnsCacheSettings{}},
 		{name: "capacity only", content: "dnsCache: {maxHosts: 16384}", want: &configv1.DnsCacheSettings{MaxHosts: new(uint32(16384))}},
 		{name: "pending only", content: "dnsCache: {maxPendingRequests: 4096}", want: &configv1.DnsCacheSettings{MaxPendingRequests: new(uint32(4096))}},
-		{name: "TTL only", content: "dnsCache: {hostTtl: 120s}", want: &configv1.DnsCacheSettings{HostTtl: durationpb.New(2 * time.Minute)}},
 		{
 			name:    "configured",
-			content: "dnsCache: {maxHosts: 16384, maxPendingRequests: 4096, hostTtl: 300s}",
+			content: "dnsCache: {maxHosts: 16384, maxPendingRequests: 4096}",
 			want: &configv1.DnsCacheSettings{
 				MaxHosts:           new(uint32(16384)),
 				MaxPendingRequests: new(uint32(4096)),
-				HostTtl:            durationpb.New(5 * time.Minute),
 			},
 		},
 		{name: "zero hosts", content: "dnsCache: {maxHosts: 0}", invalid: true},
 		{name: "zero pending", content: "dnsCache: {maxPendingRequests: 0}", invalid: true},
 		{name: "negative hosts", content: "dnsCache: {maxHosts: -1}", invalid: true},
 		{name: "overflow hosts", content: "dnsCache: {maxHosts: 4294967296}", invalid: true},
-		{name: "zero TTL", content: "dnsCache: {hostTtl: 0s}", invalid: true},
-		{name: "negative TTL", content: "dnsCache: {hostTtl: -1s}", invalid: true},
-		{name: "invalid TTL", content: "dnsCache: {hostTtl: invalid}", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, decode := range map[string]func() (*configv1.EgressGateway, error){

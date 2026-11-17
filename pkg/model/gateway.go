@@ -155,14 +155,7 @@ func ValidateDnsCacheSettings(settings *configv1.DnsCacheSettings) error {
 	if settings.MaxPendingRequests != nil && settings.GetMaxPendingRequests() == 0 {
 		return fmt.Errorf("dnsCache.maxPendingRequests must be positive")
 	}
-	if ttl := settings.GetHostTtl(); ttl != nil {
-		if err := ttl.CheckValid(); err != nil {
-			return fmt.Errorf("dnsCache.hostTtl: %w", err)
-		}
-		if ttl.AsDuration() <= 0 {
-			return fmt.Errorf("dnsCache.hostTtl must be positive")
-		}
-	}
+
 	return nil
 }
 

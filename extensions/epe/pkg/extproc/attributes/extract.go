@@ -279,7 +279,8 @@ func extractHeaderMap(headers *extProcPb.HttpHeaders) map[string]string {
 
 // ExtractUpstream parses the gateway-selected target, returning nil when absent.
 func ExtractUpstream(attrs map[string]*structpb.Struct) (*filter.UpstreamTarget, error) {
-	value, present := attrs[ExtProcAttrsKey].GetFields()[FilterStateRouteUpstream]
+	fields := attrs[ExtProcAttrsKey].GetFields()
+	value, present := fields[FilterStateRouteUpstream]
 	if !present {
 		return nil, nil
 	}
@@ -287,6 +288,7 @@ func ExtractUpstream(attrs map[string]*structpb.Struct) (*filter.UpstreamTarget,
 	if err != nil {
 		return nil, fmt.Errorf("invalid route upstream: %w", err)
 	}
+
 	target := &filter.UpstreamTarget{Address: &address}
 	if err := (&filter.RouteMutation{Upstream: target}).Validate(); err != nil {
 		return nil, err

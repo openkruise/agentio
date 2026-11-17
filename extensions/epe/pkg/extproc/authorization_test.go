@@ -17,7 +17,6 @@ package extproc
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"testing"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/extproc/attributes"
 	"github.com/openkruise/agentio/extensions/epe/pkg/filters/egressauthz"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
+	"github.com/openkruise/agentio/pkg/dns"
 
 	extProcV3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -33,7 +33,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
-	"github.com/openkruise/agentio/pkg/dns"
 )
 
 func TestRequestAuthorization(t *testing.T) {
@@ -362,10 +361,11 @@ func TestServiceEntryTargetAuthorization(t *testing.T) {
 		status    int
 	}{
 		{name: "allowed without DNS", candidate: "192.0.2.2:8443", want: "192.0.2.2:8443"},
-		{name: "denied does not fall back to allowed original", candidate: "192.0.2.99:8443", status: 403},
+		{name: "endpoint is passed to gateway authorization", candidate: "192.0.2.99:8443", want: "192.0.2.99:8443"},
+		{name: "IPv6 endpoint is passed to gateway authorization", candidate: "[::1]:8443", want: "[::1]:8443"},
 		{name: "path rewrite preserves selected endpoint", candidate: "192.0.2.2:8443", action: filter.Continue(filter.SetPath("/rewritten", true)), want: "192.0.2.2:8443"},
 		{name: "explicit route replaces candidate", candidate: "192.0.2.99:8443", action: filter.Continue(filter.Mutation{Route: upstreamRoute("192.0.2.2:8443", true)}), want: "192.0.2.2:8443"},
-		{name: "bypass still authorizes", candidate: "192.0.2.99:8443", action: filter.Bypass(), status: 403},
+		{name: "bypass retains selected endpoint", candidate: "192.0.2.99:8443", action: filter.Bypass(), want: "192.0.2.99:8443"},
 		{name: "invalid input fails locally", candidate: "invalid", status: 500},
 		{name: "invalid input fails with authorization disabled", candidate: "invalid", disabled: true, status: 500},
 		{name: "disabled does not publish candidate", candidate: "192.0.2.99:8443", disabled: true},
@@ -381,8 +381,7 @@ func TestServiceEntryTargetAuthorization(t *testing.T) {
 			}
 			if !tc.disabled {
 				deps.AuthorizeRequest = func(ctx context.Context, st *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
-					cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.99/32")}}
-					return egressauthz.NewAggregate(nil, cfg).Authorize(ctx, st)
+					return egressauthz.NewAggregate(nil).Authorize(ctx, st)
 				}
 			}
 			attrs := makeAttrsWithLabels("ns", "pod", "")
@@ -416,10 +415,9 @@ func TestServiceEntryTargetAuthorization(t *testing.T) {
 	}
 }
 
-func TestStaticAuthorizationWithoutIdentityAndWithBypass(t *testing.T) {
-	cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}}
+func TestDestinationSelectionWithoutIdentityAndWithBypass(t *testing.T) {
 	for _, mode := range []string{"missing-identity", "no-profile", "bypass", "identity-required"} {
-		for _, host := range []string{"127.0.0.1:15000", "192.0.2.1:15000"} {
+		for _, host := range []string{"127.0.0.1:15000", "[::1]:15000", "192.0.2.1:15000"} {
 			t.Run(mode+"/"+host, func(t *testing.T) {
 				resolves := 0
 				server := NewServer(ServerDeps{
@@ -431,10 +429,7 @@ func TestStaticAuthorizationWithoutIdentityAndWithBypass(t *testing.T) {
 						}
 						return engine.Resolution{}, nil
 					},
-					AuthorizeRequest: egressauthz.NewAggregate(
-						dns.NewClient(nil, 0),
-						egressauthz.NewStaticAuthorizer(cfg),
-					).Authorize,
+					AuthorizeRequest:            egressauthz.NewAggregate(dns.NewClient(nil, 0)).Authorize,
 					FailClosedOnMissingIdentity: mode == "identity-required",
 				})
 				attrs := makeAttrsWithLabels("ns", "pod", "")
@@ -453,11 +448,6 @@ func TestStaticAuthorizationWithoutIdentityAndWithBypass(t *testing.T) {
 				if mode == "identity-required" {
 					if responses[0].GetImmediateResponse() == nil {
 						t.Fatal("missing identity was allowed")
-					}
-				} else if host == "127.0.0.1:15000" {
-					if reply := responses[0].GetImmediateResponse(); reply.GetStatus().GetCode() != 403 ||
-						reply.GetDetails() != "epe_egress_denied" {
-						t.Fatalf("global deny bypassed: %v", responses)
 					}
 				} else if got := responseUpstream(responses[0]).GetFields()[upstreamAddressField].GetStringValue(); got != host {
 					t.Fatalf("allowed target not pinned: %s", got)

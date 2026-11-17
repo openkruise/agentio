@@ -27,8 +27,17 @@ import (
 	"github.com/openkruise/agentio/pkg/dns"
 )
 
-// Authorize applies common restrictions, then the request-bound policy, and
-// pins a surviving address. Selection is random within the first
+// Aggregate resolves targets for ordered SecurityProfile TCP rules and final selection.
+type Aggregate struct {
+	client *dns.Client
+}
+
+// NewAggregate creates the destination resolver shared by TCP rule checkpoints.
+func NewAggregate(client *dns.Client) *Aggregate {
+	return &Aggregate{client: client}
+}
+
+// Authorize applies the request-bound policy and pins a surviving address. Selection is random within the first
 // surviving candidate's address family; explicit and original targets stay fixed.
 func (a *Aggregate) Authorize(
 	ctx context.Context,
@@ -67,26 +76,9 @@ func (a *Aggregate) Authorize(
 	return &filter.UpstreamTarget{Address: &selected}, nil, nil
 }
 
-// Candidates resolves the current target and applies common restrictions.
-// It neither invokes the request-bound policy nor pins an address.
+// Candidates resolves the current target without invoking the request-bound policy.
 func (a *Aggregate) Candidates(ctx context.Context, stream *filter.Stream) ([]netip.AddrPort, error) {
-	candidates, err := resolveCandidates(ctx, a.client, stream)
-	if err != nil {
-		return nil, err
-	}
-	for _, authorizer := range a.authorizers {
-		candidates, err = authorizer.Authorize(ctx, stream, candidates)
-		if err != nil {
-			stream.Info.RecordAuthorization(
-				filter.AuthorizationDecision{Action: "error", Reason: filter.AuthorizationReasonPolicyLoadFailed},
-			)
-			return nil, err
-		}
-		if len(candidates) == 0 {
-			break
-		}
-	}
-	return candidates, nil
+	return resolveCandidates(ctx, a.client, stream)
 }
 
 // SelectCandidate selects an address after authorization has removed denied candidates.
@@ -143,18 +135,6 @@ func resolveCandidates(
 		candidates = append(candidates, netip.AddrPortFrom(ip, uint16(stream.Request.Port)))
 	}
 	return candidates, nil
-}
-
-func recordDenial(stream *filter.Stream, address netip.AddrPort, decision Decision) {
-	record := filter.AuthorizationDecision{
-		Action:      "deny",
-		Destination: address.String(),
-		Reason:      filter.AuthorizationReasonPolicyDenied,
-	}
-	if decision.PolicyName != "" {
-		record.Policy, record.RuleIndex = decision.PolicyName, &decision.RuleIndex
-	}
-	stream.Info.RecordAuthorization(record)
 }
 
 func denied() (*filter.UpstreamTarget, *filter.Reply, error) {

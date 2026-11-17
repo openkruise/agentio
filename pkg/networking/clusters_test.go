@@ -47,7 +47,7 @@ func TestGatewayClustersUseConfiguredConnectTimeoutAndRootCA(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
-	for _, name := range []string{PassthroughCluster, HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{PassthroughCluster, TLSConnectOriginate} {
 		if got := clusters[name].GetConnectTimeout().AsDuration(); got != 7*time.Second {
 			t.Errorf("cluster %s connect timeout = %s, want 7s", name, got)
 		}
@@ -122,15 +122,21 @@ func TestGatewayTLSOriginationUsesDefaultSessionCache(t *testing.T) {
 			if keys := context.GetMaxSessionKeys(); keys != nil {
 				t.Fatalf("max session keys = %v, want Envoy's default SNI-scoped session cache", keys)
 			}
-			if got := context.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename(); got != features.ResolveGatewayRootCAPath() {
+			if got := context.GetCommonTlsContext().
+				GetValidationContext().
+				GetTrustedCa().
+				GetFilename(); got != features.ResolveGatewayRootCAPath() {
 				t.Fatalf("trusted CA = %q, want configured roots", got)
 			}
 			if name == TLSConnectOriginate {
 				options := &httpupstreamv3.HttpProtocolOptions{}
-				if err := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(options); err != nil {
+				if err := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(
+					options,
+				); err != nil {
 					t.Fatalf("decode HTTP options: %v", err)
 				}
-				if !options.GetUpstreamHttpProtocolOptions().GetAutoSni() || !options.GetUpstreamHttpProtocolOptions().GetAutoSanValidation() {
+				if !options.GetUpstreamHttpProtocolOptions().GetAutoSni() ||
+					!options.GetUpstreamHttpProtocolOptions().GetAutoSanValidation() {
 					t.Fatal("TLS origination must retain automatic SNI and SAN validation")
 				}
 			}
@@ -154,7 +160,7 @@ func TestGatewayClustersUseAgentioStatsAndCircuitBreakers(t *testing.T) {
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
 	for _, name := range []string{
 		MainInternal, MainForward, PassthroughCluster,
-		HTTPDynamicForwardProxy, TLSConnectOriginate, TLSProxyOriginate, ExtProcCluster,
+		TLSConnectOriginate, TLSProxyOriginate, ExtProcCluster,
 	} {
 		cluster := clusters[name]
 		if got, want := cluster.GetAltStatName(), name+";"; got != want {
@@ -181,9 +187,11 @@ func TestGatewayClustersUseAgentioDownstreamIdleTimeout(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
-	for _, name := range []string{MainInternal, MainForward, PassthroughCluster, TLSProxyOriginate, HTTPDynamicForwardProxy} {
+	for _, name := range []string{MainInternal, MainForward, PassthroughCluster, TLSProxyOriginate} {
 		protocol := &httpupstreamv3.HttpProtocolOptions{}
-		if err := clusters[name].GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(protocol); err != nil {
+		if err := clusters[name].GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(
+			protocol,
+		); err != nil {
 			t.Fatalf("unmarshal cluster %s HTTP protocol options: %v", name, err)
 		}
 		if got := protocol.GetCommonHttpProtocolOptions().GetIdleTimeout().AsDuration(); got != 5*time.Minute {
@@ -238,7 +246,12 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 				if !selected {
 					minVersion, maxVersion, ciphers = tlsv3.TlsParameters_TLSv1_2, tlsv3.TlsParameters_TLSv1_3, defaults
 				}
-				clusters := messagesOf(t, resources, model.ClusterType, func() *clusterv3.Cluster { return &clusterv3.Cluster{} })
+				clusters := messagesOf(
+					t,
+					resources,
+					model.ClusterType,
+					func() *clusterv3.Cluster { return &clusterv3.Cluster{} },
+				)
 				for _, name := range []string{TLSConnectOriginate, TLSProxyOriginate} {
 					cluster := clusters[name]
 					ctx := &tlsv3.UpstreamTlsContext{}
@@ -246,18 +259,36 @@ func TestGatewayUpstreamTLS(t *testing.T) {
 						t.Fatal(err)
 					}
 					params := ctx.GetCommonTlsContext().GetTlsParams()
-					if params.GetTlsMinimumProtocolVersion() != minVersion || params.GetTlsMaximumProtocolVersion() != maxVersion || !slices.Equal(params.GetCipherSuites(), ciphers) {
-						t.Fatalf("gateway %s cluster %s TLS parameters = %v, want %v–%v and %v", current.Name, name, params, minVersion, maxVersion, ciphers)
+					if params.GetTlsMinimumProtocolVersion() != minVersion ||
+						params.GetTlsMaximumProtocolVersion() != maxVersion ||
+						!slices.Equal(params.GetCipherSuites(), ciphers) {
+						t.Fatalf(
+							"gateway %s cluster %s TLS parameters = %v, want %v–%v and %v",
+							current.Name,
+							name,
+							params,
+							minVersion,
+							maxVersion,
+							ciphers,
+						)
 					}
-					if ctx.GetMaxSessionKeys() != nil || ctx.GetCommonTlsContext().GetValidationContext().GetTrustedCa().GetFilename() != features.ResolveGatewayRootCAPath() {
+					if ctx.GetMaxSessionKeys() != nil ||
+						ctx.GetCommonTlsContext().
+							GetValidationContext().
+							GetTrustedCa().
+							GetFilename() !=
+							features.ResolveGatewayRootCAPath() {
 						t.Fatalf("cluster %s lost CA validation or default session cache: %v", name, ctx)
 					}
 					if name == TLSConnectOriginate {
 						options := &httpupstreamv3.HttpProtocolOptions{}
-						if err := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(options); err != nil {
+						if err := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsType].UnmarshalTo(
+							options,
+						); err != nil {
 							t.Fatal(err)
 						}
-						if !options.GetUpstreamHttpProtocolOptions().GetAutoSni() || !options.GetUpstreamHttpProtocolOptions().GetAutoSanValidation() {
+						if !options.GetUpstreamHttpProtocolOptions().GetAutoSni() ||
+							!options.GetUpstreamHttpProtocolOptions().GetAutoSanValidation() {
 							t.Fatal("upstream TLS override lost SNI or SAN validation")
 						}
 					}

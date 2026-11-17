@@ -47,13 +47,11 @@ pub enum Gateway {
 
 struct ParsedRequest<'a> {
     resolution: ResolveRequest<'a>,
-    protocol: &'static str,
 }
 
 struct Headers<'a> {
     method: Cow<'a, str>,
     authority: Cow<'a, str>,
-    upgrade: Cow<'a, str>,
 }
 
 fn headers(headers: Option<&extproc::HttpHeaders>) -> Result<Headers<'_>, Status> {
@@ -61,13 +59,11 @@ fn headers(headers: Option<&extproc::HttpHeaders>) -> Result<Headers<'_>, Status
     let mut result = Headers {
         method: Cow::Borrowed(""),
         authority: Cow::Borrowed(""),
-        upgrade: Cow::Borrowed(""),
     };
     for header in headers.headers.iter().flat_map(|headers| &headers.headers) {
         let target = match header.key.as_str() {
             ":method" => &mut result.method,
             ":authority" => &mut result.authority,
-            "upgrade" => &mut result.upgrade,
             _ => continue,
         };
         *target = if header.raw_value.is_empty() {
@@ -158,7 +154,6 @@ impl Processor {
             (self.gateway == Gateway::AgentioEgress).then(|| agentio_egress::ConnectMeasurement {
                 metrics: self.client.metrics.clone(),
                 started,
-                protocol: parsed.protocol,
                 result: "canceled",
             });
         let resolver = Resolver {
@@ -172,7 +167,6 @@ impl Processor {
             Ok(resolved) => match self.gateway {
                 Gateway::AgentioEgress => Ok(agentio_egress::encode(
                     resolved,
-                    parsed.protocol,
                     self.enable_sni_traffic_policy,
                 )),
                 Gateway::Agentgateway => agentgateway::encode(resolved),
@@ -282,12 +276,12 @@ mod tests {
                 None,
             ),
             (
-                "raw upgrade is case insensitive",
+                "UDP upgrade is rejected",
                 vec![
                     header(":method", "GET", b""),
                     header("upgrade", "ignored", b"CoNnEcT-UdP"),
                 ],
-                Some("udp"),
+                None,
             ),
             (
                 "malformed raw method remains invalid",

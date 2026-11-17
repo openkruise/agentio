@@ -217,8 +217,13 @@ type AgentioConfig struct {
 	// discovery. Empty disables EPE access. Clients must authenticate and use
 	// the epe node type; declaring an identity in node metadata is not sufficient.
 	TrustedEpeIdentities []string `protobuf:"bytes,6,rep,name=trusted_epe_identities,json=trustedEPEIdentities,proto3" json:"trusted_epe_identities,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Destination restrictions for all native Envoy egress gateways, independently
+	// of EPE. Checks original TCP destinations and resolved forwarding targets.
+	// Gateway-internal control connections are excluded. Omission/null inherits
+	// the lower layer; a supplied message replaces user entries. Built-ins remain.
+	EgressAuthorization *EgressAuthorization `protobuf:"bytes,7,opt,name=egress_authorization,json=egressAuthorization,proto3" json:"egress_authorization,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AgentioConfig) Reset() {
@@ -289,6 +294,13 @@ func (x *AgentioConfig) GetAdditionalExtProcs() []*ExtProcProvider {
 func (x *AgentioConfig) GetTrustedEpeIdentities() []string {
 	if x != nil {
 		return x.TrustedEpeIdentities
+	}
+	return nil
+}
+
+func (x *AgentioConfig) GetEgressAuthorization() *EgressAuthorization {
+	if x != nil {
+		return x.EgressAuthorization
 	}
 	return nil
 }
@@ -2620,20 +2632,18 @@ func (x *TcpPassthroughMatch) GetPorts() []uint32 {
 	return nil
 }
 
-// DnsCacheSettings sizes the dynamic forward proxy DNS cache per gateway process.
+// DnsCacheSettings sizes the shared DNS resolver per gateway process.
 type DnsCacheSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Maximum cached host:port pairs per gateway process. Defaults to 16384;
+	// Maximum entries per native DNS cache, or host:port pairs (legacy DFP).
+	// Native caches evict entries at capacity. Defaults to 16384;
 	// must be positive when set.
 	MaxHosts *uint32 `protobuf:"varint,1,opt,name=max_hosts,json=maxHosts,proto3,oneof" json:"max_hosts,omitempty"`
 	// Maximum requests waiting for DNS resolution, including requests for the
 	// same host. Defaults to 4096; must be positive when set.
 	MaxPendingRequests *uint32 `protobuf:"varint,2,opt,name=max_pending_requests,json=maxPendingRequests,proto3,oneof" json:"max_pending_requests,omitempty"`
-	// Idle lifetime of cached hosts, independent of DNS record TTL.
-	// Defaults to 120s; must be a positive duration when set.
-	HostTtl       *duration.Duration `protobuf:"bytes,3,opt,name=host_ttl,json=hostTtl,proto3" json:"host_ttl,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *DnsCacheSettings) Reset() {
@@ -2680,9 +2690,51 @@ func (x *DnsCacheSettings) GetMaxPendingRequests() uint32 {
 	return 0
 }
 
-func (x *DnsCacheSettings) GetHostTtl() *duration.Duration {
+// EgressAuthorization restricts the final destination of native gateway traffic.
+type EgressAuthorization struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Additional denied CIDRs on every port. Use /32 for IPv4 or /128 for IPv6.
+	// IPv4-mapped IPv6 prefixes are not accepted; use IPv4 prefixes instead.
+	// Loopback, unspecified and link-local addresses are always denied.
+	// Alibaba Cloud metadata (100.100.100.200/32) requires an explicit entry.
+	DeniedCidrs   []string `protobuf:"bytes,1,rep,name=denied_cidrs,json=deniedCIDRs,proto3" json:"denied_cidrs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressAuthorization) Reset() {
+	*x = EgressAuthorization{}
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressAuthorization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressAuthorization) ProtoMessage() {}
+
+func (x *EgressAuthorization) ProtoReflect() protoreflect.Message {
+	mi := &file_api_config_v1_agentioconfig_proto_msgTypes[38]
 	if x != nil {
-		return x.HostTtl
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressAuthorization.ProtoReflect.Descriptor instead.
+func (*EgressAuthorization) Descriptor() ([]byte, []int) {
+	return file_api_config_v1_agentioconfig_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *EgressAuthorization) GetDeniedCidrs() []string {
+	if x != nil {
+		return x.DeniedCidrs
 	}
 	return nil
 }
@@ -2691,14 +2743,15 @@ var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
 
 const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\n" +
-	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\xb5\x03\n" +
+	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x90\x04\n" +
 	"\rAgentioConfig\x12L\n" +
 	"\x10sandbox_ext_proc\x18\x01 \x01(\v2\".agentio.config.v1.ExtProcProviderR\x0esandboxExtProc\x12I\n" +
 	"\x0fegress_policies\x18\x02 \x03(\v2 .agentio.extensions.EgressPolicyR\x0eegressPolicies\x124\n" +
 	"\x16sandbox_ignored_labels\x18\x03 \x03(\tR\x14sandboxIgnoredLabels\x12I\n" +
 	"\x0fegress_gateways\x18\x04 \x03(\v2 .agentio.config.v1.EgressGatewayR\x0eegressGateways\x12T\n" +
 	"\x14additional_ext_procs\x18\x05 \x03(\v2\".agentio.config.v1.ExtProcProviderR\x12additionalExtProcs\x124\n" +
-	"\x16trusted_epe_identities\x18\x06 \x03(\tR\x14trustedEPEIdentities\"\xa5\b\n" +
+	"\x16trusted_epe_identities\x18\x06 \x03(\tR\x14trustedEPEIdentities\x12Y\n" +
+	"\x14egress_authorization\x18\a \x01(\v2&.agentio.config.v1.EgressAuthorizationR\x13egressAuthorization\"\xa5\b\n" +
 	"\rEgressGateway\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12P\n" +
@@ -2863,14 +2916,15 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\vorigination\x18\x01 \x01(\v2&.agentio.config.v1.UpstreamTlsSettingsR\vorigination\"A\n" +
 	"\x13TcpPassthroughMatch\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\x12\x14\n" +
-	"\x05ports\x18\x02 \x03(\rR\x05ports\"\xc8\x01\n" +
+	"\x05ports\x18\x02 \x03(\rR\x05ports\"\x92\x01\n" +
 	"\x10DnsCacheSettings\x12 \n" +
 	"\tmax_hosts\x18\x01 \x01(\rH\x00R\bmaxHosts\x88\x01\x01\x125\n" +
-	"\x14max_pending_requests\x18\x02 \x01(\rH\x01R\x12maxPendingRequests\x88\x01\x01\x124\n" +
-	"\bhost_ttl\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\ahostTtlB\f\n" +
+	"\x14max_pending_requests\x18\x02 \x01(\rH\x01R\x12maxPendingRequests\x88\x01\x01B\f\n" +
 	"\n" +
 	"_max_hostsB\x17\n" +
-	"\x15_max_pending_requests*1\n" +
+	"\x15_max_pending_requests\"8\n" +
+	"\x13EgressAuthorization\x12!\n" +
+	"\fdenied_cidrs\x18\x01 \x03(\tR\vdeniedCIDRs*1\n" +
 	"\x0eHeaderSendMode\x12\v\n" +
 	"\aDEFAULT\x10\x00\x12\b\n" +
 	"\x04SEND\x10\x01\x12\b\n" +
@@ -2889,7 +2943,7 @@ func file_api_config_v1_agentioconfig_proto_rawDescGZIP() []byte {
 }
 
 var file_api_config_v1_agentioconfig_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_api_config_v1_agentioconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(HeaderSendMode)(0),                      // 0: agentio.config.v1.HeaderSendMode
 	(UpstreamTlsSettings_ProtocolVersion)(0), // 1: agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
@@ -2932,71 +2986,72 @@ var file_api_config_v1_agentioconfig_proto_goTypes = []any{
 	(*GatewayTlsSettings)(nil),               // 38: agentio.config.v1.GatewayTlsSettings
 	(*TcpPassthroughMatch)(nil),              // 39: agentio.config.v1.TcpPassthroughMatch
 	(*DnsCacheSettings)(nil),                 // 40: agentio.config.v1.DnsCacheSettings
-	(*v1.EgressPolicy)(nil),                  // 41: agentio.extensions.EgressPolicy
-	(*_struct.Struct)(nil),                   // 42: google.protobuf.Struct
-	(*duration.Duration)(nil),                // 43: google.protobuf.Duration
-	(*v1alpha3.HTTPRetry)(nil),               // 44: istio.networking.v1alpha3.HTTPRetry
+	(*EgressAuthorization)(nil),              // 41: agentio.config.v1.EgressAuthorization
+	(*v1.EgressPolicy)(nil),                  // 42: agentio.extensions.EgressPolicy
+	(*_struct.Struct)(nil),                   // 43: google.protobuf.Struct
+	(*duration.Duration)(nil),                // 44: google.protobuf.Duration
+	(*v1alpha3.HTTPRetry)(nil),               // 45: istio.networking.v1alpha3.HTTPRetry
 }
 var file_api_config_v1_agentioconfig_proto_depIdxs = []int32{
 	23, // 0: agentio.config.v1.AgentioConfig.sandbox_ext_proc:type_name -> agentio.config.v1.ExtProcProvider
-	41, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> agentio.extensions.EgressPolicy
+	42, // 1: agentio.config.v1.AgentioConfig.egress_policies:type_name -> agentio.extensions.EgressPolicy
 	4,  // 2: agentio.config.v1.AgentioConfig.egress_gateways:type_name -> agentio.config.v1.EgressGateway
 	23, // 3: agentio.config.v1.AgentioConfig.additional_ext_procs:type_name -> agentio.config.v1.ExtProcProvider
-	22, // 4: agentio.config.v1.EgressGateway.tls_termination:type_name -> agentio.config.v1.TlsTerminationConfig
-	23, // 5: agentio.config.v1.EgressGateway.ext_proc:type_name -> agentio.config.v1.ExtProcProvider
-	33, // 6: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings
-	20, // 7: agentio.config.v1.EgressGateway.service_entries:type_name -> agentio.config.v1.EgressServiceEntry
-	18, // 8: agentio.config.v1.EgressGateway.access_log_format:type_name -> agentio.config.v1.AccessLogFormat
-	10, // 9: agentio.config.v1.EgressGateway.bandwidth_limit:type_name -> agentio.config.v1.BandwidthLimitSettings
-	8,  // 10: agentio.config.v1.EgressGateway.connect_concurrency_limit:type_name -> agentio.config.v1.ConnectConcurrencyLimitSettings
-	37, // 11: agentio.config.v1.EgressGateway.http:type_name -> agentio.config.v1.GatewayHttpSettings
-	29, // 12: agentio.config.v1.EgressGateway.tcp:type_name -> agentio.config.v1.TcpSettings
-	38, // 13: agentio.config.v1.EgressGateway.tls:type_name -> agentio.config.v1.GatewayTlsSettings
-	5,  // 14: agentio.config.v1.EgressGateway.upstream_trust_bundle:type_name -> agentio.config.v1.UpstreamTrustBundle
-	39, // 15: agentio.config.v1.EgressGateway.tcp_passthrough:type_name -> agentio.config.v1.TcpPassthroughMatch
-	40, // 16: agentio.config.v1.EgressGateway.dns_cache:type_name -> agentio.config.v1.DnsCacheSettings
-	6,  // 17: agentio.config.v1.UpstreamTrustBundle.additional_sources:type_name -> agentio.config.v1.UpstreamTrustSource
-	7,  // 18: agentio.config.v1.UpstreamTrustSource.config_map_ref:type_name -> agentio.config.v1.TrustSourceReference
-	7,  // 19: agentio.config.v1.UpstreamTrustSource.secret_ref:type_name -> agentio.config.v1.TrustSourceReference
-	11, // 20: agentio.config.v1.ConnectConcurrencyLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	9,  // 21: agentio.config.v1.ConnectConcurrencyLimitSettings.descriptors:type_name -> agentio.config.v1.ConnectConcurrencyDescriptor
-	16, // 22: agentio.config.v1.ConnectConcurrencyDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
-	11, // 23: agentio.config.v1.BandwidthLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	15, // 24: agentio.config.v1.BandwidthLimitSettings.descriptors:type_name -> agentio.config.v1.BandwidthDescriptor
-	12, // 25: agentio.config.v1.NetworkLimitRule.actions:type_name -> agentio.config.v1.NetworkLimitAction
-	13, // 26: agentio.config.v1.NetworkLimitAction.filter_state:type_name -> agentio.config.v1.NetworkLimitFilterStateAction
-	14, // 27: agentio.config.v1.NetworkLimitAction.generic_key:type_name -> agentio.config.v1.NetworkLimitGenericKeyAction
-	16, // 28: agentio.config.v1.BandwidthDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
-	17, // 29: agentio.config.v1.BandwidthDescriptor.bandwidth_limit:type_name -> agentio.config.v1.BandwidthRates
-	42, // 30: agentio.config.v1.AccessLogFormat.json:type_name -> google.protobuf.Struct
-	1,  // 31: agentio.config.v1.UpstreamTlsSettings.min_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
-	1,  // 32: agentio.config.v1.UpstreamTlsSettings.max_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
-	21, // 33: agentio.config.v1.EgressServiceEntry.endpoints:type_name -> agentio.config.v1.EgressServiceEntryEndpoint
-	28, // 34: agentio.config.v1.ExtProcProvider.request:type_name -> agentio.config.v1.ProcessingModeOptions
-	28, // 35: agentio.config.v1.ExtProcProvider.response:type_name -> agentio.config.v1.ProcessingModeOptions
-	26, // 36: agentio.config.v1.ExtProcProvider.cluster_settings:type_name -> agentio.config.v1.ClusterSettings
-	25, // 37: agentio.config.v1.ExtProcProvider.tls:type_name -> agentio.config.v1.ExtProcTLSSettings
-	24, // 38: agentio.config.v1.ExtProcProvider.service_ref:type_name -> agentio.config.v1.ServiceReference
-	2,  // 39: agentio.config.v1.ExtProcTLSSettings.mode:type_name -> agentio.config.v1.ExtProcTLSSettings.Mode
-	27, // 40: agentio.config.v1.ClusterSettings.http:type_name -> agentio.config.v1.HttpSettings
-	0,  // 41: agentio.config.v1.ProcessingModeOptions.header_mode:type_name -> agentio.config.v1.HeaderSendMode
-	43, // 42: agentio.config.v1.TcpSettings.idle_timeout:type_name -> google.protobuf.Duration
-	43, // 43: agentio.config.v1.TcpSettings.max_connection_duration:type_name -> google.protobuf.Duration
-	32, // 44: agentio.config.v1.HttpRoutingSettings.fallback:type_name -> agentio.config.v1.HttpRouteSettings
-	31, // 45: agentio.config.v1.HttpRoutingSettings.host_overrides:type_name -> agentio.config.v1.HttpRouteOverride
-	32, // 46: agentio.config.v1.HttpRouteOverride.settings:type_name -> agentio.config.v1.HttpRouteSettings
-	43, // 47: agentio.config.v1.HttpRouteSettings.timeout:type_name -> google.protobuf.Duration
-	44, // 48: agentio.config.v1.HttpRouteSettings.retries:type_name -> istio.networking.v1alpha3.HTTPRetry
-	34, // 49: agentio.config.v1.LocalRateLimitSettings.token_bucket:type_name -> agentio.config.v1.TokenBucket
-	35, // 50: agentio.config.v1.LocalRateLimitSettings.descriptors:type_name -> agentio.config.v1.RateLimitDescriptor
-	11, // 51: agentio.config.v1.LocalRateLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
-	43, // 52: agentio.config.v1.TokenBucket.fill_interval:type_name -> google.protobuf.Duration
-	36, // 53: agentio.config.v1.RateLimitDescriptor.entries:type_name -> agentio.config.v1.RateLimitEntry
-	34, // 54: agentio.config.v1.RateLimitDescriptor.token_bucket:type_name -> agentio.config.v1.TokenBucket
-	43, // 55: agentio.config.v1.GatewayHttpSettings.stream_idle_timeout:type_name -> google.protobuf.Duration
-	30, // 56: agentio.config.v1.GatewayHttpSettings.routing:type_name -> agentio.config.v1.HttpRoutingSettings
-	19, // 57: agentio.config.v1.GatewayTlsSettings.origination:type_name -> agentio.config.v1.UpstreamTlsSettings
-	43, // 58: agentio.config.v1.DnsCacheSettings.host_ttl:type_name -> google.protobuf.Duration
+	41, // 4: agentio.config.v1.AgentioConfig.egress_authorization:type_name -> agentio.config.v1.EgressAuthorization
+	22, // 5: agentio.config.v1.EgressGateway.tls_termination:type_name -> agentio.config.v1.TlsTerminationConfig
+	23, // 6: agentio.config.v1.EgressGateway.ext_proc:type_name -> agentio.config.v1.ExtProcProvider
+	33, // 7: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings
+	20, // 8: agentio.config.v1.EgressGateway.service_entries:type_name -> agentio.config.v1.EgressServiceEntry
+	18, // 9: agentio.config.v1.EgressGateway.access_log_format:type_name -> agentio.config.v1.AccessLogFormat
+	10, // 10: agentio.config.v1.EgressGateway.bandwidth_limit:type_name -> agentio.config.v1.BandwidthLimitSettings
+	8,  // 11: agentio.config.v1.EgressGateway.connect_concurrency_limit:type_name -> agentio.config.v1.ConnectConcurrencyLimitSettings
+	37, // 12: agentio.config.v1.EgressGateway.http:type_name -> agentio.config.v1.GatewayHttpSettings
+	29, // 13: agentio.config.v1.EgressGateway.tcp:type_name -> agentio.config.v1.TcpSettings
+	38, // 14: agentio.config.v1.EgressGateway.tls:type_name -> agentio.config.v1.GatewayTlsSettings
+	5,  // 15: agentio.config.v1.EgressGateway.upstream_trust_bundle:type_name -> agentio.config.v1.UpstreamTrustBundle
+	39, // 16: agentio.config.v1.EgressGateway.tcp_passthrough:type_name -> agentio.config.v1.TcpPassthroughMatch
+	40, // 17: agentio.config.v1.EgressGateway.dns_cache:type_name -> agentio.config.v1.DnsCacheSettings
+	6,  // 18: agentio.config.v1.UpstreamTrustBundle.additional_sources:type_name -> agentio.config.v1.UpstreamTrustSource
+	7,  // 19: agentio.config.v1.UpstreamTrustSource.config_map_ref:type_name -> agentio.config.v1.TrustSourceReference
+	7,  // 20: agentio.config.v1.UpstreamTrustSource.secret_ref:type_name -> agentio.config.v1.TrustSourceReference
+	11, // 21: agentio.config.v1.ConnectConcurrencyLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	9,  // 22: agentio.config.v1.ConnectConcurrencyLimitSettings.descriptors:type_name -> agentio.config.v1.ConnectConcurrencyDescriptor
+	16, // 23: agentio.config.v1.ConnectConcurrencyDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
+	11, // 24: agentio.config.v1.BandwidthLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	15, // 25: agentio.config.v1.BandwidthLimitSettings.descriptors:type_name -> agentio.config.v1.BandwidthDescriptor
+	12, // 26: agentio.config.v1.NetworkLimitRule.actions:type_name -> agentio.config.v1.NetworkLimitAction
+	13, // 27: agentio.config.v1.NetworkLimitAction.filter_state:type_name -> agentio.config.v1.NetworkLimitFilterStateAction
+	14, // 28: agentio.config.v1.NetworkLimitAction.generic_key:type_name -> agentio.config.v1.NetworkLimitGenericKeyAction
+	16, // 29: agentio.config.v1.BandwidthDescriptor.entries:type_name -> agentio.config.v1.NetworkLimitDescriptorEntry
+	17, // 30: agentio.config.v1.BandwidthDescriptor.bandwidth_limit:type_name -> agentio.config.v1.BandwidthRates
+	43, // 31: agentio.config.v1.AccessLogFormat.json:type_name -> google.protobuf.Struct
+	1,  // 32: agentio.config.v1.UpstreamTlsSettings.min_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
+	1,  // 33: agentio.config.v1.UpstreamTlsSettings.max_protocol_version:type_name -> agentio.config.v1.UpstreamTlsSettings.ProtocolVersion
+	21, // 34: agentio.config.v1.EgressServiceEntry.endpoints:type_name -> agentio.config.v1.EgressServiceEntryEndpoint
+	28, // 35: agentio.config.v1.ExtProcProvider.request:type_name -> agentio.config.v1.ProcessingModeOptions
+	28, // 36: agentio.config.v1.ExtProcProvider.response:type_name -> agentio.config.v1.ProcessingModeOptions
+	26, // 37: agentio.config.v1.ExtProcProvider.cluster_settings:type_name -> agentio.config.v1.ClusterSettings
+	25, // 38: agentio.config.v1.ExtProcProvider.tls:type_name -> agentio.config.v1.ExtProcTLSSettings
+	24, // 39: agentio.config.v1.ExtProcProvider.service_ref:type_name -> agentio.config.v1.ServiceReference
+	2,  // 40: agentio.config.v1.ExtProcTLSSettings.mode:type_name -> agentio.config.v1.ExtProcTLSSettings.Mode
+	27, // 41: agentio.config.v1.ClusterSettings.http:type_name -> agentio.config.v1.HttpSettings
+	0,  // 42: agentio.config.v1.ProcessingModeOptions.header_mode:type_name -> agentio.config.v1.HeaderSendMode
+	44, // 43: agentio.config.v1.TcpSettings.idle_timeout:type_name -> google.protobuf.Duration
+	44, // 44: agentio.config.v1.TcpSettings.max_connection_duration:type_name -> google.protobuf.Duration
+	32, // 45: agentio.config.v1.HttpRoutingSettings.fallback:type_name -> agentio.config.v1.HttpRouteSettings
+	31, // 46: agentio.config.v1.HttpRoutingSettings.host_overrides:type_name -> agentio.config.v1.HttpRouteOverride
+	32, // 47: agentio.config.v1.HttpRouteOverride.settings:type_name -> agentio.config.v1.HttpRouteSettings
+	44, // 48: agentio.config.v1.HttpRouteSettings.timeout:type_name -> google.protobuf.Duration
+	45, // 49: agentio.config.v1.HttpRouteSettings.retries:type_name -> istio.networking.v1alpha3.HTTPRetry
+	34, // 50: agentio.config.v1.LocalRateLimitSettings.token_bucket:type_name -> agentio.config.v1.TokenBucket
+	35, // 51: agentio.config.v1.LocalRateLimitSettings.descriptors:type_name -> agentio.config.v1.RateLimitDescriptor
+	11, // 52: agentio.config.v1.LocalRateLimitSettings.rate_limits:type_name -> agentio.config.v1.NetworkLimitRule
+	44, // 53: agentio.config.v1.TokenBucket.fill_interval:type_name -> google.protobuf.Duration
+	36, // 54: agentio.config.v1.RateLimitDescriptor.entries:type_name -> agentio.config.v1.RateLimitEntry
+	34, // 55: agentio.config.v1.RateLimitDescriptor.token_bucket:type_name -> agentio.config.v1.TokenBucket
+	44, // 56: agentio.config.v1.GatewayHttpSettings.stream_idle_timeout:type_name -> google.protobuf.Duration
+	30, // 57: agentio.config.v1.GatewayHttpSettings.routing:type_name -> agentio.config.v1.HttpRoutingSettings
+	19, // 58: agentio.config.v1.GatewayTlsSettings.origination:type_name -> agentio.config.v1.UpstreamTlsSettings
 	59, // [59:59] is the sub-list for method output_type
 	59, // [59:59] is the sub-list for method input_type
 	59, // [59:59] is the sub-list for extension type_name
@@ -3025,7 +3080,7 @@ func file_api_config_v1_agentioconfig_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_config_v1_agentioconfig_proto_rawDesc), len(file_api_config_v1_agentioconfig_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   38,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

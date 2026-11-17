@@ -34,7 +34,7 @@ const validPatchConfig = `targetGateways: [demo/egress]
 patches:
 - target: cluster
   operation: MERGE
-  match: {name: http_dynamic_forward_proxy}
+  match: {name: PassthroughCluster}
   value: {connect_timeout: 3s}
 `
 
@@ -48,7 +48,9 @@ func patchConfigMap(content string) *corev1.ConfigMap {
 }
 
 func TestPatchConfigTargetsAndMetadata(t *testing.T) {
-	cm := patchConfigMap(strings.Replace(validPatchConfig, "[demo/egress]", "[other/egress, demo/egress, demo/egress]", 1))
+	cm := patchConfigMap(
+		strings.Replace(validPatchConfig, "[demo/egress]", "[other/egress, demo/egress, demo/egress]", 1),
+	)
 	cm.Data[KubePatchDataKey] += "priority: -10\n"
 	patches, err := decodeGatewayPatches(cm)
 	if err != nil {
@@ -105,7 +107,11 @@ patches:
 	if hcm.GetStreamIdleTimeout().AsDuration() != 5*time.Minute || filter.Match.Name != "main_internal" {
 		t.Fatalf("filter = %#v, hcm = %v", filter, hcm)
 	}
-	cm.Data[KubePatchDataKey] = strings.ReplaceAll(cm.Data[KubePatchDataKey], "stream_idle_timeout", "streamIdleTimeout")
+	cm.Data[KubePatchDataKey] = strings.ReplaceAll(
+		cm.Data[KubePatchDataKey],
+		"stream_idle_timeout",
+		"streamIdleTimeout",
+	)
 	if _, err := decodeGatewayPatches(cm); err != nil {
 		t.Fatalf("camelCase ProtoJSON: %v", err)
 	}
@@ -147,9 +153,9 @@ func TestPatchConfigRejectsMalformedInput(t *testing.T) {
 		{"array value", replace("{connect_timeout: 3s}", "[]"), "requires an object"},
 		{"missing value", replace("  value: {connect_timeout: 3s}\n", ""), "requires an object"},
 		{"remove value", replace("operation: MERGE", "operation: REMOVE"), "REMOVE must omit value"},
-		{"null match", replace("{name: http_dynamic_forward_proxy}", "null"), "expected an object"},
-		{"unknown match", replace("{name: http_dynamic_forward_proxy}", "{service: example.com}"), "unknown field"},
-		{"wrong match family", replace("{name: http_dynamic_forward_proxy}", "{filterChain: {}}"), "unknown field"},
+		{"null match", replace("{name: PassthroughCluster}", "null"), "expected an object"},
+		{"unknown match", replace("{name: PassthroughCluster}", "{service: example.com}"), "unknown field"},
+		{"wrong match family", replace("{name: PassthroughCluster}", "{filterChain: {}}"), "unknown field"},
 		{"unknown protobuf field", replace("connect_timeout", "connect_timout"), "unknown field"},
 		{"bad duration", replace("connect_timeout: 3s", "connect_timeout: three"), "Duration"},
 		{"unknown Any", replace("connect_timeout: 3s", "typed_extension_protocol_options: {test: {'@type': type.googleapis.com/unknown.Config}}"), "unable to resolve"},
@@ -188,7 +194,9 @@ func TestPatchTargetOperationMatrix(t *testing.T) {
 				if operation != "REMOVE" {
 					input.Value = json.RawMessage(`{}`)
 				}
-				raw, err := json.Marshal(patchConfig{TargetGateways: []string{"demo/egress"}, Patches: []patchEntry{input}})
+				raw, err := json.Marshal(
+					patchConfig{TargetGateways: []string{"demo/egress"}, Patches: []patchEntry{input}},
+				)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -215,7 +223,9 @@ func matrixMatch(target, operation string) json.RawMessage {
 	case "networkFilter":
 		return json.RawMessage(`{"filterChain":{"filter":{"name":"test"}}}`)
 	case "httpFilter":
-		return json.RawMessage(`{"filterChain":{"filter":{"name":"envoy.filters.network.http_connection_manager","subFilter":{"name":"test"}}}}`)
+		return json.RawMessage(
+			`{"filterChain":{"filter":{"name":"envoy.filters.network.http_connection_manager","subFilter":{"name":"test"}}}}`,
+		)
 	case "httpRoute":
 		return json.RawMessage(`{"virtualHost":{"route":{"name":"test","action":"ROUTE"}}}`)
 	default:

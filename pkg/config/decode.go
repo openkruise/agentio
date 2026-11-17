@@ -30,8 +30,8 @@ import (
 
 // Apply decodes YAML/JSON onto a copy of base, which must be non-nil. Omitted
 // and null fields preserve base; supplied fields replace lists and submessages.
-// Unknown fields are ignored with a warning. Invalid known fields, duplicate
-// YAML keys, and conflicting oneof members are errors.
+// Unknown fields are ignored with a warning.
+// Invalid known fields, duplicate YAML keys, and conflicting oneof members are errors.
 func Apply[T proto.Message](content string, base T) (T, error) {
 	var zero T
 	data, err := yaml.YAMLToJSONStrict([]byte(content))

@@ -63,7 +63,7 @@ def network(resolve_sni=False):
         "envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter",
         dynamic_module_config={"name": "envoy_agentio_connection_policy", "do_not_close": True},
         filter_name="envoy_agentio_tcp_policy", filter_config=typed(
-            "google.protobuf.Struct", value={"resolveSni": resolve_sni, "skipMatchedProfile": resolve_sni, "deniedCidrs": []}))}
+            "google.protobuf.Struct", value={"mode": "DYNAMIC_FORWARD" if resolve_sni else "ORIGINAL_DST", "denied_cidrs": ["127.0.0.2/32"]}))}
 
 
 def fixture(port, legacy_port, plain_port, tls_port, cert, key):
@@ -84,6 +84,13 @@ def fixture(port, legacy_port, plain_port, tls_port, cert, key):
     actions = inner["filter_chain_matcher"]["matcher_tree"]["exact_match_map"]["map"]
     for action, chain in [("fallthrough", "forward-tcp"), ("passthrough", "tls-passthrough")]:
         actions[action] = {"action": {"name": chain, "typed_config": typed("google.protobuf.StringValue", value=chain)}}
+    actions["terminate"] = {"matcher": {"matcher_tree": {
+        "input": {"name": "sni", "typed_config": typed(
+            "envoy.extensions.matching.common_inputs.network.v3.ServerNameInput")},
+        "custom_match": {"name": "sni", "typed_config": typed(
+            "xds.type.matcher.v3.ServerNameMatcher", domain_matchers=[{
+                "domains": ["localhost", "localhost."], "on_match": copy.deepcopy(actions["passthrough"])}])}},
+        "on_no_match": actions["terminate"]}}
     # Server-first takes the same authorization path, without protocol inspectors.
     raw_inner = {"name": "raw-inner", "internal_listener": {}, "listener_filters": [inner["listener_filters"][0]],
                  "filter_chains": [{"filters": copy.deepcopy(raw_filters)}]}
@@ -105,7 +112,7 @@ def fixture(port, legacy_port, plain_port, tls_port, cert, key):
             "object_key": k, "factory_key": factory, "shared_with_upstream": "ONCE",
             "format_string": {"text_format_source": {"inline_string": f"%FILTER_STATE({k}:PLAIN)%"}}}
             for k, factory in [("envoy.filters.listener.original_dst.local_ip", "envoy.filters.listener.original_dst.local_ip"),
-                               ("agentio.connection.policy_hash", "envoy.hashable_string"), ("agentio.policy.start", "envoy.hashable_string")]])}
+                               ("agentio.connection.policy_hash", "envoy.hashable_string")]])}
     terminal = next(c for c in inner["filter_chains"] if c["name"] == "tls-terminate")
     terminal["filters"] = [relay, {"name": "envoy.filters.network.tcp_proxy", "typed_config": typed(
         "envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy", stat_prefix="post-tls", cluster="post-tls")}]
@@ -148,7 +155,7 @@ def main():
         tls.load_cert_chain(root / "cert.pem", root / "key.pem")
         servers = []
         for marker, context, handler in [(b"plain", None, Echo), (b"tls", tls, Echo), (b"greeting", None, Greeting), (b"plain", None, PersistentEcho)]:
-            server = CountedOrigin(("127.0.0.1", 0), handler)
+            server = CountedOrigin(("0.0.0.0", 0), handler)
             server.marker, server.tls_context = marker, context
             threading.Thread(target=server.serve_forever, daemon=True).start()
             servers.append(server)
@@ -203,6 +210,9 @@ def main():
                 print("PASS", name, flush=True)
 
             exercise("raw default allow", [])
+            exercise("CIDR denies raw destination", [], original="127.0.0.2", denied=True)
+            exercise("CIDR denies TLS passthrough destination", [profile("a", sni="passthrough")], origin=tls_origin, original="127.0.0.2", denied=True)
+            exercise("CIDR denies post-termination TCP destination", [profile("a", sni="tls_termination")], host="terminate.test", terminate=True, original="127.0.0.2", denied=True)
             exercise("missing TCP policy fails closed", None, denied=True)
             exercise("malformed TCP policy fails closed", [profile("a", [tcp("deny", ["invalid"])])], denied=True)
             exercise("raw deny before connect", [profile("a", [tcp("deny")])], denied=True)
@@ -221,8 +231,14 @@ def main():
             exercise("empty SNI wildcard deny precedes own TCP allow", [profile("a", [tcp("allow")], sni="deny")], origin=tls_origin, denied=True)
             exercise("empty SNI passthrough skips own TCP deny", [profile("a", [tcp("deny")], sni="passthrough")], origin=tls_origin)
             exercise("empty SNI passthrough retains higher TCP deny", [profile("a", [tcp("deny")]), profile("b", sni="passthrough")], origin=tls_origin, denied=True)
-            exercise("TLS termination preserves policy across listener", [profile("a", [tcp("allow")], sni="tls_termination")], host="localhost", terminate=True)
-            exercise("TLS termination still evaluates own TCP deny", [profile("a", [tcp("deny")], sni="tls_termination")], host="localhost", terminate=True, denied=True)
+            exercise("TLS termination preserves policy across listener", [profile("a", [tcp("allow")], sni="tls_termination")], host="terminate.test", terminate=True)
+            exercise("TLS termination still evaluates own TCP deny", [profile("a", [tcp("deny")], sni="tls_termination")], host="terminate.test", terminate=True, denied=True)
+
+            exercise("excluded SNI cannot override SNI deny", [profile("a", [tcp("allow")], sni="deny")], origin=tls_origin, host="localhost", denied=True)
+            exercise("excluded termination keeps own TCP deny", [profile("a", [tcp("deny")], sni="tls_termination")], origin=tls_origin, host="localhost", denied=True)
+            exercise("excluded termination keeps lower TCP deny", [profile("a", sni="tls_termination"), profile("b", [tcp("deny")])], origin=tls_origin, host="localhost", denied=True)
+            exercise("excluded termination forwards encrypted bytes", [profile("a", [tcp("allow")], sni="tls_termination")], origin=tls_origin, host="localhost")
+            exercise("excluded termination with uppercase trailing-dot SNI", [profile("a", [tcp("allow")], sni="tls_termination")], origin=tls_origin, host="LOCALHOST.")
 
             target = f"127.0.0.1:{persistent.server_address[1]}"
             with connect(port, target, [profile("changing", [tcp("allow")])], True) as old:

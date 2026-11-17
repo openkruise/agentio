@@ -29,7 +29,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -42,9 +41,11 @@ import (
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	internal "github.com/envoyproxy/go-control-plane/envoy/extensions/bootstrap/internal_listener/v3"
 	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	router "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	metadata "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_metadata/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
+	matchinginput "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	tlsconfig "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"istio.io/istio/pkg/test"
@@ -57,6 +58,7 @@ import (
 // Uses generated post-termination filters and clusters with real TLS on both
 // sides. Static certificates and original-destination capture replace SDS/HBONE.
 func TestEnvoyPostTLSForwarding(t *testing.T) {
+	test.SetForTest(t, &features.EnableSNITrafficPolicy, false)
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
@@ -98,8 +100,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	test.SetForTest(t, &features.GatewayRootCAPath, rootPath)
 	payload := []byte("\x00opaque application bytes after TLS termination")
 	for _, mode := range []string{
-		"tcp", "nested_tls", "bad_certificate", "idle", "loopback_tcp",
-		"passthrough", "passthrough_no_sni", "passthrough_dns_failure", "passthrough_loopback",
+		"tcp", "nested_tls", "bad_certificate", "idle",
+		"passthrough", "passthrough_no_sni", "terminate_no_sni", "passthrough_dns_failure",
 		"passthrough_port_override",
 		"http1", "http2", "fqdn_http1", "fqdn_http2",
 		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2", "connect_pinned_http1", "connect_pinned_http2",
@@ -107,6 +109,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
 			passthrough := strings.HasPrefix(mode, "passthrough")
+			noSNI := strings.HasSuffix(mode, "_no_sni")
 			serverName := upstreamHost
 			if strings.Contains(mode, "loopback") {
 				serverName = "localhost"
@@ -116,7 +119,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					t.Logf("close test transport: %v", err)
 				}
 			}
-			var handshakes atomic.Int32
+			var handshakes, connections atomic.Int32
 			upstreamTLS := &tls.Config{
 				Certificates: []tls.Certificate{certificates[serverName]},
 				MinVersion:   tls.VersionTLS12,
@@ -126,7 +129,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			upstreamTLS.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 				handshakes.Add(1)
-				if hello.ServerName != serverName {
+				if hello.ServerName != serverName && !(noSNI && hello.ServerName == "") {
 					return nil, fmt.Errorf("upstream SNI = %q, want outer %s", hello.ServerName, serverName)
 				}
 				if !isHTTP && len(hello.SupportedProtos) != 0 {
@@ -185,6 +188,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 						completed <- err
 						return
 					}
+					connections.Add(1)
 					defer closeResource(conn)
 					if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 						completed <- err
@@ -218,20 +222,72 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			// A connection to the original IP would fail; only SNI resolution reaches the origin.
 			original := net.JoinHostPort("127.0.0.2", upstreamPort)
+			if noSNI {
+				// Use a reachable, permitted origin so rejection cannot come from a bad destination.
+				original = upstreamAddress
+			}
 			if mode == "passthrough_port_override" {
 				original = "127.0.0.2:443"
 			}
-			address := startTLSEnvoy(t, binary, original, leaves[serverName], mode)
+			address := startTLSEnvoy(t, binary, leaves[serverName], mode)
+			dial := func(ctx context.Context) (net.Conn, error) {
+				conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", address)
+				if err != nil {
+					return nil, err
+				}
+				if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					closeResource(conn)
+					return nil, err
+				}
+				if _, err := fmt.Fprintf(
+					conn,
+					"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
+					original,
+					original,
+				); err != nil {
+					closeResource(conn)
+					return nil, err
+				}
+				response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+				if err != nil {
+					closeResource(conn)
+					return nil, err
+				}
+				if response.StatusCode != 200 {
+					closeResource(conn)
+					return nil, fmt.Errorf("tunnel status %s", response.Status)
+				}
+				if err := conn.SetDeadline(time.Time{}); err != nil {
+					closeResource(conn)
+					return nil, err
+				}
+				return conn, nil
+			}
+			dialTLS := func(config *tls.Config) (*tls.Conn, error) {
+				conn, err := dial(t.Context())
+				if err != nil {
+					return nil, err
+				}
+				secure := tls.Client(conn, config)
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				if err := secure.HandshakeContext(ctx); err != nil {
+					closeResource(conn)
+					return nil, err
+				}
+				return secure, nil
+			}
 			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
-			if mode == "passthrough_no_sni" {
-				clientTLS.ServerName = "127.0.0.1" // Go omits SNI for literal IPs.
+			if noSNI {
+				clientTLS.ServerName = ""
+				clientTLS.InsecureSkipVerify = true // Isolate gateway rejection from client certificate checks.
 			} else if mode == "passthrough_dns_failure" {
 				clientTLS.ServerName = "unresolvable.invalid"
 			} else if mode == "passthrough_port_override" {
 				clientTLS.ServerName = net.JoinHostPort(upstreamHost, upstreamPort)
 			}
 			if strings.HasPrefix(mode, "connect") && strings.HasSuffix(mode, "http1") {
-				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, clientTLS)
+				conn, err := dialTLS(clientTLS)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -265,7 +321,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					TLSClientConfig:   clientTLS,
 					ForceAttemptHTTP2: strings.HasSuffix(mode, "http2"),
 					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						return (&net.Dialer{}).DialContext(ctx, "tcp", address)
+						return dial(ctx)
 					},
 				}
 				defer transport.CloseIdleConnections()
@@ -301,8 +357,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if response.StatusCode != http.StatusServiceUnavailable ||
-						!strings.Contains(string(body), "DNS resolution failure") {
+					if response.StatusCode != http.StatusForbidden {
 						t.Fatalf("denied destination response = %s %q", response.Status, body)
 					}
 					if handshakes.Load() != 0 {
@@ -327,8 +382,8 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				}
 				return
 			}
-			conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", address, clientTLS)
-			if passthrough && mode != "passthrough" {
+			conn, err := dialTLS(clientTLS)
+			if (passthrough && mode != "passthrough") || noSNI {
 				if err == nil {
 					closeResource(conn)
 					t.Fatal("invalid TLS destination completed a handshake")
@@ -337,7 +392,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				if errors.As(err, &timeout) && timeout.Timeout() {
 					t.Fatalf("invalid TLS destination timed out instead of closing: %v", err)
 				}
-				if handshakes.Load() != 0 {
+				if connections.Load() != 0 || handshakes.Load() != 0 {
 					t.Fatal("invalid TLS destination opened an upstream connection")
 				}
 				return
@@ -362,12 +417,12 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			data := make([]byte, len(payload))
 			_, err = io.ReadFull(conn, data)
-			if mode == "idle" || mode == "bad_certificate" || mode == "loopback_tcp" {
+			if mode == "idle" || mode == "bad_certificate" {
 				var timeout net.Error
 				if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 					t.Fatalf("expected connection close, got data=%q error=%v", data, err)
 				}
-				if (mode == "idle" || mode == "loopback_tcp") && handshakes.Load() != 0 {
+				if mode == "idle" && handshakes.Load() != 0 {
 					t.Fatal("denied connection opened an upstream connection")
 				}
 				if mode == "bad_certificate" && handshakes.Load() != 1 {
@@ -385,7 +440,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	}
 }
 
-func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.IssuedCertificate, mode string) string {
+func startTLSEnvoy(t *testing.T, binary string, certificate pki.IssuedCertificate, mode string) string {
 	t.Helper()
 	b := &resourceBuilder{}
 	config := effectiveConfig{gateway: &configv1.EgressGateway{}}
@@ -401,34 +456,21 @@ func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Issued
 			internalListener = candidate
 		}
 	}
-	// This stock-Envoy fixture tests forwarding; policy authorization is covered by the module smoke tests.
-	for _, candidate := range listeners {
-		for _, chain := range candidate.FilterChains {
-			chain.Filters = slices.DeleteFunc(
-				chain.Filters,
-				func(f *listener.Filter) bool { return f.Name == "agentio.tcp_policy" },
-			)
-		}
-	}
 	manager := findHCM(t, forward)
 	manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
 		RouteConfig: b.buildForwardRoute(TLSConnectOriginate, config.gateway),
 	}
 	if strings.HasPrefix(mode, "connect_pinned") {
-		// Model EPE's mutable host and read-only inner port before proxy target selection.
-		manager.HttpFilters = append([]*hcm.HttpFilter{httpFilter("test.pinned_target", b.pack(&httpstate.Config{
-			OnRequestHeaders: []*common.FilterStateValue{
-				{
-					Key:   &common.FilterStateValue_ObjectKey{ObjectKey: dynamicHostKey},
-					Value: &common.FilterStateValue_FormatString{FormatString: formatString("127.0.0.1")},
-				},
-				{
-					Key:      &common.FilterStateValue_ObjectKey{ObjectKey: dynamicPortKey},
-					Value:    &common.FilterStateValue_FormatString{FormatString: formatString("443")},
-					ReadOnly: true,
-				},
-			},
-		}))}, manager.HttpFilters...)
+		// A tunnel target returned by EPE must not replace the actual TLS proxy.
+		filters := []*hcm.HttpFilter{httpFilter("envoy.filters.http.set_metadata", b.pack(&metadata.Config{
+			Metadata: []*metadata.Metadata{{
+				MetadataNamespace: "agentio.route",
+				Value: b.structure(map[string]any{
+					"upstream": map[string]any{"address": "127.0.0.1:443"},
+				})}},
+		}))}
+		filters = append(filters, b.egressTargetFilters()...)
+		manager.HttpFilters = append(filters, manager.HttpFilters...)
 	}
 	findFilterChain(t, forward, forwardHTTPChain).Filters[0] = networkFilter(
 		"envoy.filters.network.http_connection_manager",
@@ -455,14 +497,7 @@ func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Issued
 	if strings.HasPrefix(mode, "passthrough") {
 		chain = findFilterChain(t, internalListener, forwardTLSChain)
 	}
-	chain.Filters = append(
-		[]*listener.Filter{networkFilter("envoy.filters.network.set_filter_state", b.pack(&state.Config{
-			OnNewConnection: []*common.FilterStateValue{{
-				Key:   &common.FilterStateValue_ObjectKey{ObjectKey: "envoy.filters.listener.original_dst.local_ip"},
-				Value: &common.FilterStateValue_FormatString{FormatString: formatString(upstream)},
-			}},
-		}))},
-		chain.Filters...)
+
 	port, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -471,24 +506,67 @@ func startTLSEnvoy(t *testing.T, binary, upstream string, certificate pki.Issued
 	if err := port.Close(); err != nil {
 		t.Fatal(err)
 	}
+	routes, err := b.buildRoutes(config.gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer := &hcm.HttpConnectionManager{
+		StatPrefix:     "test_connect",
+		UpgradeConfigs: []*hcm.HttpConnectionManager_UpgradeConfig{{UpgradeType: "CONNECT"}},
+		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{RouteConfig: routes[0]},
+		HttpFilters: []*hcm.HttpFilter{connectAuthorityHTTPFilter, httpFilter("test.policy", b.pack(&httpstate.Config{
+			OnRequestHeaders: []*common.FilterStateValue{{
+				Key:        &common.FilterStateValue_ObjectKey{ObjectKey: "agentio.connection.policy_json"},
+				FactoryKey: "envoy.string",
+				Value:      &common.FilterStateValue_FormatString{FormatString: formatString(`{"profiles":[]}`)},
+			}},
+		}))},
+	}
+	outer.HttpFilters = append(outer.HttpFilters, b.connectPolicyFilters()...)
+	outer.HttpFilters = append(outer.HttpFilters, httpFilter("envoy.filters.http.router", b.pack(&router.Router{})))
 	bootstrapConfig := &bootstrap.Bootstrap{
 		BootstrapExtensions: []*core.TypedExtensionConfig{
 			{Name: "envoy.bootstrap.internal_listener", TypedConfig: b.pack(&internal.InternalListener{})},
 		},
 		StaticResources: &bootstrap.Bootstrap_StaticResources{
-			Listeners: []*listener.Listener{forward, {
-				Name:            "outer",
-				Address:         socketAddress("127.0.0.1", uint32(address.Port)),
-				ListenerFilters: []*listener.ListenerFilter{tlsInspectorFilter},
-				FilterChains:    []*listener.FilterChain{chain},
-				FilterChainMatcher: b.sniHostnameMatcher(exactMatcher(transportProtocolInput,
-					map[string]*xdsmatcher.Matcher_OnMatch{"tls": b.toChain(chain.Name)}, nil)),
-			}},
+			Listeners: []*listener.Listener{
+				forward,
+				{
+					Name: MainInternal,
+					ListenerSpecifier: &listener.Listener_InternalListener{
+						InternalListener: &listener.Listener_InternalListenerConfig{},
+					},
+					ListenerFilters: []*listener.ListenerFilter{
+						originalDstFilter,
+						tlsInspectorFilter,
+						b.sniPolicyListenerFilter(),
+					},
+					FilterChains: []*listener.FilterChain{
+						chain,
+						b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied"),
+					},
+					FilterChainMatcher: exactMatcher(
+						typedExtension("tls-action", b.pack(&matchinginput.FilterStateInput{Key: tlsActionKey})),
+						map[string]*xdsmatcher.Matcher_OnMatch{"fallthrough": b.toChain(chain.Name)}, nil),
+				},
+				{
+					Name:    "outer",
+					Address: socketAddress("127.0.0.1", uint32(address.Port)),
+					FilterChains: []*listener.FilterChain{
+						{
+							Filters: []*listener.Filter{
+								networkFilter("envoy.filters.network.http_connection_manager", b.pack(outer)),
+							},
+						},
+					},
+				},
+			},
 			Clusters: []*cluster.Cluster{
+				b.buildInternalCluster(MainInternal),
 				b.buildInternalCluster(MainForward),
-				b.buildTLSProxyOriginateCluster(nil),
-				b.buildDFPCluster(TLSConnectOriginate, false, true, nil),
-				b.buildDFPCluster(TLSPassthrough, true, false, nil),
+				b.buildTLSOriginateCluster(TLSProxyOriginate, nil),
+				b.buildForwardCluster(TLSConnectOriginate, false, true, nil),
+				b.buildForwardCluster(TLSPassthrough, true, false, nil),
 			},
 		},
 	}

@@ -17,34 +17,31 @@ package networking
 import (
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
-
-	configv1 "github.com/openkruise/agentio/api/config/v1"
 )
 
-func (b *resourceBuilder) tcpPolicyFilter(resolveSNI, skipMatchedProfile bool) *listenerv3.Filter {
+type tcpDestinationMode string
+
+const (
+	tcpOriginalDst    tcpDestinationMode = "ORIGINAL_DST"
+	tcpDynamicForward tcpDestinationMode = "DYNAMIC_FORWARD"
+)
+
+func (b *resourceBuilder) tcpPolicyFilter(mode tcpDestinationMode) *listenerv3.Filter {
 	denied := make([]any, 0)
-	if resolveSNI {
-		for _, cidr := range configv1.MandatoryEgressDeniedCIDRs() {
-			denied = append(denied, cidr)
-		}
+	for _, cidr := range b.egressAuthorization.EffectiveDeniedCIDRs() {
+		denied = append(denied, cidr)
 	}
 	return networkFilter("agentio.tcp_policy", b.pack(&udpatypev1.TypedStruct{
 		TypeUrl: "type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter",
 		Value: b.structure(map[string]any{
-			"dynamic_module_config": map[string]any{
-				"name":         "envoy_agentio_connection_policy",
-				"do_not_close": true,
-				"module": map[string]any{
-					"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_connection_policy.so"},
-				},
-			},
-			"filter_name": "envoy_agentio_tcp_policy",
+			"dynamic_module_config": egressModuleConfig(),
+			"filter_name":           "envoy_agentio_tcp_policy",
 			"filter_config": map[string]any{
 				"@type": "type.googleapis.com/google.protobuf.Struct",
 				"value": map[string]any{
-					"resolveSni":         resolveSNI,
-					"skipMatchedProfile": skipMatchedProfile,
-					"deniedCidrs":        denied,
+					"mode":         string(mode),
+					"denied_cidrs": denied,
+					"dns":          b.rustDNSSettings(),
 				},
 			},
 		}),

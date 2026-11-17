@@ -89,7 +89,6 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_ENABLE_SIDECAR_INJECTOR</code> | Boolean | <code>false</code> | If true, serve Agentio Pod admission for sidecar and client CA injection. |
 | <code>AGENTIO_ENABLE_SNI_TRAFFIC_POLICY</code> | Boolean | <code>false</code> | If enabled, enforce SNI traffic policies in egress gateways, using HBONE TLS action headers when present. |
 | <code>AGENTIO_GATEWAY_CONNECT_TIMEOUT</code> | Duration | <code>10s</code> | Connect timeout for passthrough and dynamic-forward-proxy gateway clusters. |
-| <code>AGENTIO_GATEWAY_ENABLE_UDP_PROXY</code> | Boolean | <code>false</code> | If enabled, egress gateways terminate experimental IPv4 CONNECT-UDP sessions from ztunnel and forward datagrams directly to the MASQUE target without inspection. |
 | <code>AGENTIO_GATEWAY_LEASE_NAME</code> | String | <code>agentiod-gateway-deployer-leader</code> | Lease electing the single replica running the gateway deployment controller. |
 | <code>AGENTIO_GATEWAY_ROOT_CA_PATH</code> | String | empty | Legacy gateway-local CA bundle path. Unused by Agentiod, which distributes its public CA trust package through xDS. |
 | <code>AGENTIO_IGNORE_RESOURCES</code> | String | empty | Comma-separated CRD names excluded from the CRD watcher; a &#34;&#42;.&#34; prefix excludes a whole group by suffix (e.g. &#34;&#42;.istio.io&#34;). |
@@ -206,20 +205,6 @@ agentiod:
 ## Client CA distribution and injection
 
 `AGENTIO_ENABLE_CLIENT_TRUST_DISTRIBUTOR` defaults to `false`. The Helm chart derives it from `agentiod.injector.clientTrust.enabled` independently of the data-plane profile; use that single chart value to enable or disable the feature. In the ambient profile, enabling it also starts Pod admission and installs CA-only webhooks. When disabled, `agentiod` does not construct the distributor or allow CA injection, even with a Pod opt-in. The public CA package is built into the Agentiod image. Secret CA sources reuse existing system-namespace RBAC; the chart grants no additional source permissions. Disabling retains existing bundle ConfigMaps but stops updating them.
-
-## Experimental UDP sessions
-
-`AGENTIO_GATEWAY_ENABLE_UDP_PROXY` defaults to `false`. When enabled, every egress gateway accepts IPv4 CONNECT-UDP sessions on its HBONE listener. Hostnames and IPv6 targets are rejected.
-
-UDP sessions are forwarded directly. Neither the CONNECT-UDP request nor the datagrams pass through external processing; EPE policies continue to apply only to the inner HTTP of ordinary TCP tunneling.
-
-The flag only changes the gateway. Enable `ENABLE_UDP_PROXY=true` on each ztunnel and configure source Pod UDP TPROXY capture to port `15002`, preserving the original destination. Keep the capture mark distinct from ztunnel's `PACKET_MARK` (default `1337`) so the proxy's own sockets are not routed back into its listener. The default sidecar init only captures TCP; UDP capture requires a UDP-capable init or CNI. Keep DNS capture and exclusions separate.
-
-```yaml
-agentiod:
-  env:
-    AGENTIO_GATEWAY_ENABLE_UDP_PROXY: "true"
-```
 
 ## On-demand TLS certificates
 

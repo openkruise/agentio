@@ -75,7 +75,7 @@ spec:
 		}
 	}
 	initial := policy("Deny", trafficFixture.Client.Name())
-	step("missing_identity_uses_global_authorization", func(t *testing.T) {
+	step("missing_identity_has_no_profile_policy", func(t *testing.T) {
 		request := fixture.request(target, "/sp-tcp-lifecycle", true)
 		request.Attributes = nil
 		response, err := fixture.sendHeaders(t.Context(), request)
@@ -121,14 +121,6 @@ spec:
 		if err := checkEPEHeaders(response, target, 0); err != nil {
 			t.Fatal(err)
 		}
-	})
-	step("global_deny_wins_over_sp_allow", func(t *testing.T) {
-		global := egressEPEConfig(scope, "epe-egressauthz", fmt.Sprintf(
-			"egressAuthorization: {deniedCIDRs: [%s/32]}", trafficFixture.Server.ServiceIPOrFail(t)))
-		global.ApplyOrFail(t, kube.CreateOnly)
-		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 403)
-		global.DeleteOrFail(t)
-		fixture.wantHeaders(t, target, "/sp-tcp-lifecycle", true, 0)
 	})
 	step("update_reject", func(t *testing.T) {
 		policy("Deny", trafficFixture.Client.Name()).ApplyOrFail(t, kube.ReconcileOwned)
@@ -196,32 +188,7 @@ spec:
 	// This barrier proves the profile is active before negative assertions.
 	fixture.wantHeaders(t, target, "/epe-phases/block", false, 451)
 
-	deny := egressEPEConfig(scope, "epe-egressauthz", fmt.Sprintf(
-		"egressAuthorization: {deniedCIDRs: [%s/32]}", trafficFixture.Server.ServiceIPOrFail(t)))
-	deny.ApplyOrFail(t, kube.CreateOnly)
-	fixture.wantHeaders(t, target, "/epe-phases", false, 403)
-	// These assertions run after the deny has converged, without retrying.
-	for _, tc := range []struct {
-		name   string
-		path   string
-		end    bool
-		status int
-	}{
-		{"deny_before_body", "/epe-phases", false, 403},
-		{"deny_before_empty_body", "/epe-phases", true, 403},
-		{"header_block_precedes_authorization", "/epe-phases/block", false, 451},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response, err := fixture.headers(t.Context(), target, tc.path, tc.end)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := checkEPEHeaders(response, target, tc.status); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-	deny.DeleteOrFail(t)
+	fixture.wantHeaders(t, target, "/epe-phases/block", false, 451)
 	fixture.wantHeaders(t, target, "/epe-phases", false, 0)
 
 	for _, tc := range []struct {

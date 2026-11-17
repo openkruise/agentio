@@ -36,19 +36,22 @@ import (
 	"github.com/openkruise/agentio/pkg/networking/telemetry"
 )
 
+// Gateway resource names identify the listeners, routes and clusters emitted below.
 const (
-	ConnectTerminate        = "connect_terminate"
-	MainInternal            = "main_internal"
-	MainForward             = "main_forward"
-	TCPPassthrough          = "tcp_passthrough"
-	PassthroughCluster      = "PassthroughCluster"
+	ConnectTerminate   = "connect_terminate"
+	MainInternal       = "main_internal"
+	MainForward        = "main_forward"
+	TCPPassthrough     = "tcp_passthrough"
+	PassthroughCluster = "PassthroughCluster"
+	HTTPForwardProxy   = "http_forward_proxy"
+	// HTTPDynamicForwardProxy is the legacy proxyv2 cluster and route name.
 	HTTPDynamicForwardProxy = "http_dynamic_forward_proxy"
 	TLSConnectOriginate     = "tls_connect_originate"
 	TLSProxyOriginate       = "tls_proxy_originate"
+	TLSEndpointOriginate    = "tls_endpoint_originate"
 	TLSPassthrough          = "tls_passthrough"
 	ExtProcCluster          = "sandbox-ext-proc"
 	PorterCluster           = "agentio-porter"
-	UDPPassthroughCluster   = "agentio_udp_passthrough"
 	DNSCacheName            = "agentio_dns_cache"
 )
 
@@ -58,6 +61,7 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	EgressAuthorization        *configv1.EgressAuthorization
 	Services                   []model.Service
 	Endpoints                  []model.Endpoint
 	GatewayPatches             []model.GatewayPatch
@@ -106,6 +110,12 @@ func Build(inputs Inputs) ([]model.Resource, error) {
 //
 //nolint:gocyclo,funlen // Keep gateway assembly and accepted EDS bindings together.
 func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
+	if err := inputs.EgressAuthorization.Validate(); err != nil {
+		return nil, err
+	}
+	if inputs.LegacyGateway && len(inputs.EgressAuthorization.GetDeniedCidrs()) > 0 {
+		return nil, fmt.Errorf("egressAuthorization.deniedCIDRs is not supported in legacy gateway mode")
+	}
 	if err := inputs.Gateway.ValidateForUse(); err != nil {
 		return nil, err
 	}
@@ -162,6 +172,7 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 	b := &resourceBuilder{
 		legacyGateway:       inputs.LegacyGateway,
 		upstreamTrustBundle: inputs.UpstreamTrustBundle,
+		egressAuthorization: inputs.EgressAuthorization,
 		dnsCacheSettings:    inputs.Gateway.Config.GetDnsCache(),
 	}
 	clusters, err := b.clusters(effective)
@@ -342,4 +353,11 @@ func scopedResource(gateway model.Gateway, typeURL, name string, message proto.M
 
 func additionalExtProcName(provider *configv1.ExtProcProvider) string {
 	return "agentio.additional-ext-proc." + provider.GetName()
+}
+
+func (b *resourceBuilder) httpForwardName() string {
+	if b.legacyGateway {
+		return HTTPDynamicForwardProxy
+	}
+	return HTTPForwardProxy
 }

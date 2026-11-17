@@ -38,7 +38,6 @@ func preferenceHarness(
 	t *testing.T,
 	client *dns.Client,
 	target string,
-	cfg egressauthz.Config,
 	buffered bool,
 ) *enginetest.Harness {
 	t.Helper()
@@ -60,7 +59,7 @@ func preferenceHarness(
 	}
 	return enginetest.New(t, enginetest.Options{
 		Registrations:    regs,
-		AuthorizeRequest: egressauthz.NewAggregate(client, cfg).Authorize,
+		AuthorizeRequest: egressauthz.NewAggregate(client).Authorize,
 		Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 			return engine.Resolution{Units: units}, nil
 		},
@@ -75,10 +74,9 @@ func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	cfg := egressauthz.Config{}
 	for _, buffered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "headers", true: "buffered"}[buffered], func(t *testing.T) {
-			h := preferenceHarness(t, client, "192.0.2.2:8443", cfg, buffered)
+			h := preferenceHarness(t, client, "192.0.2.2:8443", buffered)
 			request := authRequest("api.example.com:443").DestinationAddress("192.0.2.1:443").DestinationPort(443)
 			if buffered {
 				request.Body([]byte("payload"))
@@ -99,22 +97,8 @@ func TestScenario_EgressAuthzKeepsAllowedRoute(t *testing.T) {
 }
 
 func TestScenario_EgressAuthzRouteDoesNotRequireDNS(t *testing.T) {
-	cfg := egressauthz.Config{}
-	h := preferenceHarness(t, nil, "192.0.2.2:8443", cfg, false)
+	h := preferenceHarness(t, nil, "192.0.2.2:8443", false)
 	h.Run(t, authRequest("unresolved.invalid:443")).RequireUpstream(t, "192.0.2.2:8443")
-}
-
-func TestScenario_EgressAuthzDeniedRouteDoesNotFallBack(t *testing.T) {
-	client := dns.NewClient(nil, time.Second)
-	if err := client.SetRecord("api.example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.99/32")}}
-	h := preferenceHarness(t, client, "192.0.2.99:443", cfg, false)
-	requireDenied(
-		t,
-		h.Run(t, authRequest("api.example.com:443").DestinationAddress("192.0.2.1:443").DestinationPort(443)),
-	)
 }
 
 func TestScenario_EgressAuthzOriginalMustBelongToHost(t *testing.T) {
@@ -127,8 +111,6 @@ func TestScenario_EgressAuthzOriginalMustBelongToHost(t *testing.T) {
 	}{
 		{name: "matching original is preferred", answers: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.2:443", want: "192.0.2.2:443", port: 443},
 		{name: "allowed unrelated original is replaced", answers: []string{"192.0.2.1"}, original: "192.0.2.2:443", want: "192.0.2.1:443", port: 443},
-		{name: "denied matching original does not fall back", answers: []string{"192.0.2.99", "192.0.2.1"}, original: "192.0.2.99:443", port: 443},
-		{name: "allowed original cannot rescue denied answers", answers: []string{"192.0.2.99"}, original: "192.0.2.2:443", port: 443},
 		{name: "original port is authorized", answers: []string{"192.0.2.1", "192.0.2.2"}, original: "192.0.2.2:8443", want: "192.0.2.2:8443", port: 8443},
 		{name: "replacement keeps routing port", answers: []string{"192.0.2.1"}, original: "192.0.2.2:8443", want: "192.0.2.1:8443", port: 8443},
 		{name: "mapped original matches IPv4 answer", answers: []string{"192.0.2.1", "192.0.2.2"}, original: "[::ffff:192.0.2.2]:443", want: "192.0.2.2:443", port: 443},
@@ -143,22 +125,15 @@ func TestScenario_EgressAuthzOriginalMustBelongToHost(t *testing.T) {
 			if err := client.SetRecord("api.example.com", addresses); err != nil {
 				t.Fatal(err)
 			}
-			cfg := egressauthz.NewStaticAuthorizer(egressauthz.Config{})
-			updateDenied(t, cfg, "192.0.2.99/32")
-			h := authHarness(t, client, cfg)
+			h := authHarness(t, client)
 			v := h.Run(t, authRequest("api.example.com:443").DestinationAddress(tc.original).DestinationPort(tc.port))
-			if tc.want == "" {
-				requireDenied(t, v)
-			} else {
-				v.RequireUpstream(t, tc.want)
-			}
+			v.RequireUpstream(t, tc.want)
 		})
 	}
 }
 
 func TestEgressAuthzOriginalMustMatchLiteralHost(t *testing.T) {
-	cfg := egressauthz.Config{}
-	target, reply, err := egressauthz.NewAggregate(dns.NewClient(nil, time.Second), cfg).Authorize(
+	target, reply, err := egressauthz.NewAggregate(dns.NewClient(nil, time.Second)).Authorize(
 		t.Context(),
 		&filter.Stream{RequestContext: filter.RequestContext{Request: httpreq.HTTPRequest{
 			Host:                "192.0.2.1",
@@ -176,59 +151,49 @@ func TestEgressAuthzOriginalMustMatchLiteralHost(t *testing.T) {
 func TestScenario_EgressAuthzChecksRewrittenAuthority(t *testing.T) {
 	for _, header := range []string{":authority", "Host"} {
 		for _, buffered := range []bool{false, true} {
-			for _, allow := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/body=%v/allow=%v", header, buffered, allow), func(t *testing.T) {
-					cfg := egressauthz.Config{}
-					if !allow {
-						cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.2/32")}
-					}
-					client := dns.NewClient(nil, time.Second)
-					calls := 0
-					h := enginetest.New(t, enginetest.Options{
-						Registrations: []filter.Registration{{
-							Name:   "rewrite",
-							Phases: filter.PhaseRequestHeaders | filter.PhaseRequestBody,
-							New: func(filter.ErasedRuleConfig) filter.Filter {
-								return &authorityRewrite{
-									buffered: buffered,
-									mutation: filter.SetHeader(header, "192.0.2.2:8443"),
-								}
-							},
-						}},
-						Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
-							return engine.Resolution{Units: []engine.Unit{{Cfgs: []any{true}}}}, nil
+			t.Run(fmt.Sprintf("%s/body=%v", header, buffered), func(t *testing.T) {
+				client := dns.NewClient(nil, time.Second)
+				calls := 0
+				h := enginetest.New(t, enginetest.Options{
+					Registrations: []filter.Registration{{
+						Name:   "rewrite",
+						Phases: filter.PhaseRequestHeaders | filter.PhaseRequestBody,
+						New: func(filter.ErasedRuleConfig) filter.Filter {
+							return &authorityRewrite{
+								buffered: buffered,
+								mutation: filter.SetHeader(header, "192.0.2.2:8443"),
+							}
 						},
-						AuthorizeRequest: func(ctx context.Context, stream *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
-							calls++
-							return egressauthz.NewAggregate(client, cfg).Authorize(ctx, stream)
-						},
-					})
-					request := authRequest(
-						"original.example:443",
-					).DestinationAddress("192.0.2.1:443").
-						DestinationPort(443)
-					if buffered {
-						request.Body([]byte("payload"))
-					}
-					verdict := h.Run(t, request)
-					wantCalls := 1
-					if buffered && allow {
-						if len(verdict.Raw) != 2 {
-							t.Fatalf("expected headers and body responses, got %v", verdict.Raw)
-						}
-						enginetest.ParseVerdict(verdict.Raw[:1], verdict.Err).RequireUpstream(t, "192.0.2.2:8443")
-						verdict = enginetest.ParseVerdict(verdict.Raw[1:], verdict.Err)
-					}
-					if allow {
-						verdict.RequireUpstream(t, "192.0.2.2:8443")
-					} else {
-						requireDenied(t, verdict)
-					}
-					if calls != wantCalls {
-						t.Fatalf("authorization calls=%d, want %d", calls, wantCalls)
-					}
+					}},
+					Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
+						return engine.Resolution{Units: []engine.Unit{{Cfgs: []any{true}}}}, nil
+					},
+					AuthorizeRequest: func(ctx context.Context, stream *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
+						calls++
+						return egressauthz.NewAggregate(client).Authorize(ctx, stream)
+					},
 				})
-			}
+				request := authRequest(
+					"original.example:443",
+				).DestinationAddress("192.0.2.1:443").
+					DestinationPort(443)
+				if buffered {
+					request.Body([]byte("payload"))
+				}
+				verdict := h.Run(t, request)
+				wantCalls := 1
+				if buffered {
+					if len(verdict.Raw) != 2 {
+						t.Fatalf("expected headers and body responses, got %v", verdict.Raw)
+					}
+					enginetest.ParseVerdict(verdict.Raw[:1], verdict.Err).RequireUpstream(t, "192.0.2.2:8443")
+					verdict = enginetest.ParseVerdict(verdict.Raw[1:], verdict.Err)
+				}
+				verdict.RequireUpstream(t, "192.0.2.2:8443")
+				if calls != wantCalls {
+					t.Fatalf("authorization calls=%d, want %d", calls, wantCalls)
+				}
+			})
 		}
 	}
 }

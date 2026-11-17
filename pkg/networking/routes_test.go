@@ -63,13 +63,21 @@ func TestGatewayRouteOverridesUseOneWildcardAndIgnoreRequestPort(t *testing.T) {
 			model.RouteType,
 			func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 		)
-		for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+		for _, name := range []string{(&resourceBuilder{legacyGateway: legacy}).httpForwardName(), TLSConnectOriginate} {
 			rc := routes[name]
 			if !rc.GetIgnorePortInHostMatching() {
 				t.Fatalf("%s must match api.example.com:8443 and api.example.com identically", name)
 			}
 			seen := map[string]bool{}
 			for _, vh := range rc.GetVirtualHosts() {
+				forward := vh.GetRoutes()[1]
+				wantCluster := name
+				if !legacy && name == HTTPForwardProxy {
+					wantCluster = PassthroughCluster
+				}
+				if forward.GetRoute().GetCluster() != wantCluster || forward.GetDecorator().GetOperation() != name {
+					t.Fatalf("%s must use %s without changing its trace operation", name, wantCluster)
+				}
 				for _, domain := range vh.GetDomains() {
 					if seen[domain] {
 						t.Fatalf("duplicate virtual-host domain %q", domain)
@@ -121,7 +129,7 @@ func TestGatewayRoutesUseSupportedAgentioRetries(t *testing.T) {
 		model.RouteType,
 		func() *routev3.RouteConfiguration { return &routev3.RouteConfiguration{} },
 	)
-	for _, name := range []string{HTTPDynamicForwardProxy, TLSConnectOriginate} {
+	for _, name := range []string{HTTPForwardProxy, TLSConnectOriginate} {
 		config := routes[name]
 		configured := config.GetVirtualHosts()[0].GetRoutes()[1]
 		if got := configured.GetRoute().GetTimeout().AsDuration(); got != 0 {

@@ -16,7 +16,7 @@ syntax = "proto3";
 package agentio.config.v1;
 option go_package = "github.com/openkruise/agentio/api/config/v1;configv1";
 
-// EPEConfig configures EPE's global egress authorization and extension providers.
+// EPEConfig configures EPE's extension providers.
 // YAML or JSON is decoded from each watched ConfigMap's data.config entry.
 // Base and primary ConfigMaps overlay startup defaults in that order. Missing
 // ConfigMaps or blank entries leave the lower layer unchanged. Invalid updates
@@ -45,42 +45,6 @@ message EPEConfig {
 
   // Default services used when a caller does not select a provider explicitly.
   DefaultExtensionProviders default_providers = 2;
-
-  // Global destination restrictions, independent of xDS and workload identity.
-  // Omission/null inherits the lower layer; a supplied message replaces it.
-  EgressAuthorization egress_authorization = 3;
-}
-
-// EgressAuthorization applies to every request processed by EPE authorization.
-// Examples below are EPEConfig content for a watched ConfigMap's data.config.
-//
-// Example: deny additional IPv4/IPv6 IPs. Built-in restrictions are appended
-// automatically, so they do not need to be repeated here.
-//
-//   egressAuthorization:
-//     deniedCIDRs:
-//     - 192.0.2.10/32
-//     - 2001:db8::10/128
-//
-// Example: inherit the lower layer's restrictions in a primary ConfigMap.
-// Omitting egressAuthorization has the same effect as null.
-//
-//   egressAuthorization: null
-//
-// Example: clear inherited user restrictions. Built-in restrictions remain,
-// and optional xDS TrafficPolicy authorization still applies when enabled.
-//
-//   egressAuthorization:
-//     deniedCIDRs: []
-message EgressAuthorization {
-  // Deny these destination CIDRs on every port, before any TrafficPolicy rules.
-  // Use /32 for a single IPv4 address or /128 for a single IPv6 address.
-  // IPv4-mapped IPv6 prefixes are not accepted; use the IPv4 prefix instead.
-  // EPE always appends 127.0.0.0/8, ::1/128, 0.0.0.0/32, ::/128,
-  // 169.254.0.0/16, and fe80::/10.
-  // Alibaba Cloud metadata (100.100.100.200/32) requires an explicit operator entry.
-  // An empty list removes only user restrictions; built-ins cannot be disabled.
-  repeated string denied_cidrs = 1 [json_name = "deniedCIDRs"];
 }
 
 // ExtensionProvider registers one typed service under a unique name.

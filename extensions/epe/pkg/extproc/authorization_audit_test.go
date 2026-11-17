@@ -40,15 +40,13 @@ import (
 
 func TestAuthorizationDenialHasCorrelatedJSONResponse(t *testing.T) {
 	audit := &capturedAuditLogger{}
-	client := dns.NewClient(nil, time.Second)
-	cfg := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")}}
 	server := NewServer(
 		ServerDeps{
 			AuditLogger: audit,
 			Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
 				return engine.Resolution{}, nil
 			},
-			AuthorizeRequest: egressauthz.NewAggregate(client, cfg).Authorize,
+			AuthorizeRequest: denyRequest,
 		},
 	)
 	headers := makeRequestHeaders("1.1.1.1:80", "/", "GET")
@@ -79,7 +77,7 @@ func TestAuthorizationDenialHasCorrelatedJSONResponse(t *testing.T) {
 	decision := entry.Authorization
 	if decision == nil || decision.Action != "deny" || decision.Reason != filter.AuthorizationReasonPolicyDenied ||
 		decision.Destination != "1.1.1.1:80" ||
-		decision.Policy != "EPEConfig/egressAuthorization" ||
+		decision.Policy != "SecurityProfile/test" ||
 		decision.RuleIndex == nil ||
 		*decision.RuleIndex != 0 {
 		t.Fatalf("decision: %+v", decision)
@@ -296,7 +294,6 @@ func TestAuthorizationPreservesOutcome(t *testing.T) {
 
 func TestAuthorizationOutcomeWithSendFailure(t *testing.T) {
 	client := dns.NewClient(nil, time.Second)
-	denied := egressauthz.Config{DeniedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
 	for _, tc := range []struct {
 		name      string
 		authorize engine.RequestAuthorizer
@@ -304,7 +301,7 @@ func TestAuthorizationOutcomeWithSendFailure(t *testing.T) {
 		status    int
 	}{
 		{name: "allow", authorize: egressauthz.NewAggregate(client).Authorize, want: "bypassed"},
-		{name: "deny", authorize: egressauthz.NewAggregate(client, denied).Authorize, want: "blocked", status: 403},
+		{name: "deny", authorize: denyRequest, want: "blocked", status: 403},
 		{name: "error", authorize: egressauthz.NewAggregate(nil).Authorize, want: "blocked", status: 500},
 	} {
 		for _, failSend := range []bool{false, true} {
@@ -371,4 +368,28 @@ func TestAuthorizationOutcomeWithSendFailure(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Exercise the server's denial response with a request-bound policy.
+type denyDestinationPolicy struct{}
+
+func (denyDestinationPolicy) Authorize(
+	_ context.Context,
+	stream *filter.Stream,
+	candidates []netip.AddrPort,
+) ([]netip.AddrPort, error) {
+	index := 0
+	stream.Info.RecordAuthorization(filter.AuthorizationDecision{
+		Action:      "deny",
+		Reason:      filter.AuthorizationReasonPolicyDenied,
+		Policy:      "SecurityProfile/test",
+		RuleIndex:   &index,
+		Destination: candidates[0].String(),
+	})
+	return nil, nil
+}
+
+func denyRequest(ctx context.Context, stream *filter.Stream) (*filter.UpstreamTarget, *filter.Reply, error) {
+	stream.Policies.DestinationAuthorizer = denyDestinationPolicy{}
+	return egressauthz.NewAggregate(dns.NewClient(nil, 0)).Authorize(ctx, stream)
 }

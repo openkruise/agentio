@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -46,14 +45,12 @@ func TestSecurityProfileTCPFallthroughAfterHTTPRules(t *testing.T) {
 		name      string
 		action    agents.SecurityRuleActions
 		tcpAction agents.TCPActionType
-		global    bool
 		status    int
 	}{
 		{name: "empty HTTP rules", tcpAction: agents.TCPActionDeny, status: 403},
 		{name: "mutation falls through", action: agents.SecurityRuleActions{HeaderManipulation: &agents.HeaderManipulationAction{Set: []agents.HeaderValue{{Name: "x-token", Value: "injected"}}}}, tcpAction: agents.TCPActionDeny, status: 403},
 		{name: "bypass skips TCP deny", action: agents.SecurityRuleActions{Bypass: true}, tcpAction: agents.TCPActionDeny},
 		{name: "block wins over TCP allow", action: agents.SecurityRuleActions{Block: &agents.BlockAction{StatusCode: 451}}, tcpAction: agents.TCPActionAllow, status: 451},
-		{name: "bypass preserves platform deny", action: agents.SecurityRuleActions{Bypass: true}, tcpAction: agents.TCPActionDeny, global: true, status: 403},
 		{name: "TCP allow pins address", tcpAction: agents.TCPActionAllow},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,11 +72,7 @@ func TestSecurityProfileTCPFallthroughAfterHTTPRules(t *testing.T) {
 			store.ProfileSet(
 				&agents.SecurityProfile{ObjectMeta: metav1.ObjectMeta{Name: "profile", Namespace: "ns"}, Spec: spec},
 			)
-			global := egressauthz.Config{}
-			if tc.global {
-				global.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
-			}
-			targets := egressauthz.NewAggregate(dns.NewClient(nil, 0), egressauthz.NewStaticAuthorizer(global))
+			targets := egressauthz.NewAggregate(dns.NewClient(nil, 0))
 			srv := NewServer(ServerDeps{
 				Registrations:    regs,
 				Resolve:          securityprofile.NewResolver(store, regs, nil, targets),

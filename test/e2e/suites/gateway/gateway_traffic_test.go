@@ -122,7 +122,9 @@ data:
 `)
 
 	waitForGatewayConfig(t, environment, 200*time.Millisecond, func(dump string) error {
-		for _, want := range []string{"service-entry|" + dstIP + "|http", host, "agentio.route.upstream"} {
+		for _, want := range []string{
+			"service-entry|" + dstIP + "|http", host, "agentio.route.upstream",
+		} {
 			if !strings.Contains(dump, want) {
 				return fmt.Errorf("gateway config_dump does not contain %q", want)
 			}

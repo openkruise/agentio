@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,23 +33,23 @@ import (
 	"testing"
 	"time"
 
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
+	"google.golang.org/protobuf/types/known/anypb"
+
 	bootstrap "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	internal "github.com/envoyproxy/go-control-plane/envoy/extensions/bootstrap/internal_listener/v3"
-	dfpcluster "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
-	dfphttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	router "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	dfpsni "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/sni_dynamic_forward_proxy/v3"
-	cares "github.com/envoyproxy/go-control-plane/envoy/extensions/network/dns_resolver/cares/v3"
 	tlsconfig "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	extprocservice "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	mdns "github.com/miekg/dns"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -209,11 +208,10 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 						if stream.Request.OriginalDestination.Addr().String() == "127.0.0.3" && stream.Upstream != nil {
 							t.Error("an unmatched endpoint acquired a pinned target")
 						}
-						cfg := egressauthz.Config{}
 						if stream.Request.Path == "/deny" {
-							cfg.DeniedCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+							return nil, &filter.Reply{Status: 403}, nil
 						}
-						return egressauthz.NewAggregate(dnsClient, cfg).Authorize(ctx, stream)
+						return egressauthz.NewAggregate(dnsClient).Authorize(ctx, stream)
 					},
 				}))
 				rpc, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -360,7 +358,7 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 									originHandshakes.Load()-handshakes,
 								)
 							}
-							if (dnsQueries.Load() > 0) != (tc.name == "unmatched_ip") {
+							if (dnsQueries.Load() > 0) != (tc.name == "unmatched_ip" && epePort != 0) {
 								t.Fatalf("unexpected DNS packets: %d", dnsQueries.Load())
 							}
 							return
@@ -452,7 +450,7 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 					if tc.name != "epe_denial" && tc.status == 403 && epeCalls.Load() != authorized {
 						t.Fatal("Host mismatch was not rejected before EPE")
 					}
-					if (dnsQueries.Load() > 0) != (tc.name == "unmatched_ip") {
+					if (dnsQueries.Load() > 0) != (tc.name == "unmatched_ip" && epePort != 0) {
 						t.Fatalf("unexpected DNS packets: %d", dnsQueries.Load())
 					}
 				})
@@ -509,26 +507,6 @@ func endpointServiceEntryConfig(
 		HttpFilters: []*hcm.HttpFilter{connectAuthorityHTTPFilter,
 			httpFilter("envoy.filters.http.router", b.pack(&router.Router{}))},
 	}
-	if features.EnableSNITrafficPolicy {
-		action := "passthrough"
-		if strings.HasPrefix(mode, "terminate") {
-			action = "terminate"
-		}
-		// Inject the module decision so this test needs only the stock Envoy binary.
-		decision := httpFilter(
-			"test.tls_action",
-			b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{{
-				Key:                &common.FilterStateValue_ObjectKey{ObjectKey: tlsActionKey},
-				FactoryKey:         "envoy.hashable_string",
-				ReadOnly:           true,
-				SharedWithUpstream: common.FilterStateValue_ONCE,
-				Value: &common.FilterStateValue_FormatString{FormatString: formatString(
-					"%CEL('x-test-tls-action' in request.headers ? request.headers['x-test-tls-action'] : '" + action + "')%",
-				)},
-			}}}),
-		)
-		outer.HttpFilters = append([]*hcm.HttpFilter{decision}, outer.HttpFilters...)
-	}
 	// Replace HBONE mTLS/Porter with HTTP CONNECT, keeping destination restoration.
 	listeners[0] = &listener.Listener{
 		Name:    "test",
@@ -537,24 +515,57 @@ func endpointServiceEntryConfig(
 			Filters: []*listener.Filter{networkFilter("envoy.filters.network.http_connection_manager", b.pack(outer))},
 		}},
 	}
-	cache := dnsCacheConfig(true, nil) // Loopback origins are a harness-only exception to native DFP restrictions.
-	cache.TypedDnsResolverConfig = typedCoreExtension(
-		"envoy.network.dns_resolver.cares",
-		b.pack(&cares.CaresDnsResolverConfig{
-			Resolvers:          []*core.Address{socketAddress("127.0.0.1", dnsPort)},
-			DnsResolverOptions: &core.DnsResolverOptions{NoDefaultSearchDomain: true},
-		}),
+	// Exercise the production modules, with loopback origins allowed only by this fixture.
+	policyJSON := `{"profiles":[]}`
+	if features.EnableSNITrafficPolicy {
+		action := "SNI_ACTION_PASSTHROUGH"
+		if strings.HasPrefix(mode, "terminate") {
+			action = "SNI_ACTION_TLS_TERMINATION"
+		}
+		allow := fmt.Sprintf(
+			`{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":%q}]}}]}`,
+			action,
+		)
+		deny := `{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_DENY"}]}}]}`
+		policyJSON = fmt.Sprintf(
+			`%%CEL('x-test-tls-action' in request.headers && request.headers['x-test-tls-action'] == 'deny' ? %q : %q)%%`,
+			deny,
+			allow,
+		)
+	}
+	policy := httpFilter("test.policy", b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{{
+		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: "agentio.connection.policy_json"},
+		FactoryKey: "envoy.string",
+		Value:      &common.FilterStateValue_FormatString{FormatString: formatString(policyJSON)},
+	}}}))
+	beforeRouter := len(outer.HttpFilters) - 1
+	filters := append(outer.HttpFilters[:beforeRouter:beforeRouter], policy)
+	filters = append(filters, b.connectPolicyFilters()...)
+	outer.HttpFilters = append(filters, outer.HttpFilters[beforeRouter])
+	listeners[0].FilterChains[0].Filters[0] = networkFilter(
+		"envoy.filters.network.http_connection_manager",
+		b.pack(outer),
 	)
+	allowLoopback := func(config *anypb.Any) *anypb.Any {
+		typed := &udpatypev1.TypedStruct{}
+		if err := config.UnmarshalTo(typed); err != nil {
+			t.Fatal(err)
+		}
+		values := typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue()
+		delete(values.Fields, "denied_cidrs")
+		return b.pack(typed)
+	}
+
 	for _, l := range listeners {
 		l.ListenerFilters = slices.DeleteFunc(l.ListenerFilters, func(f *listener.ListenerFilter) bool {
-			return f.Name == "envoy.filters.listener.dynamic_modules"
+			return proto.Equal(f, inspectionDeadlineFilter)
 		})
 		for _, chain := range l.FilterChains {
-			// The stock-Envoy fixture injects policy decisions and tests endpoint binding.
-			chain.Filters = slices.DeleteFunc(
-				chain.Filters,
-				func(f *listener.Filter) bool { return f.Name == "agentio.tcp_policy" },
-			)
+			for _, f := range chain.Filters {
+				if f.Name == "agentio.tcp_policy" {
+					f.ConfigType = &listener.Filter_TypedConfig{TypedConfig: allowLoopback(f.GetTypedConfig())}
+				}
+			}
 			if chain.Name == tlsTerminateChain {
 				chain.TransportSocket.ConfigType = &core.TransportSocket_TypedConfig{
 					TypedConfig: b.pack(&tlsconfig.DownstreamTlsContext{
@@ -578,43 +589,32 @@ func endpointServiceEntryConfig(
 					if err := f.GetTypedConfig().UnmarshalTo(manager); err != nil {
 						t.Fatal(err)
 					}
+
 					if rds := manager.GetRds(); rds != nil {
 						manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
 							RouteConfig: b.buildForwardRoute(rds.RouteConfigName, config.gateway),
 						}
 					}
-					for _, hf := range manager.HttpFilters {
-						if hf.Name == "envoy.filters.http.dynamic_forward_proxy" {
-							hf.ConfigType = &hcm.HttpFilter_TypedConfig{TypedConfig: b.pack(&dfphttp.FilterConfig{
-								ImplementationSpecifier: &dfphttp.FilterConfig_DnsCacheConfig{
-									DnsCacheConfig: cache,
-								},
-								AllowDynamicHostFromFilterState: true,
-							})}
+					if route := manager.GetRouteConfig(); route != nil {
+						if authorization := route.TypedPerFilterConfig["agentio.egress_authorization"]; authorization != nil {
+							route.TypedPerFilterConfig["agentio.egress_authorization"] = allowLoopback(authorization)
+						}
+						for _, host := range route.VirtualHosts {
+							for _, entry := range host.Routes {
+								if authorization := entry.TypedPerFilterConfig["agentio.egress_authorization"]; authorization != nil {
+									entry.TypedPerFilterConfig["agentio.egress_authorization"] = allowLoopback(
+										authorization,
+									)
+								}
+							}
 						}
 					}
 					f.ConfigType = &listener.Filter_TypedConfig{TypedConfig: b.pack(manager)}
-				case "envoy.filters.network.sni_dynamic_forward_proxy":
-					cfg := &dfpsni.FilterConfig{}
-					if err := f.GetTypedConfig().UnmarshalTo(cfg); err != nil {
-						t.Fatal(err)
-					}
-					cfg.DnsCacheConfig = cache
-					f.ConfigType = &listener.Filter_TypedConfig{TypedConfig: b.pack(cfg)}
 				}
 			}
 		}
 	}
-	for _, c := range clusters {
-		if c.GetClusterType().GetName() == "envoy.clusters.dynamic_forward_proxy" {
-			cfg := &dfpcluster.ClusterConfig{}
-			if err := c.GetClusterType().GetTypedConfig().UnmarshalTo(cfg); err != nil {
-				t.Fatal(err)
-			}
-			cfg.ClusterImplementationSpecifier = &dfpcluster.ClusterConfig_DnsCacheConfig{DnsCacheConfig: cache}
-			c.GetClusterType().TypedConfig = b.pack(cfg)
-		}
-	}
+
 	if b.err != nil {
 		t.Fatal(b.err)
 	}
