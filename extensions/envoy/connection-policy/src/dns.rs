@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::{
     future::Future,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     task::{Context, Poll, Waker},
     time::{Duration, Instant},
 };
@@ -17,12 +17,14 @@ use tokio::{runtime::Runtime, sync::Semaphore, task::JoinHandle};
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub resolver: String,
     pub max_hosts: usize,
     pub max_pending_requests: usize,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            resolver: "agentio_dns_cache".into(),
             max_hosts: 16384,
             max_pending_requests: 4096,
         }
@@ -44,35 +46,41 @@ pub struct Resolver {
     pending: Arc<Semaphore>,
 }
 
-// Policy updates share raw DNS answers; authorization remains with each caller.
-static SHARED_RESOLVER: Mutex<Option<Arc<Resolver>>> = Mutex::new(None);
+// Configuration snapshots own generations; the registry must not keep retired caches alive.
+static SHARED_RESOLVERS: Mutex<Vec<Weak<Resolver>>> = Mutex::new(Vec::new());
 
 impl Resolver {
     pub fn shared(settings: &Settings) -> Result<Arc<Self>, String> {
-        let mut shared = SHARED_RESOLVER.lock().expect("shared DNS resolver lock");
-        if let Some(resolver) = shared.as_ref() {
-            if &resolver.settings != settings {
-                return Err("DNS cache settings changed; restart the gateway to apply them".into());
+        let mut shared = SHARED_RESOLVERS.lock().expect("shared DNS resolver lock");
+        shared.retain(|resolver| resolver.strong_count() > 0);
+        let mut runtime = None;
+        for resolver in shared.iter().filter_map(Weak::upgrade) {
+            if &resolver.settings == settings {
+                return Ok(resolver);
             }
-            return Ok(resolver.clone());
+            if resolver.settings.resolver == settings.resolver {
+                runtime = Some(resolver.runtime.clone());
+            }
         }
-        let resolver = Arc::new(Self::new(settings.clone())?);
-        *shared = Some(resolver.clone());
+        let runtime = match runtime {
+            Some(runtime) => runtime,
+            None => new_runtime()?,
+        };
+        let resolver = Arc::new(Self::new(settings.clone(), runtime)?);
+        shared.push(Arc::downgrade(&resolver));
         Ok(resolver)
     }
 
-    fn new(settings: Settings) -> Result<Self, String> {
+    fn new(settings: Settings, runtime: Arc<Runtime>) -> Result<Self, String> {
+        if settings.resolver.is_empty() {
+            return Err("DNS resolver name must not be empty".into());
+        }
         if settings.max_hosts == 0
             || settings.max_pending_requests == 0
             || settings.max_pending_requests > Semaphore::MAX_PERMITS
         {
             return Err("DNS cache limits must be positive and within supported capacity".into());
         }
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
         let guard = runtime.enter();
         let mut builder = TokioResolver::builder_tokio().map_err(|e| e.to_string())?;
         builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4Only;
@@ -80,7 +88,7 @@ impl Resolver {
         let resolver = builder.build().map_err(|e| e.to_string())?;
         drop(guard);
         Ok(Self {
-            runtime: Arc::new(runtime),
+            runtime,
             resolver,
             answers: Cache::new(settings.max_hosts as u64),
             pending: Arc::new(Semaphore::new(settings.max_pending_requests)),
@@ -148,6 +156,15 @@ impl Resolver {
             }
         }
     }
+}
+
+fn new_runtime() -> Result<Arc<Runtime>, String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
 }
 
 fn socket_addresses(answer: &Answer, port: u16) -> Vec<SocketAddr> {
@@ -231,6 +248,7 @@ mod tests {
 
     #[test]
     fn concurrent_callers_and_replacements_share_one_resolver() {
+        let original = Resolver::shared(&Settings::default()).unwrap();
         let callers: Vec<_> = (0..8)
             .map(|_| std::thread::spawn(|| Resolver::shared(&Settings::default()).unwrap()))
             .collect();
@@ -238,15 +256,14 @@ mod tests {
         for resolver in &resolvers {
             assert!(Arc::ptr_eq(&resolvers[0], resolver));
         }
-        let previous = Arc::downgrade(&resolvers[0]);
         drop(resolvers);
         let replacement = Resolver::shared(&Settings::default()).unwrap();
-        assert!(Arc::ptr_eq(&previous.upgrade().unwrap(), &replacement));
+        assert!(Arc::ptr_eq(&original, &replacement));
     }
 
     #[test]
     fn immediately_available_lookup_preserves_port_without_scheduling() {
-        let resolver = Resolver::new(Settings::default()).unwrap();
+        let resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         let result = resolver.resolve("localhost".into(), 8443, || -> fn() {
             panic!("ready lookup scheduled")
         });
@@ -265,7 +282,7 @@ mod tests {
                     .as_slice(),
             )
             .unwrap();
-        let mut resolver = Resolver::new(Settings::default()).unwrap();
+        let mut resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         resolver.resolver.set_hosts(Arc::new(hosts));
         for (name, port) in [
             ("service.test", 80),
@@ -286,7 +303,7 @@ mod tests {
 
     #[test]
     fn expired_answer_is_never_used() {
-        let resolver = Resolver::new(Settings::default()).unwrap();
+        let resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         for (deadline, expected) in [
             (Instant::now() + Duration::from_secs(60), [192, 0, 2, 1]),
             (Instant::now(), [127, 0, 0, 1]),
@@ -316,10 +333,13 @@ mod tests {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let mut server = NameServerConfig::udp("127.0.0.1".parse().unwrap());
         server.connections[0].port = socket.local_addr().unwrap().port();
-        let mut resolver = Resolver::new(Settings {
-            max_pending_requests: 1,
-            ..Settings::default()
-        })
+        let mut resolver = Resolver::new(
+            Settings {
+                max_pending_requests: 1,
+                ..Settings::default()
+            },
+            new_runtime().unwrap(),
+        )
         .unwrap();
         {
             let _guard = resolver.runtime.enter();
@@ -356,22 +376,172 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_dns_settings_require_restart() {
-        let current = Resolver::shared(&Settings::default()).unwrap();
-        let changed = Settings {
-            max_pending_requests: 1,
+    fn changed_settings_use_isolated_generations_on_the_same_runtime() {
+        let settings = Settings {
+            resolver: "hot-update".into(),
             ..Settings::default()
         };
-        assert!(Resolver::shared(&changed).is_err());
+        let current = Resolver::shared(&settings).unwrap();
+        current.answers.insert(
+            "service.test".into(),
+            Answer {
+                ips: Arc::from([IpAddr::from([192, 0, 2, 1])]),
+                valid_until: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let changed = Settings {
+            max_hosts: 128,
+            max_pending_requests: 1,
+            ..settings.clone()
+        };
+        let next = Resolver::shared(&changed).unwrap();
+        assert!(!Arc::ptr_eq(&current, &next));
+        assert!(Arc::ptr_eq(&current.runtime, &next.runtime));
+        assert_eq!(next.answers.policy().max_capacity(), Some(128));
+        assert!(next.answers.get("service.test").is_none());
+        assert!(current.answers.get("service.test").is_some());
+        let _permit = current.pending.clone().try_acquire_owned().unwrap();
+        assert_eq!(next.pending.available_permits(), 1);
+        assert!(Arc::ptr_eq(&current, &Resolver::shared(&settings).unwrap()));
+        assert!(Arc::ptr_eq(&next, &Resolver::shared(&changed).unwrap()));
+        assert!(
+            Resolver::shared(&Settings {
+                max_hosts: 0,
+                ..changed
+            })
+            .is_err()
+        );
+        assert!(Arc::ptr_eq(&current, &Resolver::shared(&settings).unwrap()));
+    }
+
+    #[test]
+    fn named_resolvers_are_isolated_and_retired_generations_are_reclaimed() {
+        let settings = Settings {
+            resolver: "retirement".into(),
+            ..Settings::default()
+        };
+        let current = Resolver::shared(&settings).unwrap();
+        let other = Resolver::shared(&Settings {
+            resolver: "other-resolver".into(),
+            ..settings.clone()
+        })
+        .unwrap();
+        assert!(!Arc::ptr_eq(&current, &other));
+        assert!(!Arc::ptr_eq(&current.runtime, &other.runtime));
+        for capacity in 1..=40 {
+            let next = Resolver::shared(&Settings {
+                max_hosts: capacity,
+                ..settings.clone()
+            })
+            .unwrap();
+            assert!(Arc::ptr_eq(&current.runtime, &next.runtime));
+            let retired = Arc::downgrade(&next);
+            drop(next);
+            assert!(retired.upgrade().is_none());
+        }
+        let retired = Arc::downgrade(&current);
+        let runtime = Arc::downgrade(&current.runtime);
+        drop(current);
+        assert!(retired.upgrade().is_none());
+        assert!(runtime.upgrade().is_none());
+        assert!(
+            Resolver::shared(&Settings {
+                resolver: String::new(),
+                ..settings
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn omitted_dns_fields_use_defaults() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings, Settings::default());
+        let current = Resolver::shared(&settings).unwrap();
         assert!(Arc::ptr_eq(
             &current,
-            &Resolver::shared(&Settings::default()).unwrap()
+            &Resolver::shared(&Settings::default()).unwrap(),
         ));
     }
 
     #[test]
+    fn pending_lookup_completes_in_its_original_generation_after_update() {
+        use hickory_resolver::{
+            config::{NameServerConfig, ResolverConfig},
+            net::runtime::TokioRuntimeProvider,
+        };
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let settings = Settings {
+            resolver: "pending-generation".into(),
+            ..Settings::default()
+        };
+        let mut original = Resolver::new(settings.clone(), new_runtime().unwrap()).unwrap();
+        let mut server = NameServerConfig::udp("127.0.0.1".parse().unwrap());
+        server.connections[0].port = socket.local_addr().unwrap().port();
+        {
+            let _guard = original.runtime.enter();
+            let mut builder = TokioResolver::builder_with_config(
+                ResolverConfig::from_name_servers(vec![server]),
+                TokioRuntimeProvider::default(),
+            );
+            builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4Only;
+            original.resolver = builder.build().unwrap();
+        }
+        let original = Arc::new(original);
+        SHARED_RESOLVERS
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&original));
+        let (notify, ready) = mpsc::channel();
+        let Lookup::Pending(query) =
+            original.resolve("pending-generation.test.".into(), 443, || {
+                move || notify.send(()).unwrap()
+            })
+        else {
+            panic!("lookup must wait for DNS response")
+        };
+        let mut request = [0u8; 512];
+        let (_, peer) = socket.recv_from(&mut request).unwrap();
+        let replacement = Resolver::shared(&Settings {
+            max_hosts: 128,
+            max_pending_requests: 2,
+            ..settings
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(&original.runtime, &replacement.runtime));
+        let mut question_end = 12;
+        while request[question_end] != 0 {
+            question_end += request[question_end] as usize + 1;
+        }
+        question_end += 5;
+        let mut response = request[..2].to_vec();
+        response.extend_from_slice(&[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
+        response.extend_from_slice(&request[12..question_end]);
+        response.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 1]);
+        socket.send_to(&response, peer).unwrap();
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            query.finish().unwrap(),
+            vec!["192.0.2.1:443".parse().unwrap()]
+        );
+        assert!(original.answers.get("pending-generation.test.").is_some());
+        assert!(
+            replacement
+                .answers
+                .get("pending-generation.test.")
+                .is_none()
+        );
+        let retired = Arc::downgrade(&original);
+        drop(original);
+        assert!(retired.upgrade().is_none());
+    }
+
+    #[test]
     fn lookup_errors_reach_the_caller() {
-        let resolver = Resolver::new(Settings::default()).unwrap();
+        let resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         let (notify, ready) = mpsc::channel();
         let query = PendingResolution::spawn(
             resolver.runtime.clone(),
@@ -384,7 +554,7 @@ mod tests {
 
     #[test]
     fn dropping_pending_resolution_aborts_and_joins_the_task() {
-        let resolver = Resolver::new(Settings::default()).unwrap();
+        let resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         let (started, running) = mpsc::channel();
         let (lifetime, finished) = mpsc::channel::<()>();
         let query = PendingResolution::spawn(
@@ -403,7 +573,7 @@ mod tests {
 
     #[test]
     fn dropping_resolution_waits_for_an_inflight_scheduler_callback() {
-        let resolver = Resolver::new(Settings::default()).unwrap();
+        let resolver = Resolver::new(Settings::default(), new_runtime().unwrap()).unwrap();
         let (entered, running) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let query = PendingResolution::spawn(

@@ -138,7 +138,7 @@ Entries must be IPv4 or IPv6 CIDRs; use `/32` or `/128` for one address. Hostnam
 
 Custom EnvoyFilter patches must preserve the destination checks, including the HTTP RBAC filter for plaintext application-level CONNECT.
 
-Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. A changed effective list uses a separate DNS cache so previously cached targets cannot bypass the new list. Superseded caches remain allocated until Envoy restarts; restart gateways periodically if this list changes frequently.
+Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. DNS answers remain cached; each new TCP connection or HTTP request checks them against its accepted destination restrictions. Changing the denied list does not create a new DNS cache.
 
 `EPEConfig.egressAuthorization` has been removed. Configure destination restrictions only here. The gateway checks EPE-selected endpoints after SecurityProfile evaluation; a denial does not choose another address. Independent EPE deployments must enforce platform CIDRs in their forwarding proxy.
 
@@ -333,11 +333,20 @@ Monitor gateway memory, DNS load, errors and upstream connections when sizing it
 Gateway API `parametersRef` ConfigMaps accept the same block in `data.config`,
 without the `egressGateways` wrapper or gateway name and namespace.
 
-Roll affected gateway Pods when changing DNS capacity, pending limits or resolver
-configuration. Both the native shared resolver and legacy named DFP cache reject
-incompatible settings within a running process. Changing `deniedCIDRs` requires
-no resolver replacement or restart: each request checks cached answers against its
-accepted policy snapshot. Existing TCP connections retain their original policy.
+Native gateways apply DNS capacity and pending-limit changes through LDS/RDS without
+restarting Pods. Matching settings share one resolver generation; changed settings
+create a new generation with empty caches on the same two-thread runtime. New TCP
+connections and HTTP requests use their accepted configuration, including HTTP
+requests on existing connections. Unchanged consumers and in-flight DNS requests
+retain their old generation until their configuration or request is released.
+During convergence, old and new caches and pending budgets coexist. Invalid updates
+leave the accepted configuration unchanged. Legacy proxyv2 gateways still require
+a Pod restart for DNS capacity or pending-limit changes. Each new native resolver
+generation reads the current system DNS configuration once. Existing generations
+do not watch system DNS server changes; restarting the gateway reloads them.
+Changing `deniedCIDRs` requires no resolver replacement or restart: each request
+checks cached answers against its accepted policy snapshot. Existing TCP connections
+retain their original policy.
 
 ### TCP passthrough
 

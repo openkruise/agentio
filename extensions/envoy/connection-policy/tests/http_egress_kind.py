@@ -16,29 +16,30 @@ VARIANT = 'candidate'
 CACHE = {'name': 'egress_dns', 'dns_lookup_family': 'V4_ONLY', 'max_hosts': 16384}
 
 
-def policy(mode, denied):
+def policy(mode, denied, dns=None):
     settings = {'mode': mode, 'denied_cidrs': denied, 'default_port': 80}
     if VARIANT == 'candidate':
-        settings['dns'] = {'max_hosts': 16384, 'max_pending_requests': int(os.environ.get('TEST_DNS_PENDING', '4096'))}
+        settings['dns'] = {'max_hosts': 16384,
+            'max_pending_requests': int(os.environ.get('TEST_DNS_PENDING', '4096')), **(dns or {})}
     return typed('envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilterPerRoute',
         dynamic_module_config={'name': 'envoy_agentio_connection_policy', 'do_not_close': True},
         filter_name='envoy_agentio_egress_authorization',
         filter_config=typed('google.protobuf.Struct', value=settings))
 
 
-def routes(slot, denied):
+def routes(slot, denied, dns=None):
     connect = {'match': {'connect_matcher': {}}, 'route': {'cluster': 'original', 'timeout': '0s'}}
     config = {'name': f'egress-{slot}', 'virtual_hosts': [{'name': 'all', 'domains': ['*'], 'routes': [connect,
         {'match': {'prefix': '/'}, 'route': {'cluster': 'dfp', 'timeout': '5s'}}]}]}
     if VARIANT in ('candidate', 'baseline'):
-        config['typed_per_filter_config'] = {'authorization': policy('DYNAMIC_FORWARD', denied)}
+        config['typed_per_filter_config'] = {'authorization': policy('DYNAMIC_FORWARD', denied, dns)}
         connect['typed_per_filter_config'] = {'authorization': policy('ORIGINAL_DST', denied)}
     return config
 
 
 def publish(denied, generation, unused=None):
     for slot in range(base.SLOTS):
-        config = routes(slot, ['127.0.0.2/32'] + denied.get(str(slot), []))
+        config = routes(slot, ['127.0.0.2/32'] + denied.get(str(slot), []), denied.get('dns', {}).get(str(slot)))
         config['metadata'] = {'filter_metadata': {'test': {'generation': generation}}}
         config['@type'] = 'type.googleapis.com/envoy.config.route.v3.RouteConfiguration'
         data = {'version_info': str(generation), 'resources': [config],
@@ -220,6 +221,19 @@ async def verify(host):
         assert (await request(host, name + ':18082', connection=keepalive))[0] == 200
         assert state()['dns'][name] == 1
         assert state()['process']['threads'] == start['threads']
+    settings = {'resolver': 'agentio_dns_cache', 'max_hosts': 128, 'max_pending_requests': 2}
+    update(host, {'dns': {'0': settings}})
+    assert (await request(host, name + ':18082', connection=keepalive))[0] == 200
+    assert state()['dns'][name] == 2, 'existing HTTP connection did not use the new DNS config'
+    assert (await request(host, name + ':18082', slot=1))[0] == 200
+    assert state()['dns'][name] == 2, 'DNS update replaced an unchanged config'
+    update(host, {'dns': {'0': settings, '1': settings}})
+    assert (await request(host, name + ':18082', slot=1))[0] == 200
+    assert state()['dns'][name] == 2, 'matching generations did not share DNS answers'
+    update(host, {})
+    assert (await request(host, name + ':18082', connection=keepalive))[0] == 200
+    assert state()['dns'][name] == 2
+    assert state()['process']['threads'] == start['threads']
     keepalive[1].close()
     await keepalive[1].wait_closed()
     slow = asyncio.create_task(request(host, name + ':18082', path='/slow'))
@@ -227,28 +241,32 @@ async def verify(host):
     update(host, {'0': ['127.0.0.1/32']})
     assert (await slow)[0] == 200
     assert (await request(host, name + ':18082'))[0] == 403
-    # A rejected RDS update must leave the last accepted deny policy active.
-    rejected_before = sum(s['value'] for s in base.get(host, 9901, '/stats?format=json&filter=update_rejected')['stats']
-                          if s['name'].endswith('.update_rejected'))
-    base.get(host, 18081, '/update', {'0': ['invalid']})
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        rejected = sum(s['value'] for s in base.get(host, 9901, '/stats?format=json&filter=update_rejected')['stats']
-                       if s['name'].endswith('.update_rejected'))
-        if rejected > rejected_before: break
-        await asyncio.sleep(.05)
-    else: raise AssertionError('invalid RDS was not rejected')
-    before = origin_count()
-    assert (await request(host, name + ':18082'))[0] == 403
-    assert origin_count() == before
+    # Rejected policy or DNS settings must leave the last accepted deny policy active.
+    for invalid in [{'0': ['invalid']}, {'dns': {'0': {'max_hosts': 0}}}]:
+        rejected_before = sum(s['value'] for s in base.get(host, 9901, '/stats?format=json&filter=update_rejected')['stats']
+                              if s['name'].endswith('.update_rejected'))
+        base.get(host, 18081, '/update', invalid)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            rejected = sum(s['value'] for s in base.get(host, 9901, '/stats?format=json&filter=update_rejected')['stats']
+                           if s['name'].endswith('.update_rejected'))
+            if rejected > rejected_before: break
+            await asyncio.sleep(.05)
+        else: raise AssertionError('invalid RDS was not rejected')
+        before = origin_count()
+        assert (await request(host, name + ':18082'))[0] == 403
+        assert origin_count() == before
     update(host, {})
     # DNS already in flight keeps its request snapshot; the next request uses the update.
     slow_name = f'slow.{time.time_ns()}.test:18082'
     pending = asyncio.create_task(request(host, slow_name))
     await asyncio.sleep(.05)
-    update(host, {'0': ['127.0.0.1/32']})
+    update(host, {'0': ['127.0.0.1/32'], 'dns': {'0': {'max_hosts': 128}}})
     assert (await pending)[0] == 200
     assert (await request(host, slow_name))[0] == 403
+    assert state()['dns'][slow_name.split(':')[0]] == 2, 'old query populated the new DNS cache'
+    assert (await request(host, slow_name, slot=1))[0] == 200
+    assert state()['dns'][slow_name.split(':')[0]] == 2, 'in-flight query lost its old generation'
     update(host, {})
     # A different spelling can hit Hickory's cache with a rounded remaining TTL.
     ttl_name = f'ttl.cache-rounding.{time.time_ns()}.test'
@@ -272,7 +290,9 @@ async def verify(host):
     print(json.dumps({'result': 'PASS', 'checks': ['literal and mapped IPv6 denial', 'per-request keepalive authorization',
         'hostname and port precedence', 'original proxy CONNECT', 'Host preserved', 'request body buffering',
         '16 configs share DNS', '40 RDS replacements update existing keepalive connections and preserve cache and threads', 'deny before origin',
-        'other config isolated', 'invalid RDS retains accepted policy', 'in-flight DNS snapshot survives', 'in-flight request survives', 'DNS rebinding denied', 'cached TTL is not extended', 'mixed answers', 'DNS failure'],
+        'DNS settings update on existing keepalive connection', 'matching generations share answers', 'other config isolated',
+        'invalid policy and DNS settings retain accepted RDS', 'in-flight DNS snapshot survives a DNS config update', 'in-flight request survives',
+        'DNS rebinding denied', 'cached TTL is not extended', 'mixed answers', 'DNS failure'],
         'before': start, 'after': final['process'], 'queries': {name: final['dns'][name], rebind: final['dns'][rebind]}}))
 
 

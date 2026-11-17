@@ -150,7 +150,8 @@ func TestDFPAddressFilterInGatewayGraph(t *testing.T) {
 								t.Fatal(err)
 							}
 							dns := typed.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue().Fields["dns"].GetStructValue()
-							if dns.Fields["max_hosts"].GetNumberValue() != float64(tc.hosts) ||
+							if dns.Fields["resolver"].GetStringValue() != DNSCacheName ||
+								dns.Fields["max_hosts"].GetNumberValue() != float64(tc.hosts) ||
 								dns.Fields["max_pending_requests"].GetNumberValue() != float64(tc.pending) {
 								t.Fatalf("native DNS limits were not propagated: %v", dns)
 							}
