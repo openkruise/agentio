@@ -688,7 +688,8 @@ func TestSNIValidationUsesRustActions(t *testing.T) {
 				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 				TrustDomain:      "cluster.local",
 				Gateway: testGateway(&configv1.EgressGateway{TlsTermination: &configv1.TlsTerminationConfig{
-					IncludeHosts: []string{"*"}, ExcludeHosts: []string{"*"},
+					IncludeHosts: []string{"*"},
+					ExcludeHosts: []string{"*"},
 				}}),
 			})
 			if err != nil {

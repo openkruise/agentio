@@ -195,11 +195,13 @@ spec:
 				for line := range strings.SplitSeq(logs, "\n") {
 					var entry struct {
 						SNI      string `json:"requested_server_name"`
+						Reason   string `json:"denial_reason"`
 						Details  string `json:"response_code_details"`
 						Upstream string `json:"upstream_host"`
 					}
 					if json.Unmarshal([]byte(line), &entry) == nil && entry.SNI == malformed &&
-						entry.Details == "filter_chain_not_found" && (entry.Upstream == "" || entry.Upstream == "-") {
+						entry.Reason == "sni_invalid" && entry.Details == "direct_response" &&
+						(entry.Upstream == "" || entry.Upstream == "-") {
 						return nil
 					}
 				}
