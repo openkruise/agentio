@@ -71,6 +71,7 @@ func FromXDS(value *securityv1.SecurityProfile, sandboxUID string, regs []filter
 	if err != nil {
 		return nil, err
 	}
+	profile.E2BRuleOffset = config.E2BRuleOffset
 	// xDS selection and ordering belong to the control plane's Workload binding.
 	profile.Selector = labels.Nothing()
 	if value.TcpPolicy != nil {

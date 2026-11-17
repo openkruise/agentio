@@ -15,6 +15,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -30,7 +31,54 @@ import (
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
+	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 )
+
+func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
+	source := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
+		Name:      "sandbox",
+		Namespace: "tenant",
+		Annotations: map[string]string{
+			kruise.AnnotationSecurityProfile: `{"inputs":[{"name":"data","inline":{}}],"rules":[{"name":"native","match":[{"domains":["api.example.com"],"schemes":["https"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}],"tcpRules":[{"name":"native-deny","match":[{}],"action":"Deny"}]}`,
+			kruise.AnnotationE2BNetwork:      `{"allow_internet_access":false,"network":{"allowOut":["api.example.com"],"rules":{"api.example.com":[{"transform":{"headers":{"X-Tenant":"demo"}}}]}}}`,
+		},
+	}}
+	policies, err := kruise.SandboxPolicies(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compileSandbox(model.Sandbox{UID: "kruise:one", Name: source.Name, Namespace: source.Namespace, Policies: policies})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profiles []*securityv1.SecurityProfile
+	for _, extension := range compiled.Payload.Extensions {
+		if extension.TypeUrl == model.SecurityProfileType {
+			profile := &securityv1.SecurityProfile{}
+			if err := extension.UnmarshalTo(profile); err != nil {
+				t.Fatal(err)
+			}
+			profiles = append(profiles, profile)
+		}
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("got %d inline profiles, want one", len(profiles))
+	}
+	profile := profiles[0]
+	var http model.HTTPPolicy
+	if err := json.Unmarshal(profile.PolicyJson, &http); err != nil {
+		t.Fatal(err)
+	}
+	if len(http.Rules) != 4 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" || http.E2BRuleOffset == nil || *http.E2BRuleOffset != 1 || http.Inputs[0].Inline == nil {
+		t.Fatalf("HTTP composition or inputs lost: %s", profile.PolicyJson)
+	}
+	if len(profile.TcpPolicy.Rules) != 3 || profile.TcpPolicy.Rules[0].Name != "native-deny" || profile.TcpPolicy.Rules[2].Name != "e2b-deny-rest" {
+		t.Fatalf("TCP order lost: %v", profile.TcpPolicy)
+	}
+	if profile.SniPolicy.Rules[0].Action != securityv1.SniAction_SNI_ACTION_TLS_TERMINATION {
+		t.Fatal("native HTTPS processing must precede E2B passthrough")
+	}
+}
 
 func manifestAt(t *testing.T, compiler *Compiler, uid string) *sandboxv1.Sandbox {
 	t.Helper()

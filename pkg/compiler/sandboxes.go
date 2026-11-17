@@ -17,7 +17,6 @@ package compiler
 import (
 	"fmt"
 
-	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"google.golang.org/protobuf/proto"
 
 	extensionsv1 "github.com/openkruise/agentio/api/extensions/v1"
@@ -78,12 +77,12 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 		if policies.InputError != "" {
 			return nil, fmt.Errorf("sandbox policies: %s", policies.InputError)
 		}
-		if policies.SecurityRules != nil || policies.TCPRules != nil {
-			sni, err := policy.CompileSNIRules(policies.SecurityRules)
+		if spec := policies.Profile(); spec != nil {
+			sni, err := policy.CompileSNIRules(spec.Rules)
 			if err != nil {
 				return nil, fmt.Errorf("sandbox security rules: %w", err)
 			}
-			tcp, err := policy.CompileTCPRules(policies.TCPRules)
+			tcp, err := policy.CompileTCPRules(spec.TCPRules)
 			if err != nil {
 				return nil, fmt.Errorf("sandbox TCP rules: %w", err)
 			}
@@ -97,7 +96,7 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 				Uid:       sandbox.SourceIdentity.UID,
 				SniPolicy: policy.ProjectSNIPolicy(sni),
 				TcpPolicy: tcp,
-			}, &agentsv1alpha1.SecurityProfileSpec{Rules: policies.SecurityRules})
+			}, spec, policies.E2BRuleOffset)
 			if err != nil {
 				return nil, err
 			}

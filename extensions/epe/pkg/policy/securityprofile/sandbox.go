@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// sandbox.go compiles the per-Sandbox security rules carried in the
-// agents.kruise.io/security-rules annotation. Only the Sandbox Manager may
-// write that annotation (the tenant-facing metadata key is blacklisted for
+// sandbox.go compiles the per-Sandbox policy annotations. Only the Sandbox Manager may
+// write these annotations (the tenant-facing metadata key is blacklisted for
 // direct use), and the rules are evaluated under the verified workload
 // namespace/name of the Sandbox source — so the lookup is an exact
 // namespace/name match, never a label selector, which a workload could
@@ -22,9 +21,6 @@
 package securityprofile
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/openkruise/agentio/pkg/model"
@@ -43,7 +39,7 @@ import (
 // v1alpha1.AnnotationSecurityRules once it lands upstream.
 const AnnotationSecurityRules = "agents.kruise.io/security-rules"
 
-// NewSandboxProfile compiles the rule chain of one Sandbox into a
+// NewSandboxProfile compiles the combined rule chain of one Sandbox into a
 // Profile. It reads only object metadata, so callers can feed it
 // PartialObjectMetadata from a metadata-only informer. The returned profile
 // carries an empty selector (these rules are matched by identity, not
@@ -53,42 +49,41 @@ const AnnotationSecurityRules = "agents.kruise.io/security-rules"
 // The returned profile is not yet projected: the caller must call Project
 // before it can be bound, exactly as for a CRD profile.
 //
-// Unknown JSON fields are ignored so newer writers can add fields independently.
+// The legacy array ignores unknown fields; the native inline object has a strict schema.
 func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 	raw := sandbox.GetAnnotations()[AnnotationSecurityRules]
-	if raw == "" {
-		return nil, nil
+	policies, err := kruise.SandboxPolicies(sandbox)
+	if err != nil || policies == nil {
+		return nil, err
 	}
-	var specRules []v1alpha1.SecurityRule
-	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
-	if err := dec.Decode(&specRules); err != nil {
-		return nil, fmt.Errorf("decode %s annotation: %w", AnnotationSecurityRules, err)
+	spec := policies.Profile()
+	for i := range spec.Rules {
+		escapeSandboxHeaderValues(spec.Rules[i].Actions.HeaderManipulation)
 	}
-	if len(specRules) == 0 {
-		return nil, fmt.Errorf("%s annotation contains no rules", AnnotationSecurityRules)
+	uid, _ := kruise.SandboxUID(sandbox)
+	meta := Meta{
+		Name:              sandbox.GetName(),
+		SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
+		SandboxUID:        uid,
+		Namespace:         sandbox.GetNamespace(),
+		CreationTimestamp: sandbox.GetCreationTimestamp(),
+		Version:           sandbox.GetResourceVersion(),
+		Match:             MatchSandbox,
 	}
-	for i := range specRules {
-		escapeSandboxHeaderValues(specRules[i].Actions.HeaderManipulation)
+	if policies.SecurityProfile == nil {
+		rules, err := compileRules(spec.Rules)
+		if err != nil {
+			return nil, err
+		}
+		return &Profile{Meta: meta, Selector: labels.Nothing(), RawSandboxRules: raw, Rules: rules}, nil
 	}
-	rules, err := compileRules(specRules)
+	profile, err := newProfile(meta, spec)
 	if err != nil {
 		return nil, err
 	}
-	uid, _ := kruise.SandboxUID(sandbox)
-	return &Profile{
-		Meta: Meta{
-			Name:              sandbox.GetName(),
-			SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
-			SandboxUID:        uid,
-			Namespace:         sandbox.GetNamespace(),
-			CreationTimestamp: sandbox.GetCreationTimestamp(),
-			Version:           sandbox.GetResourceVersion(),
-			Match:             MatchSandbox,
-		},
-		Selector:        labels.Nothing(),
-		RawSandboxRules: raw,
-		Rules:           rules,
-	}, nil
+	profile.Selector = labels.Nothing()
+	profile.E2BRuleOffset = policies.E2BRuleOffset
+	return profile, nil
 }
 
 // InvalidSandboxProfile returns an identity-bearing collection item for a

@@ -25,6 +25,7 @@ import (
 
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
+	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 )
 
 // FakeStore embeds the production *store and adds synchronous
@@ -88,7 +89,7 @@ func (s *FakeStore) GlobalProfileSet(profile *v1alpha1.GlobalSecurityProfile) {
 // retains any last-known-good sandbox version instead of installing or
 // removing anything.
 func (s *FakeStore) SandboxProfileSet(sandbox metav1.Object) {
-	if sandbox.GetAnnotations()[securityprofile.AnnotationSecurityRules] == "" {
+	if !kruise.HasSecurityRules(sandbox) {
 		return
 	}
 	p, err := securityprofile.NewSandboxProfile(sandbox)

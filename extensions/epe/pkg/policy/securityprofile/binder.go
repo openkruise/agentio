@@ -99,11 +99,18 @@ func (b *binder) bind(profiles []*Profile, req *httpreq.HTTPRequest, workload in
 		if profile.InputsError != "" {
 			scopeOpts = []inputs.ScopeOption{inputs.WithInputsError(profile.InputsError)}
 		}
+		e2bHeadersMatched := false
 		for i := range profile.Rules {
 			rule := &profile.Rules[i]
 			matchIdx := rule.MatchingIndex(req)
 			if matchIdx < 0 {
 				continue
+			}
+			if profile.E2BRuleOffset != nil && i >= *profile.E2BRuleOffset && rule.Actions.HeaderManipulation != nil {
+				if e2bHeadersMatched {
+					continue
+				}
+				e2bHeadersMatched = true
 			}
 			p, projErr := profile.projection(i, b.chain)
 			// Appended before the projection verdict: the rule matched, so its

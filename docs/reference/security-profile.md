@@ -24,6 +24,46 @@ The one exception is inputs availability, which is not an authoring failure: a p
 
 Per-Sandbox rules obey the same authoring rule. A Sandbox is an OpenKruise Sandbox workload, the unit of identity and policy subject in Agentio. A Sandbox whose `agents.kruise.io/security-rules` annotation fails to compile keeps its previous rules when it has any, and enforces none otherwise.
 
+## Sandbox policy annotations
+
+A Sandbox can declare both annotations below. Agentio combines them into **one** inline SecurityProfile, evaluated after shared SecurityProfiles and GlobalSecurityProfiles:
+
+```text
+security-profile.rules → E2B.rules → security-profile.tcpRules → E2B.tcpRules
+```
+
+Terminal actions stop this chain. In particular, an E2B domain bypass or TLS passthrough can skip the native TCP rules. Native HTTP mutations run before E2B HTTP mutations; neither mutation alone grants access. If no application rule decides, the native TCP rules run before E2B TCP rules. The complete undecided chain defaults to allow. Independent TrafficPolicy restrictions still apply.
+
+```yaml
+metadata:
+  annotations:
+    agents.kruise.io/security-profile: |
+      {
+        "rules": [{
+          "name": "native-header",
+          "match": [{"domains": ["api.example.com"], "schemes": ["https"]}],
+          "actions": {"headerManipulation": {"set": [{"name": "x-native", "value": "demo"}]}}
+        }],
+        "tcpRules": [{"name": "deny-private", "match": [{"cidrs": ["10.0.0.0/8"]}], "action": "Deny"}]
+      }
+    agents.kruise.io/e2b-network: |
+      {
+        "allow_internet_access": false,
+        "network": {
+          "allowOut": ["api.example.com"],
+          "rules": {"api.example.com": [{"transform": {"headers": {"X-Tenant": "demo"}}}]}
+        }
+      }
+```
+
+`security-profile` contains `rules`, `tcpRules`, `inputs`, and `audit`, without metadata, selector, or priority. ConfigMap inputs must use the Sandbox namespace. Token transformations use platform-configured CredentialProviders and their existing Sandbox-token authorization; direct Secret references are rejected for this entry point. Static header assignments remain plaintext, including template-like text. Token-transformation templates and input expressions retain their native behavior.
+
+`e2b-network` preserves the REST nesting of `allow_internet_access` and `network`. Omitted or true `allow_internet_access` adds no default denial; false appends a final TCP Deny for both IP families, including private addresses. `network.allowOut` supports domains, wildcard subdomains, IP addresses, and CIDRs. Domain entries produce HTTP bypass and TLS passthrough rules; IP/CIDR entries produce TCP Allow rules. `network.denyOut` accepts only IPs/CIDRs, after E2B Allow rules. When a domain is allowed, TCP access to `8.8.8.8` is also allowed; `dnsServers` replaces that list, and `[]` disables this exception. DNS configuration inside the Sandbox and UDP enforcement remain outside this gateway policy.
+
+`network.rules` applies static header assignments to HTTPS requests before E2B bypass. Exact domains win over wildcard domains; otherwise the longest wildcard suffix wins, without combining matching domain rule sets. Operations within the chosen domain run in array order, with the last assignment to a header winning. Each configured domain must have at least one header assignment. Header transforms select TLS termination, as do earlier native HTTPS processing rules; applications must trust the proxy CA. Without those requirements, domain allow rules pass TLS through. Ingress settings remain the Sandbox Manager's responsibility; `egressProxy` is not supported by this conversion.
+
+Each annotation is a complete snapshot. Replacing or removing one preserves the other. The legacy `agents.kruise.io/security-rules` array remains supported, can coexist with `e2b-network`, and occupies the native rule position. It is mutually exclusive with `security-profile`, including empty values. Remove the legacy key in the same update that introduces `security-profile`. Invalid updates retain the previous compiled Sandbox policy as a whole. Sandbox Manager must write these annotations; Agentio does not change its creation API or migrate existing TrafficPolicies.
+
 ## Rule structure and matching
 
 Every rule has a unique `name`, at least one `match` clause, and `actions`. The clauses in `match` are ORed. Within a clause, every populated field is ANDed:

@@ -1,0 +1,258 @@
+// Copyright 2026 The Kruise Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package kruise
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"slices"
+	"strings"
+
+	agents "github.com/openkruise/agents-api/agents/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
+)
+
+const (
+	AnnotationSecurityProfile = "agents.kruise.io/security-profile"
+	AnnotationE2BNetwork      = "agents.kruise.io/e2b-network"
+)
+
+// SandboxPolicies reads complete snapshots; neither entry replaces the other.
+func SandboxPolicies(sandbox metav1.Object) (*model.SandboxPolicies, error) {
+	a := sandbox.GetAnnotations()
+	result := &model.SandboxPolicies{}
+	_, legacy := a[agents.AnnotationSecurityRules]
+	if raw, found := a[AnnotationSecurityProfile]; found {
+		if legacy {
+			return nil, fmt.Errorf("%s and %s are mutually exclusive", agents.AnnotationSecurityRules, AnnotationSecurityProfile)
+		}
+		// Decode only the inline fields: selection and identity belong to the Sandbox.
+		var spec *struct {
+			Rules    []agents.SecurityRule         `json:"rules,omitempty"`
+			TCPRules []agents.TCPRule              `json:"tcpRules,omitempty"`
+			Inputs   []agents.SecurityProfileInput `json:"inputs,omitempty"`
+			Audit    []agents.AuditAction          `json:"audit,omitempty"`
+		}
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&spec); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", AnnotationSecurityProfile, err)
+		}
+		if spec == nil || !json.Valid([]byte(raw)) {
+			return nil, fmt.Errorf("%s must contain a single JSON object", AnnotationSecurityProfile)
+		}
+		result.SecurityProfile = &agents.SecurityProfileSpec{Rules: spec.Rules, TCPRules: spec.TCPRules, Inputs: spec.Inputs, Audit: spec.Audit}
+		if err := validateSandboxProfile(sandbox.GetNamespace(), result.SecurityProfile); err != nil {
+			return nil, err
+		}
+	} else if legacy && a[agents.AnnotationSecurityRules] != "" {
+		rules, err := sandboxSecurityRules(&agents.Sandbox{ObjectMeta: metav1.ObjectMeta{Annotations: a}})
+		if err != nil {
+			return nil, err
+		}
+		result.SecurityRules = rules
+	}
+	if raw, found := a[AnnotationE2BNetwork]; found {
+		profile, err := e2bProfile(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", AnnotationE2BNetwork, err)
+		}
+		combined := result.Profile()
+		if combined == nil {
+			combined = &agents.SecurityProfileSpec{}
+		}
+		offset := 0
+		for _, rule := range combined.Rules {
+			if rule.Actions.TLS == nil {
+				offset++
+			}
+		}
+		result.E2BRuleOffset = &offset
+		names := map[string]bool{}
+		for _, rule := range combined.Rules {
+			names[rule.Name] = true
+		}
+		for _, rule := range combined.TCPRules {
+			names[rule.Name] = true
+		}
+		generatedName := func(name string) string {
+			name = "e2b-" + name
+			for names[name] {
+				name += "-e2b"
+			}
+			names[name] = true
+			return name
+		}
+		for i := range profile.Rules {
+			profile.Rules[i].Name = generatedName(profile.Rules[i].Name)
+		}
+		for i := range profile.TCPRules {
+			profile.TCPRules[i].Name = generatedName(profile.TCPRules[i].Name)
+		}
+		combined.Rules = append(combined.Rules, profile.Rules...)
+		combined.TCPRules = append(combined.TCPRules, profile.TCPRules...)
+		result.SecurityProfile = combined
+	}
+	if result.SecurityProfile == nil && result.SecurityRules == nil {
+		return nil, nil
+	}
+	return result, nil
+}
+
+func validateSandboxProfile(namespace string, spec *agents.SecurityProfileSpec) error {
+	for _, input := range spec.Inputs {
+		if input.ConfigMap != nil && input.ConfigMap.Namespace != "" && input.ConfigMap.Namespace != namespace {
+			return fmt.Errorf("inline ConfigMap input %q must use the Sandbox namespace", input.Name)
+		}
+	}
+	for _, rule := range spec.Rules {
+		if action := rule.Actions.TokenTransformation; action != nil {
+			ref := action.CredentialRef
+			if ref.Secret != nil || ref.Kind == agents.CredentialRefKindSecret {
+				return fmt.Errorf("inline token credentials require an authorized CredentialProvider, not a Secret")
+			}
+		}
+	}
+	return nil
+}
+
+type e2bNetwork struct {
+	AllowInternetAccess *bool `json:"allow_internet_access"`
+	Network             struct {
+		EgressProxy json.RawMessage `json:"egressProxy"`
+		AllowOut    []string        `json:"allowOut"`
+		DenyOut     []string        `json:"denyOut"`
+		DNSServers  *[]string       `json:"dnsServers"`
+		Rules       map[string][]struct {
+			Transform struct {
+				Headers map[string]string `json:"headers"`
+			} `json:"transform"`
+		} `json:"rules"`
+	} `json:"network"`
+}
+
+func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
+	var config *e2bNetwork
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return nil, err
+	}
+	if config == nil {
+		return nil, fmt.Errorf("network configuration must be a JSON object")
+	}
+	if len(config.Network.EgressProxy) > 0 && string(config.Network.EgressProxy) != "null" {
+		return nil, fmt.Errorf("egressProxy is not supported by the Agentio E2B conversion")
+	}
+	spec := &agents.SecurityProfileSpec{}
+	// Most specific domain wins; all operations for that domain run before any allow.
+	domains := make([]string, 0, len(config.Network.Rules))
+	for domain := range config.Network.Rules {
+		domains = append(domains, domain)
+	}
+	slices.SortFunc(domains, func(a, b string) int {
+		aw, bw := strings.HasPrefix(a, "*."), strings.HasPrefix(b, "*.")
+		if aw != bw {
+			if aw {
+				return 1
+			}
+			return -1
+		}
+		if len(a) != len(b) {
+			return len(b) - len(a)
+		}
+		return strings.Compare(a, b)
+	})
+	seen := map[string]bool{}
+	for _, domain := range domains {
+		normalized, err := policy.NormalizeDomain(domain)
+		if err != nil {
+			return nil, err
+		}
+		if normalized == "*" || seen[normalized] {
+			return nil, fmt.Errorf("invalid or duplicate transform domain %q", domain)
+		}
+		seen[normalized] = true
+		headers := map[string]string{}
+		for _, operation := range config.Network.Rules[domain] {
+			names := make([]string, 0, len(operation.Transform.Headers))
+			for name := range operation.Transform.Headers {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for _, name := range names {
+				headers[strings.ToLower(name)] = operation.Transform.Headers[name]
+			}
+		}
+		names := make([]string, 0, len(headers))
+		for name := range headers {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		mutation := &agents.HeaderManipulationAction{}
+		for _, name := range names {
+			mutation.Set = append(mutation.Set, agents.HeaderValue{Name: name, Value: headers[name]})
+		}
+		if len(mutation.Set) == 0 {
+			// shortcut: reject empty transform sets until SNI selection can express wildcard exclusions.
+			return nil, fmt.Errorf("transform domain %q requires at least one header assignment", domain)
+		}
+		spec.Rules = append(spec.Rules, agents.SecurityRule{
+			Name:    fmt.Sprintf("transform-%d", len(spec.Rules)),
+			Match:   []agents.RuleMatch{{Domains: []string{normalized}, Schemes: []string{"https"}}},
+			Actions: agents.SecurityRuleActions{HeaderManipulation: mutation},
+		})
+	}
+	var allowDomains []string
+	var allowIPs []string
+	for _, value := range config.Network.AllowOut {
+		if _, err := netip.ParseAddr(value); err == nil {
+			allowIPs = append(allowIPs, value)
+			continue
+		}
+		if _, err := netip.ParsePrefix(value); err == nil {
+			allowIPs = append(allowIPs, value)
+			continue
+		}
+		domain, err := policy.NormalizeDomain(value)
+		if err != nil {
+			return nil, err
+		}
+		allowDomains = append(allowDomains, domain)
+	}
+	if len(allowDomains) > 0 {
+		dns := []string{"8.8.8.8"}
+		if config.Network.DNSServers != nil {
+			dns = *config.Network.DNSServers
+		}
+		for _, value := range dns {
+			ip, err := netip.ParseAddr(value)
+			if err != nil || !ip.Is4() {
+				return nil, fmt.Errorf("invalid IPv4 DNS server %q", value)
+			}
+			allowIPs = append(allowIPs, value)
+		}
+		spec.Rules = append(spec.Rules,
+			agents.SecurityRule{Name: "allow-http", Match: []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"http"}}}, Actions: agents.SecurityRuleActions{Bypass: true}},
+			agents.SecurityRule{Name: "allow-tls", Match: []agents.RuleMatch{{Domains: allowDomains}}, Actions: agents.SecurityRuleActions{TLS: &agents.TLSAction{Action: agents.TLSActionPassthrough}}},
+			agents.SecurityRule{Name: "allow-https", Match: []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"https"}}}, Actions: agents.SecurityRuleActions{Bypass: true}},
+		)
+	}
+	if len(allowIPs) > 0 {
+		spec.TCPRules = append(spec.TCPRules, agents.TCPRule{Name: "allow-addresses", Match: []agents.TCPMatch{{CIDRs: allowIPs}}, Action: agents.TCPActionAllow})
+	}
+	if len(config.Network.DenyOut) > 0 {
+		rule := agents.TCPRule{Name: "deny-addresses", Match: []agents.TCPMatch{{CIDRs: config.Network.DenyOut}}, Action: agents.TCPActionDeny}
+		if _, err := policy.CompileTCPRules([]agents.TCPRule{rule}); err != nil {
+			return nil, err
+		}
+		spec.TCPRules = append(spec.TCPRules, rule)
+	}
+	if config.AllowInternetAccess != nil && !*config.AllowInternetAccess {
+		spec.TCPRules = append(spec.TCPRules, agents.TCPRule{Name: "deny-rest", Match: []agents.TCPMatch{{}}, Action: agents.TCPActionDeny})
+	}
+	return spec, nil
+}

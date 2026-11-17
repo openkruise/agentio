@@ -22,9 +22,11 @@ import (
 
 // HTTPPolicy is the configuration carried in SecurityProfile.policy_json.
 type HTTPPolicy struct {
-	Rules  []agentsv1alpha1.SecurityRule         `json:"rules,omitempty"`
-	Audit  []agentsv1alpha1.AuditAction          `json:"audit,omitempty"`
-	Inputs []agentsv1alpha1.SecurityProfileInput `json:"inputs,omitempty"`
+	// E2BRuleOffset starts the generated rules, whose first matching Header rule wins.
+	E2BRuleOffset *int                                  `json:"e2bRuleOffset,omitempty"`
+	Rules         []agentsv1alpha1.SecurityRule         `json:"rules,omitempty"`
+	Audit         []agentsv1alpha1.AuditAction          `json:"audit,omitempty"`
+	Inputs        []agentsv1alpha1.SecurityProfileInput `json:"inputs,omitempty"`
 }
 
 // MarshalJSON preserves an empty inline input as a declared source.
