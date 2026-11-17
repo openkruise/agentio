@@ -176,6 +176,69 @@ func TestSandboxInlinePolicyLifecycle(t *testing.T) {
 	check("sandbox-readded", 453)
 }
 
+func TestSandboxE2BNetwork(t *testing.T) {
+	f := newSandboxPolicyFixture(t)
+	caller := f.caller(t, "sandbox-e2b", true)
+	host := trafficFixture.Server.Address()
+	const path = "/sandbox-e2b"
+	origin := f.check(t, caller, caller.id, path, true, http.StatusOK, "Hostname=")
+	const native = `{
+  "rules": [{
+    "name":"native-block",
+    "match":[{"domains":["*"],"schemes":["http"],"paths":[{"type":"Exact","value":"/sandbox-block"}]}],
+    "actions":{"block":{"statusCode":451,"body":"native-block"}}
+  }],
+  "tcpRules":[{"name":"native-deny-http","match":[{"ports":[80]}],"action":"Deny"}]
+}`
+	apply := func(t *testing.T, network string) {
+		t.Helper()
+		f.annotations(t, caller, map[string]any{
+			"agents.kruise.io/security-profile": native,
+			"agents.kruise.io/e2b-network":      `{"allowInternetAccess":false,"network":{` + network + `}}`,
+		})
+	}
+	verifyMITM := func(t *testing.T, reply sandboxReply) {
+		t.Helper()
+		if _, err := reply.peer.Verify(x509.VerifyOptions{Roots: f.mitmRoots, DNSName: host}); err != nil {
+			t.Fatalf("terminated TLS certificate: %v", err)
+		}
+	}
+	transform := fmt.Sprintf(`"rules":{%q:[{"transform":{"headers":{"X-Sandbox-Policy":"e2b-https"}}}]}`, host)
+	allowDomain := fmt.Sprintf(`"allowOut":[%q]`, host)
+
+	if !t.Run("transform alone does not grant access", func(t *testing.T) {
+		apply(t, `"allowOut":["other.invalid"],`+transform)
+		reply := f.check(t, caller, caller.id, path, true, http.StatusForbidden, "")
+		verifyMITM(t, reply)
+	}) {
+		return
+	}
+	if !t.Run("domain allow without a transform passes TLS through", func(t *testing.T) {
+		apply(t, allowDomain)
+		reply := f.check(t, caller, caller.id, path, true, http.StatusOK, "Hostname=")
+		if !bytes.Equal(reply.peer.Raw, origin.peer.Raw) {
+			t.Fatal("E2B TLS passthrough replaced the origin certificate")
+		}
+		f.check(t, caller, caller.id, path, false, http.StatusOK, "Hostname=")
+		f.check(t, caller, caller.id, "/sandbox-block", false, http.StatusUnavailableForLegalReasons, "native-block")
+	}) {
+		return
+	}
+	if !t.Run("domain allow with a transform terminates TLS and forwards the request", func(t *testing.T) {
+		apply(t, allowDomain+","+transform)
+		for _, id := range []string{caller.id, ""} {
+			reply := f.check(t, caller, id, path, true, http.StatusOK, "RequestHeader=X-Sandbox-Policy:e2b-https")
+			verifyMITM(t, reply)
+		}
+	}) {
+		return
+	}
+	t.Run("native TCP denial precedes E2B CIDR allow", func(t *testing.T) {
+		apply(t, `"allowOut":["0.0.0.0/0","::/0"]`)
+		f.check(t, caller, caller.id, path, false, http.StatusForbidden, "")
+	})
+}
+
 func TestSandboxIdentitySelection(t *testing.T) {
 	f := newSandboxPolicyFixture(t)
 	a := f.caller(t, "sandbox-a", true)

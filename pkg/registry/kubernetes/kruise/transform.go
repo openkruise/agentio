@@ -117,10 +117,11 @@ func newSandboxes(
 			}
 			var policies *model.SandboxPolicies
 			if HasSecurityRules(sandbox) {
-				var err error
-				policies, err = SandboxPolicies(sandbox)
+				profile, err := SandboxSecurityProfile(sandbox)
 				if err != nil {
 					policies = &model.SandboxPolicies{InputError: err.Error()}
+				} else {
+					policies = &model.SandboxPolicies{SecurityProfile: profile}
 				}
 			}
 			return &model.Sandbox{
@@ -134,8 +135,8 @@ func newSandboxes(
 		}, options...)
 }
 
-func sandboxSecurityRules(sandbox *agentsv1alpha1.Sandbox) ([]agentsv1alpha1.SecurityRule, error) {
-	raw := sandbox.Annotations[agentsv1alpha1.AnnotationSecurityRules]
+func sandboxSecurityRules(sandbox metav1.Object) ([]agentsv1alpha1.SecurityRule, error) {
+	raw := sandbox.GetAnnotations()[agentsv1alpha1.AnnotationSecurityRules]
 	if raw == "" {
 		return nil, nil
 	}

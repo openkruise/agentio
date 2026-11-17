@@ -264,9 +264,10 @@ func TestRegistrySandboxPolicies(t *testing.T) {
 				return
 			}
 			if current == nil || current.Policies == nil ||
-				len(current.Policies.SecurityRules) != 1 ||
-				current.Policies.SecurityRules[0].Match[0].Domains[0] != "inline.example" ||
-				len(current.Policies.TCPRules) != 0 || current.Policies.InputError != "" {
+				current.Policies.SecurityProfile == nil ||
+				len(current.Policies.SecurityProfile.Rules) != 1 ||
+				current.Policies.SecurityProfile.Rules[0].Match[0].Domains[0] != "inline.example" ||
+				len(current.Policies.SecurityProfile.TCPRules) != 0 || current.Policies.InputError != "" {
 				t.Fatalf("inline rules missing from Sandbox: %+v", current)
 			}
 			if len(r.SecurityProfiles.List()) != 1 {

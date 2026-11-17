@@ -100,7 +100,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 	}
 	f.trafficPolicies.UpdateObject(shared)
 	security := compatibilitySecurity("first.example")
-	s.Policies = &model.SandboxPolicies{SecurityRules: security.Rules}
+	s.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: security.Rules}}
 	f.sandboxes.UpdateObject(s)
 	await := func(uid string, sniCount int) model.ResourceSet {
 		t.Helper()
@@ -140,7 +140,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 		t.Fatalf("policy was re-resolved during projection: %d calls", got)
 	}
 	security = compatibilitySecurity("*bad.example")
-	s.Policies = &model.SandboxPolicies{SecurityRules: security.Rules}
+	s.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: security.Rules}}
 	f.sandboxes.UpdateObject(s)
 	testutil.Eventually(t, func() bool {
 		return f.compiler.Failures()["SandboxPolicies/"+s.UID] != ""
@@ -153,7 +153,7 @@ func TestSandboxLifecycleKeepsSharedWorkloadPolicies(t *testing.T) {
 		t.Fatal("SNI failure removed TrafficPolicy compatibility")
 	}
 	security = compatibilitySecurity("restored.example")
-	s.Policies = &model.SandboxPolicies{SecurityRules: security.Rules}
+	s.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: security.Rules}}
 	f.sandboxes.UpdateObject(s)
 	await(a.UID, 1)
 	s.Attester = &model.Attester{WorkloadUID: b.UID}
@@ -199,7 +199,11 @@ func TestMultipleSandboxesShareWorkloadWithoutProjection(t *testing.T) {
 			UID:       uid,
 			Namespace: "demo",
 			Attester:  &model.Attester{WorkloadUID: host.UID},
-			Policies:  &model.SandboxPolicies{SecurityRules: compatibilitySecurity(uid + ".example").Rules},
+			Policies: &model.SandboxPolicies{
+				SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{
+					Rules: compatibilitySecurity(uid + ".example").Rules,
+				},
+			},
 		})
 	}
 	testutil.Eventually(t, func() bool {
@@ -358,7 +362,7 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 			}
 			if host == "" {
 				want := 0
-				if sandbox.Policies != nil && sandbox.Policies.SecurityRules != nil {
+				if sandbox.Policies != nil && sandbox.Policies.SecurityProfile != nil {
 					want++
 				}
 				return len(manifest.Extensions) == want
@@ -376,7 +380,9 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 	check("")
 	for _, host := range []string{"first.example", "updated.example"} {
 		inline = compatibilitySecurity(host)
-		sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.Rules}
+		sandbox.Policies = &model.SandboxPolicies{
+			SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: inline.Rules},
+		}
 		f.sandboxes.UpdateObject(sandbox)
 		check(host)
 	}
@@ -394,7 +400,7 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 	projectedUID = other.UID
 	check("updated.example")
 	inline = compatibilitySecurity("*bad.example")
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.Rules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: inline.Rules}}
 	f.sandboxes.UpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
 		return f.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
@@ -402,11 +408,11 @@ func TestSandboxInlineSNIHostProjection(t *testing.T) {
 	check("updated.example")
 	inline = compatibilitySecurity("http.example")
 	inline.Rules[0].Match[0].Schemes = []string{"http"}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.Rules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: inline.Rules}}
 	f.sandboxes.UpdateObject(sandbox)
 	check("")
 	inline = compatibilitySecurity("restored.example")
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.Rules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: inline.Rules}}
 	f.sandboxes.UpdateObject(sandbox)
 	check("restored.example")
 	f.securityProfiles.DeleteObject(shared.ResourceName())

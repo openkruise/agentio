@@ -54,8 +54,8 @@ func TestNewSandboxProfile(t *testing.T) {
 	if p == nil {
 		t.Fatal("expected a profile")
 	}
-	if p.Spec != nil || p.RawSandboxRules != validInlineAnnotation {
-		t.Fatal("Sandbox source must retain only the original annotation for inspection")
+	if p.Spec == nil || len(p.Spec.Rules) != 1 || p.Spec.Rules[0].Name != "trace" {
+		t.Fatal("Sandbox profile must retain its parsed spec for inspection")
 	}
 	if p.Meta.Name != "sbx-1" || p.Meta.Namespace != "sandboxes" || p.Meta.Version != "7" {
 		t.Errorf("meta = %+v, want sbx-1/sandboxes rv 7", p.Meta)
@@ -110,6 +110,11 @@ func TestNewInlineProfileRejections(t *testing.T) {
 		{"invalid json", `{`, "decode"},
 		{"empty array", `[]`, "contains no rules"},
 		{
+			"audit without webhook",
+			`[{"name":"r","match":[{"domains":["*"]}],"actions":{"audit":[{"name":"log"}]}}]`,
+			"webhook is required",
+		},
+		{
 			"bad regex",
 			`[{"name":"r","match":[{"domains":["a.example.com"],"paths":[{"type":"Regex","value":"["}]}],"actions":{"block":{}}}]`,
 			"regex",
@@ -144,14 +149,14 @@ func TestNewSandboxProfileIgnoresUnknownFields(t *testing.T) {
 // is the CRD rule schema, not a reduced one.
 func TestNewInlineProfileAdmitsAllActions(t *testing.T) {
 	raw := `[{"name":"r","match":[{"domains":["a.example.com"]}],"actions":` +
-		`{"bypass":true,"tokenTransformation":{},"audit":[{"name":"log"}],` +
+		`{"bypass":true,"tokenTransformation":{},"audit":[{"name":"log","webhook":{"url":"https://audit.example.com"}}],` +
 		`"mcpToolPolicy":{"defaultAction":"deny"}}}]`
 	p, err := NewSandboxProfile(sandboxWithRules("sbx", "ns", raw))
 	if err != nil {
 		t.Fatalf("NewInlineProfile: %v", err)
 	}
 	a := p.Rules[0].Actions
-	if !a.Bypass || a.TokenTransformation == nil || a.MCPToolPolicy == nil || len(a.Audit) != 1 {
+	if !a.Bypass || a.TokenTransformation == nil || a.MCPToolPolicy == nil || len(p.Rules[0].Audits) != 1 {
 		t.Fatalf("actions = %+v, want every action preserved", a)
 	}
 }
@@ -165,7 +170,7 @@ func TestPayloadsForHeaderManipulation(t *testing.T) {
 			Remove: []string{"X-Carried"},
 		},
 	}}
-	m, err := payloadsFor(rule)
+	m, err := payloadsFor(rule, false)
 	if err != nil {
 		t.Fatalf("payloadsFor: %v", err)
 	}
@@ -265,13 +270,19 @@ func TestInlineHeaderValuesStayLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInlineProfile: %v", err)
 	}
-	escaped := inline.Rules[0].Actions.HeaderManipulation.Set[0].Value
-	tmpl, err := eval.CompileTemplate("test", escaped)
+	regs, err := filter.Build(headermutation.Definition())
 	if err != nil {
-		t.Fatalf("compile escaped value: %v", err)
+		t.Fatal(err)
 	}
+	if err := inline.Project(regs); err != nil {
+		t.Fatal(err)
+	}
+	if got := inline.Spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != literal {
+		t.Fatalf("profile spec header = %q, want %q", got, literal)
+	}
+	cfg := inline.Projections[0].Cfgs[0].(headermutation.Config)
 	scope := inputs.NewScope(inputs.Request{}, inputs.Workload{Name: "sbx-1"}, inputs.Profile{}, inputs.Rule{}, nil)
-	got, err := eval.RenderToString(tmpl, scope)
+	got, err := eval.RenderToString(cfg.Request.Set[0].Value, scope)
 	if err != nil {
 		t.Fatalf("render escaped value: %v", err)
 	}

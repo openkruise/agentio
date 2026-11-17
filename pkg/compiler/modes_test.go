@@ -54,10 +54,14 @@ func TestCompilerOptionalSandboxInputs(t *testing.T) {
 								Namespace: "demo",
 								Attester:  &model.Attester{WorkloadUID: worker.UID},
 								Policies: &model.SandboxPolicies{
-									SecurityRules: []agentsv1alpha1.SecurityRule{
-										{
-											Name:  "secret",
-											Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"actor.example.com"}}},
+									SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{
+										Rules: []agentsv1alpha1.SecurityRule{
+											{
+												Name: "secret",
+												Match: []agentsv1alpha1.RuleMatch{
+													{Domains: []string{"actor.example.com"}},
+												},
+											},
 										},
 									},
 								},

@@ -21,8 +21,6 @@
 package securityprofile
 
 import (
-	"strings"
-
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 
@@ -33,11 +31,7 @@ import (
 
 // AnnotationSecurityRules is the Sandbox annotation that carries the
 // normalized rule chain: a JSON array of v1alpha1.SecurityRule.
-//
-// The literal mirrors the Sandbox Manager's annotation key. It stays a local
-// constant because the agents-api module does not export it yet; switch to
-// v1alpha1.AnnotationSecurityRules once it lands upstream.
-const AnnotationSecurityRules = "agents.kruise.io/security-rules"
+const AnnotationSecurityRules = v1alpha1.AnnotationSecurityRules
 
 // NewSandboxProfile compiles the combined rule chain of one Sandbox into a
 // Profile. It reads only object metadata, so callers can feed it
@@ -51,38 +45,15 @@ const AnnotationSecurityRules = "agents.kruise.io/security-rules"
 //
 // The legacy array ignores unknown fields; the native inline object has a strict schema.
 func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
-	raw := sandbox.GetAnnotations()[AnnotationSecurityRules]
-	policies, err := kruise.SandboxPolicies(sandbox)
-	if err != nil || policies == nil {
+	spec, err := kruise.SandboxSecurityProfile(sandbox)
+	if err != nil || spec == nil {
 		return nil, err
 	}
-	spec := policies.Profile()
-	for i := range spec.Rules {
-		escapeSandboxHeaderValues(spec.Rules[i].Actions.HeaderManipulation)
-	}
-	uid, _ := kruise.SandboxUID(sandbox)
-	meta := Meta{
-		Name:              sandbox.GetName(),
-		SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
-		SandboxUID:        uid,
-		Namespace:         sandbox.GetNamespace(),
-		CreationTimestamp: sandbox.GetCreationTimestamp(),
-		Version:           sandbox.GetResourceVersion(),
-		Match:             MatchSandbox,
-	}
-	if policies.SecurityProfile == nil {
-		rules, err := compileRules(spec.Rules)
-		if err != nil {
-			return nil, err
-		}
-		return &Profile{Meta: meta, Selector: labels.Nothing(), RawSandboxRules: raw, Rules: rules}, nil
-	}
-	profile, err := newProfile(meta, spec)
+	profile, err := newProfile(sandboxMeta(sandbox), spec)
 	if err != nil {
 		return nil, err
 	}
 	profile.Selector = labels.Nothing()
-	profile.E2BRuleOffset = policies.E2BRuleOffset
 	return profile, nil
 }
 
@@ -93,36 +64,26 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 // previous version under the same identity, so a bad annotation update does
 // not silently remove rules that were enforcing.
 func InvalidSandboxProfile(sandbox metav1.Object, err error) *Profile {
-	uid, _ := kruise.SandboxUID(sandbox)
 	message := "invalid sandbox security rules"
 	if err != nil {
 		message = err.Error()
 	}
 	return &Profile{
-		Meta: Meta{
-			Name:              sandbox.GetName(),
-			SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
-			SandboxUID:        uid,
-			Namespace:         sandbox.GetNamespace(),
-			CreationTimestamp: sandbox.GetCreationTimestamp(),
-			Version:           sandbox.GetResourceVersion(),
-			Match:             MatchSandbox,
-		},
+		Meta:         sandboxMeta(sandbox),
 		Selector:     labels.Nothing(),
 		CompileError: message,
 	}
 }
 
-// escapeSandboxHeaderValues neutralizes Go template delimiters in annotation
-// set values. The E2B contract defines these header values as plaintext, and the
-// headermutation filter compiles every value as a template; without escaping,
-// a tenant-supplied "{{...}}" would be evaluated against the render scope
-// instead of arriving verbatim on the wire.
-func escapeSandboxHeaderValues(hm *v1alpha1.HeaderManipulationAction) {
-	if hm == nil {
-		return
-	}
-	for i := range hm.Set {
-		hm.Set[i].Value = strings.ReplaceAll(hm.Set[i].Value, "{{", `{{"{{"}}`)
+func sandboxMeta(sandbox metav1.Object) Meta {
+	uid, _ := kruise.SandboxUID(sandbox)
+	return Meta{
+		Name:              sandbox.GetName(),
+		SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
+		SandboxUID:        uid,
+		Namespace:         sandbox.GetNamespace(),
+		CreationTimestamp: sandbox.GetCreationTimestamp(),
+		Version:           sandbox.GetResourceVersion(),
+		Match:             MatchSandbox,
 	}
 }

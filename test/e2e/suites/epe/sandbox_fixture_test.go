@@ -153,7 +153,7 @@ func (f *sandboxPolicyFixture) caller(t *testing.T, name string, owned bool) san
 	if owned {
 		// Delivery identity deliberately differs from the namespace/name alias.
 		caller.id = "kruise:delivery-" + name
-		record, err := f.scope.ApplyInNamespace(f.ctx, f.namespace, sandboxPolicyObject(name, ""), kube.CreateOnly)
+		record, err := f.scope.ApplyInNamespace(f.ctx, f.namespace, sandboxPolicyObject(name, nil), kube.CreateOnly)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,11 +202,7 @@ func (f *sandboxPolicyFixture) caller(t *testing.T, name string, owned bool) san
 	return caller
 }
 
-func sandboxPolicyObject(name, rules string) *unstructured.Unstructured {
-	annotations := map[string]any{}
-	if rules != "" {
-		annotations["agents.kruise.io/security-rules"] = rules
-	}
+func sandboxPolicyObject(name string, annotations map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agents.kruise.io/v1alpha1",
 		"kind":       "Sandbox",
@@ -221,10 +217,19 @@ func sandboxPolicyObject(name, rules string) *unstructured.Unstructured {
 
 func (f *sandboxPolicyFixture) rules(t *testing.T, caller sandboxCaller, rules string) {
 	t.Helper()
+	annotations := map[string]any{}
+	if rules != "" {
+		annotations["agents.kruise.io/security-rules"] = rules
+	}
+	f.annotations(t, caller, annotations)
+}
+
+func (f *sandboxPolicyFixture) annotations(t *testing.T, caller sandboxCaller, annotations map[string]any) {
+	t.Helper()
 	if _, err := f.scope.ApplyInNamespace(
 		f.ctx,
 		f.namespace,
-		sandboxPolicyObject(caller.name, rules),
+		sandboxPolicyObject(caller.name, annotations),
 		kube.ReconcileOwned,
 	); err != nil {
 		t.Fatal(err)

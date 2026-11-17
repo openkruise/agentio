@@ -33,15 +33,15 @@ func TestE2BDestinationPolicy(t *testing.T) {
 		allowed bool
 	}{
 		{"default allow", `{}`, "10.0.0.1:443", true},
-		{"false denies private too", `{"allow_internet_access":false}`, "10.0.0.1:443", false},
-		{"false denies IPv6", `{"allow_internet_access":false}`, "[2001:db8::1]:443", false},
-		{"allow before deny", `{"allow_internet_access":false,"network":{"allowOut":["10.0.0.0/8"],"denyOut":["10.0.0.1"]}}`, "10.0.0.1:443", true},
-		{"IPv6 host", `{"allow_internet_access":false,"network":{"allowOut":["2001:db8::1"]}}`, "[2001:db8::1]:443", true},
-		{"true retains deny", `{"allow_internet_access":true,"network":{"denyOut":["10.0.0.0/8"]}}`, "10.0.0.1:443", false},
-		{"default DNS all ports", `{"allow_internet_access":false,"network":{"allowOut":["*.example.com"]}}`, "8.8.8.8:443", true},
-		{"empty DNS disables exception", `{"allow_internet_access":false,"network":{"allowOut":["example.com"],"dnsServers":[]}}`, "8.8.8.8:53", false},
-		{"custom DNS", `{"allow_internet_access":false,"network":{"allowOut":["example.com"],"dnsServers":["1.1.1.1"]}}`, "1.1.1.1:53", true},
-		{"no domain no DNS exception", `{"allow_internet_access":false,"network":{"allowOut":["10.0.0.1"]}}`, "8.8.8.8:53", false},
+		{"false denies private too", `{"allowInternetAccess":false}`, "10.0.0.1:443", false},
+		{"false denies IPv6", `{"allowInternetAccess":false}`, "[2001:db8::1]:443", false},
+		{"allow before deny", `{"allowInternetAccess":false,"network":{"allowOut":["10.0.0.0/8"],"denyOut":["10.0.0.1"]}}`, "10.0.0.1:443", true},
+		{"IPv6 host", `{"allowInternetAccess":false,"network":{"allowOut":["2001:db8::1"]}}`, "[2001:db8::1]:443", true},
+		{"true retains deny", `{"allowInternetAccess":true,"network":{"denyOut":["10.0.0.0/8"]}}`, "10.0.0.1:443", false},
+		{"default DNS all ports", `{"allowInternetAccess":false,"network":{"allowOut":["*.example.com"]}}`, "8.8.8.8:443", true},
+		{"empty DNS disables exception", `{"allowInternetAccess":false,"network":{"allowOut":["example.com"],"dnsServers":[]}}`, "8.8.8.8:53", false},
+		{"custom DNS", `{"allowInternetAccess":false,"network":{"allowOut":["example.com"],"dnsServers":["1.1.1.1"]}}`, "1.1.1.1:53", true},
+		{"no domain no DNS exception", `{"allowInternetAccess":false,"network":{"allowOut":["10.0.0.1"]}}`, "8.8.8.8:53", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := e2bProfile(tc.raw)
@@ -66,19 +66,20 @@ func TestSandboxAnnotationComposition(t *testing.T) {
 		Namespace: "tenant",
 		Annotations: map[string]string{
 			AnnotationSecurityProfile: `{"inputs":[{"name":"data","inline":{"key":"value"}}],"rules":[{"name":"native-tls","match":[{"domains":["native.example"]}],"actions":{"tls":{"action":"Deny"}}},{"name":"native-http","match":[{"domains":["native.example"]}],"actions":{"bypass":true}}],"tcpRules":[{"name":"e2b-deny-rest","match":[{}],"action":"Deny"}]}`,
-			AnnotationE2BNetwork:      `{"allow_internet_access":false,"network":{"allowOut":["api.example.com"]}}`,
+			AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"]}}`,
 			"unrelated":               "discard",
 		},
 	}}
-	p, err := SandboxPolicies(sandbox)
+	spec, err := SandboxSecurityProfile(sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.E2BRuleOffset == nil || *p.E2BRuleOffset != 1 || len(p.Profile().Inputs) != 1 {
-		t.Fatalf("native inputs/HTTP offset lost: %+v", p)
+	if len(spec.Inputs) != 1 {
+		t.Fatalf("native inputs lost: %+v", spec.Inputs)
 	}
-	spec := p.Profile()
-	if spec.Rules[0].Name != "native-tls" || spec.Rules[1].Name != "native-http" || spec.Rules[2].Name != "e2b-allow-http" || spec.TCPRules[0].Name != "e2b-deny-rest" {
+	if spec.Rules[0].Name != "native-tls" || spec.Rules[1].Name != "native-http" ||
+		spec.Rules[2].Name != "e2b-allow-http" ||
+		spec.TCPRules[0].Name != "e2b-deny-rest" {
 		t.Fatalf("native rules must precede generated rules: %+v", spec)
 	}
 	if _, err := policy.CompileTCPRules(spec.TCPRules); err != nil {
@@ -92,13 +93,16 @@ func TestSandboxAnnotationComposition(t *testing.T) {
 		t.Fatalf("annotations not retained: %v", got)
 	}
 	delete(sandbox.Annotations, AnnotationE2BNetwork)
-	native, err := SandboxPolicies(sandbox)
-	if err != nil || !reflect.DeepEqual(native.Profile().Inputs, spec.Inputs) || len(native.Profile().Rules) != 2 {
+	native, err := SandboxSecurityProfile(sandbox)
+	if err != nil || !reflect.DeepEqual(native.Inputs, spec.Inputs) || len(native.Rules) != 2 {
 		t.Fatalf("network removal changed native snapshot: %+v %v", native, err)
 	}
-	sandbox.Annotations = map[string]string{agents.AnnotationSecurityRules: `[{"name":"legacy","match":[{"domains":["*"]}]}]`, AnnotationE2BNetwork: `{}`}
-	legacy, err := SandboxPolicies(sandbox)
-	if err != nil || legacy.Profile().Rules[0].Name != "legacy" {
+	sandbox.Annotations = map[string]string{
+		agents.AnnotationSecurityRules: `[{"name":"legacy","match":[{"domains":["*"]}]}]`,
+		AnnotationE2BNetwork:           `{}`,
+	}
+	legacy, err := SandboxSecurityProfile(sandbox)
+	if err != nil || legacy.Rules[0].Name != "legacy" {
 		t.Fatalf("legacy + E2B: %+v %v", legacy, err)
 	}
 }
@@ -114,7 +118,7 @@ func TestSandboxAnnotationErrors(t *testing.T) {
 		{AnnotationSecurityProfile: `{"inputs":[{"name":"foreign","configMap":{"name":"data","namespace":"other"}}]}`},
 		{AnnotationE2BNetwork: `null`},
 		{AnnotationE2BNetwork: `{"network":{"egressProxy":{"address":"proxy.example:1080"}}}`},
-		{AnnotationE2BNetwork: `{"allow_internet_access":"false"}`},
+		{AnnotationE2BNetwork: `{"allowInternetAccess":"false"}`},
 		{AnnotationE2BNetwork: `{"network":{"allowOut":["https://example.com"]}}`},
 		{AnnotationE2BNetwork: `{"network":{"denyOut":["example.com"]}}`},
 		{AnnotationE2BNetwork: `{"network":{"allowOut":["example.com"],"dnsServers":["::1"]}}`},
@@ -122,7 +126,7 @@ func TestSandboxAnnotationErrors(t *testing.T) {
 		{AnnotationE2BNetwork: `{"network":{"rules":{"example.com": []}}}`},
 	} {
 		sandbox := &agents.Sandbox{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Annotations: annotations}}
-		if _, err := SandboxPolicies(sandbox); err == nil {
+		if _, err := SandboxSecurityProfile(sandbox); err == nil {
 			t.Errorf("accepted invalid annotation: %v", annotations)
 		}
 	}

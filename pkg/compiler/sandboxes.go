@@ -77,7 +77,7 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 		if policies.InputError != "" {
 			return nil, fmt.Errorf("sandbox policies: %s", policies.InputError)
 		}
-		if spec := policies.Profile(); spec != nil {
+		if spec := policies.SecurityProfile; spec != nil {
 			sni, err := policy.CompileSNIRules(spec.Rules)
 			if err != nil {
 				return nil, fmt.Errorf("sandbox security rules: %w", err)
@@ -96,7 +96,7 @@ func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 				Uid:       sandbox.SourceIdentity.UID,
 				SniPolicy: policy.ProjectSNIPolicy(sni),
 				TcpPolicy: tcp,
-			}, spec, policies.E2BRuleOffset)
+			}, spec)
 			if err != nil {
 				return nil, err
 			}

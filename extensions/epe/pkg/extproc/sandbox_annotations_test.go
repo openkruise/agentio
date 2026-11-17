@@ -16,9 +16,10 @@ package extproc
 
 import (
 	"context"
-	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"net/netip"
 	"testing"
+
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 
 	agents "github.com/openkruise/agents-api/agents/v1alpha1"
 	"istio.io/istio/pkg/test"
@@ -49,11 +50,11 @@ func TestSandboxNativeAndE2BComposition(t *testing.T) {
 		host    string
 		status  int
 	}{
-		{"E2B HTTP bypass before native TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"allow_internet_access":false,"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 0},
+		{"E2B HTTP bypass before native TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 0},
 		{"native block before E2B HTTP bypass", `{"rules":[{"name":"native","match":[{"domains":["api.example.com"]}],"actions":{"block":{"statusCode":451}}}]}`, `{"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 451},
 		{"native TCP deny before E2B TCP allow", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"network":{"allowOut":["10.0.0.0/8"]}}`, "10.1.2.3:443", 403},
-		{"native TCP allow before E2B TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Allow"}]}`, `{"allow_internet_access":false}`, "10.1.2.3:443", 0},
-		{"nonterminal native header continues to E2B deny", `{"rules":[{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}]}`, `{"allow_internet_access":false}`, "10.1.2.3:443", 403},
+		{"native TCP allow before E2B TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Allow"}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 0},
+		{"nonterminal native header continues to E2B deny", `{"rules":[{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := profilestore.MakeFakeStore(regs...)
@@ -72,10 +73,24 @@ func TestSandboxNativeAndE2BComposition(t *testing.T) {
 				return dns.LookupResult{Addresses: []netip.Addr{netip.MustParseAddr("10.1.2.3")}}, nil
 			}), 0)
 			targets := egressauthz.NewAggregate(client)
-			server := NewServer(ServerDeps{Registrations: regs, Resolve: securityprofile.NewResolver(store, regs, nil, targets), AuthorizeRequest: targets.Authorize})
+			server := NewServer(
+				ServerDeps{
+					Registrations:    regs,
+					Resolve:          securityprofile.NewResolver(store, regs, nil, targets),
+					AuthorizeRequest: targets.Authorize,
+				},
+			)
 			headers := makeRequestHeaders(tc.host, "/", "GET")
-			headers.Headers.Headers = append(headers.Headers.Headers, &corev3.HeaderValue{Key: ":scheme", RawValue: []byte("https")})
-			responses, err := server.HandleRequestHeaders(t.Context(), headers, makeAttrsWithLabels("tenant", "sandbox", ""), newStreamState())
+			headers.Headers.Headers = append(
+				headers.Headers.Headers,
+				&corev3.HeaderValue{Key: ":scheme", RawValue: []byte("https")},
+			)
+			responses, err := server.HandleRequestHeaders(
+				t.Context(),
+				headers,
+				makeAttrsWithLabels("tenant", "sandbox", ""),
+				newStreamState(),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}

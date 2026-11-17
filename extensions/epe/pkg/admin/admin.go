@@ -20,9 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
-	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	"go.uber.org/zap"
 
 	log "sigs.k8s.io/controller-runtime/pkg/log"
@@ -131,7 +129,7 @@ func enabledText(enabled bool) string {
 }
 
 // toView describes one installed profile, including its source spec in full mode.
-func toView(p *securityprofile.Profile, full bool) (ProfileView, error) {
+func toView(p *securityprofile.Profile, full bool) ProfileView {
 	kind := kindSecurityProfile
 	switch {
 	case p.Meta.Match == securityprofile.MatchSandbox:
@@ -148,21 +146,8 @@ func toView(p *securityprofile.Profile, full bool) (ProfileView, error) {
 	if full {
 		view.CreationTimestamp = &p.Meta.CreationTimestamp
 		view.Spec = p.Spec
-		if kind == kindSandbox {
-			view.Spec = &v1alpha1.SecurityProfileSpec{}
-			if p.RawSandboxRules != "" {
-				if err := json.NewDecoder(strings.NewReader(p.RawSandboxRules)).Decode(&view.Spec.Rules); err != nil {
-					return ProfileView{}, fmt.Errorf(
-						"decode installed Sandbox %s/%s rules: %w",
-						p.Meta.Namespace,
-						p.Meta.Name,
-						err,
-					)
-				}
-			}
-		}
 	}
-	return view, nil
+	return view
 }
 
 // writeJSON serializes v as JSON with the given status code.

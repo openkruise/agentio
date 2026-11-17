@@ -93,7 +93,9 @@ func TestSecurityProfileDeliveryAndInvalidUpdates(t *testing.T) {
 		Namespace: "ns",
 		Attester:  &model.Attester{WorkloadUID: worker.UID},
 		Policies: &model.SandboxPolicies{
-			TCPRules: []agents.TCPRule{{Name: "all", Action: "invalid", Match: []agents.TCPMatch{{}}}},
+			SecurityProfile: &agents.SecurityProfileSpec{
+				TCPRules: []agents.TCPRule{{Name: "all", Action: "invalid", Match: []agents.TCPMatch{{}}}},
+			},
 		},
 	}
 	f.sandboxes.ConditionalUpdateObject(sandbox)
@@ -106,7 +108,9 @@ func TestSecurityProfileDeliveryAndInvalidUpdates(t *testing.T) {
 		t.Fatal("invalid Sandbox was published")
 	}
 	sandbox.Policies = &model.SandboxPolicies{
-		TCPRules: []agents.TCPRule{{Name: "all", Action: agents.TCPActionDeny, Match: []agents.TCPMatch{{}}}},
+		SecurityProfile: &agents.SecurityProfileSpec{
+			TCPRules: []agents.TCPRule{{Name: "all", Action: agents.TCPActionDeny, Match: []agents.TCPMatch{{}}}},
+		},
 	}
 	f.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {

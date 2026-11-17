@@ -16,6 +16,7 @@ package securityprofile
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	agents "github.com/openkruise/agents-api/agents/v1alpha1"
@@ -31,7 +32,7 @@ import (
 	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 )
 
-func TestE2BMostSpecificTransformAndNativeOrder(t *testing.T) {
+func TestSandboxHeaderTransformsRunInMergedOrder(t *testing.T) {
 	regs, err := filter.Build(headermutation.Definition(), bypass.Definition())
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +42,7 @@ func TestE2BMostSpecificTransformAndNativeOrder(t *testing.T) {
 		Namespace: "tenant",
 		Annotations: map[string]string{
 			kruise.AnnotationSecurityProfile: `{"rules":[{"name":"tls-native","match":[{"domains":["irrelevant.example"]}],"actions":{"tls":{"action":"Deny"}}},{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"native"}]}}}]}`,
-			kruise.AnnotationE2BNetwork:      `{"allow_internet_access":false,"network":{"allowOut":["*.example.com"],"rules":{"*.example.com":[{"transform":{"headers":{"X-Broad":"broad"}}}],"*.nested.example.com":[{"transform":{"headers":{"X-Tenant":"nested"}}}],"api.example.com":[{"transform":{"headers":{"X-Tenant":"first"}}},{"transform":{"headers":{"x-tenant":"{{ literal }}"}}}]}}}`,
+			kruise.AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["*.example.com"],"rules":{"*.example.com":[{"transform":{"headers":{"X-Broad":"broad"}}}],"*.nested.example.com":[{"transform":{"headers":{"X-Tenant":"nested"}}}],"api.example.com":[{"transform":{"headers":{"X-Tenant":"first"}}},{"transform":{"headers":{"x-tenant":"{{ literal }}"}}}]}}}`,
 		},
 	}}
 	local, err := NewSandboxProfile(obj)
@@ -51,12 +52,12 @@ func TestE2BMostSpecificTransformAndNativeOrder(t *testing.T) {
 	if err := local.Project(regs); err != nil {
 		t.Fatal(err)
 	}
-	policies, err := kruise.SandboxPolicies(obj)
+	spec, err := kruise.SandboxSecurityProfile(obj)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := model.HTTPPolicy{E2BRuleOffset: policies.E2BRuleOffset}
-	for _, rule := range policies.Profile().Rules {
+	var config model.HTTPPolicy
+	for _, rule := range spec.Rules {
 		if rule.Actions.TLS == nil {
 			config.Rules = append(config.Rules, rule)
 		}
@@ -65,18 +66,27 @@ func TestE2BMostSpecificTransformAndNativeOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	xds, err := FromXDS(&securityv1.SecurityProfile{Name: obj.Name, Namespace: obj.Namespace, PolicyJson: data, TcpPolicy: local.TCPPolicy}, "kruise:one", regs)
+	xds, err := FromXDS(
+		&securityv1.SecurityProfile{
+			Name:       obj.Name,
+			Namespace:  obj.Namespace,
+			PolicyJson: data,
+			TcpPolicy:  local.TCPPolicy,
+		},
+		"kruise:one",
+		regs,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for source, p := range map[string]*Profile{"local": local, "xds": xds} {
 		for _, tc := range []struct {
-			host string
-			rule string
+			host  string
+			rules []string
 		}{
-			{"api.example.com", "e2b-transform-0"},
-			{"api.nested.example.com", "e2b-transform-1"},
-			{"other.example.com", "e2b-transform-2"},
+			{"api.example.com", []string{"native", "e2b-transform-0", "e2b-transform-2", "e2b-allow-https"}},
+			{"api.nested.example.com", []string{"native", "e2b-transform-0", "e2b-transform-1", "e2b-allow-https"}},
+			{"other.example.com", []string{"native", "e2b-transform-0", "e2b-allow-https"}},
 		} {
 			t.Run(source+"/"+tc.host, func(t *testing.T) {
 				req := testRequest(tc.host)
@@ -85,18 +95,25 @@ func TestE2BMostSpecificTransformAndNativeOrder(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(bound.rules) != 3 || bound.rules[0].Rule.Name != "native" || bound.rules[1].Rule.Name != tc.rule || bound.rules[2].Rule.Name != "e2b-allow-https" {
-					t.Fatalf("native, one transform, then bypass required: %+v", bound.rules)
+				names := make([]string, 0, len(bound.rules))
+				for _, rule := range bound.rules {
+					names = append(names, rule.Rule.Name)
 				}
-				if len(bound.units) != 4 || bound.units[3].CheckRequest == nil {
+				if !slices.Equal(names, tc.rules) {
+					t.Fatalf("matched rules = %v, want %v", names, tc.rules)
+				}
+				if len(bound.units) != len(tc.rules)+1 || bound.units[len(tc.rules)].CheckRequest == nil {
 					t.Fatal("TCP checkpoint must follow all HTTP rules")
 				}
 				if tc.host == "api.example.com" {
-					mutation := bound.rules[1].Cfgs[0].(headermutation.Config)
+					mutation := bound.rules[2].Cfgs[0].(headermutation.Config)
 					if len(mutation.Request.Set) != 1 {
 						t.Fatal("sequential assignments were not collapsed")
 					}
-					value, err := eval.RenderToString(mutation.Request.Set[0].Value, inputs.NewScope(inputs.Request{}, inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil))
+					value, err := eval.RenderToString(
+						mutation.Request.Set[0].Value,
+						inputs.NewScope(inputs.Request{}, inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil),
+					)
 					if err != nil || value != "{{ literal }}" {
 						t.Fatalf("last assignment must remain literal: %q %v", value, err)
 					}

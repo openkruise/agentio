@@ -82,12 +82,7 @@ func (h *handler) handleList(w http.ResponseWriter, r *http.Request) {
 	securityprofile.SortProfiles(filtered)
 	views := make([]ProfileView, 0, len(filtered))
 	for _, p := range filtered {
-		v, err := toView(p, full)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		views = append(views, v)
+		views = append(views, toView(p, full))
 	}
 
 	writeJSON(w, http.StatusOK, ListResponse{Count: len(views), Profiles: views})
@@ -113,12 +108,7 @@ func (h *handler) handleMatch(
 	)
 	views := make([]ProfileView, 0, len(matched))
 	for _, p := range matched {
-		v, err := toView(p, full)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		views = append(views, v)
+		views = append(views, toView(p, full))
 	}
 	writeJSON(w, http.StatusOK, ListResponse{Count: len(views), Profiles: views})
 }

@@ -28,9 +28,8 @@ import (
 func securityProfilePayload(
 	payload *securityv1.SecurityProfile,
 	spec *agentsv1alpha1.SecurityProfileSpec,
-	e2bRuleOffset *int,
 ) (*securityv1.SecurityProfile, error) {
-	config := model.HTTPPolicy{Inputs: spec.Inputs, Audit: spec.Audit, E2BRuleOffset: e2bRuleOffset}
+	config := model.HTTPPolicy{Inputs: spec.Inputs, Audit: spec.Audit}
 	for _, rule := range spec.Rules {
 		if rule.Actions.TLS == nil {
 			config.Rules = append(config.Rules, rule)
@@ -62,7 +61,7 @@ func newSecurityProfileResources(
 				Uid:       profile.Attachment.UID,
 				SniPolicy: policy.ProjectSNIPolicy(profile.SNIPolicy),
 				TcpPolicy: profile.TCPPolicy,
-			}, &profile.Spec, nil)
+			}, &profile.Spec)
 			if err == nil {
 				value, marshalErr := marshalDeterministicAny(payload)
 				err = marshalErr

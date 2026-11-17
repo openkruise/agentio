@@ -40,14 +40,21 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 		Namespace: "tenant",
 		Annotations: map[string]string{
 			kruise.AnnotationSecurityProfile: `{"inputs":[{"name":"data","inline":{}}],"rules":[{"name":"native","match":[{"domains":["api.example.com"],"schemes":["https"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}],"tcpRules":[{"name":"native-deny","match":[{}],"action":"Deny"}]}`,
-			kruise.AnnotationE2BNetwork:      `{"allow_internet_access":false,"network":{"allowOut":["api.example.com"],"rules":{"api.example.com":[{"transform":{"headers":{"X-Tenant":"demo"}}}]}}}`,
+			kruise.AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"],"rules":{"api.example.com":[{"transform":{"headers":{"X-Tenant":"demo"}}}]}}}`,
 		},
 	}}
-	policies, err := kruise.SandboxPolicies(source)
+	spec, err := kruise.SandboxSecurityProfile(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled, err := compileSandbox(model.Sandbox{UID: "kruise:one", Name: source.Name, Namespace: source.Namespace, Policies: policies})
+	compiled, err := compileSandbox(
+		model.Sandbox{
+			UID:       "kruise:one",
+			Name:      source.Name,
+			Namespace: source.Namespace,
+			Policies:  &model.SandboxPolicies{SecurityProfile: spec},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +76,12 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 	if err := json.Unmarshal(profile.PolicyJson, &http); err != nil {
 		t.Fatal(err)
 	}
-	if len(http.Rules) != 4 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" || http.E2BRuleOffset == nil || *http.E2BRuleOffset != 1 || http.Inputs[0].Inline == nil {
+	if len(http.Rules) != 4 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" ||
+		http.Inputs[0].Inline == nil {
 		t.Fatalf("HTTP composition or inputs lost: %s", profile.PolicyJson)
 	}
-	if len(profile.TcpPolicy.Rules) != 3 || profile.TcpPolicy.Rules[0].Name != "native-deny" || profile.TcpPolicy.Rules[2].Name != "e2b-deny-rest" {
+	if len(profile.TcpPolicy.Rules) != 3 || profile.TcpPolicy.Rules[0].Name != "native-deny" ||
+		profile.TcpPolicy.Rules[2].Name != "e2b-deny-rest" {
 		t.Fatalf("TCP order lost: %v", profile.TcpPolicy)
 	}
 	if profile.SniPolicy.Rules[0].Action != securityv1.SniAction_SNI_ACTION_TLS_TERMINATION {
@@ -158,8 +167,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	awaitHosts("inline")
 	awaitHosts("other")
 	other := manifestAt(t, fixture.compiler, "other")
-	inline := model.SandboxPolicies{}
-	inline.SecurityRules = []agentsv1alpha1.SecurityRule{{
+	rules := []agentsv1alpha1.SecurityRule{{
 		Name: "inline",
 		Match: []agentsv1alpha1.RuleMatch{
 			{Domains: []string{"API.Example.", "*.Example", "api.example"}},
@@ -167,36 +175,36 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 			{Domains: []string{"http.example"}, Schemes: []string{"http"}},
 		},
 	}}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	awaitHosts("inline", []string{"api.example", "*.example", "https.example"})
 
-	inline.SecurityRules = []agentsv1alpha1.SecurityRule{
+	rules = []agentsv1alpha1.SecurityRule{
 		{Name: "updated", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"updated.example"}}}},
 	}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	awaitHosts("inline", []string{"updated.example"})
 
 	// Reject the whole inline policy, including valid rules preceding the bad one.
-	inline.SecurityRules = []agentsv1alpha1.SecurityRule{
+	rules = []agentsv1alpha1.SecurityRule{
 		{Name: "valid", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"updated.example"}}}},
 		{Name: "invalid", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"*bad.example"}}}},
 	}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
 		return fixture.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
 	}, "invalid SNI records a compilation failure")
 	awaitHosts("inline", []string{"updated.example"})
 
-	inline.SecurityRules = []agentsv1alpha1.SecurityRule{
+	rules = []agentsv1alpha1.SecurityRule{
 		{
 			Name:  "http-only",
 			Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"http.example"}, Schemes: []string{"http"}}},
 		},
 	}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	awaitHosts("inline")
 	testutil.Eventually(
@@ -207,10 +215,10 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 
 	fixture.securityProfiles.DeleteObject(shared.ResourceName())
 	awaitHosts("inline")
-	inline.SecurityRules = []agentsv1alpha1.SecurityRule{
+	rules = []agentsv1alpha1.SecurityRule{
 		{Name: "inline", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"*"}}}},
 	}
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: inline.SecurityRules}
+	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	awaitHosts("inline", []string{"*"})
 	sandbox.Policies = nil
