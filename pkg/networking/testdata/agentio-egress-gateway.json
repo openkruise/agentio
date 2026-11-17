@@ -2175,24 +2175,6 @@
                             }
                           }
                         }
-                      },
-                      {
-                        "notMatcher": {
-                          "singlePredicate": {
-                            "input": {
-                              "name": "sni",
-                              "typedConfig": {
-                                "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ServerNameInput"
-                              }
-                            },
-                            "valueMatch": {
-                              "safeRegex": {
-                                "googleRe2": {},
-                                "regex": "(?s).+"
-                              }
-                            }
-                          }
-                        }
                       }
                     ]
                   }

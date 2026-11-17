@@ -252,7 +252,7 @@ func TestEnvoyEndpointServiceEntry(t *testing.T) {
 				cases[2].status, cases[3].status = 200, 200
 				cases = append(
 					cases,
-					trafficCase{"unmatched_ip_without_sni", "127.0.0.3", "", "unrelated.invalid", "/", 200},
+					trafficCase{"unmatched_ip_without_sni", "127.0.0.3", "", "unrelated.invalid", "/", 0},
 				)
 			}
 			cases = append(cases, trafficCase{"opaque", "127.0.0.1", "", "", "/", 0})

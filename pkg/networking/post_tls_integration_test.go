@@ -99,7 +99,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 	payload := []byte("\x00opaque application bytes after TLS termination")
 	for _, mode := range []string{
 		"tcp", "nested_tls", "bad_certificate", "idle",
-		"passthrough", "passthrough_no_sni", "passthrough_dns_failure",
+		"passthrough", "passthrough_no_sni", "terminate_no_sni", "passthrough_dns_failure",
 		"passthrough_port_override",
 		"http1", "http2", "fqdn_http1", "fqdn_http2",
 		"loopback_http1", "loopback_http2", "connect_http1", "connect_http2", "connect_pinned_http1", "connect_pinned_http2",
@@ -107,6 +107,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			isHTTP := strings.Contains(mode, "http")
 			passthrough := strings.HasPrefix(mode, "passthrough")
+			noSNI := strings.HasSuffix(mode, "_no_sni")
 			serverName := upstreamHost
 			if strings.Contains(mode, "loopback") {
 				serverName = "localhost"
@@ -116,7 +117,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 					t.Logf("close test transport: %v", err)
 				}
 			}
-			var handshakes atomic.Int32
+			var handshakes, connections atomic.Int32
 			upstreamTLS := &tls.Config{
 				Certificates: []tls.Certificate{certificates[serverName]},
 				MinVersion:   tls.VersionTLS12,
@@ -126,7 +127,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			upstreamTLS.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 				handshakes.Add(1)
-				if hello.ServerName != serverName {
+				if hello.ServerName != serverName && !(noSNI && hello.ServerName == "") {
 					return nil, fmt.Errorf("upstream SNI = %q, want outer %s", hello.ServerName, serverName)
 				}
 				if !isHTTP && len(hello.SupportedProtos) != 0 {
@@ -185,6 +186,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 						completed <- err
 						return
 					}
+					connections.Add(1)
 					defer closeResource(conn)
 					if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 						completed <- err
@@ -218,6 +220,10 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 			}
 			// A connection to the original IP would fail; only SNI resolution reaches the origin.
 			original := net.JoinHostPort("127.0.0.2", upstreamPort)
+			if noSNI {
+				// Use a reachable, permitted origin so rejection cannot come from a bad destination.
+				original = upstreamAddress
+			}
 			if mode == "passthrough_port_override" {
 				original = "127.0.0.2:443"
 			}
@@ -270,8 +276,9 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				return secure, nil
 			}
 			clientTLS := &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
-			if mode == "passthrough_no_sni" {
-				clientTLS.ServerName = "127.0.0.1" // Go omits SNI for literal IPs.
+			if noSNI {
+				clientTLS.ServerName = ""
+				clientTLS.InsecureSkipVerify = true // Isolate gateway rejection from client certificate checks.
 			} else if mode == "passthrough_dns_failure" {
 				clientTLS.ServerName = "unresolvable.invalid"
 			} else if mode == "passthrough_port_override" {
@@ -374,7 +381,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				return
 			}
 			conn, err := dialTLS(clientTLS)
-			if passthrough && mode != "passthrough" {
+			if (passthrough && mode != "passthrough") || noSNI {
 				if err == nil {
 					closeResource(conn)
 					t.Fatal("invalid TLS destination completed a handshake")
@@ -383,7 +390,7 @@ func TestEnvoyPostTLSForwarding(t *testing.T) {
 				if errors.As(err, &timeout) && timeout.Timeout() {
 					t.Fatalf("invalid TLS destination timed out instead of closing: %v", err)
 				}
-				if handshakes.Load() != 0 {
+				if connections.Load() != 0 || handshakes.Load() != 0 {
 					t.Fatal("invalid TLS destination opened an upstream connection")
 				}
 				return

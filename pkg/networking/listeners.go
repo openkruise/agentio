@@ -1350,7 +1350,7 @@ func (b *resourceBuilder) staticSNIMatcher(
 	}
 }
 
-// Missing SNI reaches policy evaluation; reject malformed non-empty names before routing.
+// Native TLS requires a valid SNI hostname before any routing decision.
 func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmatcherv3.Matcher {
 	if b.legacyGateway {
 		return next
@@ -1384,9 +1384,6 @@ func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmat
 			},
 		},
 	}
-	// ServerNameInput reports no data for absent SNI, so an empty-string regex cannot match it.
-	nonempty := proto.Clone(hostname).(*xdsmatcherv3.Matcher_MatcherList_Predicate)
-	nonempty.GetSinglePredicate().GetValueMatch().GetSafeRegex().Regex = "(?s).+"
 	return &xdsmatcherv3.Matcher{
 		MatcherType: &xdsmatcherv3.Matcher_MatcherList_{MatcherList: &xdsmatcherv3.Matcher_MatcherList{
 			Matchers: []*xdsmatcherv3.Matcher_MatcherList_FieldMatcher{{
@@ -1395,9 +1392,7 @@ func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmat
 						OrMatcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_PredicateList{
 							Predicate: []*xdsmatcherv3.Matcher_MatcherList_Predicate{{
 								MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_NotMatcher{NotMatcher: tls},
-							}, hostname, {
-								MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_NotMatcher{NotMatcher: nonempty},
-							}},
+							}, hostname},
 						},
 					},
 				},

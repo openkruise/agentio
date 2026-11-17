@@ -709,33 +709,24 @@ func TestSNIHostnameMatcher(t *testing.T) {
 				t.Fatal("invalid SNI must have no filter-chain fallback")
 			}
 			predicates := matcher.GetMatcherList().GetMatchers()[0].GetPredicate().GetOrMatcher().GetPredicate()
-			if len(predicates) != 3 ||
+			if len(predicates) != 2 ||
 				!proto.Equal(predicates[0].GetNotMatcher().GetSinglePredicate().GetInput(), transportProtocolInput) ||
 				predicates[0].GetNotMatcher().GetSinglePredicate().GetValueMatch().GetExact() != "tls" ||
-				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) ||
-				!proto.Equal(predicates[2].GetNotMatcher().GetSinglePredicate().GetInput(), serverNameInput) {
-				t.Fatal("only cleartext, missing SNI or a valid TLS hostname may reach the routing matcher")
+				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) {
+				t.Fatal("only cleartext or a valid TLS hostname may reach the routing matcher")
 			}
 			pattern := predicates[1].GetSinglePredicate().GetValueMatch().GetSafeRegex().GetRegex()
 			// Envoy StringMatcher uses a full match; anchor the Go equivalent.
 			hostname := regexp.MustCompile("^(?:" + pattern + ")$")
-			nonempty := regexp.MustCompile(
-				"^(?:" + predicates[2].GetNotMatcher().
-					GetSinglePredicate().
-					GetValueMatch().
-					GetSafeRegex().
-					GetRegex() +
-					")$",
-			)
-			for _, name := range []string{"", "api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
-				if !hostname.MatchString(name) && nonempty.MatchString(name) {
+			for _, name := range []string{"api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
+				if !hostname.MatchString(name) {
 					t.Errorf("valid SNI %q rejected", name)
 				}
 			}
-			for _, name := range []string{"api.example.com:8443", "api.example.com:443", "[::1]:443",
+			for _, name := range []string{"", "api.example.com:8443", "api.example.com:443", "[::1]:443",
 				"user@api.example.com", "api.example.com/path", "*.example.com", "a..example", "-api.example",
 				"api-.example", "api_example.com", "é.example", "\n", "a\nb"} {
-				if hostname.MatchString(name) || !nonempty.MatchString(name) {
+				if hostname.MatchString(name) {
 					t.Errorf("invalid SNI %q accepted", name)
 				}
 			}
