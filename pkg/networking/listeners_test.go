@@ -350,7 +350,15 @@ func TestBuildWithoutSNITrafficPolicyUsesProtocolMatcher(t *testing.T) {
 	for _, chain := range internal.GetFilterChains() {
 		gotChains = append(gotChains, chain.GetName())
 	}
-	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain, sniDenyChain}; !equalStrings(gotChains, want) {
+	if want := []string{
+		forwardHTTPChain,
+		forwardTCPChain,
+		forwardTLSChain,
+		sniDenyChain,
+	}; !equalStrings(
+		gotChains,
+		want,
+	) {
 		t.Fatalf("MainInternal filter chains = %v, want %v without SNI policy runtime", gotChains, want)
 	}
 	tls := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
@@ -695,7 +703,12 @@ func TestSNIValidationUsesRustActions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener { return &listenerv3.Listener{} })
+			listeners := messagesOf(
+				t,
+				resources,
+				model.ListenerType,
+				func() *listenerv3.Listener { return &listenerv3.Listener{} },
+			)
 			internal := listeners[MainInternal]
 			var module *udpatypev1.TypedStruct
 			for _, filter := range internal.ListenerFilters {
@@ -732,7 +745,8 @@ func TestSNIValidationUsesRustActions(t *testing.T) {
 				if settings.Fields["policy_enabled"] == nil || settings.Fields["policy_enabled"].GetBoolValue() {
 					t.Fatal("static routing must skip policy evaluation")
 				}
-				if got := internal.FilterChainMatcher.GetMatcherTree().GetExactMatchMap().GetMap()["deny"].GetAction().GetName(); got != sniDenyChain {
+				if got := internal.FilterChainMatcher.GetMatcherTree().GetExactMatchMap().GetMap()["deny"].GetAction().
+					GetName(); got != sniDenyChain {
 					t.Fatalf("invalid SNI routes to %q, want denial", got)
 				}
 			}

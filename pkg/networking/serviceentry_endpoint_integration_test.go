@@ -522,9 +522,16 @@ func endpointServiceEntryConfig(
 		if strings.HasPrefix(mode, "terminate") {
 			action = "SNI_ACTION_TLS_TERMINATION"
 		}
-		allow := fmt.Sprintf(`{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":%q}]}}]}`, action)
+		allow := fmt.Sprintf(
+			`{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":%q}]}}]}`,
+			action,
+		)
 		deny := `{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_DENY"}]}}]}`
-		policyJSON = fmt.Sprintf(`%%CEL('x-test-tls-action' in request.headers && request.headers['x-test-tls-action'] == 'deny' ? %q : %q)%%`, deny, allow)
+		policyJSON = fmt.Sprintf(
+			`%%CEL('x-test-tls-action' in request.headers && request.headers['x-test-tls-action'] == 'deny' ? %q : %q)%%`,
+			deny,
+			allow,
+		)
 	}
 	policy := httpFilter("test.policy", b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{{
 		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: "agentio.connection.policy_json"},

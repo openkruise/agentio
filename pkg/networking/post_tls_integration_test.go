@@ -536,8 +536,15 @@ func startTLSEnvoy(t *testing.T, binary string, certificate pki.IssuedCertificat
 					ListenerSpecifier: &listener.Listener_InternalListener{
 						InternalListener: &listener.Listener_InternalListenerConfig{},
 					},
-					ListenerFilters: []*listener.ListenerFilter{originalDstFilter, tlsInspectorFilter, b.sniPolicyListenerFilter()},
-					FilterChains:    []*listener.FilterChain{chain, b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied")},
+					ListenerFilters: []*listener.ListenerFilter{
+						originalDstFilter,
+						tlsInspectorFilter,
+						b.sniPolicyListenerFilter(),
+					},
+					FilterChains: []*listener.FilterChain{
+						chain,
+						b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied"),
+					},
 					FilterChainMatcher: exactMatcher(
 						typedExtension("tls-action", b.pack(&matchinginput.FilterStateInput{Key: tlsActionKey})),
 						map[string]*xdsmatcher.Matcher_OnMatch{"fallthrough": b.toChain(chain.Name)}, nil),
