@@ -1512,7 +1512,8 @@
                         ],
                         "dns": {
                           "max_hosts": 16384,
-                          "max_pending_requests": 4096
+                          "max_pending_requests": 4096,
+                          "resolver": "agentio_dns_cache"
                         },
                         "mode": "DYNAMIC_FORWARD"
                       }
@@ -1817,7 +1818,8 @@
                         ],
                         "dns": {
                           "max_hosts": 16384,
-                          "max_pending_requests": 4096
+                          "max_pending_requests": 4096,
+                          "resolver": "agentio_dns_cache"
                         },
                         "mode": "ORIGINAL_DST"
                       }
@@ -1869,7 +1871,8 @@
                         ],
                         "dns": {
                           "max_hosts": 16384,
-                          "max_pending_requests": 4096
+                          "max_pending_requests": 4096,
+                          "resolver": "agentio_dns_cache"
                         },
                         "mode": "DYNAMIC_FORWARD"
                       }
@@ -2451,7 +2454,8 @@
                           ],
                           "dns": {
                             "max_hosts": 16384,
-                            "max_pending_requests": 4096
+                            "max_pending_requests": 4096,
+                            "resolver": "agentio_dns_cache"
                           },
                           "mode": "ORIGINAL_DST"
                         }
@@ -2539,7 +2543,8 @@
                           ],
                           "dns": {
                             "max_hosts": 16384,
-                            "max_pending_requests": 4096
+                            "max_pending_requests": 4096,
+                            "resolver": "agentio_dns_cache"
                           },
                           "mode": "ORIGINAL_DST"
                         }
@@ -2600,7 +2605,8 @@
                   ],
                   "dns": {
                     "max_hosts": 16384,
-                    "max_pending_requests": 4096
+                    "max_pending_requests": 4096,
+                    "resolver": "agentio_dns_cache"
                   },
                   "mode": "DYNAMIC_FORWARD"
                 }
@@ -2741,7 +2747,8 @@
                   ],
                   "dns": {
                     "max_hosts": 16384,
-                    "max_pending_requests": 4096
+                    "max_pending_requests": 4096,
+                    "resolver": "agentio_dns_cache"
                   },
                   "mode": "DYNAMIC_FORWARD"
                 }

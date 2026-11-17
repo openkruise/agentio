@@ -32,6 +32,9 @@ def listeners(denied, generation):
     for slot in range(SLOTS):
         policy = network(True)
         policy['typed_config']['filter_config']['value']['denied_cidrs'] = denied.get(str(slot), [])
+        policy['typed_config']['filter_config']['value']['dns'] = {
+            'max_hosts': 16384, 'max_pending_requests': 4096,
+            **denied.get('dns', {}).get(str(slot), {})}
         resources.append(typed('envoy.config.listener.v3.Listener',
             internal_listener={}, metadata={'filter_metadata': {'test': {'generation': generation}}},
             listener_filters=[{'name': 'envoy.filters.listener.original_dst', 'typed_config': typed(
@@ -270,6 +273,20 @@ async def verify(host):
         current = state()
         assert current['dns'][name] == 1, 'LDS update discarded cached answers'
         assert current['process']['threads'] == start['process']['threads'], current
+    for iteration in range(20):
+        settings = {'resolver': 'agentio_dns_cache', 'max_hosts': 128 + iteration, 'max_pending_requests': 2}
+        update(host, {'dns': {'0': settings}})
+        await exchange(host, 0, name)
+        assert state()['dns'][name] == iteration + 2, 'new generation reused old DNS answers'
+        await exchange(host, 1, name)
+        assert state()['dns'][name] == iteration + 2, 'DNS update changed another config'
+        assert state()['process']['threads'] == start['process']['threads']
+    update(host, {'dns': {'0': settings, '1': settings}})
+    await exchange(host, 1, name)
+    assert state()['dns'][name] == 21, 'matching generations did not share DNS answers'
+    update(host, {})
+    await exchange(host, 0, name)
+    assert state()['dns'][name] == 21, 'old generation lost its cached answer'
     retained_writer.write(b'after\n')
     await retained_writer.drain()
     assert await retained_reader.readexactly(6) == b'after\n'
@@ -304,6 +321,7 @@ async def verify(host):
     assert end['process']['pid'] == start['process']['pid'], 'Envoy restarted'
     assert end['process']['threads'] == start['process']['threads'], (start, end)
     print(json.dumps({'result': 'PASS', 'checks': ['16 configs share cache', '40 LDS updates preserve cache and threads',
+        '20 DNS capacity updates preserve threads', 'matching generations share answers', 'old generations remain isolated',
         'deny blocks before origin', 'other config remains allowed', 'existing connection survives',
         'profile snapshots isolated', 'DNS failure denies', 'TTL expires', 'cancellation isolated'], 'before': start, 'after': end}))
 

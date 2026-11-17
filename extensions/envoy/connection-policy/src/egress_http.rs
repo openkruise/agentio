@@ -299,14 +299,22 @@ mod tests {
 
     #[test]
     fn route_updates_do_not_mutate_existing_request_snapshots() {
-        let allowed = new_route_config(FILTER_NAME, br#"{"mode":"ORIGINAL_DST"}"#).unwrap();
+        let allowed = new_route_config(
+            FILTER_NAME,
+            br#"{"mode":"DYNAMIC_FORWARD","dns":{"resolver":"route-update"}}"#,
+        )
+        .unwrap();
         let denied = new_route_config(
             FILTER_NAME,
-            br#"{"mode":"ORIGINAL_DST","denied_cidrs":["127.0.0.0/8"]}"#,
+            br#"{"mode":"DYNAMIC_FORWARD","dns":{"resolver":"route-update","max_hosts":128},"denied_cidrs":["127.0.0.0/8"]}"#,
         )
         .unwrap();
         let old = allowed.downcast_ref::<Arc<RouteConfig>>().unwrap().clone();
         let current = denied.downcast_ref::<Arc<RouteConfig>>().unwrap().clone();
+        assert!(!Arc::ptr_eq(
+            old.dns.as_ref().unwrap(),
+            current.dns.as_ref().unwrap()
+        ));
         let mut envoy = MockEnvoyHttpFilter::new();
         envoy
             .expect_set_filter_state_typed()

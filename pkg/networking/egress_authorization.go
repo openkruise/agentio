@@ -121,6 +121,7 @@ func (b *resourceBuilder) routeUpstreamFilter() *hcm.HttpFilter {
 func (b *resourceBuilder) rustDNSSettings() map[string]any {
 	cache := b.dnsCacheConfig()
 	return map[string]any{
+		"resolver":             cache.GetName(),
 		"max_hosts":            cache.GetMaxHosts().GetValue(),
 		"max_pending_requests": cache.GetDnsCacheCircuitBreaker().GetMaxPendingRequests().GetValue(),
 	}
