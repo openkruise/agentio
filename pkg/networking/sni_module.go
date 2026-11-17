@@ -18,10 +18,12 @@ import (
 	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/openkruise/agentio/pkg/features"
 )
 
 func (b *resourceBuilder) sniPolicyListenerFilter() *listenerv3.ListenerFilter {
-	fields := b.structure(map[string]any{
+	settings := map[string]any{
 		"dynamic_module_config": map[string]any{
 			"name": "envoy_agentio_connection_policy",
 			"module": map[string]any{
@@ -29,7 +31,14 @@ func (b *resourceBuilder) sniPolicyListenerFilter() *listenerv3.ListenerFilter {
 			},
 		},
 		"filter_name": "envoy_agentio_sni_policy",
-	})
+	}
+	if !features.EnableSNITrafficPolicy {
+		settings["filter_config"] = map[string]any{
+			"@type": "type.googleapis.com/google.protobuf.Struct",
+			"value": map[string]any{"policy_enabled": false},
+		}
+	}
+	fields := b.structure(settings)
 	return &listenerv3.ListenerFilter{
 		Name: "envoy.filters.listener.dynamic_modules",
 		ConfigType: &listenerv3.ListenerFilter_TypedConfig{TypedConfig: b.pack(&udpatypev1.TypedStruct{

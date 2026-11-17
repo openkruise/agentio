@@ -14,7 +14,7 @@ mod tcp;
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyListenerFilter, EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
     abi::envoy_dynamic_module_type_on_listener_filter_status as Status, declare_all_init_functions,
-    envoy_log_debug,
+    envoy_log_debug, envoy_log_error,
 };
 use policy::Action;
 
@@ -22,16 +22,27 @@ const FILTER_NAME: &str = "envoy_agentio_sni_policy";
 const ACTION_KEY: &[u8] = b"agentio.tls.action";
 const DENIAL_REASON_KEY: &[u8] = b"agentio.egress.denial_reason";
 
-struct Config;
-struct Filter;
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    policy_enabled: bool,
+}
+struct Filter {
+    policy_enabled: bool,
+}
 
 impl<ELF: EnvoyListenerFilter> ListenerFilterConfig<ELF> for Config {
     fn new_listener_filter(&self, _: &mut ELF) -> Box<dyn ListenerFilter<ELF>> {
-        Box::new(Filter)
+        Box::new(Filter {
+            policy_enabled: self.policy_enabled,
+        })
     }
 }
 
-fn decide(envoy: &mut impl EnvoyListenerFilter) -> Result<Action, &'static str> {
+fn decide(
+    envoy: &mut impl EnvoyListenerFilter,
+    policy_enabled: bool,
+) -> Result<Action, &'static str> {
     match envoy
         .get_detected_transport_protocol()
         .as_ref()
@@ -40,6 +51,22 @@ fn decide(envoy: &mut impl EnvoyListenerFilter) -> Result<Action, &'static str> 
         None | Some(b"raw_buffer") => return Ok(Action::Cleartext),
         Some(b"tls") => {}
         _ => return Err("connection_protocol_unsupported"),
+    }
+    let sni = envoy.get_requested_server_name();
+    let name = match sni
+        .as_ref()
+        .map(|b| std::str::from_utf8(b.as_slice()))
+        .transpose()
+    {
+        Ok(Some(name)) if !name.is_empty() => name,
+        Ok(_) => return Err("sni_missing"),
+        Err(_) => return Err("sni_invalid"),
+    };
+    if name.contains('*') || !policy::valid_pattern(name) {
+        return Err("sni_invalid");
+    }
+    if !policy_enabled {
+        return Ok(Action::Fallthrough);
     }
     let Some(bytes) = envoy.get_filter_state_bytes(store::HASH_KEY) else {
         return Err("connection_policy_missing");
@@ -65,16 +92,7 @@ fn decide(envoy: &mut impl EnvoyListenerFilter) -> Result<Action, &'static str> 
         Some((ip, port)) if port > 0 => std::net::SocketAddr::new(ip.to_canonical(), port),
         _ => return Err("connection_destination_invalid"),
     };
-    let sni = envoy.get_requested_server_name();
-    let name = match sni
-        .as_ref()
-        .map(|b| std::str::from_utf8(b.as_slice()))
-        .transpose()
-    {
-        Ok(name) => name,
-        Err(_) => return Err("sni_invalid"),
-    };
-    let (action, start) = policy.evaluate_sni(name, target)?;
+    let (action, start) = policy.evaluate_sni(Some(name), target)?;
     if let Some(start) = start.filter(|_| action == Action::Passthrough) {
         let start = start.to_owned();
         if !envoy.set_filter_state_bytes(connection::TCP_END_BEFORE_KEY, start.as_bytes()) {
@@ -93,7 +111,7 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for Filter {
             return Status::StopIteration;
         }
         // Runs once, after Envoy's inspectors. No buffering or ClientHello parser.
-        let action = match decide(envoy) {
+        let action = match decide(envoy, self.policy_enabled) {
             Ok(action) => action,
             Err(reason) => {
                 if !envoy.set_filter_state_bytes(DENIAL_REASON_KEY, reason.as_bytes()) {
@@ -122,8 +140,21 @@ fn new_config<EC: EnvoyListenerFilterConfig, ELF: EnvoyListenerFilter>(
     name: &str,
     config: &[u8],
 ) -> Option<Box<dyn ListenerFilterConfig<ELF>>> {
-    (name == FILTER_NAME && config.is_empty())
-        .then(|| Box::new(Config) as Box<dyn ListenerFilterConfig<ELF>>)
+    if name != FILTER_NAME {
+        return None;
+    }
+    if config.is_empty() {
+        return Some(Box::new(Config {
+            policy_enabled: true,
+        }));
+    }
+    match serde_json::from_slice::<Config>(config) {
+        Ok(config) => Some(Box::new(config)),
+        Err(error) => {
+            envoy_log_error!("invalid SNI listener filter config: {}", error);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -183,7 +214,7 @@ mod tests {
                 Some(b"example.org".as_slice()),
                 Action::Fallthrough,
             ),
-            (Some(POLICY), None, Action::Fallthrough),
+            (Some(POLICY), None, Action::Deny),
             (
                 Some(br#"{"profiles":[{"uid":"profile","sniPolicy":{"rules":[{"match":{"sni":["*"],"ports":[8443]},"action":"SNI_ACTION_DENY"}]}}]}"#.as_slice()),
                 Some(b"api.example.com".as_slice()),
@@ -229,9 +260,82 @@ mod tests {
                 .withf(move |k, v| k == ACTION_KEY && v == want.as_bytes())
                 .times(1)
                 .return_const(true);
-            assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
+            assert_eq!(Filter { policy_enabled: true }.on_accept(&mut envoy), Status::Continue);
             // Data callbacks never reread policy or rewrite the action.
-            assert_eq!(Filter.on_data(&mut envoy, 10), Status::Continue);
+            assert_eq!(Filter { policy_enabled: true }.on_data(&mut envoy, 10), Status::Continue);
+        }
+    }
+
+    #[test]
+    fn invalid_sni_denies_before_reading_any_policy() {
+        for policy_enabled in [false, true] {
+            for name in [
+                None,
+                Some(b"".as_slice()),
+                Some(b"api.example.com:443".as_slice()),
+                Some(b"*.example.com".as_slice()),
+                Some(b"a..example".as_slice()),
+                Some(b"-api.example".as_slice()),
+                Some(b"api_.example".as_slice()),
+                Some(b"api.example/path".as_slice()),
+                Some(b"\xff.test".as_slice()),
+            ] {
+                let mut envoy = MockEnvoyListenerFilter::new();
+                envoy
+                    .expect_get_filter_state_bytes()
+                    .withf(|key| key == ACTION_KEY)
+                    .times(1)
+                    .returning(|_| None);
+                envoy
+                    .expect_get_detected_transport_protocol()
+                    .returning(|| Some(EnvoyBuffer::new(b"tls")));
+                envoy
+                    .expect_get_requested_server_name()
+                    .returning(move || name.map(EnvoyBuffer::new));
+                let reason = if name.is_none_or(|name| name.is_empty()) {
+                    "sni_missing"
+                } else {
+                    "sni_invalid"
+                };
+                envoy
+                    .expect_set_filter_state_bytes()
+                    .withf(move |key, value| key == DENIAL_REASON_KEY && value == reason.as_bytes())
+                    .times(1)
+                    .return_const(true);
+                envoy
+                    .expect_set_filter_state_bytes()
+                    .withf(|key, value| key == ACTION_KEY && value == b"deny")
+                    .times(1)
+                    .return_const(true);
+                assert_eq!(
+                    Filter { policy_enabled }.on_accept(&mut envoy),
+                    Status::Continue
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn static_routing_validates_sni_without_evaluating_policy() {
+        for name in [
+            b"api.example.com".as_slice(),
+            b"A.B.EXAMPLE.COM.",
+            b"xn--bcher-kva.example",
+            b"node-1",
+        ] {
+            let mut envoy = tls_filter(None, Some(name));
+            envoy
+                .expect_set_filter_state_bytes()
+                .withf(|key, value| key == ACTION_KEY && value == b"fallthrough")
+                .times(1)
+                .return_const(true);
+            assert_eq!(
+                Filter {
+                    policy_enabled: false
+                }
+                .on_accept(&mut envoy),
+                Status::Continue
+            );
         }
     }
 
@@ -291,7 +395,13 @@ mod tests {
                 .withf(move |k, v| k == ACTION_KEY && v == action.as_bytes())
                 .times(1)
                 .return_const(true);
-            assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
+            assert_eq!(
+                Filter {
+                    policy_enabled: true
+                }
+                .on_accept(&mut envoy),
+                Status::Continue
+            );
         }
     }
 
@@ -312,7 +422,13 @@ mod tests {
             .withf(|key, value| key == ACTION_KEY && value == Action::Deny.as_bytes())
             .times(1)
             .return_const(true);
-        assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
+        assert_eq!(
+            Filter {
+                policy_enabled: true
+            }
+            .on_accept(&mut envoy),
+            Status::Continue
+        );
     }
 
     #[test]
@@ -345,7 +461,13 @@ mod tests {
                 .withf(move |k, v| k == ACTION_KEY && v == action.as_bytes())
                 .times(1)
                 .return_const(true);
-            assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
+            assert_eq!(
+                Filter {
+                    policy_enabled: true
+                }
+                .on_accept(&mut envoy),
+                Status::Continue
+            );
         }
     }
 
@@ -374,7 +496,13 @@ mod tests {
                 .withf(|key, value| key == ACTION_KEY && value == b"deny")
                 .times(1)
                 .return_const(true);
-            assert_eq!(Filter.on_accept(&mut envoy), Status::Continue);
+            assert_eq!(
+                Filter {
+                    policy_enabled: true
+                }
+                .on_accept(&mut envoy),
+                Status::Continue
+            );
         }
     }
 
@@ -391,7 +519,13 @@ mod tests {
             .withf(|reason| *reason == Some("agentio_denial_reason_write_failed"))
             .times(1)
             .return_const(());
-        assert_eq!(Filter.on_accept(&mut envoy), Status::StopIteration);
+        assert_eq!(
+            Filter {
+                policy_enabled: true
+            }
+            .on_accept(&mut envoy),
+            Status::StopIteration
+        );
     }
 
     #[test]
@@ -403,7 +537,13 @@ mod tests {
             .withf(|reason| *reason == Some("agentio_sni_action_write_failed"))
             .times(1)
             .return_const(());
-        assert_eq!(Filter.on_accept(&mut envoy), Status::StopIteration);
+        assert_eq!(
+            Filter {
+                policy_enabled: true
+            }
+            .on_accept(&mut envoy),
+            Status::StopIteration
+        );
     }
 
     #[test]
@@ -419,14 +559,31 @@ mod tests {
             .withf(|reason| *reason == Some("agentio_sni_action_already_set"))
             .times(1)
             .return_const(());
-        assert_eq!(Filter.on_accept(&mut envoy), Status::StopIteration);
+        assert_eq!(
+            Filter {
+                policy_enabled: true
+            }
+            .on_accept(&mut envoy),
+            Status::StopIteration
+        );
     }
 
     #[test]
-    fn config_rejects_unknown_name_and_unused_config() {
+    fn config_rejects_unknown_name_and_invalid_settings() {
         let mut envoy = MockEnvoyListenerFilterConfig::new();
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, FILTER_NAME, b"").is_some());
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, "typo", b"").is_none());
+        for enabled in [true, false] {
+            let config = format!(r#"{{"policy_enabled":{enabled}}}"#);
+            assert!(
+                new_config::<_, MockEnvoyListenerFilter>(
+                    &mut envoy,
+                    FILTER_NAME,
+                    config.as_bytes()
+                )
+                .is_some()
+            );
+        }
         assert!(new_config::<_, MockEnvoyListenerFilter>(&mut envoy, FILTER_NAME, b"{}").is_none());
         assert!(
             new_config::<_, MockEnvoyListenerFilter>(

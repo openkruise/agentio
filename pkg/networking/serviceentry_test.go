@@ -223,7 +223,7 @@ func TestServiceEntryEndpointBindings(t *testing.T) {
 		)
 		if !proto.Equal(
 			routingMatcher(internal).GetOnNoMatch().GetMatcher(),
-			routingMatcher(baselineListeners[MainInternal]),
+			baselineListeners[MainInternal].GetFilterChainMatcher(),
 		) {
 			t.Fatal("unmatched IP changed ordinary routing/policy behavior")
 		}

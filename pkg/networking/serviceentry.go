@@ -48,10 +48,19 @@ func (b *resourceBuilder) internalChainMatcher(config effectiveConfig, passthrou
 			toMatcher(b.sniTrafficPolicyMatcher(config.gateway.GetTlsTermination().GetExcludeHosts(), passthrough)),
 		)
 	}
+	routing := b.protocolMatcher(b.toChain(passthrough))
 	if termination := config.gateway.GetTlsTermination(); termination != nil {
-		return b.staticSNIMatcher(termination, passthrough)
+		routing = b.staticSNIMatcher(termination, passthrough)
 	}
-	return b.protocolMatcher(b.toChain(passthrough))
+	if b.legacyGateway {
+		return routing
+	}
+	// The Rust listener still validates TLS when SNI policy evaluation is disabled.
+	return exactMatcher(
+		typedExtension("tls-action", b.pack(&input.FilterStateInput{Key: tlsActionKey})),
+		map[string]*xdsmatcher.Matcher_OnMatch{"deny": b.toChain(sniDenyChain)},
+		toMatcher(routing),
+	)
 }
 
 // Native SNI forwarding authorizes and pins a numeric endpoint before TCP proxy.

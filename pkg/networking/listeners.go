@@ -83,7 +83,6 @@ const (
 	dynamicHostKey                = "envoy.upstream.dynamic_host"
 	dynamicPortKey                = "envoy.upstream.dynamic_port"
 	originalPortFormat            = "%FILTER_STATE(envoy.filters.listener.original_dst.local_ip:FIELD:port)%"
-	sniHostnamePattern            = `(?i)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.?`
 
 	fqdnDialHostFormat = `%CEL(request.method != 'CONNECT' ? ` +
 		`re.extract(request.host, '^([^:]+)[.](:[0-9]+)?$', r'\1\2') : '')%`
@@ -287,12 +286,12 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		})
 	}
 	if features.EnableSNITrafficPolicy {
-		internalChains = append(internalChains,
-			b.buildTLSTerminateChain(tcpSettings),
-			b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied"),
-		)
+		internalChains = append(internalChains, b.buildTLSTerminateChain(tcpSettings))
 	} else if tlsTermination := config.gateway.GetTlsTermination(); tlsTermination != nil {
 		internalChains = append(internalChains, b.buildTLSTerminateChain(tcpSettings))
+	}
+	if features.EnableSNITrafficPolicy || !b.legacyGateway {
+		internalChains = append(internalChains, b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied"))
 	}
 	mainInternal := &listenerv3.Listener{
 		Name: MainInternal,
@@ -307,7 +306,7 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		ListenerFiltersTimeout:           durationpb.New(time.Second),
 		ContinueOnListenerFiltersTimeout: false,
 	}
-	if features.EnableSNITrafficPolicy && !b.legacyGateway {
+	if !b.legacyGateway {
 		mainInternal.ListenerFilters = append(
 			append([]*listenerv3.ListenerFilter{}, inspectorsHTTPFirst...),
 			b.sniPolicyListenerFilter(),
@@ -356,7 +355,6 @@ func (b *resourceBuilder) buildListeners(config effectiveConfig, trustDomain str
 		}
 	}
 	b.bindServiceEntryEndpoints(mainInternal, config, httpInternal, false)
-	mainInternal.FilterChainMatcher = b.sniHostnameMatcher(mainInternal.FilterChainMatcher)
 	b.bindServiceEntryEndpoints(mainForward, config, httpForward, true)
 	listeners := []*listenerv3.Listener{connect, mainInternal, mainForward}
 	if len(config.gateway.GetTcpPassthrough()) > 0 {
@@ -1347,58 +1345,6 @@ func (b *resourceBuilder) staticSNIMatcher(
 			}},
 		}},
 		OnNoMatch: toMatcher(b.protocolMatcher(b.toChain(passthrough))),
-	}
-}
-
-// Native TLS requires a valid SNI hostname before any routing decision.
-func (b *resourceBuilder) sniHostnameMatcher(next *xdsmatcherv3.Matcher) *xdsmatcherv3.Matcher {
-	if b.legacyGateway {
-		return next
-	}
-	tls := &xdsmatcherv3.Matcher_MatcherList_Predicate{
-		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
-			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
-				Input: transportProtocolInput,
-				Matcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
-					ValueMatch: &xdsmatcherv3.StringMatcher{
-						MatchPattern: &xdsmatcherv3.StringMatcher_Exact{Exact: "tls"},
-					},
-				},
-			},
-		},
-	}
-	hostname := &xdsmatcherv3.Matcher_MatcherList_Predicate{
-		MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_{
-			SinglePredicate: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate{
-				Input: serverNameInput,
-				Matcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_SinglePredicate_ValueMatch{
-					ValueMatch: &xdsmatcherv3.StringMatcher{MatchPattern: &xdsmatcherv3.StringMatcher_SafeRegex{
-						SafeRegex: &xdsmatcherv3.RegexMatcher{
-							EngineType: &xdsmatcherv3.RegexMatcher_GoogleRe2{
-								GoogleRe2: &xdsmatcherv3.RegexMatcher_GoogleRE2{},
-							},
-							Regex: sniHostnamePattern,
-						},
-					}},
-				},
-			},
-		},
-	}
-	return &xdsmatcherv3.Matcher{
-		MatcherType: &xdsmatcherv3.Matcher_MatcherList_{MatcherList: &xdsmatcherv3.Matcher_MatcherList{
-			Matchers: []*xdsmatcherv3.Matcher_MatcherList_FieldMatcher{{
-				Predicate: &xdsmatcherv3.Matcher_MatcherList_Predicate{
-					MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_OrMatcher{
-						OrMatcher: &xdsmatcherv3.Matcher_MatcherList_Predicate_PredicateList{
-							Predicate: []*xdsmatcherv3.Matcher_MatcherList_Predicate{{
-								MatchType: &xdsmatcherv3.Matcher_MatcherList_Predicate_NotMatcher{NotMatcher: tls},
-							}, hostname},
-						},
-					},
-				},
-				OnMatch: toMatcher(next),
-			}},
-		}},
 	}
 }
 

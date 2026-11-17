@@ -2139,149 +2139,93 @@
           }
         ],
         "filterChainMatcher": {
-          "matcherList": {
-            "matchers": [
-              {
-                "predicate": {
-                  "orMatcher": {
-                    "predicate": [
-                      {
-                        "notMatcher": {
-                          "singlePredicate": {
-                            "input": {
-                              "name": "transport-protocol",
-                              "typedConfig": {
-                                "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.TransportProtocolInput"
-                              }
-                            },
-                            "valueMatch": {
-                              "exact": "tls"
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "singlePredicate": {
-                          "input": {
-                            "name": "sni",
-                            "typedConfig": {
-                              "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ServerNameInput"
-                            }
-                          },
-                          "valueMatch": {
-                            "safeRegex": {
-                              "googleRe2": {},
-                              "regex": "(?i)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\\.?"
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                },
-                "onMatch": {
+          "matcherTree": {
+            "input": {
+              "name": "transport-protocol",
+              "typedConfig": {
+                "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.TransportProtocolInput"
+              }
+            },
+            "exactMatchMap": {
+              "map": {
+                "tls": {
                   "matcher": {
                     "matcherTree": {
                       "input": {
-                        "name": "transport-protocol",
+                        "name": "tls-action",
                         "typedConfig": {
-                          "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.TransportProtocolInput"
+                          "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput",
+                          "key": "agentio.tls.action"
                         }
                       },
                       "exactMatchMap": {
                         "map": {
-                          "tls": {
+                          "deny": {
+                            "action": {
+                              "name": "sni-traffic-policy-deny",
+                              "typedConfig": {
+                                "@type": "type.googleapis.com/google.protobuf.StringValue",
+                                "value": "sni-traffic-policy-deny"
+                              }
+                            }
+                          },
+                          "fallthrough": {
+                            "action": {
+                              "name": "forward-tcp",
+                              "typedConfig": {
+                                "@type": "type.googleapis.com/google.protobuf.StringValue",
+                                "value": "forward-tcp"
+                              }
+                            }
+                          },
+                          "passthrough": {
+                            "action": {
+                              "name": "forward-tls",
+                              "typedConfig": {
+                                "@type": "type.googleapis.com/google.protobuf.StringValue",
+                                "value": "forward-tls"
+                              }
+                            }
+                          },
+                          "terminate": {
                             "matcher": {
                               "matcherTree": {
                                 "input": {
-                                  "name": "tls-action",
+                                  "name": "sni",
                                   "typedConfig": {
-                                    "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput",
-                                    "key": "agentio.tls.action"
+                                    "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ServerNameInput"
                                   }
                                 },
-                                "exactMatchMap": {
-                                  "map": {
-                                    "deny": {
-                                      "action": {
-                                        "name": "sni-traffic-policy-deny",
-                                        "typedConfig": {
-                                          "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                          "value": "sni-traffic-policy-deny"
-                                        }
-                                      }
-                                    },
-                                    "fallthrough": {
-                                      "action": {
-                                        "name": "forward-tcp",
-                                        "typedConfig": {
-                                          "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                          "value": "forward-tcp"
-                                        }
-                                      }
-                                    },
-                                    "passthrough": {
-                                      "action": {
-                                        "name": "forward-tls",
-                                        "typedConfig": {
-                                          "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                          "value": "forward-tls"
-                                        }
-                                      }
-                                    },
-                                    "terminate": {
-                                      "matcher": {
-                                        "matcherTree": {
-                                          "input": {
-                                            "name": "sni",
-                                            "typedConfig": {
-                                              "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ServerNameInput"
-                                            }
-                                          },
-                                          "customMatch": {
-                                            "name": "sni",
-                                            "typedConfig": {
-                                              "@type": "type.googleapis.com/xds.type.matcher.v3.ServerNameMatcher",
-                                              "domainMatchers": [
-                                                {
-                                                  "domains": [
-                                                    "legacy.example.com",
-                                                    "legacy.example.com."
-                                                  ],
-                                                  "onMatch": {
-                                                    "action": {
-                                                      "name": "forward-tls",
-                                                      "typedConfig": {
-                                                        "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                                        "value": "forward-tls"
-                                                      }
-                                                    }
-                                                  }
-                                                }
-                                              ]
-                                            }
-                                          }
-                                        },
-                                        "onNoMatch": {
+                                "customMatch": {
+                                  "name": "sni",
+                                  "typedConfig": {
+                                    "@type": "type.googleapis.com/xds.type.matcher.v3.ServerNameMatcher",
+                                    "domainMatchers": [
+                                      {
+                                        "domains": [
+                                          "legacy.example.com",
+                                          "legacy.example.com."
+                                        ],
+                                        "onMatch": {
                                           "action": {
-                                            "name": "tls-terminate",
+                                            "name": "forward-tls",
                                             "typedConfig": {
                                               "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                              "value": "tls-terminate"
+                                              "value": "forward-tls"
                                             }
                                           }
                                         }
                                       }
-                                    }
+                                    ]
                                   }
                                 }
                               },
                               "onNoMatch": {
                                 "action": {
-                                  "name": "sni-traffic-policy-deny",
+                                  "name": "tls-terminate",
                                   "typedConfig": {
                                     "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                    "value": "sni-traffic-policy-deny"
+                                    "value": "tls-terminate"
                                   }
                                 }
                               }
@@ -2291,61 +2235,70 @@
                       }
                     },
                     "onNoMatch": {
-                      "matcher": {
-                        "matcherTree": {
-                          "input": {
-                            "name": "application-protocol",
-                            "typedConfig": {
-                              "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ApplicationProtocolInput"
-                            }
-                          },
-                          "exactMatchMap": {
-                            "map": {
-                              "'h2c'": {
-                                "action": {
-                                  "name": "forward-http",
-                                  "typedConfig": {
-                                    "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                    "value": "forward-http"
-                                  }
-                                }
-                              },
-                              "'http/1.0'": {
-                                "action": {
-                                  "name": "forward-http",
-                                  "typedConfig": {
-                                    "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                    "value": "forward-http"
-                                  }
-                                }
-                              },
-                              "'http/1.1'": {
-                                "action": {
-                                  "name": "forward-http",
-                                  "typedConfig": {
-                                    "@type": "type.googleapis.com/google.protobuf.StringValue",
-                                    "value": "forward-http"
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        },
-                        "onNoMatch": {
-                          "action": {
-                            "name": "forward-tcp",
-                            "typedConfig": {
-                              "@type": "type.googleapis.com/google.protobuf.StringValue",
-                              "value": "forward-tcp"
-                            }
-                          }
+                      "action": {
+                        "name": "sni-traffic-policy-deny",
+                        "typedConfig": {
+                          "@type": "type.googleapis.com/google.protobuf.StringValue",
+                          "value": "sni-traffic-policy-deny"
                         }
                       }
                     }
                   }
                 }
               }
-            ]
+            }
+          },
+          "onNoMatch": {
+            "matcher": {
+              "matcherTree": {
+                "input": {
+                  "name": "application-protocol",
+                  "typedConfig": {
+                    "@type": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.ApplicationProtocolInput"
+                  }
+                },
+                "exactMatchMap": {
+                  "map": {
+                    "'h2c'": {
+                      "action": {
+                        "name": "forward-http",
+                        "typedConfig": {
+                          "@type": "type.googleapis.com/google.protobuf.StringValue",
+                          "value": "forward-http"
+                        }
+                      }
+                    },
+                    "'http/1.0'": {
+                      "action": {
+                        "name": "forward-http",
+                        "typedConfig": {
+                          "@type": "type.googleapis.com/google.protobuf.StringValue",
+                          "value": "forward-http"
+                        }
+                      }
+                    },
+                    "'http/1.1'": {
+                      "action": {
+                        "name": "forward-http",
+                        "typedConfig": {
+                          "@type": "type.googleapis.com/google.protobuf.StringValue",
+                          "value": "forward-http"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "onNoMatch": {
+                "action": {
+                  "name": "forward-tcp",
+                  "typedConfig": {
+                    "@type": "type.googleapis.com/google.protobuf.StringValue",
+                    "value": "forward-tcp"
+                  }
+                }
+              }
+            }
           }
         },
         "listenerFilters": [

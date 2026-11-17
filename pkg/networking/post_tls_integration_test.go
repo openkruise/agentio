@@ -45,6 +45,7 @@ import (
 	httpstate "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	metadata "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_metadata/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	matchinginput "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	tlsconfig "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"istio.io/istio/pkg/test"
@@ -57,6 +58,7 @@ import (
 // Uses generated post-termination filters and clusters with real TLS on both
 // sides. Static certificates and original-destination capture replace SDS/HBONE.
 func TestEnvoyPostTLSForwarding(t *testing.T) {
+	test.SetForTest(t, &features.EnableSNITrafficPolicy, false)
 	binary := os.Getenv("AGENTIO_TEST_ENVOY_BINARY")
 	if binary == "" {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY")
@@ -534,10 +536,11 @@ func startTLSEnvoy(t *testing.T, binary string, certificate pki.IssuedCertificat
 					ListenerSpecifier: &listener.Listener_InternalListener{
 						InternalListener: &listener.Listener_InternalListenerConfig{},
 					},
-					ListenerFilters: []*listener.ListenerFilter{originalDstFilter, tlsInspectorFilter},
-					FilterChains:    []*listener.FilterChain{chain},
-					FilterChainMatcher: b.sniHostnameMatcher(exactMatcher(transportProtocolInput,
-						map[string]*xdsmatcher.Matcher_OnMatch{"tls": b.toChain(chain.Name)}, nil)),
+					ListenerFilters: []*listener.ListenerFilter{originalDstFilter, tlsInspectorFilter, b.sniPolicyListenerFilter()},
+					FilterChains:    []*listener.FilterChain{chain, b.buildTCPDenyChain(sniDenyChain, "sni_policy_denied")},
+					FilterChainMatcher: exactMatcher(
+						typedExtension("tls-action", b.pack(&matchinginput.FilterStateInput{Key: tlsActionKey})),
+						map[string]*xdsmatcher.Matcher_OnMatch{"fallthrough": b.toChain(chain.Name)}, nil),
 				},
 				{
 					Name:    "outer",

@@ -15,10 +15,10 @@
 package networking
 
 import (
-	"regexp"
 	"testing"
 	"time"
 
+	udpatypev1 "github.com/cncf/xds/go/udpa/type/v1"
 	xdsmatcherv3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -350,7 +350,7 @@ func TestBuildWithoutSNITrafficPolicyUsesProtocolMatcher(t *testing.T) {
 	for _, chain := range internal.GetFilterChains() {
 		gotChains = append(gotChains, chain.GetName())
 	}
-	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain}; !equalStrings(gotChains, want) {
+	if want := []string{forwardHTTPChain, forwardTCPChain, forwardTLSChain, sniDenyChain}; !equalStrings(gotChains, want) {
 		t.Fatalf("MainInternal filter chains = %v, want %v without SNI policy runtime", gotChains, want)
 	}
 	tls := routingMatcher(internal).GetMatcherTree().GetExactMatchMap().GetMap()["tls"]
@@ -673,13 +673,13 @@ func TestGatewayProtocolDetectionTimeoutClosesConnection(t *testing.T) {
 
 func routingMatcher(listener *listenerv3.Listener) *xdsmatcherv3.Matcher {
 	matcher := listener.GetFilterChainMatcher()
-	if matcher.GetMatcherList() != nil {
-		return matcher.GetMatcherList().GetMatchers()[0].GetOnMatch().GetMatcher()
+	if matcher.GetMatcherTree().GetInput().GetName() == "tls-action" {
+		return matcher.GetOnNoMatch().GetMatcher()
 	}
 	return matcher
 }
 
-func TestSNIHostnameMatcher(t *testing.T) {
+func TestSNIValidationUsesRustActions(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		test.SetForTest(t, &features.EnableSNITrafficPolicy, enabled)
 		for _, legacy := range []bool{false, true} {
@@ -688,46 +688,51 @@ func TestSNIHostnameMatcher(t *testing.T) {
 				DiscoveryAddress: "agentiod.agentio-system.svc:15012",
 				TrustDomain:      "cluster.local",
 				Gateway: testGateway(&configv1.EgressGateway{TlsTermination: &configv1.TlsTerminationConfig{
-					IncludeHosts: []string{"*"},
-					ExcludeHosts: []string{"*"},
+					IncludeHosts: []string{"*"}, ExcludeHosts: []string{"*"},
 				}}),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener {
-				return &listenerv3.Listener{}
-			})
-			matcher := listeners[MainInternal].GetFilterChainMatcher()
+			listeners := messagesOf(t, resources, model.ListenerType, func() *listenerv3.Listener { return &listenerv3.Listener{} })
+			internal := listeners[MainInternal]
+			var module *udpatypev1.TypedStruct
+			for _, filter := range internal.ListenerFilters {
+				if filter.Name != "envoy.filters.listener.dynamic_modules" {
+					continue
+				}
+				config := &udpatypev1.TypedStruct{}
+				if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
+					t.Fatal(err)
+				}
+				if config.Value.Fields["filter_name"].GetStringValue() == "envoy_agentio_sni_policy" {
+					module = config
+				}
+			}
 			if legacy {
-				if matcher.GetMatcherList() != nil {
-					t.Fatal("legacy matcher must remain unchanged")
+				if module != nil {
+					t.Fatal("legacy gateway must not load the native listener")
 				}
 				continue
 			}
-			if matcher.OnNoMatch != nil || len(matcher.GetMatcherList().GetMatchers()) != 1 {
-				t.Fatal("invalid SNI must have no filter-chain fallback")
+			if module == nil {
+				t.Fatal("native gateway must validate SNI even with policy disabled")
 			}
-			predicates := matcher.GetMatcherList().GetMatchers()[0].GetPredicate().GetOrMatcher().GetPredicate()
-			if len(predicates) != 2 ||
-				!proto.Equal(predicates[0].GetNotMatcher().GetSinglePredicate().GetInput(), transportProtocolInput) ||
-				predicates[0].GetNotMatcher().GetSinglePredicate().GetValueMatch().GetExact() != "tls" ||
-				!proto.Equal(predicates[1].GetSinglePredicate().GetInput(), serverNameInput) {
-				t.Fatal("only cleartext or a valid TLS hostname may reach the routing matcher")
+			if internal.GetFilterChainMatcher().GetMatcherList() != nil {
+				t.Fatal("SNI validation must not be duplicated in an Envoy predicate")
 			}
-			pattern := predicates[1].GetSinglePredicate().GetValueMatch().GetSafeRegex().GetRegex()
-			// Envoy StringMatcher uses a full match; anchor the Go equivalent.
-			hostname := regexp.MustCompile("^(?:" + pattern + ")$")
-			for _, name := range []string{"api.example.com", "A.B.EXAMPLE.COM.", "xn--bcher-kva.example", "node-1"} {
-				if !hostname.MatchString(name) {
-					t.Errorf("valid SNI %q rejected", name)
+			findFilterChain(t, internal, sniDenyChain)
+			if enabled {
+				if module.Value.Fields["filter_config"] != nil {
+					t.Fatal("enabled policy uses the default listener config")
 				}
-			}
-			for _, name := range []string{"", "api.example.com:8443", "api.example.com:443", "[::1]:443",
-				"user@api.example.com", "api.example.com/path", "*.example.com", "a..example", "-api.example",
-				"api-.example", "api_example.com", "é.example", "\n", "a\nb"} {
-				if hostname.MatchString(name) {
-					t.Errorf("invalid SNI %q accepted", name)
+			} else {
+				settings := module.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStructValue()
+				if settings.Fields["policy_enabled"] == nil || settings.Fields["policy_enabled"].GetBoolValue() {
+					t.Fatal("static routing must skip policy evaluation")
+				}
+				if got := internal.FilterChainMatcher.GetMatcherTree().GetExactMatchMap().GetMap()["deny"].GetAction().GetName(); got != sniDenyChain {
+					t.Fatalf("invalid SNI routes to %q, want denial", got)
 				}
 			}
 		}

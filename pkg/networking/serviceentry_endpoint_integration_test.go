@@ -49,6 +49,7 @@ import (
 	mdns "github.com/miekg/dns"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/test"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
@@ -506,26 +507,6 @@ func endpointServiceEntryConfig(
 		HttpFilters: []*hcm.HttpFilter{connectAuthorityHTTPFilter,
 			httpFilter("envoy.filters.http.router", b.pack(&router.Router{}))},
 	}
-	if features.EnableSNITrafficPolicy {
-		action := "passthrough"
-		if strings.HasPrefix(mode, "terminate") {
-			action = "terminate"
-		}
-		// Inject the module decision so this test needs only the stock Envoy binary.
-		decision := httpFilter(
-			"test.tls_action",
-			b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{{
-				Key:                &common.FilterStateValue_ObjectKey{ObjectKey: tlsActionKey},
-				FactoryKey:         "envoy.hashable_string",
-				ReadOnly:           true,
-				SharedWithUpstream: common.FilterStateValue_ONCE,
-				Value: &common.FilterStateValue_FormatString{FormatString: formatString(
-					"%CEL('x-test-tls-action' in request.headers ? request.headers['x-test-tls-action'] : '" + action + "')%",
-				)},
-			}}}),
-		)
-		outer.HttpFilters = append([]*hcm.HttpFilter{decision}, outer.HttpFilters...)
-	}
 	// Replace HBONE mTLS/Porter with HTTP CONNECT, keeping destination restoration.
 	listeners[0] = &listener.Listener{
 		Name:    "test",
@@ -535,10 +516,20 @@ func endpointServiceEntryConfig(
 		}},
 	}
 	// Exercise the production modules, with loopback origins allowed only by this fixture.
+	policyJSON := `{"profiles":[]}`
+	if features.EnableSNITrafficPolicy {
+		action := "SNI_ACTION_PASSTHROUGH"
+		if strings.HasPrefix(mode, "terminate") {
+			action = "SNI_ACTION_TLS_TERMINATION"
+		}
+		allow := fmt.Sprintf(`{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":%q}]}}]}`, action)
+		deny := `{"profiles":[{"uid":"test","sniPolicy":{"rules":[{"match":{"sni":["*"]},"action":"SNI_ACTION_DENY"}]}}]}`
+		policyJSON = fmt.Sprintf(`%%CEL('x-test-tls-action' in request.headers && request.headers['x-test-tls-action'] == 'deny' ? %q : %q)%%`, deny, allow)
+	}
 	policy := httpFilter("test.policy", b.pack(&httpstate.Config{OnRequestHeaders: []*common.FilterStateValue{{
 		Key:        &common.FilterStateValue_ObjectKey{ObjectKey: "agentio.connection.policy_json"},
 		FactoryKey: "envoy.string",
-		Value:      &common.FilterStateValue_FormatString{FormatString: formatString(`{"profiles":[]}`)},
+		Value:      &common.FilterStateValue_FormatString{FormatString: formatString(policyJSON)},
 	}}}))
 	beforeRouter := len(outer.HttpFilters) - 1
 	filters := append(outer.HttpFilters[:beforeRouter:beforeRouter], policy)
@@ -560,7 +551,7 @@ func endpointServiceEntryConfig(
 
 	for _, l := range listeners {
 		l.ListenerFilters = slices.DeleteFunc(l.ListenerFilters, func(f *listener.ListenerFilter) bool {
-			return f.Name == "envoy.filters.listener.dynamic_modules"
+			return proto.Equal(f, inspectionDeadlineFilter)
 		})
 		for _, chain := range l.FilterChains {
 			for _, f := range chain.Filters {
