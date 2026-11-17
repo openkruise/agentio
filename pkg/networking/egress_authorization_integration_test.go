@@ -135,6 +135,15 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 	provider := &configv1.ExtProcProvider{Service: "127.0.0.1", Port: uint32(rpc.Addr().(*net.TCPAddr).Port)}
 	for _, pinned := range []bool{false, true} {
 		t.Run(fmt.Sprintf("epe=%t", pinned), func(t *testing.T) {
+			// Keep the configured address stable so LDS updates reuse the listening socket.
+			reservation, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := uint32(reservation.Addr().(*net.TCPAddr).Port)
+			if err := reservation.Close(); err != nil {
+				t.Fatal(err)
+			}
 			directory := t.TempDir()
 			cdsPath, ldsPath := filepath.Join(directory, "cds.json"), filepath.Join(directory, "lds.json")
 			writeResources := func(path, typeURL, version string, resources ...*anypb.Any) {
@@ -197,7 +206,7 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 					t.Fatal(b.err)
 				}
 			}
-			update("1", nil, 0)
+			update("1", nil, port)
 			cfg := &bootstrapv3.Bootstrap{
 				Node: &corev3.Node{Id: "egress-test", Cluster: "egress-test"},
 				DynamicResources: &bootstrapv3.Bootstrap_DynamicResources{
@@ -211,7 +220,6 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 			address, _ := runCompatibilityEnvoy(t, binary, string(data))
-			port := uint32(netip.MustParseAddrPort(address).Port())
 			client := &http.Client{Timeout: time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 			t.Cleanup(client.CloseIdleConnections)
 			request := func(loopback bool) int {
