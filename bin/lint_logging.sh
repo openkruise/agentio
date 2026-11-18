@@ -63,7 +63,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   checked=$((checked + 1))
 
   # 1. Stacks are split by process. agentiod and Porter use pkg/log; EPE
-  #    uses controller-runtime's logr. Neither imports the other's stack.
+  #    uses controller-runtime's logr. agentiod bridges dependency logs at startup.
   case "${f}" in
     extensions/epe/*)
       case "${f}" in
@@ -75,6 +75,10 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
             "EPE logs through logr; pkg/log belongs to the agentiod and Porter processes"
           ;;
       esac
+      ;;
+    cmd/agentiod/logging.go)
+      scan "${f}" '"github\.com/go-logr/zapr"|"go\.uber\.org/zap' \
+        "agentiod bridges dependency logs to slog; zap belongs to the EPE process"
       ;;
     *)
       scan "${f}" '"github\.com/go-logr/(logr|zapr)"|"go\.uber\.org/zap|controller-runtime/pkg/log' \
