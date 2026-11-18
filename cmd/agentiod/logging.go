@@ -17,7 +17,9 @@ package main
 import (
 	"log/slog"
 
+	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"istio.io/istio/pkg/env"
 )
@@ -38,4 +40,5 @@ var (
 func installLogger(logger *slog.Logger) {
 	slog.SetDefault(logger)
 	klog.SetSlogLogger(logger)
+	ctrllog.SetLogger(logr.FromSlogHandler(logger.Handler()))
 }
