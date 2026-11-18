@@ -164,10 +164,9 @@ func (rm *Match) Matches(req *httpreq.HTTPRequest) bool {
 }
 
 func (rm *Match) matchDomain(host string) bool {
-	if len(rm.Domains) == 0 {
-		return false
-	}
+	host = strings.TrimSuffix(host, ".")
 	for _, domain := range rm.Domains {
+		domain = strings.TrimSuffix(domain, ".")
 		if domain == "*" {
 			return true
 		}

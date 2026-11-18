@@ -485,7 +485,11 @@ func newEPECertificate(t *testing.T, issuer *tls.Certificate, identity string) t
 		if err != nil {
 			t.Fatal(err)
 		}
-		cert.URIs = []*url.URL{id}
+		if id.Scheme == "" {
+			cert.DNSNames = []string{identity}
+		} else {
+			cert.URIs = []*url.URL{id}
+		}
 		cert.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 		parent, signingKey = issuer.Leaf, issuer.PrivateKey
 	}

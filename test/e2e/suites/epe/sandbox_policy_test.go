@@ -178,22 +178,22 @@ func TestSandboxInlinePolicyLifecycle(t *testing.T) {
 
 func TestSandboxE2BNetwork(t *testing.T) {
 	f := newSandboxPolicyFixture(t)
+	f.useTrustedE2BOrigin(t)
 	caller := f.caller(t, "sandbox-e2b", true)
-	host := trafficFixture.Server.Address()
+	host := f.serverName
 	const path = "/sandbox-e2b"
 	origin := f.check(t, caller, caller.id, path, true, http.StatusOK, "Hostname=")
-	const native = `{
-  "rules": [{
+	const httpRules = `"rules": [{
     "name":"native-block",
     "match":[{"domains":["*"],"schemes":["http"],"paths":[{"type":"Exact","value":"/sandbox-block"}]}],
     "actions":{"block":{"statusCode":451,"body":"native-block"}}
-  }],
-  "tcpRules":[{"name":"native-deny-http","match":[{"ports":[80]}],"action":"Deny"}]
+  }]`
+	const native = `{` + httpRules + `,"tcpRules":[{"name":"native-deny-http","match":[{"ports":[80]}],"action":"Deny"}]
 }`
-	apply := func(t *testing.T, network string) {
+	apply := func(t *testing.T, profile, network string) {
 		t.Helper()
 		f.annotations(t, caller, map[string]any{
-			"agents.kruise.io/security-profile": native,
+			"agents.kruise.io/security-profile": profile,
 			"agents.kruise.io/e2b-network":      `{"allowInternetAccess":false,"network":{` + network + `}}`,
 		})
 	}
@@ -207,14 +207,14 @@ func TestSandboxE2BNetwork(t *testing.T) {
 	allowDomain := fmt.Sprintf(`"allowOut":[%q]`, host)
 
 	if !t.Run("transform alone does not grant access", func(t *testing.T) {
-		apply(t, `"allowOut":["other.invalid"],`+transform)
+		apply(t, native, `"allowOut":["other.invalid"],`+transform)
 		reply := f.check(t, caller, caller.id, path, true, http.StatusForbidden, "")
 		verifyMITM(t, reply)
 	}) {
 		return
 	}
 	if !t.Run("domain allow without a transform passes TLS through", func(t *testing.T) {
-		apply(t, allowDomain)
+		apply(t, native, allowDomain)
 		reply := f.check(t, caller, caller.id, path, true, http.StatusOK, "Hostname=")
 		if !bytes.Equal(reply.peer.Raw, origin.peer.Raw) {
 			t.Fatal("E2B TLS passthrough replaced the origin certificate")
@@ -225,7 +225,7 @@ func TestSandboxE2BNetwork(t *testing.T) {
 		return
 	}
 	if !t.Run("domain allow with a transform terminates TLS and forwards the request", func(t *testing.T) {
-		apply(t, allowDomain+","+transform)
+		apply(t, native, allowDomain+","+transform)
 		for _, id := range []string{caller.id, ""} {
 			reply := f.check(t, caller, id, path, true, http.StatusOK, "RequestHeader=X-Sandbox-Policy:e2b-https")
 			verifyMITM(t, reply)
@@ -234,8 +234,11 @@ func TestSandboxE2BNetwork(t *testing.T) {
 		return
 	}
 	t.Run("native TCP denial precedes E2B CIDR allow", func(t *testing.T) {
-		apply(t, `"allowOut":["0.0.0.0/0","::/0"]`)
+		const addresses = `"allowOut":["0.0.0.0/0","::/0"]`
+		apply(t, native, addresses)
 		f.check(t, caller, caller.id, path, false, http.StatusForbidden, "")
+		apply(t, "{"+httpRules+"}", addresses)
+		f.check(t, caller, caller.id, path, false, http.StatusOK, "Hostname=")
 	})
 }
 
@@ -285,12 +288,12 @@ func TestSandboxIdentitySelection(t *testing.T) {
 	}
 }
 
-func applySandboxPolicyConfig(t *testing.T, scope *kube.ResourceScope) {
+func applySandboxPolicyConfig(t *testing.T, scope *kube.ResourceScope, host, upstreamCA string) {
 	t.Helper()
 	rig.ApplyConfig(
 		t,
 		scope,
-		map[string]any{"Namespace": resolvedAgentioConfig.Namespace, "Host": trafficFixture.Server.Address()},
+		map[string]any{"Namespace": resolvedAgentioConfig.Namespace, "Host": host, "UpstreamCA": upstreamCA},
 		`
 apiVersion: v1
 kind: ConfigMap
@@ -320,6 +323,11 @@ data:
     egressGateways:
     - name: egress-gateway
       namespace: {{ .Namespace }}
+      {{ if .UpstreamCA }}
+      upstreamTrustBundle:
+        additionalSources:
+        - configMapRef: {name: {{ .UpstreamCA }}, key: ca.crt}
+      {{ end }}
       tlsTermination:
         includeHosts: [{{ .Host | printf "%q" }}]
 `,

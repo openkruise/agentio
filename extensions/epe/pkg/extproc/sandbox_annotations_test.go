@@ -44,17 +44,19 @@ func TestSandboxNativeAndE2BComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name    string
-		native  string
-		network string
-		host    string
-		status  int
+		name        string
+		native      string
+		network     string
+		host        string
+		status      int
+		wantHeaders map[string]string
 	}{
-		{"E2B HTTP bypass before native TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 0},
-		{"native block before E2B HTTP bypass", `{"rules":[{"name":"native","match":[{"domains":["api.example.com"]}],"actions":{"block":{"statusCode":451}}}]}`, `{"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 451},
-		{"native TCP deny before E2B TCP allow", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"network":{"allowOut":["10.0.0.0/8"]}}`, "10.1.2.3:443", 403},
-		{"native TCP allow before E2B TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Allow"}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 0},
-		{"nonterminal native header continues to E2B deny", `{"rules":[{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 403},
+		{"E2B HTTP bypass before native TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 0, nil},
+		{"overlapping transforms", `{}`, `{"network":{"allowOut":["api.example.com"],"rules":{"*.example.com":[{"transform":{"headers":{"X-Team":"shared","X-Broad":"yes"}}}],"api.example.com":[{"transform":{"headers":{"x-team":"api","X-Exact":"yes"}}}]}}}`, "api.example.com.:443", 0, map[string]string{"x-team": "api", "x-broad": "yes", "x-exact": "yes"}},
+		{"native block before E2B HTTP bypass", `{"rules":[{"name":"native","match":[{"domains":["api.example.com"]}],"actions":{"block":{"statusCode":451}}}]}`, `{"network":{"allowOut":["api.example.com"]}}`, "api.example.com:443", 451, nil},
+		{"native TCP deny before E2B TCP allow", `{"tcpRules":[{"name":"native","match":[{}],"action":"Deny"}]}`, `{"network":{"allowOut":["10.0.0.0/8"]}}`, "10.1.2.3:443", 403, nil},
+		{"native TCP allow before E2B TCP deny", `{"tcpRules":[{"name":"native","match":[{}],"action":"Allow"}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 0, nil},
+		{"nonterminal native header continues to E2B deny", `{"rules":[{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}]}`, `{"allowInternetAccess":false}`, "10.1.2.3:443", 403, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := profilestore.MakeFakeStore(regs...)
@@ -96,6 +98,12 @@ func TestSandboxNativeAndE2BComposition(t *testing.T) {
 			}
 			if got := int(responses[0].GetImmediateResponse().GetStatus().GetCode()); got != tc.status {
 				t.Fatalf("status=%d, want %d: %v", got, tc.status, responses)
+			}
+			mutation := responses[0].GetRequestHeaders().GetResponse().GetHeaderMutation()
+			for name, want := range tc.wantHeaders {
+				if got, ok := mutationSetValue(mutation, name); !ok || got != want {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
 			}
 		})
 	}

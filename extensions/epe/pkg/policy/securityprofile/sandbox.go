@@ -22,6 +22,7 @@ package securityprofile
 
 import (
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
 	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
@@ -47,6 +48,9 @@ const AnnotationSecurityRules = v1alpha1.AnnotationSecurityRules
 func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 	spec, err := kruise.SandboxSecurityProfile(sandbox)
 	if err != nil || spec == nil {
+		return nil, err
+	}
+	if _, err := policy.CompileSNIRules(spec.Rules); err != nil {
 		return nil, err
 	}
 	profile, err := newProfile(sandboxMeta(sandbox), spec)

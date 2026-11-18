@@ -107,7 +107,11 @@ func TestSandboxHTTPSResponseSurvivesTunnelCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := sandboxPolicyFixture{gateway: strings.TrimPrefix(gateway.URL, "https://"), serverIP: host}
+	f := sandboxPolicyFixture{
+		gateway:    strings.TrimPrefix(gateway.URL, "https://"),
+		serverIP:   host,
+		serverName: "example.com",
+	}
 	caller := sandboxCaller{tls: &tls.Config{RootCAs: roots, NextProtos: []string{"h2"}}}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()

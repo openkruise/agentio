@@ -17,6 +17,7 @@ package compiler
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
@@ -39,7 +40,8 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 		Name:      "sandbox",
 		Namespace: "tenant",
 		Annotations: map[string]string{
-			kruise.AnnotationSecurityProfile: `{"inputs":[{"name":"data","inline":{}}],"rules":[{"name":"native","match":[{"domains":["api.example.com"],"schemes":["https"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}],"tcpRules":[{"name":"native-deny","match":[{}],"action":"Deny"}]}`,
+			// EPE validates audit webhooks after delivery.
+			kruise.AnnotationSecurityProfile: `{"audit":[{"name":"missing-webhook"}],"inputs":[{"name":"data","inline":{}}],"rules":[{"name":"native","match":[{"domains":["api.example.com"],"schemes":["https"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"yes"}]}}}],"tcpRules":[{"name":"native-deny","match":[{}],"action":"Deny"}]}`,
 			kruise.AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"],"rules":{"api.example.com":[{"transform":{"headers":{"X-Tenant":"demo"}}}]}}}`,
 		},
 	}}
@@ -76,9 +78,12 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 	if err := json.Unmarshal(profile.PolicyJson, &http); err != nil {
 		t.Fatal(err)
 	}
-	if len(http.Rules) != 4 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" ||
+	if len(http.Rules) != 3 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" ||
 		http.Inputs[0].Inline == nil {
 		t.Fatalf("HTTP composition or inputs lost: %s", profile.PolicyJson)
+	}
+	if len(http.Audit) != 1 || http.Audit[0].Name != "missing-webhook" || http.Audit[0].Webhook != nil {
+		t.Fatalf("audit configuration changed in transit: %s", profile.PolicyJson)
 	}
 	if len(profile.TcpPolicy.Rules) != 3 || profile.TcpPolicy.Rules[0].Name != "native-deny" ||
 		profile.TcpPolicy.Rules[2].Name != "e2b-deny-rest" {
@@ -194,7 +199,7 @@ func TestSandboxInlineSecurityRulesLifecycle(t *testing.T) {
 	sandbox.Policies = &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: rules}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
-		return fixture.compiler.Failures()["SandboxPolicies/"+sandbox.UID] != ""
+		return strings.Contains(fixture.compiler.Failures()["SandboxPolicies/"+sandbox.UID], "*bad.example")
 	}, "invalid SNI records a compilation failure")
 	awaitHosts("inline", []string{"updated.example"})
 

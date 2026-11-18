@@ -123,6 +123,14 @@ func validateSandboxProfile(namespace string, spec *agents.SecurityProfileSpec) 
 		}
 	}
 	for _, rule := range spec.Rules {
+		if len(rule.Match) == 0 {
+			return fmt.Errorf("inline rule %q requires a match", rule.Name)
+		}
+		for i, match := range rule.Match {
+			if len(match.Domains) == 0 {
+				return fmt.Errorf("inline rule %q match[%d] requires domains", rule.Name, i)
+			}
+		}
 		if action := rule.Actions.TokenTransformation; action != nil {
 			ref := action.CredentialRef
 			if ref.Secret != nil || ref.Kind == agents.CredentialRefKindSecret {
@@ -196,18 +204,13 @@ func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
 		spec.Rules = append(
 			spec.Rules,
 			agents.SecurityRule{
-				Name:    "allow-http",
-				Match:   []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"http"}}},
-				Actions: agents.SecurityRuleActions{Bypass: true},
-			},
-			agents.SecurityRule{
 				Name:    "allow-tls",
 				Match:   []agents.RuleMatch{{Domains: allowDomains}},
 				Actions: agents.SecurityRuleActions{TLS: &agents.TLSAction{Action: agents.TLSActionPassthrough}},
 			},
 			agents.SecurityRule{
-				Name:    "allow-https",
-				Match:   []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"https"}}},
+				Name:    "allow-web",
+				Match:   []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"http", "https"}}},
 				Actions: agents.SecurityRuleActions{Bypass: true},
 			},
 		)

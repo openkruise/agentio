@@ -32,6 +32,7 @@ func TestE2BDestinationPolicy(t *testing.T) {
 		target  string
 		allowed bool
 	}{
+		{"ingress settings are owned by Sandbox Manager", `{"allowInternetAccess":false,"network":{"allowPublicTraffic":true,"futureIngressOption":{"mode":"private"}}}`, "10.0.0.1:443", false},
 		{"default allow", `{}`, "10.0.0.1:443", true},
 		{"false denies private too", `{"allowInternetAccess":false}`, "10.0.0.1:443", false},
 		{"false denies IPv6", `{"allowInternetAccess":false}`, "[2001:db8::1]:443", false},
@@ -78,7 +79,7 @@ func TestSandboxAnnotationComposition(t *testing.T) {
 		t.Fatalf("native inputs lost: %+v", spec.Inputs)
 	}
 	if spec.Rules[0].Name != "native-tls" || spec.Rules[1].Name != "native-http" ||
-		spec.Rules[2].Name != "e2b-allow-http" ||
+		spec.Rules[2].Name != "e2b-allow-tls" ||
 		spec.TCPRules[0].Name != "e2b-deny-rest" {
 		t.Fatalf("native rules must precede generated rules: %+v", spec)
 	}
@@ -114,9 +115,12 @@ func TestSandboxAnnotationErrors(t *testing.T) {
 		{AnnotationSecurityProfile: `{} {}`},
 		{AnnotationSecurityProfile: `{"priority":1}`},
 		{AnnotationSecurityProfile: `{"selector":{}}`},
-		{AnnotationSecurityProfile: `{"rules":[{"actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"credential"}}}}}]}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"secret","match":[{"domains":["*"]}],"actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"credential"}}}}}]}`},
 		{AnnotationSecurityProfile: `{"inputs":[{"name":"foreign","configMap":{"name":"data","namespace":"other"}}]}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"block","actions":{"block":{}}}]}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"block","match":[{}],"actions":{"block":{}}}]}`},
 		{AnnotationE2BNetwork: `null`},
+		{AnnotationE2BNetwork: `{} {}`},
 		{AnnotationE2BNetwork: `{"network":{"egressProxy":{"address":"proxy.example:1080"}}}`},
 		{AnnotationE2BNetwork: `{"allowInternetAccess":"false"}`},
 		{AnnotationE2BNetwork: `{"network":{"allowOut":["https://example.com"]}}`},
