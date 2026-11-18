@@ -16,37 +16,6 @@ syntax = "proto3";
 package agentio.config.v1;
 option go_package = "github.com/openkruise/agentio/api/config/v1;configv1";
 
-// EPEConfig configures EPE's extension providers.
-// YAML or JSON is decoded from each watched ConfigMap's data.config entry.
-// Base and primary ConfigMaps overlay startup defaults in that order. Missing
-// ConfigMaps or blank entries leave the lower layer unchanged. Invalid updates
-// retain the last valid configuration; an invalid initial configuration uses
-// startup defaults. Valid changes take effect without restarting EPE.
-// Secret and ConfigMap references default to the configuration namespace.
-//
-// Example: register a callout service and a default credential service.
-//
-//   extensionProviders:
-//   - name: policy-check
-//     httpCallout:
-//       url: https://policy.example.com/check
-//       timeout: 500ms
-//   - name: corporate
-//     credentialProvider:
-//       url: https://credentials.example.com/get
-//       timeout: 2s
-//   defaultProviders:
-//     credentialProvider: corporate
-message EPEConfig {
-  // Named services available to EPE. Names must be unique across provider types.
-  // Layers merge by name; a same-name entry replaces the whole provider.
-  // Omitted or null lists inherit the lower layer; an explicit [] clears it.
-  repeated ExtensionProvider extension_providers = 1;
-
-  // Default services used when a caller does not select a provider explicitly.
-  DefaultExtensionProviders default_providers = 2;
-}
-
 // ExtensionProvider registers one typed service under a unique name.
 message ExtensionProvider {
   // Local registration name, such as "corporate". Must be a DNS subdomain.
@@ -161,7 +130,7 @@ message CredentialProvider {
 //     caConfigMapRef:
 //       name: provider-ca
 //
-// Example: use Secrets in the EPEConfig namespace for trust and client identity.
+// Example: use Secrets in the AgentioConfig namespace for trust and client identity.
 //
 //   tls:
 //     caSecretRef:
@@ -223,7 +192,7 @@ message ClientTLS {
 message TargetReference {
   // Required resource name.
   string name = 1;
-  // Defaults to the EPEConfig namespace, not the calling workload's namespace.
+  // Defaults to the AgentioConfig namespace, not the calling workload's namespace.
   // An explicit Secret namespace requires list/watch access there for the EPE ServiceAccount.
   string namespace = 2;
 }

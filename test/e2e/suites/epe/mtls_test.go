@@ -160,7 +160,7 @@ func TestEPEGatewayMTLS(t *testing.T) {
 		}
 		return record
 	}
-	// Start without an EPEConfig: client authentication depends only on CA trust.
+	// Start without a watched AgentioConfig because client authentication depends only on CA trust.
 	applyRoots := func(t *testing.T, value string, mode kube.Mode) {
 		apply(t, "ConfigMap", name+"-roots", map[string]any{"data": map[string]any{"root-cert.pem": value}}, mode)
 	}
@@ -629,8 +629,6 @@ spec:
   - name: epe
     image: {{ .Image }}
     args:
-    - -epe-config={{ .Name }}
-    - -epe-config-primary={{ .Name }}-primary
     - -namespace={{ .Namespace }}
     - -tls-source=ca
     - -ca-address=agentiod.{{ .Namespace }}.svc:15012
@@ -640,6 +638,8 @@ spec:
     - --xds-root-path=/var/run/secrets/agentio/root-cert.pem
     - --xds-token-path=/var/run/secrets/tokens/agentio-token
     env:
+    - {name: AGENTIO_CONFIGMAP_NAME, value: {{ .Name }}}
+    - {name: AGENTIO_PRIMARY_CONFIGMAP_NAME, value: {{ .Name }}-primary}
     - {name: CREDENTIAL_PROVIDER_MTLS_SOURCE, value: none}
     - name: POD_NAME
       valueFrom: {fieldRef: {fieldPath: metadata.name}}

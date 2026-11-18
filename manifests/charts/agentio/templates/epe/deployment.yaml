@@ -46,8 +46,6 @@ spec:
           image: {{ include "epe.image" . | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           args:
-            - -epe-config={{ include "epe.fullname" . }}-config
-            - -epe-config-primary={{ include "epe.fullname" . }}-config-primary
             - -namespace={{ .Release.Namespace }}
             - -secret-watch-scope={{ .Values.epe.secretWatchScope }}
             - --security-profile-source={{ .Values.epe.securityProfileSource }}
@@ -78,6 +76,10 @@ spec:
             - -metrics-port={{ .Values.epe.service.metricsPort }}
             - -audit-webhook-insecure-skip-verify={{ .Values.epe.auditWebhook.insecureSkipVerify }}
           env:
+            - name: AGENTIO_CONFIGMAP_NAME
+              value: {{ .Values.agentiod.config.name | quote }}
+            - name: AGENTIO_PRIMARY_CONFIGMAP_NAME
+              value: {{ .Values.agentiod.config.primaryName | quote }}
             - name: AGENTIO_SANDBOX_MODE
               value: {{ .Values.sandbox.enabled | quote }}
             - name: POD_NAMESPACE

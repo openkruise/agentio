@@ -30,9 +30,9 @@ import (
 	"github.com/openkruise/agentio/pkg/kube"
 )
 
-// Configuration is the layered EPEConfig together with its resolved certificate material.
+// Configuration contains the provider fields of AgentioConfig and their resolved certificate material.
 type Configuration struct {
-	config.Config[*configv1.EPEConfig]
+	config.Config[*configv1.AgentioConfig]
 	Materials map[string]TLSMaterial
 }
 
@@ -43,11 +43,11 @@ func (c Configuration) Equals(other Configuration) bool {
 }
 
 // NewCollection resolves provider Secrets, CA ConfigMaps, and certificate files
-// downstream of the validated EPEConfig collection. Call before client.Run.
+// downstream of the validated AgentioConfig collection. Call before client.Run.
 func NewCollection(
 	client kube.Client,
 	namespace string,
-	configs krt.Collection[config.Config[*configv1.EPEConfig]],
+	configs krt.Collection[config.Config[*configv1.AgentioConfig]],
 	configMaps krt.Collection[*corev1.ConfigMap],
 	debugger *krt.DebugHandler,
 	stop <-chan struct{},
@@ -58,7 +58,11 @@ func NewCollection(
 	files := newFileDependencies(stop, opts.WithName("CertificateFiles")...)
 	return krt.NewCollection(
 		configs,
-		func(ctx krt.HandlerContext, cfg config.Config[*configv1.EPEConfig]) *Configuration {
+		func(ctx krt.HandlerContext, cfg config.Config[*configv1.AgentioConfig]) *Configuration {
+			cfg.Value = &configv1.AgentioConfig{
+				ExtensionProviders: cfg.Value.GetExtensionProviders(),
+				DefaultProviders:   cfg.Value.GetDefaultProviders(),
+			}
 			var paths []string
 			refs := map[string]struct{}{}
 			for _, provider := range cfg.Value.GetExtensionProviders() {
@@ -121,7 +125,7 @@ func (r *Registry) RegisterCollection(configs krt.Collection[Configuration]) krt
 		cfg := event.Latest()
 		err := r.Apply(cfg.Value, cfg.Materials)
 		if err != nil && !errors.Is(err, ErrClosed) {
-			log.Log.WithName("epe-config").Error(err, "EPEConfig application failed")
+			log.Log.WithName("epe-providers").Error(err, "apply extension providers from AgentioConfig")
 		}
 	})
 }

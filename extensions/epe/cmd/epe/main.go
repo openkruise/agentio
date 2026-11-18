@@ -65,26 +65,17 @@ import (
 	"github.com/openkruise/agentio/pkg/demandcache"
 	"github.com/openkruise/agentio/pkg/dns"
 	"github.com/openkruise/agentio/pkg/envdoc"
+	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/kube/kclient"
 )
 
 var (
-	epeConfigName = flag.String(
-		"epe-config",
-		"agentio-epe-config",
-		"Base EPEConfig ConfigMap for extension providers; absence leaves defaults unchanged",
-	)
-	epeConfigPrimaryName = flag.String(
-		"epe-config-primary",
-		"agentio-epe-config-primary",
-		"Primary EPEConfig ConfigMap applied after the base; empty disables the overlay",
-	)
 	systemNamespace = flag.String(
 		"namespace",
 		os.Getenv("POD_NAMESPACE"),
-		"System namespace where EPE runs and its EPEConfig lives; defaults to POD_NAMESPACE",
+		"System namespace for AgentioConfig and EPE Secret references; defaults to POD_NAMESPACE",
 	)
 	secretWatchScope = flag.String(
 		"secret-watch-scope",
@@ -198,6 +189,8 @@ func run() error {
 	if printEnv.Enabled {
 		return printEnv.Write(os.Stdout, envdoc.Options{
 			Prefixes: []string{
+				"AGENTIO_CONFIGMAP_NAME",
+				"AGENTIO_PRIMARY_CONFIGMAP_NAME",
 				"AGENTIO_KUBERNETES_API_",
 				"IDENTITY_PROVIDER_",
 				"TOKEN_CACHE_",
@@ -215,8 +208,8 @@ func run() error {
 	if *profileDeletionGracePeriod < 0 {
 		return fmt.Errorf("--profile-deletion-grace-period must not be negative")
 	}
-	if *epeConfigName == "" {
-		return fmt.Errorf("--epe-config must not be empty")
+	if features.AgentioConfigMapName == "" {
+		return fmt.Errorf("AGENTIO_CONFIGMAP_NAME must not be empty")
 	}
 	secretNamespace, err := tokenSecretNamespace(*systemNamespace, *secretWatchScope)
 	if err != nil {
@@ -233,7 +226,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Kubernetes supplies EPEConfig, profile inputs and credential material.
+	// Kubernetes supplies AgentioConfig, profile inputs and credential material.
 	kubeConfig, err := kube.LoadConfig(*kubeconfig)
 	if err != nil {
 		setupLog.Error(err, "failed to load Kubernetes configuration")
@@ -255,7 +248,7 @@ func run() error {
 	// a static authoring error is rejected at the collection boundary (with
 	// last-known-good retention) instead of on the first matching request.
 	// See wiring.BuildFilters for ordering semantics.
-	defaults, err := wiring.DefaultEPEConfig()
+	defaults, err := wiring.DefaultProviderConfig()
 	if err != nil {
 		return fmt.Errorf("initialize EPE config: %w", err)
 	}
@@ -282,14 +275,14 @@ func run() error {
 	}
 	cms := kclient.NewFiltered[*corev1.ConfigMap](client, kclient.Filter{})
 	cms.Start(ctx.Done())
-	configMaps := krt.WrapClient(cms, krt.WithName("EPEConfigMaps"), krt.WithStop(ctx.Done()))
-	configs := config.NewCollection(configMaps, config.Options[*configv1.EPEConfig]{
+	configMaps := krt.WrapClient(cms, krt.WithName("ConfigMaps"), krt.WithStop(ctx.Done()))
+	configs := config.NewCollection(configMaps, config.Options[*configv1.AgentioConfig]{
 		Namespace: *systemNamespace,
-		Names:     []string{*epeConfigName, *epeConfigPrimaryName},
+		Names:     []string{features.AgentioConfigMapName, features.PrimaryAgentioConfigMapName},
 		Defaults:  defaults,
-		Apply:     extensionprovider.ApplyConfig,
+		Apply:     config.ApplyAgentioConfig,
 		Validate:  extensionprovider.Validate,
-	}, krt.WithName("EPEConfig"), krt.WithStop(ctx.Done())).AsCollection()
+	}, krt.WithName("AgentioConfig"), krt.WithStop(ctx.Done())).AsCollection()
 	providerConfigs := extensionprovider.NewCollection(client, *systemNamespace,
 		configs, configMaps, nil, ctx.Done())
 	providerReg := providers.RegisterCollection(providerConfigs)

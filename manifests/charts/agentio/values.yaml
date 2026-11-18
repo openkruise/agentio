@@ -109,6 +109,7 @@ agentiod:
   config:
     name: agentio-config
     primaryName: agentio-config-primary
+    # Shared AgentioConfig fields, including EPE's extensionProviders and defaultProviders.
     values: {}
     sourcesName: agentio-config-sources
     sources: ""
@@ -365,12 +366,6 @@ epe:
   xdsCache:
     idleTTL: 10m
     maxEntries: 0
-  # EPE always watches <epe-name>-config and <epe-name>-config-primary in its namespace.
-  # Set config to have Helm create EPEConfig with extensionProviders and defaultProviders.
-  # null leaves the base externally managed; primary is always externally managed.
-  # Providers merge by name across environment defaults, base, and primary.
-  # The environment provider is named agentio-default-credential-provider.
-  config: null
   # system watches the EPE namespace; cluster watches all namespaces and grants global Secret list/watch.
   secretWatchScope: system
   mode: disabled

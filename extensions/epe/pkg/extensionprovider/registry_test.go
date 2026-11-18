@@ -41,8 +41,8 @@ import (
 	"github.com/openkruise/agentio/pkg/kube"
 )
 
-func decodeConfig(raw string) (*configv1.EPEConfig, error) {
-	cfg, err := config.Apply(raw, &configv1.EPEConfig{})
+func decodeConfig(raw string) (*configv1.AgentioConfig, error) {
+	cfg, err := config.Apply(raw, &configv1.AgentioConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func TestRegistryRoutesAndIsolatesRevisions(t *testing.T) {
 	if err != nil || sts.AccessKeyID != "B" {
 		t.Fatalf("STS: %+v %v", sts, err)
 	}
-	if err := r.Apply(&configv1.EPEConfig{}, nil); err != nil {
+	if err := r.Apply(&configv1.AgentioConfig{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Fetch(
@@ -471,7 +471,7 @@ func TestRegistryDefaultIsAnOrdinaryProvider(t *testing.T) {
 	if r.current.providers["default"] != first {
 		t.Fatal("unchanged default was rebuilt")
 	}
-	if err := r.Apply(&configv1.EPEConfig{}, nil); err != nil {
+	if err := r.Apply(&configv1.AgentioConfig{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.current.providers) != 0 || r.current.defaultCredential != "" {

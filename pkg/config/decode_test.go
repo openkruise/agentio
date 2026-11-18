@@ -33,7 +33,7 @@ func TestApplyConfigOverlay(t *testing.T) {
 - name: base
   credentialProvider: {url: https://base.example}
 defaultProviders: {credentialProvider: base}
-`, &configv1.EPEConfig{})
+`, &configv1.AgentioConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ proto_files=(
   api/extensions/v1/snipolicy.proto
   api/security/v1/snipolicy.proto
   api/security/v1/tcppolicy.proto
-  api/config/v1/epeconfig.proto
+  api/config/v1/extensionprovider.proto
   api/config/v1/agentioconfig.proto
 )
 

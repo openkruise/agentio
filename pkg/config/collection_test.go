@@ -45,23 +45,23 @@ func TestCollectionDefaultsOverlaysAndLastGood(t *testing.T) {
 		nil,
 		[]*corev1.ConfigMap{cm("base", "base"), cm("primary", "reject")},
 		opts.WithName("Sources")...)
-	defaults := &configv1.EPEConfig{
+	defaults := &configv1.AgentioConfig{
 		DefaultProviders: &configv1.DefaultExtensionProviders{CredentialProvider: "default"},
 	}
 	rejected := make(chan struct{}, 2)
-	col := config.NewCollection(sources.AsCollection(), config.Options[*configv1.EPEConfig]{
+	col := config.NewCollection(sources.AsCollection(), config.Options[*configv1.AgentioConfig]{
 		Namespace: "system",
 		Names:     []string{"base", "", "primary"},
 		Key:       "settings",
 		Defaults:  defaults,
-		Apply: func(content string, base *configv1.EPEConfig) (*configv1.EPEConfig, error) {
+		Apply: func(content string, base *configv1.AgentioConfig) (*configv1.AgentioConfig, error) {
 			value, err := config.Apply(content, base)
 			if err != nil {
 				rejected <- struct{}{}
 			}
 			return value, err
 		},
-		Validate: func(value *configv1.EPEConfig) error {
+		Validate: func(value *configv1.AgentioConfig) error {
 			if value.GetDefaultProviders().GetCredentialProvider() == "reject" {
 				rejected <- struct{}{}
 				return fmt.Errorf("rejected selection")
@@ -72,7 +72,7 @@ func TestCollectionDefaultsOverlaysAndLastGood(t *testing.T) {
 	// Construction owns a snapshot of defaults, independent of caller mutation.
 	defaults.DefaultProviders.CredentialProvider = "modified"
 	events := make(chan string, 10)
-	registration := col.AsCollection().Register(func(event krt.Event[config.Config[*configv1.EPEConfig]]) {
+	registration := col.AsCollection().Register(func(event krt.Event[config.Config[*configv1.AgentioConfig]]) {
 		events <- event.Latest().Value.GetDefaultProviders().GetCredentialProvider()
 	})
 	if !registration.WaitUntilSynced(ctx.Done()) {

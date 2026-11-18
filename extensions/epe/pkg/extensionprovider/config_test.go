@@ -35,7 +35,7 @@ func TestApplyConfigLayers(t *testing.T) {
       caSecretRef: {name: roots}
 defaultProviders: {credentialProvider: inherited}
 `
-	base, err := config.Apply(baseYAML, &configv1.EPEConfig{})
+	base, err := config.Apply(baseYAML, &configv1.AgentioConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,9 +109,9 @@ defaultProviders: {credentialProvider: inherited}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ApplyConfig(tc.raw, base)
+			got, err := config.ApplyAgentioConfig(tc.raw, base)
 			if (err != nil) != tc.invalid {
-				t.Fatalf("ApplyConfig() error = %v, want invalid=%v", err, tc.invalid)
+				t.Fatalf("config.ApplyAgentioConfig() error = %v, want invalid=%v", err, tc.invalid)
 			}
 			if !proto.Equal(base, original) {
 				t.Fatal("overlay mutated the lower layer")
@@ -119,7 +119,7 @@ defaultProviders: {credentialProvider: inherited}`,
 			if tc.invalid {
 				return
 			}
-			want, err := config.Apply(tc.want, &configv1.EPEConfig{})
+			want, err := config.Apply(tc.want, &configv1.AgentioConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

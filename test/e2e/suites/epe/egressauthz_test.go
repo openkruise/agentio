@@ -440,13 +440,13 @@ spec:
   - name: epe
     image: {{ .Image }}
     args:
-    - --epe-config=epe-egressauthz
-    - --epe-config-primary=epe-egressauthz-primary
     - --namespace={{ .Namespace }}
     - --xds-address=agentiod.{{ .Namespace }}.svc:15012
     - --xds-root-path=/var/run/xds-root/root-cert.pem
     - --xds-token-path=/var/run/xds-token/token
     env:
+    - {name: AGENTIO_CONFIGMAP_NAME, value: epe-egressauthz}
+    - {name: AGENTIO_PRIMARY_CONFIGMAP_NAME, value: epe-egressauthz-primary}
     - name: POD_NAME
       valueFrom: {fieldRef: {fieldPath: metadata.name}}
     - name: POD_NAMESPACE

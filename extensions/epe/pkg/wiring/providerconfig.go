@@ -21,13 +21,13 @@ import (
 
 const defaultCredentialProviderName = "agentio-default-credential-provider"
 
-// DefaultEPEConfig assembles the lowest layer from environment-configured providers.
-func DefaultEPEConfig() (*configv1.EPEConfig, error) {
+// DefaultProviderConfig assembles EPE's defaults from environment-configured providers.
+func DefaultProviderConfig() (*configv1.AgentioConfig, error) {
 	provider, err := credentialProviderFromEnv()
 	if err != nil {
 		return nil, err
 	}
-	cfg := &configv1.EPEConfig{}
+	cfg := &configv1.AgentioConfig{}
 	if provider != nil {
 		cfg.ExtensionProviders = []*configv1.ExtensionProvider{{
 			Name:     defaultCredentialProviderName,

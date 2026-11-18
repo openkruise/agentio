@@ -104,7 +104,7 @@ func newWireHarness(t *testing.T, endpoint, payload string) *enginetest.Harness 
 	t.Helper()
 	providers := &extensionprovider.Registry{}
 	t.Cleanup(providers.Close)
-	if err := providers.Apply(&configv1.EPEConfig{ExtensionProviders: []*configv1.ExtensionProvider{{
+	if err := providers.Apply(&configv1.AgentioConfig{ExtensionProviders: []*configv1.ExtensionProvider{{
 		Name: "scanner",
 		Provider: &configv1.ExtensionProvider_HttpCallout{HttpCallout: &configv1.HTTPCalloutProvider{
 			Url:     endpoint,
