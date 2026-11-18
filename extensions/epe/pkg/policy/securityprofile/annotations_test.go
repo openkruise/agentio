@@ -107,7 +107,13 @@ func TestSandboxHeaderTransformsRunInMergedOrder(t *testing.T) {
 					t.Fatal("TCP checkpoint must follow all HTTP rules")
 				}
 				if tc.host == "api.example.com" {
-					scope := inputs.NewScope(inputs.Request{}, inputs.Workload{Name: "sandbox"}, inputs.Profile{}, inputs.Rule{}, nil)
+					scope := inputs.NewScope(
+						inputs.Request{},
+						inputs.Workload{Name: "sandbox"},
+						inputs.Profile{},
+						inputs.Rule{},
+						nil,
+					)
 					for _, want := range []struct {
 						ruleIndex int
 						value     string
