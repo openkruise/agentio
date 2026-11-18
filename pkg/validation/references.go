@@ -54,6 +54,7 @@ type ReferenceChecker struct {
 	servicesSynced   krt.Collection[bool]
 }
 
+// NewReferenceChecker checks references against the control-plane caches.
 func NewReferenceChecker(sources ReferenceSources, stop <-chan struct{}) *ReferenceChecker {
 	return &ReferenceChecker{
 		sources:          sources,
@@ -119,7 +120,10 @@ func (v *ReferenceChecker) SecurityProfile(ctx krt.HandlerContext, p model.Secur
 		refPath := actions.Child("tokenTransformation", "credentialRef")
 		ref, err := policy.NormalizeCredentialRef(tt.CredentialRef)
 		if err != nil {
-			issues = append(issues, ReferenceIssue{Field: refPath.String(), Reason: "InvalidReference", Message: err.Error()})
+			issues = append(
+				issues,
+				ReferenceIssue{Field: refPath.String(), Reason: "InvalidReference", Message: err.Error()},
+			)
 			continue
 		}
 		if ref.CredentialProvider != nil {
@@ -137,9 +141,14 @@ func (v *ReferenceChecker) SecurityProfile(ctx krt.HandlerContext, p model.Secur
 		// Policy validation assumes EPE uses the same Secret access scope.
 		if v.sources.ScopedSecrets && namespace != v.sources.RootNamespace {
 			issues = append(issues, ReferenceIssue{
-				Field:   refPath.String(),
-				Reason:  "RefNotPermitted",
-				Message: fmt.Sprintf("Rule %q: Secret %s is outside the permitted namespace %s", rule.Name, key, v.sources.RootNamespace),
+				Field:  refPath.String(),
+				Reason: "RefNotPermitted",
+				Message: fmt.Sprintf(
+					"Rule %q: Secret %s is outside the permitted namespace %s",
+					rule.Name,
+					key,
+					v.sources.RootNamespace,
+				),
 			})
 			continue
 		}
@@ -227,11 +236,13 @@ func (v *ReferenceChecker) TrafficPolicy(ctx krt.HandlerContext, p model.Traffic
 				}
 				path := field.NewPath("spec", direction.name, "rules").Index(i).Child(member).Index(j).String()
 				key := cmp.Or(peer.Service.Namespace, namespace) + "/" + peer.Service.Name
-				issues = append(issues, checkCachedReference(ctx, v.sources.Services, v.servicesSynced, key, ReferenceIssue{
-					Field:   path + ".service.name",
-					Reason:  "ServiceNotFound",
-					Message: fmt.Sprintf("%s: Service %s not found", path, key),
-				})...)
+				issues = append(
+					issues,
+					checkCachedReference(ctx, v.sources.Services, v.servicesSynced, key, ReferenceIssue{
+						Field:   path + ".service.name",
+						Reason:  "ServiceNotFound",
+						Message: fmt.Sprintf("%s: Service %s not found", path, key),
+					})...)
 			}
 		}
 	}

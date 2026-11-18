@@ -204,7 +204,14 @@ func TestProfileProviderReferencesTrackAgentioConfig(t *testing.T) {
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(callout), *c.compileProfile(oauth)},
 		krt.WithStop(t.Context().Done()))
 	results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
-	got := awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ProviderNotFound")
+	got := awaitResult(
+		t,
+		results,
+		callout.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderNotFound",
+	)
 	assert.Equal(t, got.Conditions[1].Message,
 		`Rule "scan": HTTP callout provider "scanner" is missing`)
 	awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
@@ -234,9 +241,23 @@ defaultProviders: {credentialProvider: credentials}
 - name: credentials
   httpCallout: {url: https://credentials.example}
 `)
-	got = awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ProviderTypeMismatch")
+	got = awaitResult(
+		t,
+		results,
+		callout.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderTypeMismatch",
+	)
 	assert.Equal(t, got.Conditions[1].Message, `Rule "scan": provider "scanner" must be an HTTP callout provider`)
-	got = awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ProviderTypeMismatch")
+	got = awaitResult(
+		t,
+		results,
+		oauth.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderTypeMismatch",
+	)
 	assert.Equal(t, got.Conditions[1].Message, `Rule "exchange": provider "credentials" must be a credential provider`)
 
 	setPrimary("extensionProviders: []")
@@ -249,7 +270,14 @@ defaultProviders: {credentialProvider: credentials}
 
 	setPrimary("defaultProviders: {}")
 	awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
-	got = awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "DefaultProviderDisabled")
+	got = awaitResult(
+		t,
+		results,
+		oauth.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"DefaultProviderDisabled",
+	)
 	assert.Equal(t, got.Conditions[1].Message, `Rule "exchange": the default credential provider is disabled`)
 
 	maps.DeleteObject("system/agentio-config-primary")
@@ -315,7 +343,11 @@ func TestProfileReferenceCheckScope(t *testing.T) {
 			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
 			got := awaitResult(t, results, s.ResourceName(), tc.accepted, tc.status, tc.reason)
 			if tc.reason == "RefNotPermitted" {
-				assert.Equal(t, got.Conditions[1].Message, `Rule "r": Secret demo/cred is outside the permitted namespace system`)
+				assert.Equal(
+					t,
+					got.Conditions[1].Message,
+					`Rule "r": Secret demo/cred is outside the permitted namespace system`,
+				)
 			}
 		})
 	}

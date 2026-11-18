@@ -181,9 +181,9 @@ spec:
         to:
           - cidr: "not-a-valid-cidr"
 `)
-		if _, err := invalid.Apply(ctx, kube.CreateOnly); !apierrors.IsForbidden(err) ||
+		if _, err := invalid.Apply(ctx, kube.CreateOnly); !apierrors.IsInvalid(err) ||
 			!strings.Contains(err.Error(), "invalid CIDR") {
-			t.Fatalf("create invalid CIDR policy: got %v, want admission rejection", err)
+			t.Fatalf("create invalid CIDR policy: got %v, want Invalid for CIDR", err)
 		}
 
 		// A rejected policy must not prevent subsequent valid policy propagation.
@@ -487,9 +487,9 @@ spec:
 		src.CallOrFail(t, dst.CallOptionsOrFail(t, "http").WithCheck(check.Error()))
 
 		invalid := trafficPolicy(name, namespace, selector, "allow", "not-a-valid-cidr")
-		if _, err := scope.Apply(ctx, invalid, kube.ReconcileOwned); !apierrors.IsForbidden(err) ||
+		if _, err := scope.Apply(ctx, invalid, kube.ReconcileOwned); !apierrors.IsInvalid(err) ||
 			!strings.Contains(err.Error(), "invalid CIDR") {
-			t.Fatalf("update invalid CIDR policy: got %v, want admission rejection", err)
+			t.Fatalf("update invalid CIDR policy: got %v, want Invalid for CIDR", err)
 		}
 		src.CallOrFail(t, dst.CallOptionsOrFail(t, "http").WithCheck(check.Error()))
 	})

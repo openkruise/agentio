@@ -45,7 +45,10 @@ func ValidateSecurityProfile(profile model.SecurityProfile) field.ErrorList {
 			errs = append(errs, field.Invalid(path, field.OmitValueType{}, "set exactly one input source"))
 		}
 		if input.ConfigMap != nil && input.ConfigMap.Namespace == "" && profile.Namespace == "" {
-			errs = append(errs, field.Required(path.Child("configMap", "namespace"), "global profiles require an explicit namespace"))
+			errs = append(
+				errs,
+				field.Required(path.Child("configMap", "namespace"), "global profiles require an explicit namespace"),
+			)
 		}
 	}
 	errs = append(errs, validateAudits(profile.Spec.Audit, spec.Child("audit"))...)
@@ -78,7 +81,10 @@ func validateSecurityRule(rule agents.SecurityRule, path *field.Path) field.Erro
 			errs = append(errs, field.Invalid(namePath, name, strings.Join(problems, ", ")))
 		}
 		if callout.Request == nil && callout.Response == nil {
-			errs = append(errs, field.Invalid(calloutPath, field.OmitValueType{}, "requires at least one request or response phase"))
+			errs = append(
+				errs,
+				field.Invalid(calloutPath, field.OmitValueType{}, "requires at least one request or response phase"),
+			)
 		}
 		for _, entry := range []struct {
 			name  string

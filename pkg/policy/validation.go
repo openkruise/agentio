@@ -56,7 +56,10 @@ func ValidateTrafficPolicy(spec agentsv1alpha1.TrafficPolicySpec) field.ErrorLis
 					peerPath := path.Child(entry.name).Index(j)
 					if peer.CIDR != "" {
 						if _, err := parsePrefix(peer.CIDR); err != nil {
-							errs = append(errs, field.Invalid(peerPath.Child("cidr"), peer.CIDR, "invalid CIDR: "+err.Error()))
+							errs = append(
+								errs,
+								field.Invalid(peerPath.Child("cidr"), peer.CIDR, "invalid CIDR: "+err.Error()),
+							)
 						}
 					}
 					if peer.Workload != nil {

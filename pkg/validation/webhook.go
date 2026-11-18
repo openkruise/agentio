@@ -82,7 +82,9 @@ func Register(mux *http.ServeMux, references *ReferenceChecker) {
 			if len(errs) != 0 {
 				kind := schema.GroupKind{Group: req.Kind.Group, Kind: req.Kind.Kind}
 				status := apierrors.NewInvalid(kind, name, errs).ErrStatus
-				return admission.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: false, Result: &status}}
+				return admission.Response{
+					AdmissionResponse: admissionv1.AdmissionResponse{Allowed: false, Result: &status},
+				}
 			}
 			var warnings []string
 			for _, issue := range issues {
