@@ -4,6 +4,12 @@
 
 This guide installs Agentio with sidecar injection, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
 
+## How sidecar mode works
+
+When Kubernetes creates a Pod in an enrolled namespace, the `agentiod` admission webhook injects a ztunnel named `agentio-proxy`. In the default sidecar profile, `agentio-init` installs redirect rules in the Pod's network namespace before the application starts. Those rules steer captured connections to the ztunnel running alongside the application. Each replica gets its own proxy when its Pod is created.
+
+For an outbound connection, that proxy checks the workload's traffic policy and forwards allowed traffic according to its egress route. See the [sidecar and ambient traffic paths](../getting-started.md#how-the-two-modes-handle-outbound-traffic).
+
 ## Before you begin
 
 Complete the prerequisites in [Getting started](../getting-started.md). If the cluster already runs Istio or another sidecar injector, inspect the existing namespace labels and mutating webhooks before continuing.

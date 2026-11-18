@@ -86,13 +86,18 @@ Sandbox annotations support `security-profile` and `e2b-network`, combined into 
 
 ## Compiled profile delivery
 
-```text
-Workload → ordered PolicyReference → shared SecurityProfile
-                                    ├─ SNIPolicy
-                                    └─ TCPPolicy
-Sandbox → inline SecurityProfile
-          ├─ SNIPolicy
-          └─ TCPPolicy
+```mermaid
+flowchart TB
+    accTitle: Compiled SecurityProfile delivery over xDS
+    compiler["agentiod"] -->|Publishes| resources
+    subgraph resources["xDS resources"]
+        workload["Workload"] -->|"Ordered references"| profile["Shared SecurityProfile<br/>HTTP JSON · SNI · TCP"]
+        sandbox["Sandbox with inline SecurityProfile"]
+    end
+    resources --> porter["Porter"]
+    resources --> epe["EPE in xDS mode"]
+    porter -->|"Ordered SNI and TCP policy"| gateway["Native gateway<br/>TLS selection and TCP authorization"]
+    epe -->|"Ordered profile snapshot"| http["HTTP rules and TCP checks<br/>on the forwarding destination"]
 ```
 
 The two policy messages update together within one SecurityProfile. Multiple shared

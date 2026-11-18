@@ -8,6 +8,23 @@ A `SecurityProfile` can match only Workloads in its own namespace. A `GlobalSecu
 
 For each selected profile, EPE visits rules in the order they appear in `spec.rules`. A rule is added to the chain when any entry in `match` matches the request. Within one match entry, `domains` and every supplied restriction are ANDed; separate match entries are ORed. A broad matching rule does not prevent later, more-specific rules from running.
 
+For gateway-routed HTTP, EPE finishes each profile's HTTP rules and TCP destination checks before moving to the next profile. A header change alone leaves the destination subject to that profile's `tcpRules`.
+
+```mermaid
+flowchart TD
+    accTitle: HTTP and TCP evaluation across SecurityProfiles
+    next{"Another selected profile?"} -->|Yes| http["Run matching HTTP rules"]
+    http -->|"Block or other immediate response"| reply["Return local response"]
+    http -->|Bypass| auth["Final destination authorization"]
+    http -->|"No terminal action"| tcp{"First matching TCP rule?"}
+    tcp -->|Deny| reject["Reject request"]
+    tcp -->|Allow| auth
+    tcp -->|"No match"| next
+    next -->|No| auth
+```
+
+Final authorization checks the forwarding address against applicable destination restrictions before Envoy connects upstream. For a worked example, see [Check the destination after an HTTP header change](../reference/security-profile.md#check-the-destination-after-an-http-header-change).
+
 ## Action and continuation order
 
 EPE executes the matched rule chain in profile and rule order. Within every rule, actions run in a fixed order:

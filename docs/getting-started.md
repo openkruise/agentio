@@ -19,6 +19,41 @@ Install the [Kruise Agents API](https://github.com/openkruise/agents-api) before
 
 The standalone chart defaults to `profile: sidecar`; set `profile: ambient` for ambient mode.
 
+### How the two modes handle outbound traffic
+
+```mermaid
+flowchart TB
+    accTitle: Sidecar and ambient outbound traffic
+    subgraph sidecar["Sidecar · one node"]
+        inject["agentiod injector"]
+        subgraph sA["Pod A"]
+            appA["Application"] --> proxyA["agentio-proxy"]
+        end
+        subgraph sB["Pod B"]
+            appB["Application"] --> proxyB["agentio-proxy"]
+        end
+        inject -.-> sA
+        inject -.-> sB
+    end
+    subgraph ambient["Ambient · one node"]
+        cni["Agentio CNI"]
+        cni -.-> podA["Pod A"]
+        cni -.-> podB["Pod B"]
+        podA --> shared["Shared node ztunnel"]
+        podB --> shared
+    end
+    proxyA --> route{"Egress route"}
+    proxyB --> route
+    shared --> route
+    route -->|PASSTHROUGH| destination["External destination"]
+    route -->|GATEWAY| gateway["Egress gateway"]
+    gateway -->|Authorized| destination
+```
+
+Dotted arrows show capture setup. Solid arrows trace outbound traffic.
+
+In both modes, `agentiod` distributes workload and policy configuration to ztunnel. Ztunnel enforces the workload's L3/L4 policy and uses the configured egress route. The gateway can apply additional destination checks and call the Egress Policy Enforcer (EPE) for HTTP processing. See the [EPE request path](concepts/epe-overview.md).
+
 If OpenKruise Agents creates the workload, start with [Integrate OpenKruise Agents](integrations/openkruise-agents.md) instead. Its embedded installation runs Agentio in the sandbox-manager release and uses sandbox-controller's traffic-proxy injection.
 
 If Istio ambient already captures your workloads, use [Integrate with Istio ambient](integrations/istio-ambient.md) to run an Agentio egress waypoint with the existing Istio CNI, ztunnel, and CA. That guide includes its own deployment, policy, and verification steps; follow it instead of the shared task sequence below.

@@ -26,7 +26,9 @@ $ kubectl get pods \
 
 `spec.selector` selects calling Pods, not the external service. A namespaced profile can select only Pods in its own namespace; an empty selector selects every Pod in that namespace. Use narrow labels where possible.
 
-Each rule requires `domains`; add `paths`, `methods`, `ports`, `schemes`, `headers`, or `queryParams` to further restrict it. Match semantics are documented in the [SecurityProfile reference](../reference/security-profile.md#rule-structure-and-matching).
+Each HTTP rule in `spec.rules` requires `domains`; add `paths`, `methods`, `ports`, `schemes`, `headers`, or `queryParams` to further restrict it. Match semantics are documented in the [SecurityProfile reference](../reference/security-profile.md#rule-structure-and-matching).
+
+To allow or deny gateway destinations by IP address and port, use `spec.tcpRules`. See the [TCP destination rule examples](../reference/security-profile.md#tcp-destination-rules).
 
 A terminal action stops all later EPE processing and returns a response. A non-terminal action applies its mutation and lets the request continue.
 
