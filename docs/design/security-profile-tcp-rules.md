@@ -82,7 +82,7 @@ This changes native gateway deployment contracts: install the updated SecurityPr
 
 The API types and CRDs are available in [agents-api #67](https://github.com/openkruise/agents-api/pull/67). Agentio pins `github.com/openkruise/agents-api` to `v0.7.0-alpha1.0.20261113034313-6be2827c6155`; no local module replacement is required. TCP actions use the API's `TCPActionType` values `Allow` and `Deny`. Destination matches accept CIDRs and individual IP addresses.
 
-Sandbox annotations continue to support the existing `security-rules` array. A new inline policy annotation format requires a coordinated Sandbox Manager change and is outside this change.
+Sandbox annotations support `security-profile` and `e2b-network`, combined into one inline profile in the order `security-profile.rules → E2B.rules → security-profile.tcpRules → E2B.tcpRules`. The legacy `security-rules` array remains compatible but is mutually exclusive with `security-profile`. See the [Sandbox annotation reference](../reference/security-profile.md#sandbox-policy-annotations) for conversion and update semantics. Sandbox Manager writes the snapshots; its API and migration switch are separate from Agentio's annotation consumption.
 
 ## Compiled profile delivery
 

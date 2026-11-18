@@ -117,10 +117,11 @@ func newSandboxes(
 			}
 			var policies *model.SandboxPolicies
 			if HasSecurityRules(sandbox) {
-				rules, err := sandboxSecurityRules(sandbox)
-				policies = &model.SandboxPolicies{SecurityRules: rules}
+				profile, err := SandboxSecurityProfile(sandbox)
 				if err != nil {
-					policies.InputError = err.Error()
+					policies = &model.SandboxPolicies{InputError: err.Error()}
+				} else {
+					policies = &model.SandboxPolicies{SecurityProfile: profile}
 				}
 			}
 			return &model.Sandbox{
@@ -134,8 +135,8 @@ func newSandboxes(
 		}, options...)
 }
 
-func sandboxSecurityRules(sandbox *agentsv1alpha1.Sandbox) ([]agentsv1alpha1.SecurityRule, error) {
-	raw := sandbox.Annotations[agentsv1alpha1.AnnotationSecurityRules]
+func sandboxSecurityRules(sandbox metav1.Object) ([]agentsv1alpha1.SecurityRule, error) {
+	raw := sandbox.GetAnnotations()[agentsv1alpha1.AnnotationSecurityRules]
 	if raw == "" {
 		return nil, nil
 	}
@@ -192,7 +193,10 @@ func OwnsPod(pod *corev1.Pod) bool {
 	return false
 }
 
-// HasSecurityRules reports whether the Sandbox declares inline security rules.
+// HasSecurityRules reports whether the Sandbox declares an inline security policy.
 func HasSecurityRules(sandbox metav1.Object) bool {
-	return sandbox.GetAnnotations()[agentsv1alpha1.AnnotationSecurityRules] != ""
+	a := sandbox.GetAnnotations()
+	_, native := a[AnnotationSecurityProfile]
+	_, e2b := a[AnnotationE2BNetwork]
+	return native || e2b || a[agentsv1alpha1.AnnotationSecurityRules] != ""
 }

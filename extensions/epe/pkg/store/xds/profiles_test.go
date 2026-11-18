@@ -162,9 +162,6 @@ func TestSandboxProfilesAreAtomicAndHostBound(t *testing.T) {
 		decoded.profile.Meta.AdmissionRevision <= revision {
 		t.Fatal("watches did not assign ordered admission revisions")
 	}
-	if decoded.profile.RawSandboxRules != "" {
-		t.Fatal("xDS retained unused admin rules JSON")
-	}
 	f := testSource()
 	f.snapshot.Synced[model.SecurityProfileType], f.snapshot.Synced[model.SandboxType] = true, true
 	f.snapshot.Resources[model.SandboxType] = map[string]*xdsclient.Resource{

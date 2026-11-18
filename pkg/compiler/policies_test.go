@@ -867,13 +867,17 @@ func TestCompilerProjectsSandboxSNIWithoutInlineAttachment(t *testing.T) {
 		EgressPolicies: []*extensionsv1.EgressPolicy{{Policy: extensionsv1.EgressPolicyAction_PASSTHROUGH}},
 	}})
 	inputs := validCompilerInputs(stop)
-	inputs.Sandboxes = krt.NewStaticCollection(nil, []model.Sandbox{{
-		UID:      workload.UID,
-		Attester: &model.Attester{WorkloadUID: workload.UID},
-		Policies: &model.SandboxPolicies{SecurityRules: []agentsv1alpha1.SecurityRule{
-			{Name: "api", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"api.example.com"}}}},
-		}},
-	}}, options...)
+	inputs.Sandboxes = krt.NewStaticCollection(nil, []model.Sandbox{
+		{
+			UID:      workload.UID,
+			Attester: &model.Attester{WorkloadUID: workload.UID},
+			Policies: &model.SandboxPolicies{
+				SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: []agentsv1alpha1.SecurityRule{
+					{Name: "api", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"api.example.com"}}}},
+				}},
+			},
+		},
+	}, options...)
 	inputs.Workloads = workloads.AsCollection()
 	inputs.Services = services
 	inputs.Endpoints = endpoints

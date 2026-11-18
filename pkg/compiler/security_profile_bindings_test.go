@@ -102,7 +102,9 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 			Match:   []agentsv1alpha1.RuleMatch{{Domains: []string{"API.Example.COM."}, Ports: []int32{8443}}},
 			Actions: agentsv1alpha1.SecurityRuleActions{TLS: &agentsv1alpha1.TLSAction{Action: tc.action}},
 		}}
-		sandbox.Policies = &model.SandboxPolicies{SecurityRules: profile.Spec.Rules}
+		sandbox.Policies = &model.SandboxPolicies{
+			SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: profile.Spec.Rules},
+		}
 		fixture.securityProfiles.ConditionalUpdateObject(profile)
 		fixture.sandboxes.ConditionalUpdateObject(sandbox)
 		await(&extensionsv1.SniTrafficPolicy{Rules: []*extensionsv1.SniRule{{
@@ -112,7 +114,9 @@ func TestSecurityProfileTLSActionsReachWorkloadAndSandbox(t *testing.T) {
 	}
 	profile.Spec = *profile.Spec.DeepCopy()
 	profile.Spec.Rules[0].Actions.TLS.Action = "invalid"
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: profile.Spec.Rules}
+	sandbox.Policies = &model.SandboxPolicies{
+		SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: profile.Spec.Rules},
+	}
 	fixture.securityProfiles.ConditionalUpdateObject(profile)
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	testutil.Eventually(t, func() bool {
@@ -258,7 +262,9 @@ func TestSandboxSecurityProfileInline(t *testing.T) {
 	sibling := model.Sandbox{UID: "kruise:two", Namespace: "demo", Attester: &model.Attester{WorkloadUID: workload.UID}}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	fixture.sandboxes.ConditionalUpdateObject(sibling)
-	sandbox.Policies = &model.SandboxPolicies{SecurityRules: []agentsv1alpha1.SecurityRule{}}
+	sandbox.Policies = &model.SandboxPolicies{
+		SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: []agentsv1alpha1.SecurityRule{}},
+	}
 	fixture.sandboxes.ConditionalUpdateObject(sandbox)
 	shared := model.SecurityProfile{Name: "shared", Namespace: "demo"}
 	fixture.securityProfiles.ConditionalUpdateObject(shared)

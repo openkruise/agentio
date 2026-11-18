@@ -146,7 +146,8 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 				valid := inline == nil && step.raw == ""
 				if inline != nil {
 					valid = (step.invalid && inline.InputError != "") ||
-						(!step.invalid && inline.InputError == "" && reflect.DeepEqual(inline.SecurityRules, want))
+						(!step.invalid && inline.InputError == "" && inline.SecurityProfile != nil &&
+							reflect.DeepEqual(inline.SecurityProfile.Rules, want))
 				}
 				return current.Attester == nil && valid, nil
 			},

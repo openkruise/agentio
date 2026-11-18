@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// sandbox.go compiles the per-Sandbox security rules carried in the
-// agents.kruise.io/security-rules annotation. Only the Sandbox Manager may
-// write that annotation (the tenant-facing metadata key is blacklisted for
+// sandbox.go compiles the per-Sandbox policy annotations. Only the Sandbox Manager may
+// write these annotations (the tenant-facing metadata key is blacklisted for
 // direct use), and the rules are evaluated under the verified workload
 // namespace/name of the Sandbox source — so the lookup is an exact
 // namespace/name match, never a label selector, which a workload could
@@ -22,12 +21,8 @@
 package securityprofile
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"strings"
-
 	"github.com/openkruise/agentio/pkg/model"
+	"github.com/openkruise/agentio/pkg/policy"
 	"github.com/openkruise/agentio/pkg/registry/kubernetes/kruise"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
@@ -37,13 +32,9 @@ import (
 
 // AnnotationSecurityRules is the Sandbox annotation that carries the
 // normalized rule chain: a JSON array of v1alpha1.SecurityRule.
-//
-// The literal mirrors the Sandbox Manager's annotation key. It stays a local
-// constant because the agents-api module does not export it yet; switch to
-// v1alpha1.AnnotationSecurityRules once it lands upstream.
-const AnnotationSecurityRules = "agents.kruise.io/security-rules"
+const AnnotationSecurityRules = v1alpha1.AnnotationSecurityRules
 
-// NewSandboxProfile compiles the rule chain of one Sandbox into a
+// NewSandboxProfile compiles the combined rule chain of one Sandbox into a
 // Profile. It reads only object metadata, so callers can feed it
 // PartialObjectMetadata from a metadata-only informer. The returned profile
 // carries an empty selector (these rules are matched by identity, not
@@ -53,42 +44,21 @@ const AnnotationSecurityRules = "agents.kruise.io/security-rules"
 // The returned profile is not yet projected: the caller must call Project
 // before it can be bound, exactly as for a CRD profile.
 //
-// Unknown JSON fields are ignored so newer writers can add fields independently.
+// The legacy array ignores unknown fields; the native inline object has a strict schema.
 func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
-	raw := sandbox.GetAnnotations()[AnnotationSecurityRules]
-	if raw == "" {
-		return nil, nil
+	spec, err := kruise.SandboxSecurityProfile(sandbox)
+	if err != nil || spec == nil {
+		return nil, err
 	}
-	var specRules []v1alpha1.SecurityRule
-	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
-	if err := dec.Decode(&specRules); err != nil {
-		return nil, fmt.Errorf("decode %s annotation: %w", AnnotationSecurityRules, err)
+	if _, err := policy.CompileSNIRules(spec.Rules); err != nil {
+		return nil, err
 	}
-	if len(specRules) == 0 {
-		return nil, fmt.Errorf("%s annotation contains no rules", AnnotationSecurityRules)
-	}
-	for i := range specRules {
-		escapeSandboxHeaderValues(specRules[i].Actions.HeaderManipulation)
-	}
-	rules, err := compileRules(specRules)
+	profile, err := newProfile(sandboxMeta(sandbox), spec)
 	if err != nil {
 		return nil, err
 	}
-	uid, _ := kruise.SandboxUID(sandbox)
-	return &Profile{
-		Meta: Meta{
-			Name:              sandbox.GetName(),
-			SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
-			SandboxUID:        uid,
-			Namespace:         sandbox.GetNamespace(),
-			CreationTimestamp: sandbox.GetCreationTimestamp(),
-			Version:           sandbox.GetResourceVersion(),
-			Match:             MatchSandbox,
-		},
-		Selector:        labels.Nothing(),
-		RawSandboxRules: raw,
-		Rules:           rules,
-	}, nil
+	profile.Selector = labels.Nothing()
+	return profile, nil
 }
 
 // InvalidSandboxProfile returns an identity-bearing collection item for a
@@ -98,36 +68,26 @@ func NewSandboxProfile(sandbox metav1.Object) (*Profile, error) {
 // previous version under the same identity, so a bad annotation update does
 // not silently remove rules that were enforcing.
 func InvalidSandboxProfile(sandbox metav1.Object, err error) *Profile {
-	uid, _ := kruise.SandboxUID(sandbox)
 	message := "invalid sandbox security rules"
 	if err != nil {
 		message = err.Error()
 	}
 	return &Profile{
-		Meta: Meta{
-			Name:              sandbox.GetName(),
-			SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
-			SandboxUID:        uid,
-			Namespace:         sandbox.GetNamespace(),
-			CreationTimestamp: sandbox.GetCreationTimestamp(),
-			Version:           sandbox.GetResourceVersion(),
-			Match:             MatchSandbox,
-		},
+		Meta:         sandboxMeta(sandbox),
 		Selector:     labels.Nothing(),
 		CompileError: message,
 	}
 }
 
-// escapeSandboxHeaderValues neutralizes Go template delimiters in annotation
-// set values. The E2B contract defines these header values as plaintext, and the
-// headermutation filter compiles every value as a template; without escaping,
-// a tenant-supplied "{{...}}" would be evaluated against the render scope
-// instead of arriving verbatim on the wire.
-func escapeSandboxHeaderValues(hm *v1alpha1.HeaderManipulationAction) {
-	if hm == nil {
-		return
-	}
-	for i := range hm.Set {
-		hm.Set[i].Value = strings.ReplaceAll(hm.Set[i].Value, "{{", `{{"{{"}}`)
+func sandboxMeta(sandbox metav1.Object) Meta {
+	uid, _ := kruise.SandboxUID(sandbox)
+	return Meta{
+		Name:              sandbox.GetName(),
+		SourceIdentity:    model.SourceIdentity{UID: string(sandbox.GetUID())},
+		SandboxUID:        uid,
+		Namespace:         sandbox.GetNamespace(),
+		CreationTimestamp: sandbox.GetCreationTimestamp(),
+		Version:           sandbox.GetResourceVersion(),
+		Match:             MatchSandbox,
 	}
 }

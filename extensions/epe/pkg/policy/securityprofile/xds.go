@@ -60,9 +60,6 @@ func FromXDS(value *securityv1.SecurityProfile, sandboxUID string, regs []filter
 	}
 	if sandboxUID != "" {
 		meta.Match = MatchSandbox
-		for i := range config.Rules {
-			escapeSandboxHeaderValues(config.Rules[i].Actions.HeaderManipulation)
-		}
 	}
 	profile, err := newProfile(
 		meta,

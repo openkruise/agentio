@@ -112,7 +112,7 @@ func newSandboxObjects(
 	return krt.WrapClient(informer, options...)
 }
 
-// stripSandbox keeps runtime identity labels, inline security rules, and the Pod UID needed for host binding.
+// stripSandbox keeps runtime identity labels, inline policy annotations, and the Pod UID needed for host binding.
 func stripSandbox(obj any) (any, error) {
 	sandbox, ok := obj.(*agentsv1alpha1.Sandbox)
 	if !ok || sandbox == nil {
@@ -139,8 +139,14 @@ func stripSandbox(obj any) (any, error) {
 }
 
 func sandboxSecurityAnnotations(sandbox *agentsv1alpha1.Sandbox) map[string]string {
-	if raw, found := sandbox.Annotations[agentsv1alpha1.AnnotationSecurityRules]; found {
-		return map[string]string{agentsv1alpha1.AnnotationSecurityRules: raw}
+	var annotations map[string]string
+	for _, key := range []string{agentsv1alpha1.AnnotationSecurityRules, AnnotationSecurityProfile, AnnotationE2BNetwork} {
+		if raw, found := sandbox.Annotations[key]; found {
+			if annotations == nil {
+				annotations = map[string]string{}
+			}
+			annotations[key] = raw
+		}
 	}
-	return nil
+	return annotations
 }

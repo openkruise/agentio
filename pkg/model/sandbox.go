@@ -49,10 +49,8 @@ type Sandbox struct {
 // SandboxPolicies contains rules owned by the Sandbox, including source parse errors.
 // A nil value means the source declares no Sandbox policies.
 type SandboxPolicies struct {
-	// Nil means no Sandbox SecurityProfile; an empty slice declares an empty profile.
-	SecurityRules []agentsv1alpha1.SecurityRule
-	TCPRules      []agentsv1alpha1.TCPRule
-	InputError    string
+	SecurityProfile *agentsv1alpha1.SecurityProfileSpec
+	InputError      string
 }
 
 func (s Sandbox) Validate() error {

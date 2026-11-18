@@ -172,9 +172,11 @@ func TestSandboxInlineRemoval(t *testing.T) {
 	sandbox := model.Sandbox{
 		UID:            "kruise:clear",
 		SourceIdentity: model.SourceIdentity{UID: "source"},
-		Policies: &model.SandboxPolicies{SecurityRules: []agentsv1alpha1.SecurityRule{
-			{Name: "old", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"old.example"}}}},
-		}},
+		Policies: &model.SandboxPolicies{
+			SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{Rules: []agentsv1alpha1.SecurityRule{
+				{Name: "old", Match: []agentsv1alpha1.RuleMatch{{Domains: []string{"old.example"}}}},
+			}},
+		},
 	}
 	f.sandboxes.UpdateObject(sandbox)
 	waitSynced(t, f.compiler)

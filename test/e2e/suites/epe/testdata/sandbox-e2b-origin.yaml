@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-e2b-origin-ca
+  namespace: {{ .GatewayNamespace }}
+data:
+  ca.crt: {{ printf "%q" .CA }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-e2b-origin
+type: kubernetes.io/tls
+stringData:
+  tls.crt: {{ printf "%q" .Cert }}
+  tls.key: {{ printf "%q" .Key }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-e2b-origin
+spec:
+  selector: {app: sandbox-e2b-origin}
+  ports:
+  - {name: http, port: 80, targetPort: 18080}
+  - {name: https, port: 443, targetPort: 18443}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sandbox-e2b-origin
+  labels: {app: sandbox-e2b-origin}
+spec:
+  containers:
+  - name: echo
+    image: {{ .Image }}
+    args: ["--port=18080", "--port=18443", "--tls=18443", "--crt=/tls/tls.crt", "--key=/tls/tls.key"]
+    readinessProbe:
+      tcpSocket: {port: 18443}
+    volumeMounts:
+    - {name: tls, mountPath: /tls, readOnly: true}
+  volumes:
+  - name: tls
+    secret: {secretName: sandbox-e2b-origin}

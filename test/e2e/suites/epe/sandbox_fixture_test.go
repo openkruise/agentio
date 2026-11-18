@@ -47,6 +47,7 @@ import (
 	"github.com/openkruise/agentio/test/e2e"
 	"github.com/openkruise/agentio/test/e2e/components/echo"
 	"github.com/openkruise/agentio/test/e2e/components/hbone"
+	e2econfig "github.com/openkruise/agentio/test/e2e/config"
 	"github.com/openkruise/agentio/test/e2e/kube"
 	"github.com/openkruise/agentio/test/e2e/suites/internal/harness"
 )
@@ -70,6 +71,7 @@ type sandboxPolicyFixture struct {
 	ctx         context.Context
 	namespace   string
 	serverIP    string
+	serverName  string
 	gateway     string
 	debug       string
 	roots       *x509.CertPool
@@ -90,7 +92,8 @@ func newSandboxPolicyFixture(t *testing.T) *sandboxPolicyFixture {
 		namespace:   trafficFixture.Namespace.Name(),
 	}
 	f.serverIP = trafficFixture.Server.ServiceIPOrFail(t)
-	applySandboxPolicyConfig(t, scope)
+	f.serverName = trafficFixture.Server.Address()
+	applySandboxPolicyConfig(t, scope, f.serverName, "")
 	pods, err := environment.Kube.ReadyPods(ctx, resolvedAgentioConfig.Namespace, harness.GatewayPodSelector)
 	if err != nil || len(pods) != 1 {
 		t.Fatalf("find gateway: %v, pods=%d", err, len(pods))
@@ -146,6 +149,31 @@ func newSandboxPolicyFixture(t *testing.T) *sandboxPolicyFixture {
 	return f
 }
 
+// The shared echo image's certificate covers only server.default.svc.
+func (f *sandboxPolicyFixture) useTrustedE2BOrigin(t *testing.T) {
+	t.Helper()
+	const name = "sandbox-e2b-origin"
+	f.serverName = name + "." + f.namespace + ".svc.cluster.local"
+	ca := newEPECertificate(t, nil, "")
+	server := newEPECertificate(t, &ca, f.serverName)
+	e2econfig.New(f.scope).EvalFile(f.namespace, map[string]string{
+		"GatewayNamespace": resolvedAgentioConfig.Namespace,
+		"CA":               string(epeCertificatePEM(ca)),
+		"Cert":             string(epeCertificatePEM(server)),
+		"Key":              string(epePrivateKeyPEM(t, server)),
+		"Image":            echo.DefaultImage,
+	}, "testdata/sandbox-e2b-origin.yaml").ApplyOrFail(t, kube.CreateOnly)
+	if _, err := f.environment.Kube.WaitReadyPods(f.ctx, f.namespace, "app="+name, 1); err != nil {
+		t.Fatal(err)
+	}
+	service, err := f.environment.Cluster.Kube.CoreV1().Services(f.namespace).Get(f.ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.serverIP = service.Spec.ClusterIP
+	applySandboxPolicyConfig(t, f.scope, f.serverName, name+"-ca")
+}
+
 func (f *sandboxPolicyFixture) caller(t *testing.T, name string, owned bool) sandboxCaller {
 	t.Helper()
 	caller := sandboxCaller{name: name}
@@ -153,7 +181,7 @@ func (f *sandboxPolicyFixture) caller(t *testing.T, name string, owned bool) san
 	if owned {
 		// Delivery identity deliberately differs from the namespace/name alias.
 		caller.id = "kruise:delivery-" + name
-		record, err := f.scope.ApplyInNamespace(f.ctx, f.namespace, sandboxPolicyObject(name, ""), kube.CreateOnly)
+		record, err := f.scope.ApplyInNamespace(f.ctx, f.namespace, sandboxPolicyObject(name, nil), kube.CreateOnly)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,11 +230,7 @@ func (f *sandboxPolicyFixture) caller(t *testing.T, name string, owned bool) san
 	return caller
 }
 
-func sandboxPolicyObject(name, rules string) *unstructured.Unstructured {
-	annotations := map[string]any{}
-	if rules != "" {
-		annotations["agents.kruise.io/security-rules"] = rules
-	}
+func sandboxPolicyObject(name string, annotations map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agents.kruise.io/v1alpha1",
 		"kind":       "Sandbox",
@@ -221,10 +245,19 @@ func sandboxPolicyObject(name, rules string) *unstructured.Unstructured {
 
 func (f *sandboxPolicyFixture) rules(t *testing.T, caller sandboxCaller, rules string) {
 	t.Helper()
+	annotations := map[string]any{}
+	if rules != "" {
+		annotations["agents.kruise.io/security-rules"] = rules
+	}
+	f.annotations(t, caller, annotations)
+}
+
+func (f *sandboxPolicyFixture) annotations(t *testing.T, caller sandboxCaller, annotations map[string]any) {
+	t.Helper()
 	if _, err := f.scope.ApplyInNamespace(
 		f.ctx,
 		f.namespace,
-		sandboxPolicyObject(caller.name, rules),
+		sandboxPolicyObject(caller.name, annotations),
 		kube.ReconcileOwned,
 	); err != nil {
 		t.Fatal(err)
@@ -361,7 +394,7 @@ func (f *sandboxPolicyFixture) request(
 		inner := tls.Client(
 			conn,
 			&tls.Config{
-				ServerName:         trafficFixture.Server.Address(),
+				ServerName:         f.serverName,
 				InsecureSkipVerify: true,
 				NextProtos:         []string{"http/1.1"},
 			},
@@ -375,7 +408,7 @@ func (f *sandboxPolicyFixture) request(
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		scheme+"://"+net.JoinHostPort(trafficFixture.Server.Address(), port)+path,
+		scheme+"://"+net.JoinHostPort(f.serverName, port)+path,
 		nil,
 	)
 	if err != nil {

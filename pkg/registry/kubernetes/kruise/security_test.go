@@ -1,0 +1,137 @@
+// Copyright 2026 The Kruise Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package kruise
+
+import (
+	"net/netip"
+	"reflect"
+	"testing"
+
+	agents "github.com/openkruise/agents-api/agents/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/openkruise/agentio/pkg/policy"
+)
+
+func TestE2BDestinationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		target  string
+		allowed bool
+	}{
+		{"ingress settings are owned by Sandbox Manager", `{"allowInternetAccess":false,"network":{"allowPublicTraffic":true,"futureIngressOption":{"mode":"private"}}}`, "10.0.0.1:443", false},
+		{"default allow", `{}`, "10.0.0.1:443", true},
+		{"false denies private too", `{"allowInternetAccess":false}`, "10.0.0.1:443", false},
+		{"false denies IPv6", `{"allowInternetAccess":false}`, "[2001:db8::1]:443", false},
+		{"allow before deny", `{"allowInternetAccess":false,"network":{"allowOut":["10.0.0.0/8"],"denyOut":["10.0.0.1"]}}`, "10.0.0.1:443", true},
+		{"IPv6 host", `{"allowInternetAccess":false,"network":{"allowOut":["2001:db8::1"]}}`, "[2001:db8::1]:443", true},
+		{"true retains deny", `{"allowInternetAccess":true,"network":{"denyOut":["10.0.0.0/8"]}}`, "10.0.0.1:443", false},
+		{"default DNS all ports", `{"allowInternetAccess":false,"network":{"allowOut":["*.example.com"]}}`, "8.8.8.8:443", true},
+		{"empty DNS disables exception", `{"allowInternetAccess":false,"network":{"allowOut":["example.com"],"dnsServers":[]}}`, "8.8.8.8:53", false},
+		{"custom DNS", `{"allowInternetAccess":false,"network":{"allowOut":["example.com"],"dnsServers":["1.1.1.1"]}}`, "1.1.1.1:53", true},
+		{"no domain no DNS exception", `{"allowInternetAccess":false,"network":{"allowOut":["10.0.0.1"]}}`, "8.8.8.8:53", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := e2bProfile(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcp, err := policy.CompileTCPRules(spec.TCPRules)
+			if err != nil {
+				t.Fatal(err)
+			}
+			allowed, _ := policy.MatchTCPRules(tcp.Rules, netip.MustParseAddrPort(tc.target))
+			if allowed != tc.allowed {
+				t.Fatalf("allowed=%v, want %v", allowed, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestSandboxAnnotationComposition(t *testing.T) {
+	sandbox := &agents.Sandbox{ObjectMeta: metav1.ObjectMeta{
+		Name:      "sandbox",
+		Namespace: "tenant",
+		Annotations: map[string]string{
+			AnnotationSecurityProfile: `{"inputs":[{"name":"data","inline":{"key":"value"}}],"rules":[{"name":"native-tls","match":[{"domains":["native.example"]}],"actions":{"tls":{"action":"Deny"}}},{"name":"native-http","match":[{"domains":["native.example"]}],"actions":{"bypass":true}}],"tcpRules":[{"name":"e2b-deny-rest","match":[{}],"action":"Deny"}]}`,
+			AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["api.example.com"]}}`,
+			"unrelated":               "discard",
+		},
+	}}
+	spec, err := SandboxSecurityProfile(sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Inputs) != 1 {
+		t.Fatalf("native inputs lost: %+v", spec.Inputs)
+	}
+	if spec.Rules[0].Name != "native-tls" || spec.Rules[1].Name != "native-http" ||
+		spec.Rules[2].Name != "agentio-e2b-allow-tls" || spec.Rules[3].Name != "agentio-e2b-allow-web" ||
+		spec.TCPRules[0].Name != "e2b-deny-rest" || spec.TCPRules[2].Name != "agentio-e2b-deny-rest" {
+		t.Fatalf("native rules must precede generated rules: %+v", spec)
+	}
+	if _, err := policy.CompileTCPRules(spec.TCPRules); err != nil {
+		t.Fatal("compile combined TCP rules:", err)
+	}
+	stripped, err := stripSandbox(sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stripped.(*agents.Sandbox).Annotations; len(got) != 2 || !HasSecurityRules(stripped.(*agents.Sandbox)) {
+		t.Fatalf("annotations not retained: %v", got)
+	}
+	delete(sandbox.Annotations, AnnotationE2BNetwork)
+	native, err := SandboxSecurityProfile(sandbox)
+	if err != nil || !reflect.DeepEqual(native.Inputs, spec.Inputs) || len(native.Rules) != 2 {
+		t.Fatalf("network removal changed native snapshot: %+v %v", native, err)
+	}
+	sandbox.Annotations = map[string]string{
+		agents.AnnotationSecurityRules: `[{"name":"legacy","match":[{"domains":["*"]}]}]`,
+		AnnotationE2BNetwork:           `{}`,
+	}
+	legacy, err := SandboxSecurityProfile(sandbox)
+	if err != nil || legacy.Rules[0].Name != "legacy" {
+		t.Fatalf("legacy + E2B: %+v %v", legacy, err)
+	}
+}
+
+func TestSandboxAnnotationErrors(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		{AnnotationSecurityProfile: `{}`, agents.AnnotationSecurityRules: `[]`},
+		{AnnotationSecurityProfile: `null`},
+		{AnnotationSecurityProfile: `{} {}`},
+		{AnnotationSecurityProfile: `{"priority":1}`},
+		{AnnotationSecurityProfile: `{"selector":{}}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"secret","match":[{"domains":["*"]}],"actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"credential"}}}}}]}`},
+		{AnnotationSecurityProfile: `{"inputs":[{"name":"foreign","configMap":{"name":"data","namespace":"other"}}]}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"block","actions":{"block":{}}}]}`},
+		{AnnotationSecurityProfile: `{"rules":[{"name":"block","match":[{}],"actions":{"block":{}}}]}`},
+		{AnnotationE2BNetwork: `null`},
+		{AnnotationE2BNetwork: `{} {}`},
+		{AnnotationE2BNetwork: `{"network":{"egressProxy":{"address":"proxy.example:1080"}}}`},
+		{AnnotationE2BNetwork: `{"allowInternetAccess":"false"}`},
+		{AnnotationE2BNetwork: `{"network":{"allowOut":["https://example.com"]}}`},
+		{AnnotationE2BNetwork: `{"network":{"denyOut":["example.com"]}}`},
+		{AnnotationE2BNetwork: `{"network":{"allowOut":["example.com"],"dnsServers":["::1"]}}`},
+		{AnnotationE2BNetwork: `{"network":{"rules":{"*": [{"transform":{"headers":{"X-A":"value"}}}]}}}`},
+		{AnnotationE2BNetwork: `{"network":{"rules":{"example.com": []}}}`},
+	} {
+		sandbox := &agents.Sandbox{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Annotations: annotations}}
+		if _, err := SandboxSecurityProfile(sandbox); err == nil {
+			t.Errorf("accepted invalid annotation: %v", annotations)
+		}
+	}
+}
