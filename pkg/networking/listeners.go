@@ -1309,16 +1309,20 @@ func (b *resourceBuilder) staticSNIMatcher(
 	config *configv1.TlsTerminationConfig,
 	passthrough string,
 ) *xdsmatcherv3.Matcher {
-	domainMatchers := make([]*xdsmatcherv3.ServerNameMatcher_DomainMatcher, 0, 2)
-	seen := make(map[string]bool)
+	routing := b.protocolMatcher(b.toChain(passthrough))
+	// Envoy picks the most specific domain within one matcher. Wrap the
+	// inclusion matcher with an exclusion matcher so exclusions always win.
 	for _, match := range []struct {
 		domains []string
 		onMatch *xdsmatcherv3.Matcher_OnMatch
 	}{
-		{domains: config.GetExcludeHosts(), onMatch: b.toChain(passthrough)},
 		{domains: config.GetIncludeHosts(), onMatch: b.toChain(tlsTerminateChain)},
+		{domains: config.GetExcludeHosts(), onMatch: b.toChain(passthrough)},
 	} {
-		// Exclusions come first; Envoy rejects a domain registered more than once.
+		if len(match.domains) == 0 {
+			continue
+		}
+		seen := make(map[string]bool, len(match.domains))
 		domains := make([]string, 0, len(match.domains))
 		for _, domain := range match.domains {
 			key := strings.ToLower(domain)
@@ -1327,25 +1331,23 @@ func (b *resourceBuilder) staticSNIMatcher(
 				domains = append(domains, domain)
 			}
 		}
-		if len(domains) > 0 {
-			domainMatchers = append(domainMatchers, &xdsmatcherv3.ServerNameMatcher_DomainMatcher{
+		config := &xdsmatcherv3.ServerNameMatcher{
+			DomainMatchers: []*xdsmatcherv3.ServerNameMatcher_DomainMatcher{{
 				Domains: domains,
 				OnMatch: match.onMatch,
-			})
+			}},
+		}
+		routing = &xdsmatcherv3.Matcher{
+			MatcherType: &xdsmatcherv3.Matcher_MatcherTree_{MatcherTree: &xdsmatcherv3.Matcher_MatcherTree{
+				Input: serverNameInput,
+				TreeType: &xdsmatcherv3.Matcher_MatcherTree_CustomMatch{
+					CustomMatch: typedExtension("sni", b.pack(config)),
+				},
+			}},
+			OnNoMatch: toMatcher(routing),
 		}
 	}
-	domains := &xdsmatcherv3.ServerNameMatcher{DomainMatchers: domainMatchers}
-	typedConfig := b.pack(domains)
-	return &xdsmatcherv3.Matcher{
-		MatcherType: &xdsmatcherv3.Matcher_MatcherTree_{MatcherTree: &xdsmatcherv3.Matcher_MatcherTree{
-			Input: serverNameInput,
-			TreeType: &xdsmatcherv3.Matcher_MatcherTree_CustomMatch{CustomMatch: &xdscorev3.TypedExtensionConfig{
-				Name:        "sni",
-				TypedConfig: typedConfig,
-			}},
-		}},
-		OnNoMatch: toMatcher(b.protocolMatcher(b.toChain(passthrough))),
-	}
+	return routing
 }
 
 func (b *resourceBuilder) protocolMatcher(tls *xdsmatcherv3.Matcher_OnMatch) *xdsmatcherv3.Matcher {

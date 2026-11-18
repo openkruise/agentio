@@ -138,7 +138,7 @@ func TestLegacyTLSActionIgnoredWithoutSNITrafficPolicy(t *testing.T) {
 
 func TestStaticSNIOverlapExcludesWin(t *testing.T) {
 	config := &configv1.TlsTerminationConfig{
-		IncludeHosts: []string{"same.test", "SAME.test", "*.overlap.test", "include.test", "include.test"},
+		IncludeHosts: []string{"same.test", "SAME.test", "*.overlap.test", "specific.overlap.test", "include.test", "include.test"},
 		ExcludeHosts: []string{"same.test", "same.test", "*.overlap.test", "*.overlap.test"},
 	}
 	before := proto.Clone(config)
@@ -152,18 +152,24 @@ func TestStaticSNIOverlapExcludesWin(t *testing.T) {
 		if err := matcher.GetMatcherTree().GetCustomMatch().GetTypedConfig().UnmarshalTo(domains); err != nil {
 			t.Fatal(err)
 		}
-		if len(domains.DomainMatchers) != 2 {
-			t.Fatal(domains)
+		if len(domains.DomainMatchers) != 1 {
+			t.Fatalf("exclusions must be checked before Envoy compares include patterns: %v", domains)
 		}
 		if !reflect.DeepEqual(domains.DomainMatchers[0].Domains, []string{"same.test", "*.overlap.test"}) ||
 			domains.DomainMatchers[0].OnMatch.GetAction().GetName() != forwardTCPChain {
 			t.Fatal(domains)
 		}
-		if !reflect.DeepEqual(domains.DomainMatchers[1].Domains, []string{"include.test"}) ||
-			domains.DomainMatchers[1].OnMatch.GetAction().GetName() != tlsTerminateChain {
+		includes := matcher.GetOnNoMatch().GetMatcher()
+		domains.Reset()
+		if err := includes.GetMatcherTree().GetCustomMatch().GetTypedConfig().UnmarshalTo(domains); err != nil {
+			t.Fatal(err)
+		}
+		if len(domains.DomainMatchers) != 1 ||
+			!reflect.DeepEqual(domains.DomainMatchers[0].Domains, []string{"same.test", "*.overlap.test", "specific.overlap.test", "include.test"}) ||
+			domains.DomainMatchers[0].OnMatch.GetAction().GetName() != tlsTerminateChain {
 			t.Fatal(domains)
 		}
-		if matcher.OnNoMatch.GetMatcher() == nil {
+		if includes.GetOnNoMatch().GetMatcher().GetMatcherTree().GetExactMatchMap().GetMap()["tls"].GetAction().GetName() != forwardTCPChain {
 			t.Fatal("protocol fallback lost")
 		}
 	}

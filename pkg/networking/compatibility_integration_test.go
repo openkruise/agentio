@@ -239,7 +239,7 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 				{"same.test", "passthrough"}, {"SAME.test", "passthrough"},
 				{"api.overlap.test", "passthrough"}, {"a.b.overlap.test", "passthrough"},
 				{"include.test", "terminated"}, {"unmatched.test", "passthrough"},
-				{"specific.overlap.test", "terminated"},
+				{"specific.overlap.test", "passthrough"},
 			}
 			if mode != "static" {
 				cases = append(cases, testCase{"same.test.", "passthrough"},
@@ -250,8 +250,6 @@ func TestEnvoyStaticSNIOverlap(t *testing.T) {
 					switch cases[i].host {
 					case "unmatched.test":
 						cases[i].want = "terminated"
-					case "specific.overlap.test":
-						cases[i].want = "passthrough"
 					}
 					if mode == "wildcard" && cases[i].host != "" {
 						cases[i].want = "passthrough"
