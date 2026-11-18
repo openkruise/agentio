@@ -21,12 +21,15 @@ package inject
 
 import (
 	"fmt"
+	"math"
+	"time"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	admissionclientv1 "k8s.io/client-go/kubernetes/typed/admissionregistration/v1"
+	"k8s.io/client-go/util/workqueue"
 
 	"github.com/openkruise/agentio/pkg/kube"
 	"github.com/openkruise/agentio/pkg/kube/controllers"
@@ -65,9 +68,15 @@ func NewCABundlePatcher(client kube.Client, webhookName string, bundle func() []
 		func(string) admissionclientv1.MutatingWebhookConfigurationInterface {
 			return client.Kube().AdmissionregistrationV1().MutatingWebhookConfigurations()
 		})
-	p.queue = controllers.NewQueue("injection caBundle patcher",
+	p.queue = controllers.NewQueue(
+		"injection caBundle patcher",
 		controllers.WithReconciler(p.reconcile),
-		controllers.WithMaxAttempts(5))
+		// Retry conflicts quickly, then keep retrying slowly so CA updates are never abandoned.
+		controllers.WithRateLimiter(
+			workqueue.NewTypedItemFastSlowRateLimiter[any](100*time.Millisecond, time.Minute, 5),
+		),
+		controllers.WithMaxAttempts(math.MaxInt),
+	)
 	return p, nil
 }
 
