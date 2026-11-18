@@ -36,6 +36,7 @@ import (
 type SidecarInjectorOptions struct {
 	EnableInjection             bool
 	ValidationWebhookConfigName string
+	ValidationReferences        *validation.ReferenceChecker
 	// EnableClientTrust gates client CA distribution and injection at startup.
 	// The injector's clientTrust.enabled setting must also be true.
 	EnableClientTrust bool
@@ -152,7 +153,7 @@ func setupAdmissionWebhooks(
 		}
 	}
 	if options.ValidationWebhookConfigName != "" {
-		validation.Register(webhookMux)
+		validation.Register(webhookMux, options.ValidationReferences)
 		patcher, err := validation.NewCABundlePatcher(client, options.ValidationWebhookConfigName, authority.RootPEM)
 		if err != nil {
 			return nil, err

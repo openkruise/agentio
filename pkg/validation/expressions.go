@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	agents "github.com/openkruise/agents-api/agents/v1alpha1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func validateCEL(expression string) error {
@@ -62,13 +63,12 @@ func validateValueSource(value agents.ValueSource) error {
 	return nil
 }
 
-func validateAudits(actions []agents.AuditAction) error {
-	for _, action := range actions {
-		if err := validateAudit(action); err != nil {
-			return fmt.Errorf("audit %q: %w", action.Name, err)
-		}
+func validateAudits(actions []agents.AuditAction, path *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	for i, action := range actions {
+		errs = appendInvalid(errs, path.Index(i), validateAudit(action))
 	}
-	return nil
+	return errs
 }
 
 func validateAudit(action agents.AuditAction) error {

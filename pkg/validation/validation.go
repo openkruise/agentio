@@ -17,8 +17,11 @@ package validation
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	agents "github.com/openkruise/agents-api/agents/v1alpha1"
+	kubevalidation "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
@@ -26,62 +29,76 @@ import (
 
 // ValidateSecurityProfile checks the API contract and expression syntax without
 // compiling a data-plane implementation or accessing external references.
-func ValidateSecurityProfile(profile model.SecurityProfile) error {
-	if _, err := policy.SecurityProfileAttachment(profile); err != nil {
-		return err
+func ValidateSecurityProfile(profile model.SecurityProfile) field.ErrorList {
+	spec := field.NewPath("spec")
+	var errs field.ErrorList
+	if priority := profile.Spec.Priority; priority != nil && *priority < 0 {
+		errs = append(errs, field.Invalid(spec.Child("priority"), *priority, "must not be negative"))
+	} else if _, err := policy.SecurityProfileAttachment(profile); err != nil {
+		errs = appendInvalid(errs, spec.Child("selector"), err)
 	}
-	if _, err := policy.CompileTCPRules(profile.Spec.TCPRules); err != nil {
-		return err
-	}
-	for _, input := range profile.Spec.Inputs {
+	_, err := policy.CompileTCPRules(profile.Spec.TCPRules)
+	errs = appendInvalid(errs, spec.Child("tcpRules"), err)
+	for i, input := range profile.Spec.Inputs {
+		path := spec.Child("inputs").Index(i)
 		if (input.Inline != nil) == (input.ConfigMap != nil) {
-			return fmt.Errorf("input %q must set exactly one source", input.Name)
+			errs = append(errs, field.Invalid(path, field.OmitValueType{}, "set exactly one input source"))
 		}
 		if input.ConfigMap != nil && input.ConfigMap.Namespace == "" && profile.Namespace == "" {
-			return fmt.Errorf("ConfigMap input %q requires an explicit namespace for a global profile", input.Name)
+			errs = append(errs, field.Required(path.Child("configMap", "namespace"), "global profiles require an explicit namespace"))
 		}
 	}
-	if err := validateAudits(profile.Spec.Audit); err != nil {
-		return err
+	errs = append(errs, validateAudits(profile.Spec.Audit, spec.Child("audit"))...)
+	for i, rule := range profile.Spec.Rules {
+		errs = append(errs, validateSecurityRule(rule, spec.Child("rules").Index(i))...)
 	}
-	for _, rule := range profile.Spec.Rules {
-		if err := validateSecurityRule(rule); err != nil {
-			return fmt.Errorf("rule %q: %w", rule.Name, err)
-		}
-	}
-	return nil
+	return errs
 }
 
-func validateSecurityRule(rule agents.SecurityRule) error {
-	if err := policy.ValidateTLSRule(rule); err != nil {
-		return err
+func appendInvalid(errs field.ErrorList, path *field.Path, err error) field.ErrorList {
+	if err != nil {
+		return append(errs, field.Invalid(path, field.OmitValueType{}, err.Error()))
 	}
+	return errs
+}
+
+func validateSecurityRule(rule agents.SecurityRule, path *field.Path) field.ErrorList {
+	errs := appendInvalid(nil, path, policy.ValidateTLSRule(rule))
 	for i, match := range rule.Match {
-		if err := validateMatch(match); err != nil {
-			return fmt.Errorf("match[%d]: %w", i, err)
-		}
+		errs = appendInvalid(errs, path.Child("match").Index(i), validateMatch(match))
 	}
-	if err := validateAudits(rule.Actions.Audit); err != nil {
-		return err
-	}
+	actions := path.Child("actions")
+	errs = append(errs, validateAudits(rule.Actions.Audit, actions.Child("audit"))...)
 	if callout := rule.Actions.HTTPCallout; callout != nil {
-		if callout.Request == nil && callout.Response == nil {
-			return fmt.Errorf("httpCallout requires at least one request or response phase")
+		calloutPath := actions.Child("httpCallout")
+		namePath := calloutPath.Child("provider", "name")
+		if name := callout.Provider.Name; name == "" {
+			errs = append(errs, field.Required(namePath, "a named HTTP callout provider is required"))
+		} else if problems := kubevalidation.IsDNS1123Subdomain(name); len(problems) != 0 {
+			errs = append(errs, field.Invalid(namePath, name, strings.Join(problems, ", ")))
 		}
-		for _, phase := range []*agents.HTTPCalloutPhase{callout.Request, callout.Response} {
+		if callout.Request == nil && callout.Response == nil {
+			errs = append(errs, field.Invalid(calloutPath, field.OmitValueType{}, "requires at least one request or response phase"))
+		}
+		for _, entry := range []struct {
+			name  string
+			phase *agents.HTTPCalloutPhase
+		}{{"request", callout.Request}, {"response", callout.Response}} {
+			phase := entry.phase
 			if phase == nil || phase.Headers == nil || !phase.Headers.Enabled || phase.Headers.Filter == nil {
 				continue
 			}
 			filter := phase.Headers.Filter
 			if (len(filter.AllowList) > 0) == (len(filter.DenyList) > 0) {
-				return fmt.Errorf("httpCallout header filter requires exactly one non-empty allowList or denyList")
+				errs = append(errs, field.Invalid(calloutPath.Child(entry.name, "headers", "filter"),
+					field.OmitValueType{}, "requires exactly one non-empty allowList or denyList"))
 			}
 		}
 	}
 	if action := rule.Actions.TokenTransformation; action != nil && !action.Disabled {
-		return validateTokenTransformation(*action)
+		errs = appendInvalid(errs, actions.Child("tokenTransformation"), validateTokenTransformation(*action))
 	}
-	return nil
+	return errs
 }
 
 func validateMatch(match agents.RuleMatch) error {

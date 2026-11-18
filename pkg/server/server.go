@@ -48,6 +48,7 @@ import (
 	"github.com/openkruise/agentio/pkg/security/ca"
 	"github.com/openkruise/agentio/pkg/security/mitm"
 	"github.com/openkruise/agentio/pkg/server/debug"
+	"github.com/openkruise/agentio/pkg/validation"
 	"github.com/openkruise/agentio/pkg/xds"
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
@@ -108,9 +109,19 @@ func Run(shutdownCtx context.Context, options Options, opts ...Option) error {
 	if err != nil {
 		return err
 	}
+	if features.EnablePolicyStatus || features.ValidationWebhookConfigName != "" {
+		plane.validationRefs = validation.NewReferenceChecker(validation.ReferenceSources{
+			AgentioConfig: plane.registry.AgentioConfig,
+			ConfigMaps:    plane.registry.ConfigMaps,
+			Secrets:       plane.registry.Secrets,
+			Services:      plane.registry.KubernetesServices,
+			RootNamespace: options.RootNamespace,
+			ScopedSecrets: features.ScopedSecrets,
+		}, ctx.Done())
+	}
 	if features.EnablePolicyStatus {
 		statusController, err := policystatus.New(plane.kubeClient, plane.registry, options.RootNamespace,
-			features.ScopedSecrets, resolver.Resolve, ctx.Done())
+			plane.validationRefs, resolver.Resolve, ctx.Done())
 		if err != nil {
 			return err
 		}
@@ -130,6 +141,7 @@ type controlPlane struct {
 	authenticationSynced func() bool
 	authority            *ca.Authority
 	compiler             *compiler.Compiler
+	validationRefs       *validation.ReferenceChecker
 	started              time.Time
 	ready                atomic.Bool
 }
@@ -631,6 +643,7 @@ func (p *controlPlane) setupWebhooks(ctx context.Context, domainSigner mitm.Doma
 	injectorOptions := SidecarInjectorOptions{
 		EnableInjection:             features.EnableSidecarInjector,
 		ValidationWebhookConfigName: features.ValidationWebhookConfigName,
+		ValidationReferences:        p.validationRefs,
 		EnableClientTrust:           features.EnableClientTrustDistributor,
 		Secrets:                     p.registry.Secrets,
 		MITMTrustBundle:             domainSigner.TrustBundle,

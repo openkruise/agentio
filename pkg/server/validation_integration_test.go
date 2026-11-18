@@ -20,16 +20,22 @@ import (
 	"crypto/x509"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/internal/testutil"
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/security/ca"
+	"github.com/openkruise/agentio/pkg/validation"
 )
 
 func TestValidationWithoutInjector(t *testing.T) {
@@ -54,9 +60,19 @@ func TestValidationWithoutInjector(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	stop := ctx.Done()
+	effective := model.AgentioConfiguration{Value: &configv1.AgentioConfig{}}
+	references := validation.NewReferenceChecker(validation.ReferenceSources{
+		AgentioConfig: krt.NewStatic(&effective, true, krt.WithStop(stop)).AsCollection(),
+		ConfigMaps:    krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(stop)),
+		Secrets:       krt.NewStaticCollection[*corev1.Secret](nil, nil, krt.WithStop(stop)),
+		Services:      krt.NewStaticCollection[*corev1.Service](nil, nil, krt.WithStop(stop)),
+		RootNamespace: "agentio-system",
+	}, stop)
 	serve, err := setupAdmissionWebhooks(ctx, client, authority, SidecarInjectorOptions{
 		Address:                     address,
 		ValidationWebhookConfigName: "validator",
+		ValidationReferences:        references,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +95,21 @@ func TestValidationWithoutInjector(t *testing.T) {
 			Operation: admissionv1.Create,
 			Namespace: "demo",
 			Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "TrafficPolicy"},
-			Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"allow"},"spec":{"egress":{}}}`)},
+			Object: runtime.RawExtension{Raw: []byte(`{
+				"metadata":{"name":"allow"},
+				"spec":{"egress":{"rules":[{"action":"allow","to":[{"service":{"name":"api"}}]}]}}
+			}`)},
 		},
 	}
 	testutil.Eventually(t, func() bool {
 		response, err := postReview(t, httpClient, "https://"+address+"/validate", review)
 		return err == nil && response != nil && response.Allowed && response.UID == review.Request.UID
 	}, "validation endpoint to accept without injection configuration")
+	response, err := postReview(t, httpClient, "https://"+address+"/validate", review)
+	if err != nil || response == nil || !response.Allowed || len(response.Warnings) != 1 ||
+		!strings.Contains(response.Warnings[0], "Service demo/api not found") {
+		t.Fatalf("validation response = %+v error = %v, want a missing Service warning", response, err)
+	}
 	resp, err := httpClient.Get("https://" + address + "/inject")
 	if err != nil {
 		t.Fatal(err)

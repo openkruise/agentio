@@ -20,6 +20,9 @@ import (
 	"slices"
 )
 
+// EnvironmentCredentialProviderName is the provider EPE registers from its environment.
+const EnvironmentCredentialProviderName = "agentio-default-credential-provider"
+
 // Validate checks operator-supplied destination CIDRs.
 func (x *EgressAuthorization) Validate() error {
 	for _, raw := range x.GetDeniedCidrs() {

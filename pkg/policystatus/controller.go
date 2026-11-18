@@ -33,35 +33,30 @@ import (
 	agentlog "github.com/openkruise/agentio/pkg/log"
 	"github.com/openkruise/agentio/pkg/policy"
 	kubernetesregistry "github.com/openkruise/agentio/pkg/registry/kubernetes"
+	"github.com/openkruise/agentio/pkg/validation"
 )
 
 var log = agentlog.New("policy-status")
 
 // Controller validates policy configuration; it does not gate data-plane loading.
 type Controller struct {
-	client           kube.Client
-	registry         *kubernetesregistry.Registry
-	namespace        string
-	scopedSecrets    bool
-	traffic          policy.TrafficPolicyInputs
-	secretsSynced    krt.Singleton[bool]
-	configMapsSynced krt.Singleton[bool]
-	results          krt.Collection[result]
+	client     kube.Client
+	namespace  string
+	traffic    policy.TrafficPolicyInputs
+	references *validation.ReferenceChecker
+	results    krt.Collection[result]
 }
 
 // New reuses the registry's informers for API validation and reference checks.
 func New(client kube.Client, registry *kubernetesregistry.Registry, namespace string,
-	scopedSecrets bool, resolve policy.HostnameResolver, stop <-chan struct{},
+	references *validation.ReferenceChecker, resolve policy.HostnameResolver, stop <-chan struct{},
 ) (*Controller, error) {
 	opts := krt.NewOptionsBuilder(stop, "policy-status", nil)
 	c := &Controller{
-		client:        client,
-		registry:      registry,
-		namespace:     namespace,
-		scopedSecrets: scopedSecrets,
+		client:     client,
+		namespace:  namespace,
+		references: references,
 	}
-	c.secretsSynced = cacheSynced(registry.Secrets, stop, opts.WithName("secrets-synced"))
-	c.configMapsSynced = cacheSynced(registry.ConfigMaps, stop, opts.WithName("configmaps-synced"))
 	c.traffic = policy.TrafficPolicyInputs{
 		RootNamespace:  namespace,
 		Services:       registry.KubernetesServices,
@@ -98,18 +93,6 @@ func New(client kube.Client, registry *kubernetesregistry.Registry, namespace st
 	c.results = krt.JoinCollection([]krt.Collection[result]{profileResults, trafficResults},
 		opts.WithName("results")...)
 	return c, nil
-}
-
-func cacheSynced(cache krt.Syncer, stop <-chan struct{}, options []krt.CollectionOption) krt.Singleton[bool] {
-	ready := cache.HasSynced()
-	state := krt.NewStatic(&ready, true, options...)
-	go func() {
-		if cache.WaitUntilSynced(stop) {
-			synced := true
-			state.Set(&synced)
-		}
-	}()
-	return state
 }
 
 // Run elects one writer per installation; validation itself remains read-only.

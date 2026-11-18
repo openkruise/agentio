@@ -19,8 +19,6 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/extensionprovider"
 )
 
-const defaultCredentialProviderName = "agentio-default-credential-provider"
-
 // DefaultProviderConfig assembles EPE's defaults from environment-configured providers.
 func DefaultProviderConfig() (*configv1.AgentioConfig, error) {
 	provider, err := credentialProviderFromEnv()
@@ -30,10 +28,12 @@ func DefaultProviderConfig() (*configv1.AgentioConfig, error) {
 	cfg := &configv1.AgentioConfig{}
 	if provider != nil {
 		cfg.ExtensionProviders = []*configv1.ExtensionProvider{{
-			Name:     defaultCredentialProviderName,
+			Name:     configv1.EnvironmentCredentialProviderName,
 			Provider: &configv1.ExtensionProvider_CredentialProvider{CredentialProvider: provider},
 		}}
-		cfg.DefaultProviders = &configv1.DefaultExtensionProviders{CredentialProvider: defaultCredentialProviderName}
+		cfg.DefaultProviders = &configv1.DefaultExtensionProviders{
+			CredentialProvider: configv1.EnvironmentCredentialProviderName,
+		}
 	}
 	return cfg, extensionprovider.Validate(cfg)
 }

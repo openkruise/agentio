@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
 )
 
@@ -45,8 +46,9 @@ func TestDefaultProviderConfig(t *testing.T) {
 				}
 				return
 			}
-			if len(cfg.ExtensionProviders) != 1 || cfg.ExtensionProviders[0].Name != defaultCredentialProviderName ||
-				cfg.GetDefaultProviders().GetCredentialProvider() != defaultCredentialProviderName ||
+			if len(cfg.ExtensionProviders) != 1 ||
+				cfg.ExtensionProviders[0].Name != configv1.EnvironmentCredentialProviderName ||
+				cfg.GetDefaultProviders().GetCredentialProvider() != configv1.EnvironmentCredentialProviderName ||
 				cfg.ExtensionProviders[0].GetCredentialProvider().GetUrl() != tc.endpoint {
 				t.Fatalf("missing default credential provider registration: %v", cfg)
 			}
