@@ -1,6 +1,6 @@
 # SecurityProfile reference
 
-`SecurityProfile` is a namespaced TLS connection and HTTP egress policy for selected Pods. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Agentio projects TLS connection selection into SNI policy; Egress Policy Enforcer (EPE) processes HTTP rules. `TrafficPolicy` and `GlobalTrafficPolicy` control destination routing.
+`SecurityProfile` controls TLS connections, HTTP requests, and TCP forwarding destinations for selected Pods at the native egress gateway. `GlobalSecurityProfile` has the same `spec` but is cluster-scoped and can select Pods in every namespace. Agentio projects TLS connection selection into SNI policy; Egress Policy Enforcer (EPE) processes HTTP rules. `TrafficPolicy` and `GlobalTrafficPolicy` control destination routing.
 
 The complete field schemas for both kinds are in the [SecurityProfile API reference](security-profile-api.md). This page explains the implemented evaluation behavior instead of duplicating the field reference.
 
@@ -10,7 +10,7 @@ A `SecurityProfile` selects Pods only in its metadata namespace. A `GlobalSecuri
 
 All matching profiles are ordered by lower `spec.priority` first (default `1000`), then earlier creation time, name, and namespace. Global and namespaced profiles are merged into that one order; an exact ordering tie places the global profile first because its namespace is empty.
 
-For each selected request, EPE evaluates every matching rule from the first profile through the last, preserving rule order inside each profile. A terminal action stops the remaining chain. A later rule may still match after a broad earlier rule: matching is not first-rule-wins.
+For HTTP requests, EPE evaluates each profile's matching HTTP rules in manifest order, then its TCP rules. A terminal HTTP action or the first matching TCP rule stops the chain. If the profile reaches no decision, evaluation continues with the next profile.
 
 ## Failure behavior
 
@@ -64,9 +64,53 @@ metadata:
 
 Each annotation is a complete snapshot. Replacing or removing one preserves the other. The legacy `agents.kruise.io/security-rules` array remains supported, can coexist with `e2b-network`, and occupies the native rule position. Its header assignments also use Go templates. Set the legacy annotation to `[]` or remove it to clear only its rules. The legacy key conflicts with `security-profile` unless its value is an explicit empty array. EPE validates and compiles audit actions from all Sandbox profiles, including legacy arrays, in both Kubernetes and xDS modes. Agentiod validates the annotations and compiles SNI and TCP rules before publishing. If this step fails, it retains the previous Sandbox resource. EPE independently validates the HTTP policy and keeps its last accepted version on failure. Valid SNI and TCP changes can therefore reach the gateway even when EPE rejects the HTTP update. Sandbox Manager must write these annotations; Agentio does not change its creation API or migrate existing TrafficPolicies.
 
+### Allow one database endpoint for one Sandbox
+
+Add this annotation to the Sandbox's metadata. With no other applicable policy, this Sandbox can reach the database over gateway-routed TCP on port 5432. A connection to the same IP on port 5433, or to another IP on port 5432, reaches the catch-all deny.
+
+```yaml
+metadata:
+  annotations:
+    agents.kruise.io/security-profile: |
+      {
+        "tcpRules": [
+          {"name": "allow-db", "match": [{"cidrs": ["192.0.2.10"], "ports": [5432]}], "action": "Allow"},
+          {"name": "deny-rest", "match": [{}], "action": "Deny"}
+        ]
+      }
+```
+
+### E2B domain access with and without HTTPS inspection
+
+The following are alternative JSON values for the same Sandbox annotation, `agents.kruise.io/e2b-network`. Used on their own, both allow `api.example.com` and deny other gateway destinations. Both set `network.dnsServers` to an empty list to disable the automatic TCP allowance for `8.8.8.8`. The Sandbox still needs working DNS.
+
+**Pass TLS through.** With no other rule selecting TLS termination, a connection with SNI `api.example.com` stays encrypted through the gateway.
+
+```json
+{
+  "allowInternetAccess": false,
+  "network": {"allowOut": ["api.example.com"], "dnsServers": []}
+}
+```
+
+**Set a header on HTTPS requests.** The header rule selects TLS termination for the same domain. Configure the gateway's signing CA and [client CA trust](../tasks/configure-client-ca-trust.md). The upstream then receives `X-Tenant: demo` on matching HTTPS requests.
+
+```json
+{
+  "allowInternetAccess": false,
+  "network": {
+    "allowOut": ["api.example.com"],
+    "dnsServers": [],
+    "rules": {"api.example.com": [{"transform": {"headers": {"X-Tenant": "demo"}}}]}
+  }
+}
+```
+
+If the same Sandbox also has native `tcpRules`, E2B's domain bypass or explicit TLS passthrough can end evaluation before those TCP rules run. For an IP entry in `allowOut`, E2B generates a TCP allow instead. In that case a matching native TCP deny runs first.
+
 ## Rule structure and matching
 
-Every rule has a unique `name`, at least one `match` clause, and `actions`. The clauses in `match` are ORed. Within a clause, every populated field is ANDed:
+Each entry in `spec.rules` has a unique `name`, at least one `match` clause, and `actions`. The clauses in `match` are ORed. Within a clause, every populated field is ANDed:
 
 | Field | Behavior |
 | --- | --- |
@@ -79,6 +123,78 @@ Every rule has a unique `name`, at least one `match` clause, and `actions`. The 
 | `queryParams` | ANDed. `Exact` is the default, with `Prefix` and RE2 `Regex`. Only the first percent-decoded value for a repeated key is considered. |
 
 Invalid regexes reject the whole profile version rather than silently making a rule non-matching. The request values and absence rules are detailed in [Request context](#request-context).
+
+## TCP destination rules
+
+Use `spec.tcpRules` for traffic routed through the native egress gateway. For raw TCP, the gateway checks the original destination IP and port. For HTTP, EPE checks the resolved forwarding IP and port. Both `Allow` and `Deny` stop evaluation of later profile rules. If every applicable profile passes without a decision, the default is allow. Independent TrafficPolicy and gateway restrictions still apply.
+
+### Block SSH to a management subnet
+
+This profile denies connections from Pods labeled `app: worker` in `agentio-demo` to TCP port 22 in the management subnet. Replace the namespace, label, and addresses in these examples with your own.
+
+```yaml
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata:
+  name: worker-egress
+  namespace: agentio-demo
+spec:
+  selector:
+    matchLabels:
+      app: worker
+  tcpRules:
+  - name: deny-management-ssh
+    match:
+    - cidrs: ["10.20.0.0/16"]
+      ports: [22]
+    action: Deny
+```
+
+The address and port must match the same clause. The rule denies `10.20.1.5:22`. Both `10.20.1.5:443` and `10.21.1.5:22` fall through to any remaining profiles.
+
+### Allow only the database and registry destinations
+
+Replace the previous profile's `tcpRules` with the following list under `spec`. A single IP in `cidrs` matches exactly one host (IPv4 `/32` or IPv6 `/128`). The two match entries keep each destination paired with its own ports.
+
+```yaml
+tcpRules:
+- name: allow-database-or-registry
+  match:
+  - cidrs: ["192.0.2.10", "2001:db8::10"]
+    ports: [5432]
+  - cidrs: ["192.0.2.64/26"]
+    ports: [443, 8443]
+  action: Allow
+- name: deny-rest
+  match: [{}]
+  action: Deny
+```
+
+The first rule allows either database address on port 5432 and any registry address in the subnet on port 443 or 8443. For example, `[2001:db8::10]:5432` and `192.0.2.65:8443` are allowed. The empty match clause in the last rule covers all IPv4 and IPv6 destinations on every port, so `[2001:db8::10]:443` and `192.0.2.65:5432` are denied. Keep this catch-all last.
+
+### Check the destination after an HTTP header change
+
+For this example, keep the selector from the first manifest and use the following `rules` and `tcpRules` under `spec`.
+
+```yaml
+rules:
+- name: tag-api-requests
+  match:
+  - domains: [api.example.com]
+    schemes: [http]
+  actions:
+    headerManipulation:
+      set:
+      - name: x-client
+        value: worker
+tcpRules:
+- name: deny-internal-subnet
+  match:
+  - cidrs: ["10.20.0.0/16"]
+  action: Deny
+```
+
+For a request to `http://api.example.com`, the header change lets evaluation continue. If the forwarding address is `10.20.1.5`, EPE denies the request on any port. If it is `192.0.2.10` and no later profile denies it, the request can reach the upstream with `x-client: worker`. The subnet deny also applies when the HTTP rule does not match. A matching HTTP `bypass: true` or explicit TLS `Passthrough` would skip this profile's TCP rules.
 
 ## Action order and actions
 
@@ -279,5 +395,3 @@ Notable defaults are priority `1000`, `block.statusCode` `403`, MCP `defaultActi
 agentiod reports `Accepted` and `ResolvedRefs` using the existing status fields.
 See [Policy validation status](../components/securityprofile-status.md) for
 condition meanings, reference scope and the distinction from data-plane loading.
-
-`tcpRules.action` accepts `Allow` or `Deny`. Each `match.cidrs` entry accepts an IPv4/IPv6 address or CIDR. A single address matches only that host, equivalent to IPv4 `/32` or IPv6 `/128`.

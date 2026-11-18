@@ -4,12 +4,24 @@ The Egress Policy Enforcer (EPE) applies content-aware HTTP policy to Agentio wo
 
 EPE does not capture workload traffic and it does not select its own traffic path. Agentio's sidecar or ambient data plane captures enrolled workload traffic; the egress route decides whether that traffic reaches an egress gateway. On a gateway-routed HTTP request, the gateway invokes the `agentio-epe` Service. Requests on the direct passthrough path do not call EPE.
 
-```text
-enrolled workload
-  -> Agentio traffic capture
-  -> egress gateway selected by egress routing
-  -> agentio-epe
-  -> external service, or an EPE response
+```mermaid
+sequenceDiagram
+    accTitle: HTTP processing on the gateway route
+    participant Z as Workload ztunnel
+    participant G as Egress gateway
+    participant E as agentio-epe
+    participant U as External service
+    Z->>G: Gateway-routed HTTP traffic
+    G->>E: Check request (ext_proc)
+    alt Profile blocks the request
+        E-->>G: Immediate response
+        G-->>Z: Return local response
+    else Forwarding is authorized
+        E-->>G: Continue with any request mutations
+        G->>U: Forward to authorized destination
+        U-->>G: Upstream response
+        G-->>Z: Return upstream response
+    end
 ```
 
 ## Control-plane boundaries

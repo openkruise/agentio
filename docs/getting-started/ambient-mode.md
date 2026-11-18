@@ -4,6 +4,12 @@
 
 This guide installs Agentio in ambient mode, enrolls a namespace, and creates a test workload for the shared egress and policy tasks.
 
+## How ambient mode works
+
+The chart installs `agentio-cni` and `ztunnel` as DaemonSets. On each enrolled Pod's node, Agentio CNI configures traffic capture in the Pod's network namespace. The node's ztunnel opens listeners there and serves the captured connections for that Pod. Multiple Pods on the node share the same proxy process, so the workload manifest needs only the application containers.
+
+For an outbound connection, the shared ztunnel applies the originating workload's traffic policy and egress route. See the [sidecar and ambient traffic paths](../getting-started.md#how-the-two-modes-handle-outbound-traffic).
+
 ## Before you begin
 
 Complete the prerequisites in [Getting started](../getting-started.md). Ambient mode requires Linux nodes.

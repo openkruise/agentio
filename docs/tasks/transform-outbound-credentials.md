@@ -78,6 +78,20 @@ spec:
 
 Apply it with `kubectl apply -f example-api-credentials.yaml`. The source identity's bearer token and Sandbox client ID travel only from EPE to the configured provider; neither is available to CEL nor to policy templates.
 
+### Restrict where the transformed request can go
+
+To keep requests out of an internal subnet, add this field under `spec`, alongside the existing `rules`, and reapply the profile:
+
+```yaml
+tcpRules:
+- name: deny-internal-subnet
+  match:
+  - cidrs: ["10.20.0.0/16"]
+  action: Deny
+```
+
+For `https://api.example.com/v1/models`, a successful token transformation leaves the destination check pending. If the selected upstream is `10.20.1.5`, EPE rejects forwarding before the upstream receives the credential. If the selected address is permitted, the upstream receives the transformed request. The same subnet rule also applies to requests that reach it without matching the token rule.
+
 ## Verify the transformation
 
 Confirm that Kubernetes accepted the profile:

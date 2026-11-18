@@ -26,7 +26,9 @@ $ kubectl get pods \
 
 `spec.selector` selects calling Pods, not the external service. A namespaced profile can select only Pods in its own namespace; an empty selector selects every Pod in that namespace. Use narrow labels where possible.
 
-Each rule requires `domains`; add `paths`, `methods`, `ports`, `schemes`, `headers`, or `queryParams` to further restrict it. Match semantics are documented in the [SecurityProfile reference](../reference/security-profile.md#rule-structure-and-matching).
+Each HTTP rule in `spec.rules` requires `domains`; add `paths`, `methods`, `ports`, `schemes`, `headers`, or `queryParams` to further restrict it. Match semantics are documented in the [SecurityProfile reference](../reference/security-profile.md#rule-structure-and-matching).
+
+To allow or deny gateway destinations by IP address and port, use `spec.tcpRules`. See the [TCP destination rule examples](../reference/security-profile.md#tcp-destination-rules).
 
 A terminal action stops all later EPE processing and returns a response. A non-terminal action applies its mutation and lets the request continue.
 
@@ -141,6 +143,50 @@ $ kubectl exec "$AGENTIO_PROFILE_POD" \
 ```
 
 If the request reaches the upstream service, first verify that the host uses the egress gateway rather than direct passthrough, then check the EPE Deployment logs and the workload's labels. A profile resource appearing in `kubectl get` does not by itself prove that its compiled version is enforcing.
+
+## Allow selected domains and deny other gateway traffic
+
+This standalone example selects Pods labeled `app: restricted-client` in `agentio-demo`. Route all of their outbound TCP traffic through the native egress gateway before using the allowlist. The workload's TrafficPolicy must permit that path. For the outcomes below, assume this is the only matching profile and the gateway permits the upstream addresses.
+
+```yaml
+apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata:
+  name: domain-allowlist
+  namespace: agentio-demo
+spec:
+  selector:
+    matchLabels:
+      app: restricted-client
+  rules:
+  - name: allow-http
+    match:
+    - domains: ["api.example.com", "*.packages.example.org"]
+      schemes: [http]
+      ports: [80]
+    actions:
+      bypass: true
+  - name: allow-tls
+    match:
+    - domains: ["api.example.com", "*.packages.example.org"]
+      ports: [443]
+    actions:
+      tls:
+        action: Passthrough
+  tcpRules:
+  - name: deny-rest
+    match: [{}]
+    action: Deny
+```
+
+| Gateway traffic | Expected result |
+| --- | --- |
+| HTTP to `api.example.com:80` | The Host matches. HTTP bypass ends profile evaluation. |
+| TLS with SNI `repo.packages.example.org` on port 443 | The wildcard matches. The gateway forwards the encrypted connection. |
+| HTTP to `packages.example.org:80` | The wildcard matches subdomains only. The TCP catch-all denies forwarding. |
+| Raw TCP to `192.0.2.10:5432` | The TCP catch-all denies forwarding, as it would for an IPv6 destination. |
+
+TLS passthrough allows any TLS application protocol matching that SNI and port. To restrict HTTPS by path or method, select TLS termination for the host, configure client CA trust, and apply HTTP rules to the decrypted request. For a subnet that must be blocked even when a profile allows a domain, configure the native gateway's [destination restrictions](../design/egress-gateway-protocol-and-dfp.md#destination-restrictions).
 
 ## Clean up
 
