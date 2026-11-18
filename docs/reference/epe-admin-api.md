@@ -36,7 +36,7 @@ $ curl --fail --silent --request POST \
 {"apiKeyEntries":12,"stsEntries":3,"oauth2Entries":2}
 ```
 
-`providerName` is required and must be non-empty; it is the remote `credentialProviderName`, not the local `EPEConfig.extensionProviders[].name`. A successful `200 OK` response reports removed entries, including expired entries not yet reaped; zero counts are successful. The response does not mean new credentials have been fetched. For cache semantics and invalidation behavior, see [Credential provider](credential-provider.md#external-cache-invalidation).
+`providerName` is required and must be non-empty; it is the remote `credentialProviderName`, not the local `AgentioConfig.extensionProviders[].name`. A successful `200 OK` response reports removed entries, including expired entries not yet reaped; zero counts are successful. The response does not mean new credentials have been fetched. For cache semantics and invalidation behavior, see [Credential provider](credential-provider.md#external-cache-invalidation).
 
 Requests must contain one JSON object of at most 4 KiB. Unknown fields, invalid types, trailing JSON, and missing or empty provider names return `400` without changing cache state. Other methods return `405` with `Allow: POST`. JSON responses carry `Cache-Control: no-store`.
 

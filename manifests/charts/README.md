@@ -39,12 +39,12 @@ For the embedded OpenKruise installation, start with [OpenKruise chart integrati
 | Components, images, resources and scheduling | Helm `profile`, `sandbox`, `global`, `agentiod`, `cni`, `ztunnel`, `egressGateway`, `epe` | Helm upgrade; Pod template changes roll out managed workloads. Existing injected Pods need recreation. |
 | Egress routes, gateway policy and external processors | `agentiod.config.values` | Helm writes the base ConfigMap; Agentiod watches and distributes valid changes. |
 | Operations-owned Agentio policy overrides | `agentio-config-primary` ConfigMap | Watched; overrides the Helm-managed base. Use only when another owner needs an override. |
-| EPE extension providers | `epe.config` | Helm writes EPE's base ConfigMap; EPE watches it and its externally managed primary overlay. |
+| EPE extension providers | `agentiod.config.values.extensionProviders`, `.defaultProviders` | EPE watches the shared AgentioConfig base and its primary overlay. |
 | Gateway agent process settings | Shared `egressGateway.agentConfig`; per-Gateway agent-config annotation | Both Envoy deployment paths use these defaults; annotations override them. See [Gateway agent configuration](../../docs/reference/gateway-agent-configuration.md). |
 | Envoy patches and telemetry | `agentiod.config.sources` | Separate watched Kubernetes document stream; see [Envoy patches](../../docs/reference/envoy-patches.md). |
 | Advanced process options | Component `env` maps | Pod rollout. Prefer named Helm settings when available; explicit env entries override generated entries. |
 
-The policy layers have different merge rules: Helm deep-merges `agentiod.config.values` over generated maps; the runtime primary ConfigMap replaces supplied messages and lists. EPE merges providers by name. See [Agentio configuration](../../docs/reference/agentio-configuration.md#configuration-sources-and-precedence) and [EPE configuration](../../docs/reference/epe-configuration.md) before adding an overlay.
+Helm deep-merges `agentiod.config.values` over generated maps. The runtime primary ConfigMap replaces supplied messages and lists by default and merges extension providers by name. See [Agentio configuration](../../docs/reference/agentio-configuration.md#merge-behavior) and [extension providers](../../docs/reference/epe-configuration.md#extension-providers) for overlay behavior.
 
 ## Prerequisites
 

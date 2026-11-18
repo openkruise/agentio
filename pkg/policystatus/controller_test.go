@@ -28,9 +28,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/pkg/config"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
+	"github.com/openkruise/agentio/pkg/model"
 	registry "github.com/openkruise/agentio/pkg/registry/kubernetes"
+	"github.com/openkruise/agentio/pkg/validation"
 )
 
 func mutable[T any](t *testing.T) krt.StaticCollection[T] {
@@ -40,7 +44,9 @@ func mutable[T any](t *testing.T) krt.StaticCollection[T] {
 
 func testController(t *testing.T, scoped bool) (*Controller, *registry.Registry) {
 	t.Helper()
+	defaults := model.AgentioConfiguration{Value: &configv1.AgentioConfig{}}
 	r := &registry.Registry{
+		AgentioConfig:                krt.NewStatic(&defaults, true, krt.WithStop(t.Context().Done())).AsCollection(),
 		SecurityProfileObjects:       mutable[*agents.SecurityProfile](t).AsCollection(),
 		GlobalSecurityProfileObjects: mutable[*agents.GlobalSecurityProfile](t).AsCollection(),
 		TrafficPolicyObjects:         mutable[*agents.TrafficPolicy](t).AsCollection(),
@@ -51,11 +57,23 @@ func testController(t *testing.T, scoped bool) (*Controller, *registry.Registry)
 		KubernetesServices:           mutable[*corev1.Service](t).AsCollection(),
 		EndpointSlices:               mutable[*discoveryv1.EndpointSlice](t).AsCollection(),
 	}
-	c, err := New(kube.NewFakeClient(), r, "system", scoped,
+	c, err := New(kube.NewFakeClient(), r, "system", testReferences(t, r, scoped),
 		func(krt.HandlerContext, string) []netip.Addr { return nil }, t.Context().Done())
 	assert.NoError(t, err)
 	assert.Equal(t, c.results.WaitUntilSynced(t.Context().Done()), true)
 	return c, r
+}
+
+func testReferences(t *testing.T, r *registry.Registry, scoped bool) *validation.ReferenceChecker {
+	t.Helper()
+	return validation.NewReferenceChecker(validation.ReferenceSources{
+		ConfigMaps:    r.ConfigMaps,
+		Secrets:       r.Secrets,
+		Services:      r.KubernetesServices,
+		AgentioConfig: r.AgentioConfig,
+		RootNamespace: "system",
+		ScopedSecrets: scoped,
+	}, t.Context().Done())
 }
 
 func profileSource(t *testing.T, raw, namespace string) source {
@@ -106,6 +124,7 @@ func awaitResult(
 		assert.Equal(t, programmed.Message, got.Conditions[0].Message)
 	}
 	if refs == metav1.ConditionTrue {
+		assert.Equal(t, got.Conditions[1].Reason, "ResolvedRefs")
 		assert.Equal(t, got.Conditions[1].Message, "Reference checks passed")
 	}
 	for _, condition := range got.Conditions {
@@ -146,9 +165,10 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	maps := mutable[*corev1.ConfigMap](t)
 	secrets := mutable[*corev1.Secret](t)
 	r.ConfigMaps, r.Secrets = maps.AsCollection(), secrets.AsCollection()
+	c.references = testReferences(t, r, false)
 	s := profileSource(
 		t,
-		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}},"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
+		`{"inputs":[{"name":"config","configMap":{"name":"config"}}],"rules":[{"name":"auth","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
 		"demo",
 	)
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(s)}, krt.WithStop(t.Context().Done()))
@@ -159,9 +179,109 @@ func TestProfileReferencesRecoverWithoutSpecChange(t *testing.T) {
 	got = awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "SecretNotFound")
 	assert.Equal(t, got.Conditions[1].Message, `Rule "auth": Secret demo/cred not found`)
 	secrets.UpdateObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "cred", Namespace: "demo"}})
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 	maps.DeleteObject("demo/config")
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ConfigMapNotFound")
+}
+
+func TestProfileProviderReferencesTrackAgentioConfig(t *testing.T) {
+	c, r := testController(t, false)
+	maps := mutable[*corev1.ConfigMap](t)
+	r.AgentioConfig = config.NewCollection(maps.AsCollection(), config.Options[*configv1.AgentioConfig]{
+		Namespace: "system",
+		Names:     []string{"agentio-config", "agentio-config-primary"},
+		Defaults:  &configv1.AgentioConfig{},
+		Apply:     config.ApplyAgentioConfig,
+	}, krt.WithStop(t.Context().Done())).AsCollection()
+	c.references = testReferences(t, r, false)
+	callout := profileSource(t, `{"rules":[{"name":"scan","actions":{
+		"httpCallout":{"provider":{"name":"scanner"},"request":{}}
+	}}]}`, "demo")
+	oauth := profileSource(t, `{"rules":[{"name":"exchange","actions":{
+		"tokenTransformation":{"type":"OAuth2","credentialRef":{"credentialProvider":{"name":"remote-binding"}},
+		"oauth2":{"operation":{"resource":{}}}}
+	}}]}`, "")
+	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(callout), *c.compileProfile(oauth)},
+		krt.WithStop(t.Context().Done()))
+	results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
+	got := awaitResult(
+		t,
+		results,
+		callout.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderNotFound",
+	)
+	assert.Equal(t, got.Conditions[1].Message,
+		`Rule "scan": HTTP callout provider "scanner" is missing`)
+	awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+
+	maps.UpdateObject(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "agentio-config", Namespace: "system"},
+		Data: map[string]string{"config": `extensionProviders:
+- name: scanner
+  httpCallout: {url: https://scanner.example}
+- name: credentials
+  credentialProvider: {url: https://credentials.example}
+defaultProviders: {credentialProvider: credentials}
+`},
+	})
+	awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+	awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+
+	setPrimary := func(raw string) {
+		maps.UpdateObject(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentio-config-primary", Namespace: "system"},
+			Data:       map[string]string{"config": raw},
+		})
+	}
+	setPrimary(`extensionProviders:
+- name: scanner
+  credentialProvider: {url: https://scanner.example}
+- name: credentials
+  httpCallout: {url: https://credentials.example}
+`)
+	got = awaitResult(
+		t,
+		results,
+		callout.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderTypeMismatch",
+	)
+	assert.Equal(t, got.Conditions[1].Message, `Rule "scan": provider "scanner" must be an HTTP callout provider`)
+	got = awaitResult(
+		t,
+		results,
+		oauth.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"ProviderTypeMismatch",
+	)
+	assert.Equal(t, got.Conditions[1].Message, `Rule "exchange": provider "credentials" must be a credential provider`)
+
+	setPrimary("extensionProviders: []")
+	awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ProviderNotFound")
+	got = awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ProviderNotFound")
+	assert.Equal(t, got.Conditions[1].Message, `Rule "exchange": default credential provider "credentials" is missing`)
+
+	setPrimary("defaultProviders: {credentialProvider: " + configv1.EnvironmentCredentialProviderName + "}")
+	awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+
+	setPrimary("defaultProviders: {}")
+	awaitResult(t, results, callout.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+	got = awaitResult(
+		t,
+		results,
+		oauth.ResourceName(),
+		metav1.ConditionTrue,
+		metav1.ConditionFalse,
+		"DefaultProviderDisabled",
+	)
+	assert.Equal(t, got.Conditions[1].Message, `Rule "exchange": the default credential provider is disabled`)
+
+	maps.DeleteObject("system/agentio-config-primary")
+	awaitResult(t, results, oauth.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 }
 
 func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
@@ -178,7 +298,7 @@ func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
 				krt.WithStop(t.Context().Done()),
 			)
 			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 
 			invalid := s
 			invalid.Profile = s.Profile.DeepCopy()
@@ -186,11 +306,11 @@ func TestProfileProgrammedTracksSpecChanges(t *testing.T) {
 			invalid.Profile.Priority = &priority
 			invalid.Metadata.Generation++
 			sources.UpdateObject(invalid)
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionTrue, reasonResolvedRefs)
 
 			s.Metadata.Generation = invalid.Metadata.Generation + 1
 			sources.UpdateObject(s)
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 		})
 	}
 }
@@ -205,12 +325,13 @@ func TestProfileReferenceCheckScope(t *testing.T) {
 		status    metav1.ConditionStatus
 		reason    string
 	}{
-		{"scoped secret", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"kind":"Secret","name":"cred"},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionUnknown, "OutsideWatchScope"},
-		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
-		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
-		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
-		{"disabled transform", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"disabled":true}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs"},
-		{"invalid global configmap", "", `{"inputs":[{"name":"config","configMap":{"name":"config"}}]}`, metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked"},
+		{"namespaced secret outside scope", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"kind":"Secret","name":"cred"},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionFalse, "RefNotPermitted"},
+		{"global explicit secret outside scope", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred","namespace":"demo"}}}}}]}`, metav1.ConditionTrue, metav1.ConditionFalse, "RefNotPermitted"},
+		{"global implicit secret", "", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs},
+		{"credential provider", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"credentialProvider":{"name":"provider"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs},
+		{"callout", "demo", `{"rules":[{"name":"r","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}`, metav1.ConditionTrue, metav1.ConditionFalse, "ProviderNotFound"},
+		{"disabled transform", "demo", `{"rules":[{"name":"r","actions":{"tokenTransformation":{"disabled":true}}}]}`, metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs},
+		{"invalid global configmap", "", `{"inputs":[{"name":"config","configMap":{"name":"config"}}]}`, metav1.ConditionFalse, metav1.ConditionTrue, reasonResolvedRefs},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := profileSource(t, tc.spec, tc.namespace)
@@ -221,8 +342,12 @@ func TestProfileReferenceCheckScope(t *testing.T) {
 			)
 			results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
 			got := awaitResult(t, results, s.ResourceName(), tc.accepted, tc.status, tc.reason)
-			if tc.reason == "OutsideWatchScope" {
-				assert.Equal(t, got.Conditions[1].Message, `Rule "r": Secret demo/cred could not be verified`)
+			if tc.reason == "RefNotPermitted" {
+				assert.Equal(
+					t,
+					got.Conditions[1].Message,
+					`Rule "r": Secret demo/cred is outside the permitted namespace system`,
+				)
 			}
 		})
 	}
@@ -232,12 +357,8 @@ func TestTrafficReferencesAndValidation(t *testing.T) {
 	c, r := testController(t, false)
 	services := mutable[*corev1.Service](t)
 	r.KubernetesServices = services.AsCollection()
+	c.references = testReferences(t, r, false)
 	c.traffic.Services = r.KubernetesServices
-	addresses := []netip.Addr(nil)
-	dns := krt.NewStatic(&addresses, true, krt.WithStop(t.Context().Done()))
-	c.traffic.Resolve = func(ctx krt.HandlerContext, _ string) []netip.Addr {
-		return *krt.FetchOne(ctx, dns.AsCollection())
-	}
 	var spec agents.TrafficPolicySpec
 	assert.NoError(
 		t,
@@ -253,27 +374,13 @@ func TestTrafficReferencesAndValidation(t *testing.T) {
 	results := krt.NewCollection(sources.AsCollection(), c.trafficStatus, krt.WithStop(t.Context().Done()))
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "ServiceNotFound")
 	services.UpdateObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "demo"}})
-	got := awaitResult(
-		t,
-		results,
-		s.ResourceName(),
-		metav1.ConditionTrue,
-		metav1.ConditionUnknown,
-		"DNSResolutionPending",
-	)
-	assert.Equal(
-		t,
-		got.Conditions[1].Message,
-		"spec.egress.rules[0].to[1]: No IP addresses are available for api.example.com",
-	)
-	resolvedAddresses := []netip.Addr{netip.MustParseAddr("192.0.2.1")}
-	dns.Set(&resolvedAddresses)
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+	// The fixture's DNS resolver still returns no addresses.
+	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 	invalid := spec.DeepCopy()
 	invalid.Priority = -1
 	s.Traffic = invalid
 	sources.UpdateObject(s)
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+	awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionTrue, reasonResolvedRefs)
 }
 
 func TestTrafficProgrammedTracksSpecChanges(t *testing.T) {
@@ -288,18 +395,18 @@ func TestTrafficProgrammedTracksSpecChanges(t *testing.T) {
 				kind, resource, nil, &agents.TrafficPolicySpec{})
 			sources := krt.NewMutableCollection(nil, []source{s}, krt.WithStop(t.Context().Done()))
 			results := krt.NewCollection(sources.AsCollection(), c.trafficStatus, krt.WithStop(t.Context().Done()))
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 
 			invalid := s
 			invalid.Traffic = s.Traffic.DeepCopy()
 			invalid.Traffic.Priority = -1
 			invalid.Metadata.Generation++
 			sources.UpdateObject(invalid)
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionUnknown, "NotChecked")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionFalse, metav1.ConditionTrue, reasonResolvedRefs)
 
 			s.Metadata.Generation = invalid.Metadata.Generation + 1
 			sources.UpdateObject(s)
-			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, "ResolvedRefs")
+			awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
 		})
 	}
 }
@@ -321,7 +428,7 @@ func TestSourcesExcludeStatusUpdates(t *testing.T) {
 	traffic.UpdateObject(&agents.TrafficPolicy{ObjectMeta: meta})
 	globalTraffic.UpdateObject(&agents.GlobalTrafficPolicy{ObjectMeta: globalMeta})
 	assert.EventuallyEqual(t, func() bool { return len(sources.List()) == 4 }, true)
-	controller, err := New(kube.NewFakeClient(), r, "system", false,
+	controller, err := New(kube.NewFakeClient(), r, "system", testReferences(t, r, false),
 		func(krt.HandlerContext, string) []netip.Addr { return nil }, t.Context().Done())
 	assert.NoError(t, err)
 	for _, key := range []string{"securityprofiles/demo/test", "globalsecurityprofiles//test", "trafficpolicies/demo/test", "globaltrafficpolicies//test"} {
@@ -331,7 +438,7 @@ func TestSourcesExcludeStatusUpdates(t *testing.T) {
 			key,
 			metav1.ConditionTrue,
 			metav1.ConditionTrue,
-			"ResolvedRefs",
+			reasonResolvedRefs,
 		)
 	}
 	before := sources.GetKey("securityprofiles/demo/test")
@@ -370,10 +477,10 @@ func TestWriterStopsAndReplaysOnRestart(t *testing.T) {
 }
 
 func TestSecretCacheSynchronizationUpdatesStatus(t *testing.T) {
-	c, _ := testController(t, false)
-	ready := false
-	synced := krt.NewStatic(&ready, true, krt.WithStop(t.Context().Done()))
-	c.secretsSynced = synced
+	c, r := testController(t, false)
+	synced := krt.NewStatic[bool](nil, false, krt.WithStop(t.Context().Done()))
+	r.Secrets = krt.NewStaticCollection[*corev1.Secret](synced.AsCollection(), nil, krt.WithStop(t.Context().Done()))
+	c.references = testReferences(t, r, false)
 	s := profileSource(
 		t,
 		`{"rules":[{"name":"r","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}},"apiKey":{"valueTemplate":"Bearer {{ .Token }}"}}}}]}`,
@@ -381,8 +488,7 @@ func TestSecretCacheSynchronizationUpdatesStatus(t *testing.T) {
 	)
 	profiles := krt.NewStaticCollection(nil, []compiledProfile{*c.compileProfile(s)}, krt.WithStop(t.Context().Done()))
 	results := krt.NewCollection(profiles, c.profileStatus, krt.WithStop(t.Context().Done()))
-	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionUnknown, "CacheNotSynced")
-	complete := true
-	synced.Set(&complete)
+	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionTrue, reasonResolvedRefs)
+	synced.MarkSynced()
 	awaitResult(t, results, s.ResourceName(), metav1.ConditionTrue, metav1.ConditionFalse, "SecretNotFound")
 }

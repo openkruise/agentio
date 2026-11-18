@@ -347,8 +347,6 @@ spec:
   - name: epe
     image: {{ .EPEImage }}
     args:
-    - -epe-config={{ .Name }}
-    - -epe-config-primary={{ .Name }}-primary
     - -namespace={{ .Namespace }}
     - -fail-closed-on-missing-identity=true
     - -enable-debug=true
@@ -356,6 +354,8 @@ spec:
     - --xds-root-path=/var/run/xds-root/root-cert.pem
     - --xds-token-path=/var/run/xds-token/token
     env:
+    - {name: AGENTIO_CONFIGMAP_NAME, value: {{ .Name }}}
+    - {name: AGENTIO_PRIMARY_CONFIGMAP_NAME, value: {{ .Name }}-primary}
     - name: POD_NAME
       valueFrom: {fieldRef: {fieldPath: metadata.name}}
     - name: POD_NAMESPACE

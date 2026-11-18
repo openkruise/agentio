@@ -24,7 +24,7 @@ import (
 )
 
 func (c *Controller) compileProfile(s source) *compiledProfile {
-	err := c.validateProfile(s)
+	err := validation.ValidateSecurityProfile(profileModel(s)).ToAggregate()
 	accepted := condition(conditionAccepted, metav1.ConditionTrue, reasonAccepted,
 		messageAccepted, s.Metadata.Generation)
 	if err != nil {
@@ -34,14 +34,14 @@ func (c *Controller) compileProfile(s source) *compiledProfile {
 		Accepted: accepted}
 }
 
-func (c *Controller) validateProfile(s source) error {
-	return validation.ValidateSecurityProfile(model.SecurityProfile{
+func profileModel(s source) model.SecurityProfile {
+	return model.SecurityProfile{
 		Name:         s.Metadata.Name,
 		Namespace:    s.Metadata.Namespace,
 		Global:       s.Kind == "GlobalSecurityProfile",
 		CreationTime: s.Metadata.CreationTimestamp.Time,
 		Spec:         *s.Profile,
-	})
+	}
 }
 
 func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {
@@ -52,38 +52,51 @@ func (c *Controller) trafficStatus(ctx krt.HandlerContext, s source) *result {
 		CreationTime: s.Metadata.CreationTimestamp.Time,
 		Spec:         *s.Traffic,
 	}
-	compiled, err := policy.CompileTrafficPolicy(ctx, p, c.traffic)
-	if err == nil {
-		_, err = policy.TrafficPolicyAsAuthorizations(*compiled, p, c.namespace)
+	var err error
+	if errs := policy.ValidateTrafficPolicy(p.Spec); len(errs) != 0 {
+		err = errs.ToAggregate()
+	} else {
+		compiled, compileErr := policy.CompileTrafficPolicy(ctx, p, c.traffic)
+		err = compileErr
+		if err == nil {
+			_, err = policy.TrafficPolicyAsAuthorizations(*compiled, p, c.namespace)
+		}
 	}
 	accepted := condition(conditionAccepted, metav1.ConditionTrue, reasonAccepted,
 		messageAccepted, s.Metadata.Generation)
-	resolved := condition(conditionResolvedRefs, metav1.ConditionUnknown, reasonNotChecked,
-		messageReferencesNotChecked, s.Metadata.Generation)
+	var issues []validation.ReferenceIssue
 	programmed := accepted
 	programmed.Type = conditionProgrammed
 	if err != nil {
 		accepted.Status, accepted.Reason, accepted.Message = metav1.ConditionFalse, reasonInvalidConfiguration, err.Error()
 		programmed.Status, programmed.Reason, programmed.Message = accepted.Status, accepted.Reason, accepted.Message
 	} else {
-		resolved = c.trafficRefs(ctx, s)
+		issues = c.references.TrafficPolicy(ctx, p)
 		programmed.Reason = reasonProgrammed
 		programmed.Message = messageProgrammed
 	}
+	resolved := referenceCondition(s.Metadata.Generation, issues)
 	return &result{Source: s,
 		Conditions: []metav1.Condition{accepted, resolved, programmed}}
 }
 
 func (c *Controller) profileStatus(ctx krt.HandlerContext, p compiledProfile) *result {
-	resolved := condition(conditionResolvedRefs, metav1.ConditionUnknown, reasonNotChecked,
-		messageReferencesNotChecked, p.Source.Metadata.Generation)
+	var issues []validation.ReferenceIssue
 	programmed := p.Accepted
 	programmed.Type = conditionProgrammed
 	if p.Accepted.Status == metav1.ConditionTrue {
-		resolved = c.profileRefs(ctx, p.Source)
+		issues = c.references.SecurityProfile(ctx, profileModel(p.Source))
 		programmed.Reason = reasonProgrammed
 		programmed.Message = messageProgrammed
 	}
+	resolved := referenceCondition(p.Source.Metadata.Generation, issues)
 	return &result{Source: p.Source,
 		Conditions: []metav1.Condition{p.Accepted, resolved, programmed}}
+}
+
+func referenceCondition(generation int64, issues []validation.ReferenceIssue) metav1.Condition {
+	if len(issues) != 0 {
+		return condition(conditionResolvedRefs, metav1.ConditionFalse, issues[0].Reason, issues[0].Message, generation)
+	}
+	return condition(conditionResolvedRefs, metav1.ConditionTrue, reasonResolvedRefs, messageResolvedRefs, generation)
 }

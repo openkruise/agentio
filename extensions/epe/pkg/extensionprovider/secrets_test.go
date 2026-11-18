@@ -119,7 +119,7 @@ func TestWatchForbiddenSecretDoesNotBlockStartup(t *testing.T) {
 				t.Fatalf("wrong initial provider state for optional=%t: %+v", optional, initial)
 			}
 			// The reflector retries after RBAC is granted, without restarting EPE
-			// or changing the EPEConfig. Optional providers must reload too.
+			// or changing AgentioConfig. Optional providers must reload too.
 			allowed.Store(true)
 			testsupport.Eventually(t, 10*time.Second, func() error {
 				provider := liveProvider(registry, "default")

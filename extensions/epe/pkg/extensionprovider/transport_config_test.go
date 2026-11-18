@@ -20,6 +20,7 @@ import (
 	"time"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/pkg/config"
 )
 
 func TestCalloutTransportValidation(t *testing.T) {
@@ -38,7 +39,7 @@ func TestCalloutTransportValidation(t *testing.T) {
 				"extensionProviders: [{name: scanner, httpCallout: {url: 'http://localhost:8080', %s}}]",
 				tc.fields,
 			)
-			cfg, err := ApplyConfig(raw, &configv1.EPEConfig{})
+			cfg, err := config.ApplyAgentioConfig(raw, &configv1.AgentioConfig{})
 			if err == nil {
 				err = Validate(cfg)
 			}
@@ -69,7 +70,7 @@ func TestCalloutTransportDefaults(t *testing.T) {
 			raw := fmt.Sprintf(
 				"extensionProviders: [{name: scanner, httpCallout: {url: 'http://localhost:8080', %s}}]", tc.fields,
 			)
-			cfg, err := ApplyConfig(raw, &configv1.EPEConfig{})
+			cfg, err := config.ApplyAgentioConfig(raw, &configv1.AgentioConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

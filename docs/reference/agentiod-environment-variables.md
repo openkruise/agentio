@@ -280,15 +280,22 @@ disables validation admission. The Helm chart sets this name in both sidecar and
 ambient profiles.
 
 The webhook validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and
-GlobalTrafficPolicy on CREATE and UPDATE, including dry runs. SecurityProfile
-validation shares API static checks with policy status: selectors, priorities,
-TLS constraints, reference and field unions, regular expressions, and CEL and Go
-template syntax. It does not import EPE or check a consumer's expression variables,
-helper functions, filter payloads, or ability to load the policy. TrafficPolicy validation checks selectors, priorities, actions,
-protocols, port ranges and CIDRs without resolving live peers. CRD schema validation
-continues to enforce structural constraints. Missing external references are
-reported by policy status and do not prevent admission. Status updates and deletes
-are excluded. The chart uses `failurePolicy: Fail`, so policy writes require an
+GlobalTrafficPolicy on CREATE and UPDATE, including server-side dry runs. It shares
+static validation and reference checks with [policy status](../components/securityprofile-status.md).
+
+Static errors reject the request with field details. SecurityProfile checks include
+selectors, priorities, TLS constraints, field unions, regular expressions, and CEL
+and Go template syntax. TrafficPolicy checks include selectors, priorities, actions,
+protocols, port ranges, and CIDRs. CRD schema validation also enforces structural
+constraints. EPE validates its expression environment and filter payloads when it
+loads policies.
+
+The webhook reads existing caches and returns admission warnings for confirmed
+provider, ConfigMap, Secret, and named Service reference errors. A Secret outside
+the permitted namespace also produces a warning. Policy writes with these
+warnings are allowed. Status tracks references as their dependencies change.
+DNS resolution runs in the background. Deletes and status updates bypass policy
+validation. The chart uses `failurePolicy: Fail`, so policy writes require an
 available agentiod webhook.
 
 ## See also

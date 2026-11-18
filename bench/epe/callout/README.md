@@ -72,7 +72,7 @@ GOMAXPROCS=4 go test -v ./bench/epe/callout -run '^TestEnvoyLoad$' -timeout 15m 
 
 ## HTTP/1.1 versus HTTP/2 comparison
 
-Build the Linux test binary with `bash bench/epe/callout/build-h2c.sh /tmp/agentio-h2c` from the repository root. Copy `callout.test` and `compare-h2c.py` to one directory on a Linux Docker host. Both modes use the production EPEConfig API and transport; no compiler overlay is needed.
+Build the Linux test binary with `bash bench/epe/callout/build-h2c.sh /tmp/agentio-h2c` from the repository root. Copy `callout.test` and `compare-h2c.py` to one directory on a Linux Docker host. Both modes use the production AgentioConfig API and transport; no compiler overlay is needed.
 
 Run `python3 compare-h2c.py` there for three alternating-order comparisons with isolated generator/EPE/endpoint/upstream processes. The runner validates every response, protocol, call count and refused-stream count, and writes raw logs plus `results/summary.json`. HTTP/2 runs set `-callout-http2`, selecting production `protocol: HTTP2` and asserting h2c on every invocation. The default client limit is 32 streams per connection; `-callout-client-streams` overrides it. `-callout-max-connections` sets the provider connection cap (zero omits the override: HTTP2 defaults to 32 connections and 8 idle connections, AUTO/HTTP1 to 128 and 64). `-callout-max-idle` overrides idle retention; `-callout-timeout=` uses the production 500ms timeout instead of the harness default of 2s.
 

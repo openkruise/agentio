@@ -30,27 +30,12 @@ const (
 	reasonResolvedRefs         = conditionResolvedRefs
 	reasonProgrammed           = conditionProgrammed
 	reasonInvalidConfiguration = "InvalidConfiguration"
-	reasonNotChecked           = "NotChecked"
-	reasonCacheNotSynced       = "CacheNotSynced"
-	reasonConfigMapNotFound    = "ConfigMapNotFound"
-	reasonInvalidReference     = "InvalidReference"
-	reasonOutsideWatchScope    = "OutsideWatchScope"
-	reasonSecretNotFound       = "SecretNotFound"
-	reasonServiceNotFound      = "ServiceNotFound"
-	reasonDNSResolutionPending = "DNSResolutionPending"
 )
 
 const (
-	messageAccepted             = "Configuration is valid"
-	messageResolvedRefs         = "Reference checks passed"
-	messageProgrammed           = "Configuration is ready for distribution"
-	messageReferencesNotChecked = "Reference checks require a valid configuration"
-	messageReferencesPending    = "Reference checks are pending"
-	messageConfigMapNotFound    = "Input %q: ConfigMap %s not found"
-	messageSecretNotVerified    = "Rule %q: Secret %s/%s could not be verified"
-	messageSecretNotFound       = "Rule %q: Secret %s not found"
-	messageServiceNotFound      = "%s: Service %s not found"
-	messageDNSResolutionPending = "%s: No IP addresses are available for %s"
+	messageAccepted     = "Configuration is valid"
+	messageResolvedRefs = "Reference checks passed"
+	messageProgrammed   = "Configuration is ready for distribution"
 )
 
 func condition(typ string, status metav1.ConditionStatus, reason, message string, generation int64) metav1.Condition {

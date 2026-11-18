@@ -277,7 +277,7 @@ func providerRegistry(t testing.TB, endpoint string) *extensionprovider.Registry
 	t.Helper()
 	registry := &extensionprovider.Registry{}
 	t.Cleanup(registry.Close)
-	cfg := &configv1.EPEConfig{
+	cfg := &configv1.AgentioConfig{
 		ExtensionProviders: []*configv1.ExtensionProvider{{
 			Name: "default",
 			Provider: &configv1.ExtensionProvider_CredentialProvider{

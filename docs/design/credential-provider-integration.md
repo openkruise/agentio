@@ -8,11 +8,11 @@ The credential provider is an extension point, not a fixed backend. Any service 
 
 ## Per-rule extension provider references
 
-EPEConfig supports multiple named credential services and selects the default through `defaultProviders.credentialProvider`. SecurityProfile's `name` field selects the remote credential configuration. Per-rule extension provider references are deferred to future SecurityProfile API work.
+AgentioConfig supports multiple named credential services and selects the default through `defaultProviders.credentialProvider`. SecurityProfile's `name` field selects the remote credential configuration. Per-rule extension provider references are deferred to future SecurityProfile API work.
 
 ## In-process invalidation trigger
 
-In-process integrations call the same `extensionprovider.Registry` used by the filters. `providerName` is the remote `credentialProviderName`, not an `EPEConfig.extensionProviders[].name`. The registry invalidates that remote name across all current credential-provider connections and aggregates removed counts; replaced configuration versions remain isolated from current caches.
+In-process integrations call the same `extensionprovider.Registry` used by the filters. `providerName` is the remote `credentialProviderName`, not an `AgentioConfig.extensionProviders[].name`. The registry invalidates that remote name across all current credential-provider connections and aggregates removed counts; replaced configuration versions remain isolated from current caches.
 
 ```go
 result, err := registry.InvalidateCredentials(credential.InvalidationRequest{

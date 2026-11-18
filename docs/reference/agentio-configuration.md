@@ -15,7 +15,7 @@ The sources are applied in this order:
 | 1 | `agentio-config` | Contains chart-generated defaults plus the raw configuration under `agentiod.config.values`. |
 | 2 | `agentio-config-primary` | Optionally overrides the base configuration. |
 
-Both ConfigMaps are watched. A valid update is applied and distributed without restarting `agentiod`. If a layer cannot be parsed or validated, Agentio logs a warning and retains the last successfully applied effective configuration.
+Agentiod and EPE watch both ConfigMaps. Agentiod distributes gateway and routing updates, and EPE applies extension provider updates. If a layer cannot be parsed or validated, the affected component logs a warning and retains its last successfully applied configuration.
 
 Unknown fields are ignored with a warning listing their full paths, so an older controller can read configuration that contains fields from a newer version. Known fields still undergo type and semantic validation; invalid enum names, duplicate YAML keys, and conflicting oneof members reject the update. Before any valid configuration has been loaded, rejection uses the startup defaults; retained configuration does not survive a process restart.
 
@@ -25,7 +25,8 @@ Configuration is merged by protobuf field semantics:
 
 - A top-level field omitted by a higher-priority layer preserves the lower-priority value.
 - A message field present in a higher-priority layer replaces that entire message. Include every nested field that must remain set.
-- A repeated field present in a higher-priority layer replaces the entire lower-priority list; list entries are not appended.
+- A repeated field present in a higher-priority layer replaces the entire lower-priority list by default.
+- A non-empty `extensionProviders` list merges by provider name. A matching name replaces the whole provider and an explicit empty list clears the inherited providers.
 - An empty document or `{}` preserves the lower-priority configuration.
 
 For example, this primary layer replaces the complete `sandboxExtProc` message. It changes `service` and resets the lower layer's `port` and processing options:
@@ -118,6 +119,8 @@ In this example the primary `egressPolicies` list replaces the complete list gen
 | `sandboxIgnoredLabels` | `string[]` | Built-in list | Label names or path-style patterns removed from Sandbox workload metadata to reduce configuration size. |
 | `egressGateways` | `EgressGateway[]` | Empty | Per-gateway HTTP, TCP, TLS, external processing, and CONNECT limit settings. |
 | `trustedEPEIdentities` | `string[]` | Empty; Helm adds the managed EPE identity | Exact SPIFFE identities authorized for EPE Workload and TrafficPolicy discovery. Empty disables EPE access. |
+| `extensionProviders` | `ExtensionProvider[]` | EPE environment defaults | Named HTTP callout and credential services used by EPE. |
+| `defaultProviders` | `DefaultExtensionProviders` | EPE environment defaults | Default credential provider selection. See [extension providers](epe-configuration.md#extension-providers). |
 
 ## Egress authorization
 
@@ -140,7 +143,7 @@ Custom EnvoyFilter patches must preserve the destination checks, including the H
 
 Updates are distributed through xDS without restarting the gateway and take effect after it accepts the new resources. Existing connections are not forcibly closed. DNS answers remain cached; each new TCP connection or HTTP request checks them against its accepted destination restrictions. Changing the denied list does not create a new DNS cache.
 
-`EPEConfig.egressAuthorization` has been removed. Configure destination restrictions only here. The gateway checks EPE-selected endpoints after SecurityProfile evaluation; a denial does not choose another address. Independent EPE deployments must enforce platform CIDRs in their forwarding proxy.
+The gateway checks EPE-selected endpoints after SecurityProfile evaluation. A denied endpoint ends the request. Independent EPE deployments enforce platform CIDRs in their forwarding proxy.
 
 Legacy proxyv2 gateways do not support this setting. A nonempty custom list suppresses the legacy gateway resource variant; upgrade gateways to the native image before configuring it. Native gateways always enforce the built-ins. See [destination restrictions](../design/egress-gateway-protocol-and-dfp.md#destination-restrictions) for DNS behavior.
 

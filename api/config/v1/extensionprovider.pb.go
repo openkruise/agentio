@@ -16,7 +16,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.36.0
-// source: api/config/v1/epeconfig.proto
+// source: api/config/v1/extensionprovider.proto
 
 package configv1
 
@@ -68,11 +68,11 @@ func (x HTTPCalloutProvider_Protocol) String() string {
 }
 
 func (HTTPCalloutProvider_Protocol) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_config_v1_epeconfig_proto_enumTypes[0].Descriptor()
+	return file_api_config_v1_extensionprovider_proto_enumTypes[0].Descriptor()
 }
 
 func (HTTPCalloutProvider_Protocol) Type() protoreflect.EnumType {
-	return &file_api_config_v1_epeconfig_proto_enumTypes[0]
+	return &file_api_config_v1_extensionprovider_proto_enumTypes[0]
 }
 
 func (x HTTPCalloutProvider_Protocol) Number() protoreflect.EnumNumber {
@@ -81,84 +81,7 @@ func (x HTTPCalloutProvider_Protocol) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HTTPCalloutProvider_Protocol.Descriptor instead.
 func (HTTPCalloutProvider_Protocol) EnumDescriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{3, 0}
-}
-
-// EPEConfig configures EPE's extension providers.
-// YAML or JSON is decoded from each watched ConfigMap's data.config entry.
-// Base and primary ConfigMaps overlay startup defaults in that order. Missing
-// ConfigMaps or blank entries leave the lower layer unchanged. Invalid updates
-// retain the last valid configuration; an invalid initial configuration uses
-// startup defaults. Valid changes take effect without restarting EPE.
-// Secret and ConfigMap references default to the configuration namespace.
-//
-// Example: register a callout service and a default credential service.
-//
-//	extensionProviders:
-//	- name: policy-check
-//	  httpCallout:
-//	    url: https://policy.example.com/check
-//	    timeout: 500ms
-//	- name: corporate
-//	  credentialProvider:
-//	    url: https://credentials.example.com/get
-//	    timeout: 2s
-//	defaultProviders:
-//	  credentialProvider: corporate
-type EPEConfig struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Named services available to EPE. Names must be unique across provider types.
-	// Layers merge by name; a same-name entry replaces the whole provider.
-	// Omitted or null lists inherit the lower layer; an explicit [] clears it.
-	ExtensionProviders []*ExtensionProvider `protobuf:"bytes,1,rep,name=extension_providers,json=extensionProviders,proto3" json:"extension_providers,omitempty"`
-	// Default services used when a caller does not select a provider explicitly.
-	DefaultProviders *DefaultExtensionProviders `protobuf:"bytes,2,opt,name=default_providers,json=defaultProviders,proto3" json:"default_providers,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *EPEConfig) Reset() {
-	*x = EPEConfig{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EPEConfig) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EPEConfig) ProtoMessage() {}
-
-func (x *EPEConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EPEConfig.ProtoReflect.Descriptor instead.
-func (*EPEConfig) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *EPEConfig) GetExtensionProviders() []*ExtensionProvider {
-	if x != nil {
-		return x.ExtensionProviders
-	}
-	return nil
-}
-
-func (x *EPEConfig) GetDefaultProviders() *DefaultExtensionProviders {
-	if x != nil {
-		return x.DefaultProviders
-	}
-	return nil
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{2, 0}
 }
 
 // ExtensionProvider registers one typed service under a unique name.
@@ -181,7 +104,7 @@ type ExtensionProvider struct {
 
 func (x *ExtensionProvider) Reset() {
 	*x = ExtensionProvider{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[1]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -193,7 +116,7 @@ func (x *ExtensionProvider) String() string {
 func (*ExtensionProvider) ProtoMessage() {}
 
 func (x *ExtensionProvider) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[1]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -206,7 +129,7 @@ func (x *ExtensionProvider) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtensionProvider.ProtoReflect.Descriptor instead.
 func (*ExtensionProvider) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{1}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ExtensionProvider) GetName() string {
@@ -272,7 +195,7 @@ type DefaultExtensionProviders struct {
 
 func (x *DefaultExtensionProviders) Reset() {
 	*x = DefaultExtensionProviders{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[2]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -284,7 +207,7 @@ func (x *DefaultExtensionProviders) String() string {
 func (*DefaultExtensionProviders) ProtoMessage() {}
 
 func (x *DefaultExtensionProviders) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[2]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -297,7 +220,7 @@ func (x *DefaultExtensionProviders) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DefaultExtensionProviders.ProtoReflect.Descriptor instead.
 func (*DefaultExtensionProviders) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{2}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *DefaultExtensionProviders) GetCredentialProvider() string {
@@ -351,7 +274,7 @@ type HTTPCalloutProvider struct {
 
 func (x *HTTPCalloutProvider) Reset() {
 	*x = HTTPCalloutProvider{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[3]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -363,7 +286,7 @@ func (x *HTTPCalloutProvider) String() string {
 func (*HTTPCalloutProvider) ProtoMessage() {}
 
 func (x *HTTPCalloutProvider) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[3]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -376,7 +299,7 @@ func (x *HTTPCalloutProvider) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPCalloutProvider.ProtoReflect.Descriptor instead.
 func (*HTTPCalloutProvider) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{3}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *HTTPCalloutProvider) GetUrl() string {
@@ -437,7 +360,7 @@ type HTTPCalloutConnectionPool struct {
 
 func (x *HTTPCalloutConnectionPool) Reset() {
 	*x = HTTPCalloutConnectionPool{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[4]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -449,7 +372,7 @@ func (x *HTTPCalloutConnectionPool) String() string {
 func (*HTTPCalloutConnectionPool) ProtoMessage() {}
 
 func (x *HTTPCalloutConnectionPool) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[4]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -462,7 +385,7 @@ func (x *HTTPCalloutConnectionPool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPCalloutConnectionPool.ProtoReflect.Descriptor instead.
 func (*HTTPCalloutConnectionPool) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{4}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HTTPCalloutConnectionPool) GetMaxConnections() uint32 {
@@ -497,7 +420,7 @@ type HTTPCalloutHTTP2 struct {
 
 func (x *HTTPCalloutHTTP2) Reset() {
 	*x = HTTPCalloutHTTP2{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[5]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -509,7 +432,7 @@ func (x *HTTPCalloutHTTP2) String() string {
 func (*HTTPCalloutHTTP2) ProtoMessage() {}
 
 func (x *HTTPCalloutHTTP2) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[5]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -522,7 +445,7 @@ func (x *HTTPCalloutHTTP2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPCalloutHTTP2.ProtoReflect.Descriptor instead.
 func (*HTTPCalloutHTTP2) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{5}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HTTPCalloutHTTP2) GetMaxConcurrentStreams() uint32 {
@@ -551,7 +474,7 @@ type CredentialProvider struct {
 
 func (x *CredentialProvider) Reset() {
 	*x = CredentialProvider{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[6]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -563,7 +486,7 @@ func (x *CredentialProvider) String() string {
 func (*CredentialProvider) ProtoMessage() {}
 
 func (x *CredentialProvider) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[6]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -576,7 +499,7 @@ func (x *CredentialProvider) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialProvider.ProtoReflect.Descriptor instead.
 func (*CredentialProvider) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{6}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CredentialProvider) GetUrl() string {
@@ -616,7 +539,7 @@ func (x *CredentialProvider) GetTls() *ClientTLS {
 //	  caConfigMapRef:
 //	    name: provider-ca
 //
-// Example: use Secrets in the EPEConfig namespace for trust and client identity.
+// Example: use Secrets in the AgentioConfig namespace for trust and client identity.
 //
 //	tls:
 //	  caSecretRef:
@@ -674,7 +597,7 @@ type ClientTLS struct {
 
 func (x *ClientTLS) Reset() {
 	*x = ClientTLS{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[7]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -686,7 +609,7 @@ func (x *ClientTLS) String() string {
 func (*ClientTLS) ProtoMessage() {}
 
 func (x *ClientTLS) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[7]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -699,7 +622,7 @@ func (x *ClientTLS) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientTLS.ProtoReflect.Descriptor instead.
 func (*ClientTLS) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{7}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ClientTLS) GetServerName() string {
@@ -843,7 +766,7 @@ type TargetReference struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Required resource name.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Defaults to the EPEConfig namespace, not the calling workload's namespace.
+	// Defaults to the AgentioConfig namespace, not the calling workload's namespace.
 	// An explicit Secret namespace requires list/watch access there for the EPE ServiceAccount.
 	Namespace     string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -852,7 +775,7 @@ type TargetReference struct {
 
 func (x *TargetReference) Reset() {
 	*x = TargetReference{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[8]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -864,7 +787,7 @@ func (x *TargetReference) String() string {
 func (*TargetReference) ProtoMessage() {}
 
 func (x *TargetReference) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[8]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -877,7 +800,7 @@ func (x *TargetReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TargetReference.ProtoReflect.Descriptor instead.
 func (*TargetReference) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{8}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *TargetReference) GetName() string {
@@ -909,7 +832,7 @@ type ProviderClientCertificateFiles struct {
 
 func (x *ProviderClientCertificateFiles) Reset() {
 	*x = ProviderClientCertificateFiles{}
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[9]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -921,7 +844,7 @@ func (x *ProviderClientCertificateFiles) String() string {
 func (*ProviderClientCertificateFiles) ProtoMessage() {}
 
 func (x *ProviderClientCertificateFiles) ProtoReflect() protoreflect.Message {
-	mi := &file_api_config_v1_epeconfig_proto_msgTypes[9]
+	mi := &file_api_config_v1_extensionprovider_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -934,7 +857,7 @@ func (x *ProviderClientCertificateFiles) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderClientCertificateFiles.ProtoReflect.Descriptor instead.
 func (*ProviderClientCertificateFiles) Descriptor() ([]byte, []int) {
-	return file_api_config_v1_epeconfig_proto_rawDescGZIP(), []int{9}
+	return file_api_config_v1_extensionprovider_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ProviderClientCertificateFiles) GetCertificateFile() string {
@@ -951,14 +874,11 @@ func (x *ProviderClientCertificateFiles) GetPrivateKeyFile() string {
 	return ""
 }
 
-var File_api_config_v1_epeconfig_proto protoreflect.FileDescriptor
+var File_api_config_v1_extensionprovider_proto protoreflect.FileDescriptor
 
-const file_api_config_v1_epeconfig_proto_rawDesc = "" +
+const file_api_config_v1_extensionprovider_proto_rawDesc = "" +
 	"\n" +
-	"\x1dapi/config/v1/epeconfig.proto\x12\x11agentio.config.v1\"\xbd\x01\n" +
-	"\tEPEConfig\x12U\n" +
-	"\x13extension_providers\x18\x01 \x03(\v2$.agentio.config.v1.ExtensionProviderR\x12extensionProviders\x12Y\n" +
-	"\x11default_providers\x18\x02 \x01(\v2,.agentio.config.v1.DefaultExtensionProvidersR\x10defaultProviders\"\xda\x01\n" +
+	"%api/config/v1/extensionprovider.proto\x12\x11agentio.config.v1\"\xda\x01\n" +
 	"\x11ExtensionProvider\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12K\n" +
 	"\fhttp_callout\x18\x02 \x01(\v2&.agentio.config.v1.HTTPCalloutProviderH\x00R\vhttpCallout\x12X\n" +
@@ -1012,65 +932,62 @@ const file_api_config_v1_epeconfig_proto_rawDesc = "" +
 	"\x10private_key_file\x18\x02 \x01(\tR\x0eprivateKeyFileB6Z4github.com/openkruise/agentio/api/config/v1;configv1b\x06proto3"
 
 var (
-	file_api_config_v1_epeconfig_proto_rawDescOnce sync.Once
-	file_api_config_v1_epeconfig_proto_rawDescData []byte
+	file_api_config_v1_extensionprovider_proto_rawDescOnce sync.Once
+	file_api_config_v1_extensionprovider_proto_rawDescData []byte
 )
 
-func file_api_config_v1_epeconfig_proto_rawDescGZIP() []byte {
-	file_api_config_v1_epeconfig_proto_rawDescOnce.Do(func() {
-		file_api_config_v1_epeconfig_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_config_v1_epeconfig_proto_rawDesc), len(file_api_config_v1_epeconfig_proto_rawDesc)))
+func file_api_config_v1_extensionprovider_proto_rawDescGZIP() []byte {
+	file_api_config_v1_extensionprovider_proto_rawDescOnce.Do(func() {
+		file_api_config_v1_extensionprovider_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_config_v1_extensionprovider_proto_rawDesc), len(file_api_config_v1_extensionprovider_proto_rawDesc)))
 	})
-	return file_api_config_v1_epeconfig_proto_rawDescData
+	return file_api_config_v1_extensionprovider_proto_rawDescData
 }
 
-var file_api_config_v1_epeconfig_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_api_config_v1_epeconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
-var file_api_config_v1_epeconfig_proto_goTypes = []any{
+var file_api_config_v1_extensionprovider_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_api_config_v1_extensionprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_api_config_v1_extensionprovider_proto_goTypes = []any{
 	(HTTPCalloutProvider_Protocol)(0),      // 0: agentio.config.v1.HTTPCalloutProvider.Protocol
-	(*EPEConfig)(nil),                      // 1: agentio.config.v1.EPEConfig
-	(*ExtensionProvider)(nil),              // 2: agentio.config.v1.ExtensionProvider
-	(*DefaultExtensionProviders)(nil),      // 3: agentio.config.v1.DefaultExtensionProviders
-	(*HTTPCalloutProvider)(nil),            // 4: agentio.config.v1.HTTPCalloutProvider
-	(*HTTPCalloutConnectionPool)(nil),      // 5: agentio.config.v1.HTTPCalloutConnectionPool
-	(*HTTPCalloutHTTP2)(nil),               // 6: agentio.config.v1.HTTPCalloutHTTP2
-	(*CredentialProvider)(nil),             // 7: agentio.config.v1.CredentialProvider
-	(*ClientTLS)(nil),                      // 8: agentio.config.v1.ClientTLS
-	(*TargetReference)(nil),                // 9: agentio.config.v1.TargetReference
-	(*ProviderClientCertificateFiles)(nil), // 10: agentio.config.v1.ProviderClientCertificateFiles
+	(*ExtensionProvider)(nil),              // 1: agentio.config.v1.ExtensionProvider
+	(*DefaultExtensionProviders)(nil),      // 2: agentio.config.v1.DefaultExtensionProviders
+	(*HTTPCalloutProvider)(nil),            // 3: agentio.config.v1.HTTPCalloutProvider
+	(*HTTPCalloutConnectionPool)(nil),      // 4: agentio.config.v1.HTTPCalloutConnectionPool
+	(*HTTPCalloutHTTP2)(nil),               // 5: agentio.config.v1.HTTPCalloutHTTP2
+	(*CredentialProvider)(nil),             // 6: agentio.config.v1.CredentialProvider
+	(*ClientTLS)(nil),                      // 7: agentio.config.v1.ClientTLS
+	(*TargetReference)(nil),                // 8: agentio.config.v1.TargetReference
+	(*ProviderClientCertificateFiles)(nil), // 9: agentio.config.v1.ProviderClientCertificateFiles
 }
-var file_api_config_v1_epeconfig_proto_depIdxs = []int32{
-	2,  // 0: agentio.config.v1.EPEConfig.extension_providers:type_name -> agentio.config.v1.ExtensionProvider
-	3,  // 1: agentio.config.v1.EPEConfig.default_providers:type_name -> agentio.config.v1.DefaultExtensionProviders
-	4,  // 2: agentio.config.v1.ExtensionProvider.http_callout:type_name -> agentio.config.v1.HTTPCalloutProvider
-	7,  // 3: agentio.config.v1.ExtensionProvider.credential_provider:type_name -> agentio.config.v1.CredentialProvider
-	8,  // 4: agentio.config.v1.HTTPCalloutProvider.tls:type_name -> agentio.config.v1.ClientTLS
-	0,  // 5: agentio.config.v1.HTTPCalloutProvider.protocol:type_name -> agentio.config.v1.HTTPCalloutProvider.Protocol
-	5,  // 6: agentio.config.v1.HTTPCalloutProvider.connection_pool:type_name -> agentio.config.v1.HTTPCalloutConnectionPool
-	6,  // 7: agentio.config.v1.HTTPCalloutProvider.http2:type_name -> agentio.config.v1.HTTPCalloutHTTP2
-	8,  // 8: agentio.config.v1.CredentialProvider.tls:type_name -> agentio.config.v1.ClientTLS
-	9,  // 9: agentio.config.v1.ClientTLS.ca_secret_ref:type_name -> agentio.config.v1.TargetReference
-	9,  // 10: agentio.config.v1.ClientTLS.ca_config_map_ref:type_name -> agentio.config.v1.TargetReference
-	9,  // 11: agentio.config.v1.ClientTLS.client_certificate_secret_ref:type_name -> agentio.config.v1.TargetReference
-	10, // 12: agentio.config.v1.ClientTLS.client_certificate_files:type_name -> agentio.config.v1.ProviderClientCertificateFiles
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+var file_api_config_v1_extensionprovider_proto_depIdxs = []int32{
+	3,  // 0: agentio.config.v1.ExtensionProvider.http_callout:type_name -> agentio.config.v1.HTTPCalloutProvider
+	6,  // 1: agentio.config.v1.ExtensionProvider.credential_provider:type_name -> agentio.config.v1.CredentialProvider
+	7,  // 2: agentio.config.v1.HTTPCalloutProvider.tls:type_name -> agentio.config.v1.ClientTLS
+	0,  // 3: agentio.config.v1.HTTPCalloutProvider.protocol:type_name -> agentio.config.v1.HTTPCalloutProvider.Protocol
+	4,  // 4: agentio.config.v1.HTTPCalloutProvider.connection_pool:type_name -> agentio.config.v1.HTTPCalloutConnectionPool
+	5,  // 5: agentio.config.v1.HTTPCalloutProvider.http2:type_name -> agentio.config.v1.HTTPCalloutHTTP2
+	7,  // 6: agentio.config.v1.CredentialProvider.tls:type_name -> agentio.config.v1.ClientTLS
+	8,  // 7: agentio.config.v1.ClientTLS.ca_secret_ref:type_name -> agentio.config.v1.TargetReference
+	8,  // 8: agentio.config.v1.ClientTLS.ca_config_map_ref:type_name -> agentio.config.v1.TargetReference
+	8,  // 9: agentio.config.v1.ClientTLS.client_certificate_secret_ref:type_name -> agentio.config.v1.TargetReference
+	9,  // 10: agentio.config.v1.ClientTLS.client_certificate_files:type_name -> agentio.config.v1.ProviderClientCertificateFiles
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
-func init() { file_api_config_v1_epeconfig_proto_init() }
-func file_api_config_v1_epeconfig_proto_init() {
-	if File_api_config_v1_epeconfig_proto != nil {
+func init() { file_api_config_v1_extensionprovider_proto_init() }
+func file_api_config_v1_extensionprovider_proto_init() {
+	if File_api_config_v1_extensionprovider_proto != nil {
 		return
 	}
-	file_api_config_v1_epeconfig_proto_msgTypes[1].OneofWrappers = []any{
+	file_api_config_v1_extensionprovider_proto_msgTypes[0].OneofWrappers = []any{
 		(*ExtensionProvider_HttpCallout)(nil),
 		(*ExtensionProvider_CredentialProvider)(nil),
 	}
-	file_api_config_v1_epeconfig_proto_msgTypes[4].OneofWrappers = []any{}
-	file_api_config_v1_epeconfig_proto_msgTypes[5].OneofWrappers = []any{}
-	file_api_config_v1_epeconfig_proto_msgTypes[7].OneofWrappers = []any{
+	file_api_config_v1_extensionprovider_proto_msgTypes[3].OneofWrappers = []any{}
+	file_api_config_v1_extensionprovider_proto_msgTypes[4].OneofWrappers = []any{}
+	file_api_config_v1_extensionprovider_proto_msgTypes[6].OneofWrappers = []any{
 		(*ClientTLS_CaSecretRef)(nil),
 		(*ClientTLS_CaConfigMapRef)(nil),
 		(*ClientTLS_CaCertificateFile)(nil),
@@ -1081,18 +998,18 @@ func file_api_config_v1_epeconfig_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_config_v1_epeconfig_proto_rawDesc), len(file_api_config_v1_epeconfig_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_config_v1_extensionprovider_proto_rawDesc), len(file_api_config_v1_extensionprovider_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_api_config_v1_epeconfig_proto_goTypes,
-		DependencyIndexes: file_api_config_v1_epeconfig_proto_depIdxs,
-		EnumInfos:         file_api_config_v1_epeconfig_proto_enumTypes,
-		MessageInfos:      file_api_config_v1_epeconfig_proto_msgTypes,
+		GoTypes:           file_api_config_v1_extensionprovider_proto_goTypes,
+		DependencyIndexes: file_api_config_v1_extensionprovider_proto_depIdxs,
+		EnumInfos:         file_api_config_v1_extensionprovider_proto_enumTypes,
+		MessageInfos:      file_api_config_v1_extensionprovider_proto_msgTypes,
 	}.Build()
-	File_api_config_v1_epeconfig_proto = out.File
-	file_api_config_v1_epeconfig_proto_goTypes = nil
-	file_api_config_v1_epeconfig_proto_depIdxs = nil
+	File_api_config_v1_extensionprovider_proto = out.File
+	file_api_config_v1_extensionprovider_proto_goTypes = nil
+	file_api_config_v1_extensionprovider_proto_depIdxs = nil
 }

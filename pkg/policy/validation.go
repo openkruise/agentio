@@ -15,8 +15,6 @@
 package policy
 
 import (
-	"fmt"
-
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
@@ -25,18 +23,15 @@ import (
 
 // ValidateTrafficPolicy checks configuration without resolving live peers.
 // Missing Services, Pods and DNS records are reported by policy status instead.
-func ValidateTrafficPolicy(spec agentsv1alpha1.TrafficPolicySpec) error {
-	if errs := metavalidation.ValidateLabelSelector(
+func ValidateTrafficPolicy(spec agentsv1alpha1.TrafficPolicySpec) field.ErrorList {
+	root := field.NewPath("spec")
+	errs := metavalidation.ValidateLabelSelector(
 		&spec.Selector,
 		metavalidation.LabelSelectorValidationOptions{},
-		field.NewPath("spec", "selector"),
-	); len(
-		errs,
-	) > 0 {
-		return errs.ToAggregate()
-	}
+		root.Child("selector"),
+	)
 	if spec.Priority < 0 {
-		return fmt.Errorf("spec.priority must be nonnegative")
+		errs = append(errs, field.Invalid(root.Child("priority"), spec.Priority, "must be nonnegative"))
 	}
 	for _, direction := range []struct {
 		name  string
@@ -46,35 +41,38 @@ func ValidateTrafficPolicy(spec agentsv1alpha1.TrafficPolicySpec) error {
 			continue
 		}
 		for i, rule := range direction.value.Rules {
-			path := fmt.Sprintf("spec.%s.rules[%d]", direction.name, i)
+			path := root.Child(direction.name, "rules").Index(i)
 			if rule.Action != agentsv1alpha1.RuleActionAllow && rule.Action != agentsv1alpha1.RuleActionReject {
-				return fmt.Errorf("%s: unsupported traffic rule action %q", path, rule.Action)
+				errs = append(errs, field.Invalid(path.Child("action"), rule.Action, "unsupported traffic rule action"))
 			}
 			if _, err := compileNativePorts(rule.Ports); err != nil {
-				return fmt.Errorf("%s.ports: %w", path, err)
+				errs = append(errs, field.Invalid(path.Child("ports"), field.OmitValueType{}, err.Error()))
 			}
-			for _, peers := range [][]agentsv1alpha1.TrafficPolicyPeer{rule.From, rule.To} {
-				for _, peer := range peers {
+			for _, entry := range []struct {
+				name  string
+				peers []agentsv1alpha1.TrafficPolicyPeer
+			}{{"from", rule.From}, {"to", rule.To}} {
+				for j, peer := range entry.peers {
+					peerPath := path.Child(entry.name).Index(j)
 					if peer.CIDR != "" {
 						if _, err := parsePrefix(peer.CIDR); err != nil {
-							return fmt.Errorf("%s: invalid CIDR %q: %w", path, peer.CIDR, err)
+							errs = append(
+								errs,
+								field.Invalid(peerPath.Child("cidr"), peer.CIDR, "invalid CIDR: "+err.Error()),
+							)
 						}
 					}
 					if peer.Workload != nil {
 						selector := metav1.LabelSelector{MatchLabels: peer.Workload.Selector}
-						if errs := metavalidation.ValidateLabelSelector(
+						errs = append(errs, metavalidation.ValidateLabelSelector(
 							&selector,
 							metavalidation.LabelSelectorValidationOptions{},
-							field.NewPath(path, "workload", "selector"),
-						); len(
-							errs,
-						) > 0 {
-							return errs.ToAggregate()
-						}
+							peerPath.Child("workload", "selector"),
+						)...)
 					}
 				}
 			}
 		}
 	}
-	return nil
+	return errs
 }

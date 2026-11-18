@@ -8,7 +8,7 @@ A Sandbox is an OpenKruise Sandbox workload and is the unit of identity and poli
 
 - Route the selected Sandbox's traffic through an Egress Policy Enforcer (EPE)-enabled gateway.
 - Apply OAuth policies to decrypted inner HTTPS requests. EPE rejects plaintext HTTP, missing schemes, and CONNECT envelopes before credential lookup. The gateway must verify the destination and upstream TLS certificate.
-- Configure the default credential connection in [EPEConfig](../reference/epe-configuration.md).
+- Configure the default credential connection in [AgentioConfig](../reference/epe-configuration.md).
 - Supply the trusted platform token and Sandbox client ID through the [request identity chain](../reference/epe-request-context.md).
 
 ## Operations

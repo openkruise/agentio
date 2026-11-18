@@ -37,7 +37,7 @@ func applyAgentioConfig(content string, base *configv1.AgentioConfig) (*configv1
 	if base == nil {
 		base = &configv1.AgentioConfig{}
 	}
-	value, err := config.Apply(content, base)
+	value, err := config.ApplyAgentioConfig(content, base)
 	if err != nil {
 		return nil, err
 	}
@@ -138,13 +138,26 @@ func TestAgentioConfigMapNamesAreConfigurable(t *testing.T) {
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "custom-base"},
 			Data: map[string]string{
-				"config": "sandboxExtProc:\n  service: custom.agentio-system.svc.cluster.local\n  port: 9002\n",
+				"config": `sandboxExtProc:
+  service: custom.agentio-system.svc.cluster.local
+  port: 9002
+extensionProviders:
+- name: corporate
+  credentialProvider: {url: https://credentials.example}
+defaultProviders: {credentialProvider: corporate}
+`,
 			},
 		},
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "agentio-system", Name: "custom-primary"},
 			Data: map[string]string{
-				"config": "egressGateways:\n- name: egress\n  namespace: agentio-system\n",
+				"config": `egressGateways:
+- name: egress
+  namespace: agentio-system
+extensionProviders:
+- name: scanner
+  httpCallout: {url: https://scanner.example}
+`,
 			},
 		},
 	}
@@ -162,6 +175,13 @@ func TestAgentioConfigMapNamesAreConfigurable(t *testing.T) {
 	}
 	if got := len(config.Value.GetEgressGateways()); got != 1 {
 		t.Fatalf("egress gateways = %d, want primary ConfigMap overlay", got)
+	}
+	providers := config.Value.GetExtensionProviders()
+	if len(providers) != 2 || providers[0].GetName() != "corporate" || providers[1].GetName() != "scanner" {
+		t.Fatalf("extension providers = %v, want both base and primary providers", providers)
+	}
+	if got := config.Value.GetDefaultProviders().GetCredentialProvider(); got != "corporate" {
+		t.Fatalf("default credential provider = %q, want corporate", got)
 	}
 }
 

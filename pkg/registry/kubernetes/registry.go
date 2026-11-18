@@ -212,6 +212,7 @@ func New(
 		Namespace: rootNamespace,
 		Names:     []string{agentioConfigMaps.BaseName, agentioConfigMaps.PrimaryName},
 		Defaults:  defaultAgentioConfiguration(),
+		Apply:     config.ApplyAgentioConfig,
 		Validate:  validateAgentioConfig,
 	}, derivedOptions("agentio-config")...).AsCollection()
 	r.GatewayPatches = newGatewayPatchesCollection(

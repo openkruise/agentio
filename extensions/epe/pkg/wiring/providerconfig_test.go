@@ -18,10 +18,11 @@ import (
 	"strings"
 	"testing"
 
+	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
 )
 
-func TestDefaultEPEConfig(t *testing.T) {
+func TestDefaultProviderConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		endpoint string
@@ -34,7 +35,7 @@ func TestDefaultEPEConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testsupport.SetForTest(t, &identityProviderURL, tc.endpoint)
 			testsupport.SetForTest(t, &credProviderMTLSSource, tc.source)
-			cfg, err := DefaultEPEConfig()
+			cfg, err := DefaultProviderConfig()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,8 +46,9 @@ func TestDefaultEPEConfig(t *testing.T) {
 				}
 				return
 			}
-			if len(cfg.ExtensionProviders) != 1 || cfg.ExtensionProviders[0].Name != defaultCredentialProviderName ||
-				cfg.GetDefaultProviders().GetCredentialProvider() != defaultCredentialProviderName ||
+			if len(cfg.ExtensionProviders) != 1 ||
+				cfg.ExtensionProviders[0].Name != configv1.EnvironmentCredentialProviderName ||
+				cfg.GetDefaultProviders().GetCredentialProvider() != configv1.EnvironmentCredentialProviderName ||
 				cfg.ExtensionProviders[0].GetCredentialProvider().GetUrl() != tc.endpoint {
 				t.Fatalf("missing default credential provider registration: %v", cfg)
 			}
@@ -54,7 +56,7 @@ func TestDefaultEPEConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultEPEConfigRejectsInvalidProvider(t *testing.T) {
+func TestDefaultProviderConfigRejectsInvalidProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		endpoint string
@@ -67,7 +69,7 @@ func TestDefaultEPEConfigRejectsInvalidProvider(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testsupport.SetForTest(t, &identityProviderURL, tc.endpoint)
 			testsupport.SetForTest(t, &credProviderMTLSSource, tc.source)
-			_, err := DefaultEPEConfig()
+			_, err := DefaultProviderConfig()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}

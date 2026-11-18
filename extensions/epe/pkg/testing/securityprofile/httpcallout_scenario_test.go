@@ -70,7 +70,7 @@ func TestScenario_HTTPCalloutPublicAPI(t *testing.T) {
 			providers := &extensionprovider.Registry{}
 			defer providers.Close()
 			if err := providers.Apply(
-				&configv1.EPEConfig{
+				&configv1.AgentioConfig{
 					ExtensionProviders: []*configv1.ExtensionProvider{
 						{
 							Name: "scanner",

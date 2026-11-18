@@ -128,7 +128,7 @@ func newFixtureWithEndpoints(t *testing.T, endpointURL, upstreamURL string) *fix
 	}
 	providers := &extensionprovider.Registry{}
 	t.Cleanup(providers.Close)
-	config := &configv1.EPEConfig{}
+	config := &configv1.AgentioConfig{}
 	modes := []string{"continue", "mutate", "respond", "status", "malformed", "oversize", "delay", "reset"}
 	for _, mode := range modes {
 		suffix := "/" + mode

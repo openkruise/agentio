@@ -42,10 +42,10 @@ import (
 	"github.com/openkruise/agentio/pkg/kube"
 )
 
-// TestEPEConfigWatchE2E exercises the production watcher against an explicitly
+// TestAgentioConfigProviderWatchE2E exercises the production watcher against an explicitly
 // selected API server, with real HTTP/mTLS providers. It creates and removes its
 // own namespace. SecurityProfile/Envoy integration is intentionally separate.
-func TestEPEConfigWatchE2E(t *testing.T) {
+func TestAgentioConfigProviderWatchE2E(t *testing.T) {
 	path := os.Getenv("EPE_E2E_KUBECONFIG")
 	if path == "" {
 		t.Skip("set EPE_E2E_KUBECONFIG to run against a disposable Kubernetes cluster")

@@ -22,14 +22,17 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/policy"
 )
 
-// Register installs the /validate admission endpoint on the shared HTTPS mux.
-func Register(mux *http.ServeMux) {
+// Register installs /validate. References may be nil for static validation alone.
+func Register(mux *http.ServeMux, references *ReferenceChecker) {
 	webhook := &admission.Webhook{
 		Handler: admission.HandlerFunc(func(_ context.Context, req admission.Request) admission.Response {
 			if req.Operation != admissionv1.Create && req.Operation != admissionv1.Update || req.SubResource != "" {
@@ -38,30 +41,56 @@ func Register(mux *http.ServeMux) {
 			if req.Kind.Group != "agents.kruise.io" || req.Kind.Version != "v1alpha1" {
 				return admission.Denied(fmt.Sprintf("unrecognized type %v", req.Kind))
 			}
-			var err error
+			var errs field.ErrorList
+			var issues []ReferenceIssue
+			var name string
 			switch req.Kind.Kind {
 			case "SecurityProfile", "GlobalSecurityProfile":
 				var object agentsv1alpha1.SecurityProfile
-				if err = json.Unmarshal(req.Object.Raw, &object); err == nil {
-					err = ValidateSecurityProfile(model.SecurityProfile{
-						Name:      object.Name,
-						Namespace: req.Namespace,
-						Global:    req.Kind.Kind == "GlobalSecurityProfile",
-						Spec:      object.Spec,
-					})
+				if err := json.Unmarshal(req.Object.Raw, &object); err != nil {
+					return admission.Errored(http.StatusBadRequest, err)
+				}
+				name = object.Name
+				profile := model.SecurityProfile{
+					Name:      name,
+					Namespace: req.Namespace,
+					Global:    req.Kind.Kind == "GlobalSecurityProfile",
+					Spec:      object.Spec,
+				}
+				errs = ValidateSecurityProfile(profile)
+				if len(errs) == 0 && references != nil {
+					issues = references.SecurityProfile(nil, profile)
 				}
 			case "TrafficPolicy", "GlobalTrafficPolicy":
 				var object agentsv1alpha1.TrafficPolicy
-				if err = json.Unmarshal(req.Object.Raw, &object); err == nil {
-					err = policy.ValidateTrafficPolicy(object.Spec)
+				if err := json.Unmarshal(req.Object.Raw, &object); err != nil {
+					return admission.Errored(http.StatusBadRequest, err)
+				}
+				name = object.Name
+				errs = policy.ValidateTrafficPolicy(object.Spec)
+				if len(errs) == 0 && references != nil {
+					issues = references.TrafficPolicy(nil, model.TrafficPolicy{
+						Name:      name,
+						Namespace: req.Namespace,
+						Global:    req.Kind.Kind == "GlobalTrafficPolicy",
+						Spec:      object.Spec,
+					})
 				}
 			default:
 				return admission.Denied(fmt.Sprintf("unrecognized type %v", req.Kind))
 			}
-			if err != nil {
-				return admission.Denied(fmt.Sprintf("configuration is invalid: %v", err))
+			if len(errs) != 0 {
+				kind := schema.GroupKind{Group: req.Kind.Group, Kind: req.Kind.Kind}
+				status := apierrors.NewInvalid(kind, name, errs).ErrStatus
+				return admission.Response{
+					AdmissionResponse: admissionv1.AdmissionResponse{Allowed: false, Result: &status},
+				}
 			}
-			return admission.Allowed("")
+			var warnings []string
+			for _, issue := range issues {
+				warnings = append(warnings, fmt.Sprintf("[%s] %s: %s", issue.Reason, issue.Field, issue.Message))
+			}
+			return admission.Allowed("").WithWarnings(warnings...)
 		}),
 	}
 	mux.Handle("/validate", webhook)

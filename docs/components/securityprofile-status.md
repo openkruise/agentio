@@ -2,17 +2,17 @@
 
 `agentiod` validates SecurityProfile, GlobalSecurityProfile, TrafficPolicy and GlobalTrafficPolicy and reports the result in their existing `status.conditions`. SecurityProfile is a standard API; agentiod performs static API validation independently of any data-plane implementation. Consumers such as EPE watch and compile profiles independently. This controller neither distributes L7 configuration nor verifies that a consumer can load it.
 
-| Condition | True | False | Unknown |
-| --- | --- | --- | --- |
-| `Accepted` | SecurityProfile passed API static validation, or TrafficPolicy passed the native traffic compiler. | Validation failed; `reason: InvalidConfiguration` and `message` identify the error. | No completed validation is available yet. |
-| `ResolvedRefs` | Reference checks passed; see the check scope below. | A referenced resource was not found. | Reference checks are pending, a reference could not be verified, DNS has no addresses yet, or validation failed before reference checks. |
-| `Programmed` | SecurityProfile passed API static validation, or TrafficPolicy compiled successfully; the configuration is eligible for distribution. | API validation or native traffic compilation failed. | No completed validation is available yet. |
+| Condition | True | False |
+| --- | --- | --- |
+| `Accepted` | SecurityProfile passed API static validation, or TrafficPolicy passed API validation and native compilation. | `InvalidConfiguration` identifies a validation or compilation error. |
+| `ResolvedRefs` | Agentiod has no confirmed reference errors. The reason is `ResolvedRefs`. | A resource is missing, a provider has the wrong type, the required default credential provider is disabled, or a Secret is outside the permitted namespace. |
+| `Programmed` | The validated configuration is eligible for distribution. | API validation or native traffic compilation failed. |
 
-A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also retain their existing `status.observedGeneration`; TrafficPolicies use the generation in each condition. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` changes only when the condition's True/False/Unknown value changes.
+A new object may have no conditions until it is first reconciled. Conditions carry `observedGeneration`, `reason`, `message` and `lastTransitionTime`. SecurityProfiles also record `status.observedGeneration`. A condition describes the current spec only when its `observedGeneration` equals `metadata.generation`. `lastTransitionTime` records the last change to the condition's status.
 
-For all four policy kinds, `Programmed` follows `Accepted`: successful validation reports both as `True`, and invalid configuration reports both as `False`. It does not wait for data-plane acknowledgements or verify a consumer's compilation or loading result. Reference checks remain separate: missing references checked by agentiod affect `ResolvedRefs`, not `Programmed`.
+For all four policy kinds, `Programmed` follows `Accepted`. `ResolvedRefs` reports reference problems independently. Agentiod checks references after successful validation and defers cache lookups until the relevant cache has synchronized.
 
-Successful conditions use the same messages across all four policy kinds: `Configuration is valid`, `Reference checks passed`, and `Configuration is ready for distribution`. Error messages retain the affected resource name, rule or input name, and field path where available. `Reference checks are pending` indicates that checks are not ready to complete; `could not be verified` means the reference could not be checked, rather than that the resource is absent. The condition's `reason` provides the diagnostic category.
+The condition's `reason` identifies the error category. Error messages include the affected resource, rule, input or field where available.
 
 The controller owns `Accepted`, `ResolvedRefs` and `Programmed` on all four policy kinds. Other controllers may own separate condition types, but must not compete for these types.
 
@@ -30,14 +30,18 @@ agentiod:
 
 ## Validation and reference scope
 
-- SecurityProfiles share API static validation with the validating webhook: selector and priority constraints, TLS rules, reference and field unions, match regular expressions, and CEL and Go template syntax. Parsing does not type-check consumer-specific CEL variables or functions, check a template helper allowlist, probe-render templates, or project actions to filters. No EPE code or network calls are involved.
-- TrafficPolicies reuse the native traffic and authorization projection compilers. Named Services must exist; a selector matching no objects is valid. An FQDN with no current addresses reports `DNSResolutionPending`, because the resolver does not expose enough detail to distinguish pending and failed DNS.
+- SecurityProfiles share API static validation with the validating webhook. Checks cover selectors, priorities, TLS rules, field unions, match regular expressions, and CEL and Go template syntax. EPE validates consumer-specific expression and filter semantics when compiling the profile.
+- TrafficPolicies reuse the native traffic and authorization projection compilers. Named Services must exist. Selectors and FQDNs can resolve to an empty set of addresses.
 - ConfigMap inputs use their explicit namespace or the namespaced profile's namespace. Global profiles must specify the ConfigMap namespace.
 - Secret references support both the typed union and the legacy spelling. Explicit namespaces take precedence. A namespaced profile otherwise uses its own namespace; a global profile without an explicit Secret namespace is excluded from reference checks, because the API specifies the selected Pod's namespace.
-- With `agentiod.restrictedSecretsScope=true`, Secrets outside the control-plane namespace report `OutsideWatchScope`, not `SecretNotFound`. Status checks existence only; Secret contents and required credential keys remain runtime checks. Status never contains Secret values.
-- Credential providers and HTTP callout providers are resolved by the API consumer and are excluded from reference checks. `ResolvedRefs=True` only covers references checked by agentiod; it does not confirm provider availability. Consumer-specific compilation, provider availability, upstream calls and expression evaluation remain consumer responsibilities.
+- Agentiod assumes EPE uses the same token Secret scope. With `AGENTIO_SCOPED_SECRETS=true`, Secrets outside the control-plane namespace report `RefNotPermitted`. Agentiod checks for the presence of permitted Secrets. EPE checks credential keys at runtime.
+- HTTP callouts require `actions.httpCallout.provider.name` to name an `httpCallout` extension provider in the effective AgentioConfig.
+- Credential transformations and OAuth2 use the local connection selected by `defaultProviders.credentialProvider`. The rule's `credentialRef.credentialProvider.name` identifies a credential configuration on that remote service. Agentiod leaves an omitted default or a selected environment provider with no AgentioConfig entry to EPE. An explicitly empty default selection reports `DefaultProviderDisabled`.
+- Provider reference checks verify local names and types. EPE still validates provider configuration, loads TLS material, and handles upstream calls and remote credential lookup.
 
-ConfigMap, Secret, Service and DNS changes update reference status without a spec change. Status-only updates do not reparse SecurityProfile expressions.
+AgentioConfig, ConfigMap, Secret and Service changes update reference status without a spec change.
+
+The validating webhook uses the same reference checks on its current cache. It returns warnings for confirmed problems and permits the write. A server-side dry run shows the admission response.
 
 ## Writing status
 

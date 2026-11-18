@@ -575,6 +575,9 @@ func TestManagedEPE(t *testing.T) {
 		"--set", "global.tag=0.1.0",
 		"--set", "epe.mode=managed",
 		"--set", "epe.credentialProvider.url=https://credentials.example",
+		"--set", "agentiod.config.name=shared-config,agentiod.config.primaryName=shared-primary",
+		"--set-json", `agentiod.config.values.extensionProviders=[{"name":"scanner","httpCallout":{"url":"https://scanner.example"}}]`,
+		"--set", "agentiod.config.values.defaultProviders.credentialProvider=agentio-default-credential-provider",
 	)
 	if got, want := objectNamesByKind(
 		t,
@@ -598,8 +601,10 @@ func TestManagedEPE(t *testing.T) {
 		"filter_state['downstream_peer'].name",
 		"filter_state['downstream_peer'].namespace",
 		"port: 9002",
-		"- -epe-config=agentio-epe-config",
-		"- -epe-config-primary=agentio-epe-config-primary",
+		"name: shared-config",
+		"name: scanner",
+		"url: https://scanner.example",
+		"credentialProvider: agentio-default-credential-provider",
 		"- -namespace=agentio-system",
 		"- -grpc-port=9002",
 		"- -grpc-health-port=9003",
@@ -613,6 +618,14 @@ func TestManagedEPE(t *testing.T) {
 	)
 	if strings.Contains(manifest, "credential-provider-mtls") {
 		t.Fatal("managed EPE must not mount credential-provider certificates")
+	}
+	for _, setting := range []string{
+		"name: AGENTIO_CONFIGMAP_NAME\n              value: \"shared-config\"",
+		"name: AGENTIO_PRIMARY_CONFIGMAP_NAME\n              value: \"shared-primary\"",
+	} {
+		if count := strings.Count(manifest, setting); count != 2 {
+			t.Fatalf("agentiod and EPE must use the same config source: %s (count=%d)", setting, count)
+		}
 	}
 }
 

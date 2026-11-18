@@ -34,7 +34,7 @@ import (
 )
 
 // Cache policy is fixed at process startup and applies to every credential
-// provider, including providers added later through EPEConfig. Cache instances
+// provider, including providers added later through AgentioConfig. Cache instances
 // remain private to each provider configuration version.
 var (
 	invalidationWindow = env.Register("CREDENTIAL_CACHE_INVALIDATION_WINDOW", 30*time.Second,
@@ -94,7 +94,7 @@ func (p *instance) closeIdleConnections() {
 // Apply atomically replaces providers using resolved, immutable TLS material.
 // Missing or invalid required material installs an unavailable instance instead
 // of retaining revoked credentials. The caller must not mutate material during Apply.
-func (r *Registry) Apply(cfg *configv1.EPEConfig, materials map[string]TLSMaterial) error {
+func (r *Registry) Apply(cfg *configv1.AgentioConfig, materials map[string]TLSMaterial) error {
 	if err := Validate(cfg); err != nil {
 		return err
 	}

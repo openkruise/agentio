@@ -20,6 +20,7 @@ syntax = "proto3";
 // policy messages live in api/extensions/v1/egresspolicy.proto instead.
 package agentio.config.v1;
 
+import "api/config/v1/extensionprovider.proto";
 import "api/extensions/v1/egresspolicy.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
@@ -27,7 +28,7 @@ import "networking/v1alpha3/virtual_service.proto";
 
 option go_package = "github.com/openkruise/agentio/api/config/v1;configv1";
 
-// AgentioConfig is the complete configuration for the agentio controller.
+// AgentioConfig configures the Agentio controller and EPE.
 message AgentioConfig {
   // External processing provider for sandbox traffic inspection and policy enforcement.
   ExtProcProvider sandbox_ext_proc = 1;
@@ -60,6 +61,14 @@ message AgentioConfig {
   // Gateway-internal control connections are excluded. Omission/null inherits
   // the lower layer; a supplied message replaces user entries. Built-ins remain.
   EgressAuthorization egress_authorization = 7;
+
+  // Named services available to EPE. Names must be unique across provider types.
+  // Layers merge by name; a same-name entry replaces the whole provider.
+  // Omitted or null lists inherit the lower layer; an explicit [] clears it.
+  repeated ExtensionProvider extension_providers = 8;
+
+  // Default services used when a policy does not select a provider explicitly.
+  DefaultExtensionProviders default_providers = 9;
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same

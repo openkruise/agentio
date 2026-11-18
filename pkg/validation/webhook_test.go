@@ -23,13 +23,19 @@ import (
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	configv1 "github.com/openkruise/agentio/api/config/v1"
+	"github.com/openkruise/agentio/pkg/config"
+	"github.com/openkruise/agentio/pkg/krt"
+	"github.com/openkruise/agentio/pkg/model"
 )
 
 func TestAdmission(t *testing.T) {
 	mux := http.NewServeMux()
-	Register(mux)
+	Register(mux, nil)
 	for _, tc := range []struct {
 		name      string
 		kind      string
@@ -97,6 +103,118 @@ func TestAdmission(t *testing.T) {
 	} {
 		if got := admit(t, mux, req); !got.Allowed {
 			t.Fatalf("excluded request denied: %+v", got)
+		}
+	}
+}
+
+func TestAdmissionProviderReferenceWarnings(t *testing.T) {
+	stop := t.Context().Done()
+	initial := model.AgentioConfiguration{Value: &configv1.AgentioConfig{}}
+	configs := krt.NewStatic(&initial, true, krt.WithStop(stop))
+	checker := NewReferenceChecker(ReferenceSources{
+		AgentioConfig: configs.AsCollection(),
+		ConfigMaps:    krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, krt.WithStop(stop)),
+		Secrets:       krt.NewStaticCollection[*corev1.Secret](nil, nil, krt.WithStop(stop)),
+		Services:      krt.NewStaticCollection[*corev1.Service](nil, nil, krt.WithStop(stop)),
+		RootNamespace: "system",
+	}, stop)
+	mux := http.NewServeMux()
+	Register(mux, checker)
+	dryRun := true
+	req := &admissionv1.AdmissionRequest{
+		UID:       "provider-reference",
+		Operation: admissionv1.Create,
+		DryRun:    &dryRun,
+		Namespace: "demo",
+		Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: "SecurityProfile"},
+		Object: runtime.RawExtension{Raw: []byte(`{
+			"metadata":{"name":"policy"},
+			"spec":{"rules":[{"name":"scan","actions":{"httpCallout":{"provider":{"name":"scanner"},"request":{}}}}]}
+		}`)},
+	}
+	path := "spec.rules[0].actions.httpCallout.provider.name"
+	for _, tc := range []struct {
+		name    string
+		config  string
+		warning string
+	}{
+		{name: "missing", config: "{}", warning: "ProviderNotFound"},
+		{
+			name:    "wrong provider type",
+			config:  "extensionProviders: [{name: scanner, credentialProvider: {url: https://scanner.example}}]",
+			warning: "ProviderTypeMismatch",
+		},
+		{
+			name:   "reference resolves after config update",
+			config: "extensionProviders: [{name: scanner, httpCallout: {url: https://scanner.example}}]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.ApplyAgentioConfig(tc.config, &configv1.AgentioConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			configs.Set(&model.AgentioConfiguration{Value: cfg})
+			got := admit(t, mux, req)
+			if !got.Allowed {
+				t.Fatalf("admission denied: %+v", got.Result)
+			}
+			if tc.warning == "" {
+				if len(got.Warnings) != 0 {
+					t.Fatalf("resolved reference warned: %v", got.Warnings)
+				}
+			} else if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "["+tc.warning+"] "+path) {
+				t.Fatalf("warnings = %v, want %s for %s", got.Warnings, tc.warning, path)
+			}
+		})
+	}
+	req.Object.Raw = bytes.ReplaceAll(req.Object.Raw, []byte(`"scanner"`), []byte(`"bad/name"`))
+	got := admit(t, mux, req)
+	if got.Allowed || got.Result == nil || got.Result.Reason != metav1.StatusReasonInvalid || len(got.Warnings) != 0 {
+		t.Fatalf("invalid provider name response = %+v", got)
+	}
+	if got.Result.Details == nil ||
+		len(got.Result.Details.Causes) != 1 || got.Result.Details.Causes[0].Field != path {
+		t.Fatalf("invalid provider name details = %+v, want field %s", got.Result.Details, path)
+	}
+}
+
+func TestAdmissionReferenceWarningsUseCacheScope(t *testing.T) {
+	stop := t.Context().Done()
+	initial := model.AgentioConfiguration{Value: &configv1.AgentioConfig{}}
+	mux := http.NewServeMux()
+	pending := krt.NewStatic[bool](nil, false, krt.WithStop(stop))
+	Register(mux, NewReferenceChecker(ReferenceSources{
+		AgentioConfig: krt.NewStatic(&initial, true, krt.WithStop(stop)).AsCollection(),
+		ConfigMaps:    krt.NewStaticCollection[*corev1.ConfigMap](pending.AsCollection(), nil, krt.WithStop(stop)),
+		Secrets:       krt.NewStaticCollection[*corev1.Secret](nil, nil, krt.WithStop(stop)),
+		Services:      krt.NewStaticCollection[*corev1.Service](nil, nil, krt.WithStop(stop)),
+		RootNamespace: "system",
+		ScopedSecrets: true,
+	}, stop))
+	for _, tc := range []struct {
+		kind      string
+		namespace string
+		spec      string
+		warning   string
+	}{
+		{"SecurityProfile", "system", `{"inputs":[{"name":"opts","configMap":{"name":"opts"}}]}`, ""},
+		{"SecurityProfile", "demo", `{"rules":[{"name":"auth","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}}}}}]}`, "[RefNotPermitted] spec.rules[0].actions.tokenTransformation.credentialRef: Rule \"auth\": Secret demo/cred is outside the permitted namespace system"},
+		{"SecurityProfile", "system", `{"rules":[{"name":"auth","actions":{"tokenTransformation":{"credentialRef":{"secret":{"name":"cred"}}}}}]}`, "SecretNotFound"},
+		{"GlobalTrafficPolicy", "", `{"egress":{"rules":[{"action":"allow","to":[{"service":{"name":"api"}}]}]}}`, "Service system/api not found"},
+		{"TrafficPolicy", "demo", `{"egress":{"rules":[{"action":"allow","to":[{"fqdn":"api.example.com"}]}]}}`, ""},
+	} {
+		got := admit(t, mux, &admissionv1.AdmissionRequest{
+			UID:       "reference-scope",
+			Operation: admissionv1.Update,
+			Namespace: tc.namespace,
+			Kind:      metav1.GroupVersionKind{Group: "agents.kruise.io", Version: "v1alpha1", Kind: tc.kind},
+			Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"test"},"spec":` + tc.spec + `}`)},
+		})
+		if !got.Allowed ||
+			(tc.warning == "" && len(got.Warnings) != 0) ||
+			(tc.warning != "" && (len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], tc.warning))) {
+			t.Fatalf("%s %s response = %+v, want warning %q", tc.kind, tc.spec, got, tc.warning)
 		}
 	}
 }

@@ -134,7 +134,7 @@ For a response-phase call, set `phase` to `response`, add `"response":{"statusCo
 
 ## Connect EPE to the server
 
-Configure a provider in EPEConfig, or under `epe.config` in Helm values:
+Add a provider to AgentioConfig. In Helm values, put this fragment under `agentiod.config.values`.
 
 ```yaml
 extensionProviders:

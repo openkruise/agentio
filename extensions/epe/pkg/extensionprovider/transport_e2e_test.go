@@ -42,6 +42,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 	"github.com/openkruise/agentio/extensions/epe/pkg/inputs"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
+	"github.com/openkruise/agentio/pkg/config"
 	fixture "github.com/openkruise/agentio/test/fixtures/httpcallout"
 )
 
@@ -117,7 +118,7 @@ func TestHTTPCalloutTransportE2E(t *testing.T) {
 		if protocol != "HTTP1" {
 			raw += fmt.Sprintf("    http2: {maxConcurrentStreams: %d}\n", streams)
 		}
-		cfg, err := extensionprovider.ApplyConfig(raw, &configv1.EPEConfig{})
+		cfg, err := config.ApplyAgentioConfig(raw, &configv1.AgentioConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}

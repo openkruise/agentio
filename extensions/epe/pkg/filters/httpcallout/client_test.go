@@ -95,7 +95,7 @@ func newTestHTTPClient(t *testing.T, endpoint string) *testHTTPClient {
 
 func (c *testHTTPClient) configure(t *testing.T) {
 	t.Helper()
-	if err := c.registry.Apply(&configv1.EPEConfig{ExtensionProviders: []*configv1.ExtensionProvider{{
+	if err := c.registry.Apply(&configv1.AgentioConfig{ExtensionProviders: []*configv1.ExtensionProvider{{
 		Name:     "scanner",
 		Provider: &configv1.ExtensionProvider_HttpCallout{HttpCallout: c.config},
 	}}}, nil); err != nil {

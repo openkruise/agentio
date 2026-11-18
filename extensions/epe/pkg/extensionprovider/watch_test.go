@@ -51,10 +51,10 @@ func watch(
 	names []string,
 	registry *Registry,
 	stop <-chan struct{},
-	defaults ...*configv1.EPEConfig,
+	defaults ...*configv1.AgentioConfig,
 ) krt.HandlerRegistration {
 	t.Helper()
-	cfg := &configv1.EPEConfig{}
+	cfg := &configv1.AgentioConfig{}
 	if len(defaults) != 0 {
 		cfg = defaults[0]
 	}
@@ -66,11 +66,11 @@ func watch(
 	configMaps := krt.WrapClient(cms, krt.WithStop(stop))
 	configs := config.NewCollection(
 		configMaps,
-		config.Options[*configv1.EPEConfig]{
+		config.Options[*configv1.AgentioConfig]{
 			Namespace: namespace,
 			Names:     names,
 			Defaults:  cfg,
-			Apply:     ApplyConfig,
+			Apply:     config.ApplyAgentioConfig,
 			Validate:  Validate,
 		},
 		krt.WithStop(stop),
@@ -167,8 +167,11 @@ func TestWatchConfigMapLayersOverrideDefaults(t *testing.T) {
 	registry := &Registry{}
 	defer registry.Close()
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "epe", Namespace: "system"},
-		Data: map[string]string{"config": fmt.Sprintf(`extensionProviders:
+		ObjectMeta: metav1.ObjectMeta{Name: "agentio-config", Namespace: "system"},
+		Data: map[string]string{"config": fmt.Sprintf(`egressGateways:
+- name: egress
+  namespace: system
+extensionProviders:
 - name: additional
   credentialProvider: {url: %q}
 defaultProviders: {credentialProvider: additional}
@@ -189,7 +192,7 @@ defaultProviders: {credentialProvider: additional}
 		t,
 		client,
 		"system",
-		[]string{"epe", "epe-primary"},
+		[]string{"agentio-config", "agentio-config-primary"},
 		registry,
 		t.Context().Done(),
 		defaultConfig(environment.Server.URL),
@@ -226,7 +229,7 @@ defaultProviders: {credentialProvider: additional}
 		t.Fatal("adding a provider must preserve the environment provider and its cache")
 	}
 	primary := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "epe-primary", Namespace: "system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "agentio-config-primary", Namespace: "system"},
 		Data: map[string]string{"config": fmt.Sprintf(`extensionProviders:
 - name: default
   credentialProvider: {url: %q}
@@ -267,7 +270,7 @@ defaultProviders: {credentialProvider: default}
 	if err := client.Kube().
 		CoreV1().
 		ConfigMaps("system").
-		Delete(t.Context(), "epe", metav1.DeleteOptions{}); err != nil {
+		Delete(t.Context(), cm.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	testsupport.Eventually(t, 5*time.Second, func() error {
@@ -362,8 +365,8 @@ func TestWatchSwitchesSecretDependencies(t *testing.T) {
 	})
 }
 
-func defaultConfig(endpoint string) *configv1.EPEConfig {
-	return &configv1.EPEConfig{
+func defaultConfig(endpoint string) *configv1.AgentioConfig {
+	return &configv1.AgentioConfig{
 		ExtensionProviders: []*configv1.ExtensionProvider{{
 			Name: "default",
 			Provider: &configv1.ExtensionProvider_CredentialProvider{

@@ -37,7 +37,7 @@ import (
 
 // Deps carries what plugin builders may need.
 type Deps struct {
-	// Providers resolves the effective EPEConfig. BuildFilters requires a registry.
+	// Providers resolves AgentioConfig extension providers. BuildFilters requires a registry.
 	Providers *extensionprovider.Registry
 	// Secrets supplies cached credentials within the configured watch scope.
 	Secrets tokentransform.CredentialSource
