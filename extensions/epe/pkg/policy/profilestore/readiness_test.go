@@ -35,6 +35,7 @@ import (
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/extensions/epe/pkg/testing/testsupport"
+	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/features"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/kube"
@@ -113,6 +114,16 @@ func TestResolveProfilesSandboxWithDistinctWorkloadName(t *testing.T) {
 			if len(s.pending) != 0 || subj.Workload.Name != "runtime" {
 				t.Fatal("ready lookup registered a waiter or changed workload identity")
 			}
+			cleared := sandbox.DeepCopy()
+			cleared.ResourceVersion = "2"
+			cleared.Annotations[securityprofile.AnnotationSecurityRules] = `[]`
+			if err := metadata.Tracker().Update(sandboxGVR, cleared, cleared.Namespace); err != nil {
+				t.Fatal(err)
+			}
+			testutil.Eventually(t, func() bool {
+				got, err := s.ResolveProfiles(t.Context(), subj)
+				return err == nil && len(got) == 1 && got[0].Meta.Name == "admin"
+			}, "empty array clears only the Sandbox profile")
 		})
 	}
 }

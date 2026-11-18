@@ -72,8 +72,12 @@ func TestNewSandboxProfile(t *testing.T) {
 }
 
 // A Sandbox without the annotation carries no inline rules.
-func TestNewInlineProfileNoAnnotation(t *testing.T) {
-	for _, annotations := range []map[string]string{nil, {"agents.kruise.io/tcp-rules": "not a supported annotation"}} {
+func TestNewInlineProfileNoRules(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		nil,
+		{AnnotationSecurityRules: `[]`},
+		{"agents.kruise.io/tcp-rules": "not a supported annotation"},
+	} {
 		p, err := NewSandboxProfile(&v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
 			Name:        "sbx",
 			Namespace:   "ns",
@@ -108,7 +112,7 @@ func TestNewInlineProfileRejections(t *testing.T) {
 		want string
 	}{
 		{"invalid json", `{`, "decode"},
-		{"empty array", `[]`, "contains no rules"},
+		{"null", `null`, "JSON array"},
 		{
 			"audit without webhook",
 			`[{"name":"r","match":[{"domains":["*"]}],"actions":{"audit":[{"name":"log"}]}}]`,

@@ -33,13 +33,21 @@ const (
 	AnnotationE2BNetwork      = "agents.kruise.io/e2b-network"
 )
 
+// Match an explicit empty array without decoding the annotation on the EPE request path.
+func emptySecurityRulesArray(raw string) bool {
+	const whitespace = " \t\r\n"
+	raw = strings.Trim(raw, whitespace)
+	return strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") &&
+		strings.Trim(raw[1:len(raw)-1], whitespace) == ""
+}
+
 // SandboxSecurityProfile combines the Sandbox policy annotations into one profile.
 func SandboxSecurityProfile(sandbox metav1.Object) (*agents.SecurityProfileSpec, error) {
 	a := sandbox.GetAnnotations()
 	var result *agents.SecurityProfileSpec
 	legacyRules, legacy := a[agents.AnnotationSecurityRules]
 	if raw, found := a[AnnotationSecurityProfile]; found {
-		if legacy {
+		if legacy && !emptySecurityRulesArray(legacyRules) {
 			return nil, fmt.Errorf(
 				"%s and %s are mutually exclusive",
 				agents.AnnotationSecurityRules,
@@ -70,7 +78,7 @@ func SandboxSecurityProfile(sandbox metav1.Object) (*agents.SecurityProfileSpec,
 		if err := validateSandboxProfile(sandbox.GetNamespace(), result); err != nil {
 			return nil, err
 		}
-	} else if legacyRules != "" {
+	} else if legacyRules != "" && !emptySecurityRulesArray(legacyRules) {
 		rules, err := sandboxSecurityRules(sandbox)
 		if err != nil {
 			return nil, err
