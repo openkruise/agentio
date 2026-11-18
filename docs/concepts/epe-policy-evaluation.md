@@ -25,6 +25,16 @@ flowchart TD
 
 Final authorization checks the forwarding address against applicable destination restrictions before Envoy connects upstream. For a worked example, see [Check the destination after an HTTP header change](../reference/security-profile.md#check-the-destination-after-an-http-header-change).
 
+Suppose two shared profiles select the same workload. A has priority `10` and B has priority `20`. Each row is a separate HTTP request scenario.
+
+| Profile A | Profile B | Outcome |
+| --- | --- | --- |
+| TCP `Deny` matches the forwarding IP | HTTP `bypass` would match the host | A rejects the request before B runs. |
+| TCP `Allow` matches the forwarding IP | HTTP `block` would match the path | A ends profile evaluation. The request proceeds to final destination authorization. |
+| No HTTP or TCP rule matches | HTTP `block` matches the path | Evaluation reaches B, which returns its configured response. |
+
+For the order of native and E2B rules within a **single** Sandbox profile, see [Sandbox policy annotations](../reference/security-profile.md#sandbox-policy-annotations).
+
 ## Action and continuation order
 
 EPE executes the matched rule chain in profile and rule order. Within every rule, actions run in a fixed order:

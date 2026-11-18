@@ -64,6 +64,50 @@ metadata:
 
 Each annotation is a complete snapshot. Replacing or removing one preserves the other. The legacy `agents.kruise.io/security-rules` array remains supported, can coexist with `e2b-network`, and occupies the native rule position. Its header assignments also use Go templates. Set the legacy annotation to `[]` or remove it to clear only its rules. The legacy key conflicts with `security-profile` unless its value is an explicit empty array. EPE validates and compiles audit actions from all Sandbox profiles, including legacy arrays, in both Kubernetes and xDS modes. Agentiod validates the annotations and compiles SNI and TCP rules before publishing. If this step fails, it retains the previous Sandbox resource. EPE independently validates the HTTP policy and keeps its last accepted version on failure. Valid SNI and TCP changes can therefore reach the gateway even when EPE rejects the HTTP update. Sandbox Manager must write these annotations; Agentio does not change its creation API or migrate existing TrafficPolicies.
 
+### Allow one database endpoint for one Sandbox
+
+Add this annotation to the Sandbox's metadata. With no other applicable policy, this Sandbox can reach the database over gateway-routed TCP on port 5432. A connection to the same IP on port 5433, or to another IP on port 5432, reaches the catch-all deny.
+
+```yaml
+metadata:
+  annotations:
+    agents.kruise.io/security-profile: |
+      {
+        "tcpRules": [
+          {"name": "allow-db", "match": [{"cidrs": ["192.0.2.10"], "ports": [5432]}], "action": "Allow"},
+          {"name": "deny-rest", "match": [{}], "action": "Deny"}
+        ]
+      }
+```
+
+### E2B domain access with and without HTTPS inspection
+
+The following are alternative JSON values for the same Sandbox annotation, `agents.kruise.io/e2b-network`. Used on their own, both allow `api.example.com` and deny other gateway destinations. Both set `network.dnsServers` to an empty list to disable the automatic TCP allowance for `8.8.8.8`. The Sandbox still needs working DNS.
+
+**Pass TLS through.** With no other rule selecting TLS termination, a connection with SNI `api.example.com` stays encrypted through the gateway.
+
+```json
+{
+  "allowInternetAccess": false,
+  "network": {"allowOut": ["api.example.com"], "dnsServers": []}
+}
+```
+
+**Set a header on HTTPS requests.** The header rule selects TLS termination for the same domain. Configure the gateway's signing CA and [client CA trust](../tasks/configure-client-ca-trust.md). The upstream then receives `X-Tenant: demo` on matching HTTPS requests.
+
+```json
+{
+  "allowInternetAccess": false,
+  "network": {
+    "allowOut": ["api.example.com"],
+    "dnsServers": [],
+    "rules": {"api.example.com": [{"transform": {"headers": {"X-Tenant": "demo"}}}]}
+  }
+}
+```
+
+If the same Sandbox also has native `tcpRules`, E2B's domain bypass or explicit TLS passthrough can end evaluation before those TCP rules run. For an IP entry in `allowOut`, E2B generates a TCP allow instead. In that case a matching native TCP deny runs first.
+
 ## Rule structure and matching
 
 Each entry in `spec.rules` has a unique `name`, at least one `match` clause, and `actions`. The clauses in `match` are ORed. Within a clause, every populated field is ANDed:
