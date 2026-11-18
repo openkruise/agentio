@@ -120,7 +120,7 @@ reported as failure; inspect affected objects before resuming.
 
 Network actions require `--ca=HOST:15012 --gateway=HOST:15008 --target=HOST:8080`.
 Run them from a network namespace that can reach cluster IPs. Gateway certificates
-are checked against the configured CA and the exact gateway SPIFFE principal.
+are checked against the configured CA and the exact gateway SPIFFE principal. For an existing installation, use `--system` to select its namespace, `--ca-server-name` to select its CA/ADS TLS name, `--ca-config-map` to select its trust bundle, and `--token-audience` to match the server’s Pod authentication audience.
 
 - `traffic`: signs `--active` uniformly spaced Pod identities, then sends
   `--requests` at `--rate` with `--workers`. Latency includes generator queueing.

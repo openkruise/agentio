@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,8 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 	}{
 		{"allowed", 200, 200, "sandbox-scale-ok\n", false, false},
 		{"connect_denied", 403, 200, "sandbox-scale-ok\n", true, false},
+		{"traffic_connect_denied", 403, 200, "connection denied", false, true},
+		{"traffic_connect_wrong_body", 403, 200, "other failure", true, true},
 		{"policy_denied", 200, 451, "denied", true, false},
 		{"wrong_backend", 200, 200, "other-service\n", true, false},
 		{"traffic_policy_denied", 200, 403, `{"code":"epe_egress_denied","message":"Outbound destination is denied by policy.","requestID":"dynamic-id"}`, false, true},
@@ -87,6 +90,9 @@ func TestRequestChecksTunnelAndBackend(t *testing.T) {
 				w.WriteHeader(tc.connect)
 				w.(http.Flusher).Flush()
 				if tc.connect != 200 {
+					if _, err := io.WriteString(w, tc.body); err != nil {
+						t.Errorf("write CONNECT response: %v", err)
+					}
 					return
 				}
 				reader := bufio.NewReader(req.Body)

@@ -69,7 +69,7 @@ func (r *runner) watch(ctx context.Context) (any, error) {
 	if r.Action == "watch-sidecar" && r.ConnectionRate <= 0 {
 		return nil, fmt.Errorf("connection-rate must be positive")
 	}
-	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, "sandbox-scale-ca-root-cert", metav1.GetOptions{})
+	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, r.CAConfigMap, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func (r *runner) refreshWatchCredentials(
 	if credentials.token == nil || time.Until(credentials.token.Status.ExpirationTimestamp.Time) < 5*time.Minute {
 		token, err := r.kube.CoreV1().
 			ServiceAccounts(namespace).
-			CreateToken(ctx, account, &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: name, UID: pod.UID}}}, metav1.CreateOptions{})
+			CreateToken(ctx, account, &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{r.TokenAudience}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: name, UID: pod.UID}}}, metav1.CreateOptions{})
 		if err != nil {
 			return err
 		}

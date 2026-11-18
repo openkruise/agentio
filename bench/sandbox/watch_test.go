@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,13 +41,20 @@ func TestWatchReconnectReusesPodAndTokenUntilRenewal(t *testing.T) {
 		if action.GetSubresource() != "token" {
 			t.Fatal(action)
 		}
+		request := action.(ktesting.CreateAction).GetObject().(*authenticationv1.TokenRequest)
+		if !slices.Equal(request.Spec.Audiences, []string{"test-ca"}) {
+			t.Fatalf("token audiences = %v, want [test-ca]", request.Spec.Audiences)
+		}
 		tokens++
 		return true, &authenticationv1.TokenRequest{Status: authenticationv1.TokenRequestStatus{
 			Token:               "test-token",
 			ExpirationTimestamp: metav1.NewTime(time.Now().Add(time.Hour)),
 		}}, nil
 	})
-	r := &runner{kube: kube, options: options{Action: "watch-sidecar", Prefix: "sandbox-scale"}}
+	r := &runner{
+		kube:    kube,
+		options: options{Action: "watch-sidecar", Prefix: "sandbox-scale", TokenAudience: "test-ca"},
+	}
 	credentials := &watchCredentials{}
 	for range 2 {
 		// A rejected connection must not mint another projected token.

@@ -62,7 +62,7 @@ func (r *runner) issue(
 	}
 	token, err := r.kube.CoreV1().
 		ServiceAccounts(ns).
-		CreateToken(ctx, "sandbox", &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, UID: pod.UID}}}, metav1.CreateOptions{})
+		CreateToken(ctx, "sandbox", &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{r.TokenAudience}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, UID: pod.UID}}}, metav1.CreateOptions{})
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -322,6 +322,16 @@ func (r *runner) requestOn(ctx context.Context, roundTrip func(*http.Request) (*
 	}
 	defer closeResource(response.Body)
 	if response.StatusCode != http.StatusOK {
+		if r.PolicyKind == "traffic" && r.ExpectedStatus == http.StatusForbidden &&
+			response.StatusCode == http.StatusForbidden {
+			body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+			if err != nil {
+				return err
+			}
+			if string(body) == "connection denied" {
+				return nil
+			}
+		}
 		return connectError{response.StatusCode}
 	}
 	writeDone := make(chan error, 1)
@@ -379,7 +389,7 @@ func closeResource(c io.Closer) {
 }
 
 func (r *runner) credentials(ctx context.Context) (*grpc.ClientConn, *x509.CertPool, error) {
-	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, "sandbox-scale-ca-root-cert", metav1.GetOptions{})
+	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, r.CAConfigMap, metav1.GetOptions{})
 	if err != nil {
 		return nil, nil, err
 	}

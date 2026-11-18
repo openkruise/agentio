@@ -38,6 +38,8 @@ type options struct {
 	Output           string
 	CA               string
 	CAServerName     string
+	CAConfigMap      string
+	TokenAudience    string
 	PolicyKind       string
 	Gateway          string
 	Target           string
@@ -90,7 +92,14 @@ func parseOptions() options {
 	flag.StringVar(&o.System, "system", "sandbox-scale-system", "Agentio installation namespace")
 	flag.StringVar(&o.Output, "output", "", "JSON result path")
 	flag.StringVar(&o.CA, "ca", "", "CA gRPC host:port; TLS server name is agentiod.SYSTEM.svc")
-	flag.StringVar(&o.CAServerName, "ca-server-name", "", "override CA/ADS TLS server name for group-admission probes")
+	flag.StringVar(&o.CAServerName, "ca-server-name", "", "override the CA/ADS TLS server name")
+	flag.StringVar(
+		&o.CAConfigMap,
+		"ca-config-map",
+		"sandbox-scale-ca-root-cert",
+		"ConfigMap in the system namespace containing root-cert.pem",
+	)
+	flag.StringVar(&o.TokenAudience, "token-audience", "agentio-ca", "audience for Pod-bound service account tokens")
 	flag.StringVar(&o.PolicyKind, "policy-kind", "security", "policy probe kind: security or traffic")
 	flag.StringVar(&o.Gateway, "gateway", "", "gateway TLS host:port")
 	flag.StringVar(&o.Target, "target", "", "CONNECT target host:port (traffic also accepts comma-separated upstreams)")
