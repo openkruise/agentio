@@ -96,6 +96,7 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 		{raw: `[{"name":"inline","match":[{"domains":["first.example"]}],"actions":{"block":{}}}]`, host: "first.example"},
 		{raw: `[{"name":`, host: "first.example", invalid: true},
 		{raw: `[{"name":"inline","match":[{"domains":["second.example"]}],"actions":{"block":{}}}]`, host: "second.example"},
+		{raw: " [ \n\t ] "},
 		{},
 	} {
 		changed := source.DeepCopy()
@@ -143,7 +144,7 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 					return false, nil
 				}
 				inline := current.Policies
-				valid := inline == nil && step.raw == ""
+				valid := inline == nil && step.host == "" && !step.invalid
 				if inline != nil {
 					valid = (step.invalid && inline.InputError != "") ||
 						(!step.invalid && inline.InputError == "" && inline.SecurityProfile != nil &&
@@ -189,7 +190,7 @@ func TestSandboxSecurityRulesProjection(t *testing.T) {
 
 func TestSandboxSecurityRulesRejectInvalidAnnotation(t *testing.T) {
 	for _, raw := range []string{
-		`[]`, `null`, `{}`, `[{"name":`,
+		`null`, `{}`, `[{"name":`, `[] []`,
 		`[{"match":[{"domains":["api.example"]}]}] []`,
 	} {
 		sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{

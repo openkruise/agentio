@@ -98,19 +98,31 @@ func TestSandboxAnnotationComposition(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(native.Inputs, spec.Inputs) || len(native.Rules) != 2 {
 		t.Fatalf("network removal changed native snapshot: %+v %v", native, err)
 	}
+	sandbox.Annotations[agents.AnnotationSecurityRules] = `[]`
+	afterClear, err := SandboxSecurityProfile(sandbox)
+	if err != nil || !reflect.DeepEqual(afterClear, native) {
+		t.Fatalf("clearing legacy rules changed native policy: %+v %v", afterClear, err)
+	}
 	sandbox.Annotations = map[string]string{
 		agents.AnnotationSecurityRules: `[{"name":"legacy","match":[{"domains":["*"]}]}]`,
-		AnnotationE2BNetwork:           `{}`,
+		AnnotationE2BNetwork:           `{"allowInternetAccess":false}`,
 	}
 	legacy, err := SandboxSecurityProfile(sandbox)
-	if err != nil || legacy.Rules[0].Name != "legacy" {
+	if err != nil || len(legacy.Rules) != 1 || legacy.Rules[0].Name != "legacy" || len(legacy.TCPRules) == 0 {
 		t.Fatalf("legacy + E2B: %+v %v", legacy, err)
+	}
+	sandbox.Annotations[agents.AnnotationSecurityRules] = " [ \n\t ] "
+	afterClear, err = SandboxSecurityProfile(sandbox)
+	if err != nil || !HasSecurityRules(sandbox) || afterClear == nil || len(afterClear.Rules) != 0 ||
+		!reflect.DeepEqual(afterClear.TCPRules, legacy.TCPRules) {
+		t.Fatalf("clearing legacy rules changed E2B policy: %+v %v", afterClear, err)
 	}
 }
 
 func TestSandboxAnnotationErrors(t *testing.T) {
 	for _, annotations := range []map[string]string{
-		{AnnotationSecurityProfile: `{}`, agents.AnnotationSecurityRules: `[]`},
+		{AnnotationSecurityProfile: `{}`, agents.AnnotationSecurityRules: `[{}]`},
+		{AnnotationSecurityProfile: `{}`, agents.AnnotationSecurityRules: ""},
 		{AnnotationSecurityProfile: `null`},
 		{AnnotationSecurityProfile: `{} {}`},
 		{AnnotationSecurityProfile: `{"priority":1}`},

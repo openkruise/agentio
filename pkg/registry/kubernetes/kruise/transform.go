@@ -148,8 +148,8 @@ func sandboxSecurityRules(sandbox metav1.Object) ([]agentsv1alpha1.SecurityRule,
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s must contain a single JSON array", agentsv1alpha1.AnnotationSecurityRules)
 	}
-	if len(rules) == 0 {
-		return nil, fmt.Errorf("%s contains no rules", agentsv1alpha1.AnnotationSecurityRules)
+	if rules == nil {
+		return nil, fmt.Errorf("%s must contain a JSON array", agentsv1alpha1.AnnotationSecurityRules)
 	}
 	return rules, nil
 }
@@ -198,5 +198,6 @@ func HasSecurityRules(sandbox metav1.Object) bool {
 	a := sandbox.GetAnnotations()
 	_, native := a[AnnotationSecurityProfile]
 	_, e2b := a[AnnotationE2BNetwork]
-	return native || e2b || a[agentsv1alpha1.AnnotationSecurityRules] != ""
+	legacy := a[agentsv1alpha1.AnnotationSecurityRules]
+	return native || e2b || (legacy != "" && !emptySecurityRulesArray(legacy))
 }
