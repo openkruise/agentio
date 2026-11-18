@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"istio.io/istio/pkg/test"
@@ -109,21 +110,38 @@ func TestStartupLogUsesEffectiveSettingsWithoutDumpingOptions(t *testing.T) {
 	}
 }
 
-func TestWithRunContextCancelsChildWhenRunReturns(t *testing.T) {
-	want := errors.New("initialization failed")
-	var child context.Context
-	err := withRunContext(context.Background(), func(ctx context.Context) error {
-		child = ctx
-		return want
+func TestRunContextShutdownDuringStartup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parent, signal := context.WithCancel(t.Context())
+		ctx, finishStartup, stop := newRunContext(parent)
+		defer stop()
+		signal()
+		synctest.Wait()
+		if !errors.Is(ctx.Err(), context.Canceled) || finishStartup() {
+			t.Fatal("shutdown did not cancel startup")
+		}
 	})
-	if !errors.Is(err, want) {
-		t.Fatalf("withRunContext() error = %v, want %v", err, want)
-	}
-	select {
-	case <-child.Done():
-	case <-time.After(time.Second):
-		t.Fatal("child context remained active after run returned")
-	}
+}
+
+func TestRunContextKeepsDependenciesAliveUntilDrainEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parent, signal := context.WithCancel(t.Context())
+		defer signal()
+		ctx, finishStartup, stop := newRunContext(parent)
+		defer stop()
+		if !finishStartup() {
+			t.Fatal("startup canceled")
+		}
+		signal()
+		synctest.Wait()
+		if ctx.Err() != nil {
+			t.Fatal("dependencies canceled before gRPC drained")
+		}
+		stop()
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatal("dependencies still running after gRPC drained")
+		}
+	})
 }
 
 func TestRunRejectsInvalidOptions(t *testing.T) {

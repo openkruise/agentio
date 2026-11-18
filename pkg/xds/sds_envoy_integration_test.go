@@ -35,6 +35,8 @@ import (
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -99,13 +101,21 @@ func TestSDSEnvoyECDSACompatibility(t *testing.T) {
 	adsPort := listener.Addr().(*net.TCPAddr).Port
 	var transport *grpc.Server
 	wire := &compatibilityWireCounts{}
+	unavailable := make(chan struct{}, 1)
 	startADS := func(l net.Listener) {
 		current := grpc.NewServer(
 			// Match agentiod: a large reconnect carries all initial resource versions.
 			grpc.MaxRecvMsgSize(math.MaxInt32),
 			grpc.StreamInterceptor(
 				func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-					return handler(srv, &compatibilityWireStream{ServerStream: stream, counts: wire})
+					err := handler(srv, &compatibilityWireStream{ServerStream: stream, counts: wire})
+					if status.Code(err) == codes.Unavailable {
+						select {
+						case unavailable <- struct{}{}:
+						default:
+						}
+					}
+					return err
 				},
 			),
 		)
@@ -196,7 +206,7 @@ func TestSDSEnvoyECDSACompatibility(t *testing.T) {
 			CipherSuites: ciphers,
 		})
 	}
-	handshake := func(domain string, version uint16) *tls.Conn {
+	handshake := func(t *testing.T, domain string, version uint16) *tls.Conn {
 		t.Helper()
 		conn, err := dial(domain, version, nil)
 		if err != nil {
@@ -233,29 +243,10 @@ func TestSDSEnvoyECDSACompatibility(t *testing.T) {
 	}, "RSA to ECDSA replacement after ADS reconnect")
 	t.Log("PASS: RSA -> ECDSA on the same secret after ADS reconnect")
 	// An established RSA connection must remain usable across secret replacement.
-	if err := old.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.WriteString(old, "GET / HTTP/1.1\r\nHost: upgrade.example.com\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	response, err := http.ReadResponse(bufio.NewReader(old), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := response.Body.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != 200 || string(body) != "ok" {
-		t.Fatalf("old connection response: %d %q", response.StatusCode, body)
-	}
+	assertCompatibilityHTTP(t, old, "upgrade.example.com")
 	t.Log("PASS: existing RSA TLS connection survives ECDSA replacement")
 	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
-		c := handshake("second.example.com", version)
+		c := handshake(t, "second.example.com", version)
 		leaf := c.ConnectionState().PeerCertificates[0]
 		key, ok := leaf.PublicKey.(*ecdsa.PublicKey)
 		if !ok || key.Equal(upgraded.PublicKey) {
@@ -323,6 +314,58 @@ func TestSDSEnvoyECDSACompatibility(t *testing.T) {
 		return leaf.Issuer.CommonName == "compat-new" && !leaf.PublicKey.(*ecdsa.PublicKey).Equal(upgraded.PublicKey)
 	}, "CA rotation and leaf key replacement")
 	t.Log("PASS: CA rotation replaces the CA and leaf key through live SDS")
+
+	t.Run("issuer cancellation across ADS reconnect", func(t *testing.T) {
+		source := mitm.DomainSignerSource{Signer: signer, State: signer.State()}
+		newIssuer := func(ctx context.Context) *mitm.OnDemandIssuer {
+			issuer, err := mitm.NewOnDemandIssuer(ctx, source, allowCompatibilityGateway{}, mitm.OnDemandOptions{
+				LeafLifetime: time.Hour,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return issuer
+		}
+		issuerCtx, cancelIssuer := context.WithCancel(t.Context())
+		defer cancelIssuer()
+		provider.current.Store(newIssuer(issuerCtx))
+		const warmHost = "warm-before-cancel.example.com"
+		held := handshake(t, warmHost, tls.VersionTLS13)
+		before := held.ConnectionState().PeerCertificates[0]
+		replacement := newIssuer(ctx)
+		cancelIssuer()
+
+		// Make one uncached handshake and keep it pending while the ADS stream
+		// fails over. Retrying the TLS request would mask a fatal SDS removal.
+		done := make(chan error, 1)
+		go func() {
+			c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", "127.0.0.1:18443", &tls.Config{
+				RootCAs:    roots,
+				ServerName: "cold-after-cancel.example.com",
+				MinVersion: tls.VersionTLS13,
+			})
+			if err == nil {
+				err = c.Close()
+			}
+			done <- err
+		}()
+		select {
+		case <-unavailable:
+			provider.current.Store(replacement)
+		case err := <-done:
+			t.Fatalf("cold TLS handshake ended before ADS reconnect: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("canceled issuer did not close ADS stream with Unavailable")
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("cold TLS handshake did not recover on the new ADS stream: %v", err)
+		}
+		warm := handshake(t, warmHost, tls.VersionTLS13)
+		if !bytes.Equal(warm.ConnectionState().PeerCertificates[0].Raw, before.Raw) {
+			t.Fatal("ADS reconnect replaced a valid cached certificate")
+		}
+		assertCompatibilityHTTP(t, held, warmHost)
+	})
 
 	if os.Getenv("AGENTIO_TEST_SDS_HARD_EXPIRY") == "1" {
 		hardIssuer, err := mitm.NewOnDemandIssuer(ctx,
@@ -425,6 +468,30 @@ func closeCompatibilityConnection(t *testing.T, conn *tls.Conn) {
 	t.Helper()
 	if err := conn.Close(); err != nil {
 		t.Logf("close TLS connection: %v", err)
+	}
+}
+
+func assertCompatibilityHTTP(t *testing.T, conn *tls.Conn, host string) {
+	t.Helper()
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("existing connection response: %d %q", response.StatusCode, body)
 	}
 }
 

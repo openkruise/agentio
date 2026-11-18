@@ -47,9 +47,9 @@ func TestRemovedSandboxRuntimesRejectedBeforeKubernetes(t *testing.T) {
 			t.Setenv("AGENTIO_SANDBOX_RUNTIMES", value)
 			options := DefaultOptions()
 			options.Kubeconfig = "/does/not/exist"
-			if err := run(t.Context(), options); err == nil ||
+			if err := Run(t.Context(), options); err == nil ||
 				!strings.Contains(err.Error(), "AGENTIO_SANDBOX_RUNTIMES is no longer supported") {
-				t.Fatalf("run() error = %v, want migration error before loading Kubernetes config", err)
+				t.Fatalf("Run() error = %v, want migration error before loading Kubernetes config", err)
 			}
 		})
 	}
