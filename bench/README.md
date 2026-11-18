@@ -7,3 +7,6 @@
 - [Porter scale tests](porter/README.md): Go ext_proc load generator and WDS clients, with Go/client-go orchestration for cold/hot caches, reconnects, policy lifecycle and control-plane failover.
 - [Kubernetes Sandbox lifecycle tests](sandbox/README.md): KWOK nodes, real Sandbox/Pod changes, node WDS clients, and authenticated traffic through production gateways.
 - [EPE HTTPCallout](epe/callout/README.md): real Envoy integration and proxy-chain performance/stability tests using the shared HTTPCallout fixture.
+- [EPE on-demand load](epe/demand/README.md): request SecurityProfile lookups at a fixed offered rate and measure cold and warm paths.
+- [Sandbox stability tools](sandbox/stability/README.md): real HTTPS handshakes, hot and long-tail domains, streaming and file transfers, with request and resource summaries.
+- [Gateway capacity tools](gateway/README.md): isolated Envoy and ext_proc fixture, plus open-loop HTTP, HTTP/2, and CONNECT/TCP traffic against a deployed gateway.

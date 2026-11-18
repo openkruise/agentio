@@ -120,7 +120,7 @@ reported as failure; inspect affected objects before resuming.
 
 Network actions require `--ca=HOST:15012 --gateway=HOST:15008 --target=HOST:8080`.
 Run them from a network namespace that can reach cluster IPs. Gateway certificates
-are checked against the configured CA and the exact gateway SPIFFE principal.
+are checked against the configured CA and the exact gateway SPIFFE principal. For an existing installation, use `--system` to select its namespace, `--ca-server-name` to select its CA/ADS TLS name, `--ca-config-map` to select its trust bundle, and `--token-audience` to match the server’s Pod authentication audience.
 
 - `traffic`: signs `--active` uniformly spaced Pod identities, then sends
   `--requests` at `--rate` with `--workers`. Latency includes generator queueing.
@@ -210,3 +210,25 @@ upper bounds. Those bounds are not exact percentiles. Unmatched Pods or counter
 resets are reported instead of producing a misleading aggregate.
 
 The load result also reports `queue_p99_ms` (scheduled arrival to operation start) and `operation_p99_ms` (operation start to response validation, including client and network time). These quantiles do not add up to the end-to-end P99.
+
+### Sandbox preparation over persistent ADS
+
+`watch-sidecar --sandbox-prepare` adds a test-only preparation controller on HTTP port 8081, without restarting ADS connections between rounds. Keep this unauthenticated port inside the isolated benchmark network. Wait until `/connections` reports the expected client count before beginning a round.
+
+```sh
+sandbox-bench --kubeconfig=KUBECONFIG --action=watch-sidecar \
+  --count=20000 --connection-rate=500 --ca=agentiod.sandbox-scale-system.svc:15012 \
+  --sandbox-prepare --duration=6h --output=/results/ads.json
+curl -fsS http://CLIENT:8081/connections
+curl -fsS -X POST http://CLIENT:8081/retry -d '{"optimized":true}'
+curl -fsS -X POST http://CLIENT:8081/prepare \
+  -d '{"name":"claim-wave","retry":true,"clear_cache":false}'
+curl -fsS http://CLIENT:8081/stats
+curl -fsS http://CLIENT:8081/details
+```
+
+The model requires both the Workload and its matching Sandbox attester binding. Each preparation attempt waits up to 30 seconds; optional retries wait 5 seconds. `/retry` enables retry jitter and a minimum one-second reconnect backoff after `ResourceExhausted`, for comparison with the earlier client behavior. A preparation timeout leaves ADS open. `/stats` separates completed, pending, failed and timed-out preparations and reports latency; `/details` retains per-client timing. This simulator checks discovery and binding waits, not every behavior of the real ztunnel runtime.
+
+`--action=prepare-rpc --target=127.0.0.1:15090 --prefix=kruise:SANDBOX_NAME --duration=40s` invokes the real ztunnel preparation RPC and records its gRPC status and elapsed time. Run it in the Sandbox network namespace. A non-OK RPC is recorded in the result and returned as a command error.
+
+For larger loads without dropping existing connections, add disjoint `watch-sidecar` shards with increasing `--offset`; stop all shards explicitly after testing. The generic [xDS load application](../xds/README.md) also supports increasing its target through its management API. The [stability fixtures](stability/README.md) exercise real inner TLS, hot and long-tail domains, and streaming traffic alongside these simulated clients.

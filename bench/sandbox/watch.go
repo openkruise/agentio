@@ -28,6 +28,8 @@ import (
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"golang.org/x/time/rate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -54,10 +56,20 @@ type watchCredentials struct {
 }
 
 func (r *runner) watch(ctx context.Context) (any, error) {
+	stats := &watchStats{Resources: map[int]map[string]map[string]string{}}
+	if r.SandboxPrepare {
+		r.preparation = newPrepareController()
+		r.preparation.watchStats = stats
+		stop, err := r.preparation.serve(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer stop()
+	}
 	if r.Action == "watch-sidecar" && r.ConnectionRate <= 0 {
 		return nil, fmt.Errorf("connection-rate must be positive")
 	}
-	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, "sandbox-scale-ca-root-cert", metav1.GetOptions{})
+	cm, err := r.kube.CoreV1().ConfigMaps(r.System).Get(ctx, r.CAConfigMap, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +87,6 @@ func (r *runner) watch(ctx context.Context) (any, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.Duration)
 	defer cancel()
-	stats := &watchStats{Resources: map[int]map[string]map[string]string{}}
 	prepare := *r
 	prepare.Count = (r.Count + 99) / 100
 	prepare.Offset = 0
@@ -171,7 +182,7 @@ func (r *runner) watchSnapshot(stats *watchStats) any {
 			}
 		}
 	}
-	return map[string]any{
+	result := map[string]any{
 		"time":            time.Now(),
 		"connected":       stats.Connected,
 		"ready":           ready,
@@ -181,6 +192,10 @@ func (r *runner) watchSnapshot(stats *watchStats) any {
 		"policy_versions": versions,
 		"last_error":      stats.LastError,
 	}
+	if r.preparation != nil {
+		result["preparation"] = r.preparation.snapshot()
+	}
+	return result
 }
 
 func (r *runner) watchNode(ctx context.Context, i int, roots *x509.CertPool, stats *watchStats) {
@@ -200,8 +215,16 @@ func (r *runner) watchNode(ctx context.Context, i int, roots *x509.CertPool, sta
 			backoff = 10 * time.Millisecond
 		}
 		backoff = min(2*backoff, 15*time.Second)
+		if r.preparation != nil {
+			r.preparation.mu.Lock()
+			optimized := r.preparation.optimized
+			r.preparation.mu.Unlock()
+			if optimized && status.Code(err) == codes.ResourceExhausted {
+				backoff = max(time.Second, backoff)
+			}
+		}
 		// Cache the projected token across reconnects; spread admission retries.
-		delay := time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
+		delay := min(15*time.Second, time.Duration(float64(backoff)*(0.8+0.4*rand.Float64())))
 		select {
 		case <-ctx.Done():
 			return
@@ -226,7 +249,7 @@ func (r *runner) refreshWatchCredentials(
 	if credentials.token == nil || time.Until(credentials.token.Status.ExpirationTimestamp.Time) < 5*time.Minute {
 		token, err := r.kube.CoreV1().
 			ServiceAccounts(namespace).
-			CreateToken(ctx, account, &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{"agentio-ca"}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: name, UID: pod.UID}}}, metav1.CreateOptions{})
+			CreateToken(ctx, account, &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{r.TokenAudience}, BoundObjectRef: &authenticationv1.BoundObjectReference{APIVersion: "v1", Kind: "Pod", Name: name, UID: pod.UID}}}, metav1.CreateOptions{})
 		if err != nil {
 			return err
 		}
@@ -277,6 +300,10 @@ func (r *runner) watchStream(
 		return err
 	}
 	defer closeResource(client)
+	if r.preparation != nil {
+		r.preparation.attach(i, client, "Kubernetes//Pod/"+namespace+"/"+name, "kruise:"+name)
+		defer r.preparation.detach(i, client)
+	}
 	stats.mu.Lock()
 	stats.Connected++
 	stats.Resources[i] = map[string]map[string]string{}
@@ -288,6 +315,12 @@ func (r *runner) watchStream(
 		stats.mu.Unlock()
 	}()
 	for _, typ := range []string{model.AddressType, model.SandboxType, model.TrafficPolicyType} {
+		if typ == model.SandboxType && r.preparation != nil {
+			if err := r.preparation.subscribe(i); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := client.Subscribe(typ, "*"); err != nil {
 			return err
 		}
@@ -321,6 +354,11 @@ func (r *runner) watchStream(
 		stats.Responses++
 		stats.mu.Unlock()
 		if r.Acknowledge {
+			if r.preparation != nil {
+				if err := r.preparation.accept(i, response); err != nil {
+					return err
+				}
+			}
 			if err := client.ACK(response); err != nil {
 				return err
 			}

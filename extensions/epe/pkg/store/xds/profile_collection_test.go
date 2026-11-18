@@ -26,6 +26,7 @@ import (
 
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/internal/testutil"
 	"github.com/openkruise/agentio/pkg/features"
@@ -102,6 +103,21 @@ func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 	if err != nil || len(missing) != 1 || missing[0].InputsError == "" {
 		t.Fatal("first request did not wait for dependency publication", missing, err)
 	}
+	// The store receives collection updates asynchronously.
+	waitForInput := func(want string) *securityprofile.Profile {
+		t.Helper()
+		var profile *securityprofile.Profile
+		testutil.Eventually(t, func() bool {
+			profiles, err := local.ResolveProfiles(t.Context(), subj)
+			if err != nil || len(profiles) != 1 {
+				t.Fatalf("resolve profile: got %d profiles, error %v", len(profiles), err)
+			}
+			profile = profiles[0]
+			settings, _ := profile.Inputs["settings"].(map[string]string)
+			return settings["value"] == want
+		}, "EPE store publishes ConfigMap value "+want)
+		return profile
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "settings"},
 		Data:       map[string]string{"value": "first"},
@@ -111,10 +127,7 @@ func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 		p := collection.GetKey("ns/policy")
 		return p != nil && p.InputsError == ""
 	}, "ConfigMap creation updates policy without a request")
-	first, err := local.ResolveProfiles(t.Context(), subj)
-	if err != nil || first[0].Inputs["settings"].(map[string]string)["value"] != "first" {
-		t.Fatal("resolved inputs missing", err)
-	}
+	first := waitForInput("first")
 	body.PolicyJson = []byte(`{"inputs":[{"name":"settings"}]}`)
 	if err := publish(); err == nil {
 		t.Fatal("invalid version admitted")
@@ -126,10 +139,10 @@ func TestProfileCollectionInputsNACKAndEviction(t *testing.T) {
 		p := collection.GetKey("ns/policy")
 		return p != nil && p.Inputs["settings"].(map[string]string)["value"] == "second"
 	}, "NACK retains accepted source dependencies")
-	second, err := local.ResolveProfiles(t.Context(), subj)
-	if err != nil || second[0].Inputs["settings"].(map[string]string)["value"] != "second" ||
-		first[0].Inputs["settings"].(map[string]string)["value"] != "first" {
-		t.Fatal("dependency update changed an in-flight request", err)
+	waitForInput("second")
+	settings, _ := first.Inputs["settings"].(map[string]string)
+	if got := settings["value"]; got != "first" {
+		t.Fatalf("dependency update changed an in-flight request: got %q, want first", got)
 	}
 	cms.DeleteObject("ns/settings")
 	testutil.Eventually(t, func() bool {

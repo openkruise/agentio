@@ -52,10 +52,15 @@ func main() {
 	offset := flag.Int("offset", 0, "First fixture Pod number")
 	concurrency := flag.Int("concurrency", 16, "Concurrent ext_proc streams")
 	connections := flag.Int("connections", 1, "Shared gRPC connections")
+	sandboxInventory := flag.Bool(
+		"sandbox-inventory",
+		false,
+		"use bench/sandbox names and namespaces; namespace is the inventory prefix",
+	)
 	rate := flag.Int("rate", 0, "Requests per second; zero uses closed-loop concurrency")
 	duration := flag.Duration("duration", 5*time.Minute, "Maximum run duration")
 	flag.Parse()
-	if err := run(*address, *namespace, *cluster, *path, *want, *connections, load.Config{
+	if err := run(*address, *namespace, *cluster, *path, *want, *connections, *sandboxInventory, load.Config{
 		Requests:    *requests,
 		Identities:  *identities,
 		Offset:      *offset,
@@ -68,7 +73,12 @@ func main() {
 	}
 }
 
-func run(address, namespace, cluster, path string, want, connections int, config load.Config) (resultErr error) {
+func run(
+	address, namespace, cluster, path string,
+	want, connections int,
+	sandboxInventory bool,
+	config load.Config,
+) (resultErr error) {
 	if connections < 1 {
 		return fmt.Errorf("connections must be positive")
 	}
@@ -105,23 +115,7 @@ func run(address, namespace, cluster, path string, want, connections int, config
 			record("grpc_" + status.Code(err).String())
 			return err
 		}
-		name := fmt.Sprintf("workload-%05d", index)
-		request := &extproc.ProcessingRequest{
-			Attributes: map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
-				"filter_state['agentio.workload.uid']": structpb.NewStringValue(
-					cluster + "//Pod/" + namespace + "/" + name,
-				),
-			}}},
-			Request: &extproc.ProcessingRequest_RequestHeaders{RequestHeaders: &extproc.HttpHeaders{
-				EndOfStream: true,
-				Headers: &core.HeaderMap{Headers: []*core.HeaderValue{
-					{Key: ":method", RawValue: []byte("GET")},
-					{Key: ":scheme", RawValue: []byte("http")},
-					{Key: ":authority", RawValue: []byte("203.0.113.7:8080")},
-					{Key: ":path", RawValue: []byte(path)},
-				}},
-			}},
-		}
+		request := processingRequest(cluster, namespace, path, index, sandboxInventory)
 		if err := stream.Send(request); err != nil {
 			record("send_" + status.Code(err).String())
 			return err
@@ -149,7 +143,7 @@ func run(address, namespace, cluster, path string, want, connections int, config
 			int(immediate.GetStatus().GetCode()) == want {
 			return nil
 		}
-		return fmt.Errorf("unexpected response for %s: %s", name, response)
+		return fmt.Errorf("unexpected response for identity %d: %s", index, response)
 	})
 	if err := json.NewEncoder(os.Stdout).Encode(struct {
 		load.Result
@@ -166,4 +160,35 @@ func run(address, namespace, cluster, path string, want, connections int, config
 		return fmt.Errorf("%d requests failed: %s", result.Errors, result.FirstError)
 	}
 	return nil
+}
+
+func processingRequest(cluster, namespace, path string, index int, sandboxInventory bool) *extproc.ProcessingRequest {
+	name := fmt.Sprintf("workload-%05d", index)
+	ns := namespace
+	if sandboxInventory {
+		name = fmt.Sprintf("sandbox-%06d", index)
+		ns = fmt.Sprintf("%s-%03d", namespace, index/1000)
+	}
+	request := &extproc.ProcessingRequest{
+		Attributes: map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+			"filter_state['agentio.workload.uid']": structpb.NewStringValue(
+				cluster + "//Pod/" + ns + "/" + name,
+			),
+		}}},
+		Request: &extproc.ProcessingRequest_RequestHeaders{RequestHeaders: &extproc.HttpHeaders{
+			EndOfStream: true,
+			Headers: &core.HeaderMap{Headers: []*core.HeaderValue{
+				{Key: ":method", RawValue: []byte("GET")},
+				{Key: ":scheme", RawValue: []byte("http")},
+				{Key: ":authority", RawValue: []byte("203.0.113.7:8080")},
+				{Key: ":path", RawValue: []byte(path)},
+			}},
+		}},
+	}
+	if sandboxInventory {
+		request.Attributes["envoy.filters.http.ext_proc"].Fields["filter_state['agentio.sandbox.id']"] = structpb.NewStringValue(
+			"kruise:" + name,
+		)
+	}
+	return request
 }
