@@ -20,7 +20,6 @@ package securityprofile
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	v1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
@@ -82,7 +81,7 @@ func (sp *Profile) Project(regs []filter.Registration) error {
 	var firstErr error
 	for i := range sp.Rules {
 		rule := &sp.Rules[i]
-		payloads, err := payloadsFor(rule, sp.Meta.Match == MatchSandbox)
+		payloads, err := payloadsFor(rule)
 		if err != nil {
 			sp.Projections[i] = RuleProjection{Err: err}
 			if firstErr == nil {
@@ -145,7 +144,7 @@ func (sp *Profile) projection(i int, chain string) (RuleProjection, error) {
 //
 // Marshal errors are returned, never swallowed: an action we cannot encode
 // is a rule we cannot enforce, and the binder fails such a rule closed.
-func payloadsFor(rule *Rule, literalHeaders bool) (map[string]json.RawMessage, error) {
+func payloadsFor(rule *Rule) (map[string]json.RawMessage, error) {
 	m := map[string]json.RawMessage{}
 	if a := rule.Actions.Block; a != nil {
 		raw, err := json.Marshal(a)
@@ -166,7 +165,7 @@ func payloadsFor(rule *Rule, literalHeaders bool) (map[string]json.RawMessage, e
 		m[mcpacl.FilterName] = raw
 	}
 	if a := rule.Actions.HeaderManipulation; a != nil {
-		raw, err := headerManipulationPayload(a, literalHeaders)
+		raw, err := headerManipulationPayload(a)
 		if err != nil {
 			return nil, fmt.Errorf("build headerManipulation payload: %w", err)
 		}
@@ -222,20 +221,12 @@ func tokenTransformPayload(a *v1alpha1.TokenTransformationAction) (json.RawMessa
 // headermutation filter's phase-based schema. SecurityRule header
 // manipulation is defined for egress requests only, so both lists land on
 // the request phase and the response phase stays empty.
-func headerManipulationPayload(a *v1alpha1.HeaderManipulationAction, literal bool) (json.RawMessage, error) {
+func headerManipulationPayload(a *v1alpha1.HeaderManipulationAction) (json.RawMessage, error) {
 	type opSpec struct {
 		Set    []v1alpha1.HeaderValue `json:"set,omitempty"`
 		Remove []string               `json:"remove,omitempty"`
 	}
-	set := a.Set
-	if literal {
-		// The filter treats values as templates, but Sandbox assignments are plaintext.
-		set = slices.Clone(set)
-		for i := range set {
-			set[i].Value = strings.ReplaceAll(set[i].Value, "{{", `{{"{{"}}`)
-		}
-	}
 	return json.Marshal(struct {
 		Request opSpec `json:"request"`
-	}{Request: opSpec{Set: set, Remove: a.Remove}})
+	}{Request: opSpec{Set: a.Set, Remove: a.Remove}})
 }

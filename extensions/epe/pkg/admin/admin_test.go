@@ -337,7 +337,7 @@ func TestHandleProfiles_ListMode_POST(t *testing.T) {
 
 func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	const rules = `[{"name":"trace","match":[{"domains":["*"]}],` +
-		`"actions":{"headerManipulation":{"set":[{"name":"X-T","value":"{{pod.name}}"}]}}}]`
+		`"actions":{"headerManipulation":{"set":[{"name":"X-T","value":"{{ .Pod.Name }}"}]}}}]`
 	sbx := &v1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "sbx-1",
@@ -449,8 +449,8 @@ func TestHandleProfiles_InlineProfiles(t *testing.T) {
 	if spec == nil || len(spec.Rules) != 1 || spec.Rules[0].Name != "trace" {
 		t.Fatalf("full mode spec = %+v, want the annotation's rule chain", spec)
 	}
-	if got := spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != "{{pod.name}}" {
-		t.Fatalf("full mode changed the original plaintext header: %q", got)
+	if got := spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != "{{ .Pod.Name }}" {
+		t.Fatalf("full mode changed the original header template: %q", got)
 	}
 
 	sbx.ResourceVersion = "8"

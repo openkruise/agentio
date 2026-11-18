@@ -117,7 +117,7 @@ func TestHTTPCalloutPreservedWithOAuth2(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	payloads, err := payloadsFor(&Rule{Actions: actions}, false)
+	payloads, err := payloadsFor(&Rule{Actions: actions})
 	if err != nil {
 		t.Fatal(err)
 	}

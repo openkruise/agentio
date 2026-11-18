@@ -36,7 +36,7 @@ func BenchmarkNewSandboxProfile(b *testing.B) {
 			for i := range rules {
 				rules[i] = matchAllRule("r" + strconv.Itoa(i))
 				rules[i].Actions.HeaderManipulation = &v1alpha1.HeaderManipulationAction{
-					Set: []v1alpha1.HeaderValue{{Name: "X-Trace", Value: "{{pod.name}}-literal"}},
+					Set: []v1alpha1.HeaderValue{{Name: "X-Trace", Value: "{{ .Pod.Name }}-trace"}},
 				}
 			}
 			raw, err := json.Marshal(rules)

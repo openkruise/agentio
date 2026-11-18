@@ -41,8 +41,8 @@ func TestSandboxHeaderTransformsRunInMergedOrder(t *testing.T) {
 		Name:      "sandbox",
 		Namespace: "tenant",
 		Annotations: map[string]string{
-			kruise.AnnotationSecurityProfile: `{"rules":[{"name":"tls-native","match":[{"domains":["irrelevant.example"]}],"actions":{"tls":{"action":"Deny"}}},{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"native"}]}}}]}`,
-			kruise.AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["*.example.com"],"rules":{"*.example.com":[{"transform":{"headers":{"X-Broad":"broad"}}}],"*.nested.example.com":[{"transform":{"headers":{"X-Tenant":"nested"}}}],"api.example.com":[{"transform":{"headers":{"X-Tenant":"first"}}},{"transform":{"headers":{"x-tenant":"{{ literal }}"}}}]}}}`,
+			kruise.AnnotationSecurityProfile: `{"rules":[{"name":"tls-native","match":[{"domains":["irrelevant.example"]}],"actions":{"tls":{"action":"Deny"}}},{"name":"native","match":[{"domains":["*"]}],"actions":{"headerManipulation":{"set":[{"name":"x-native","value":"{{ .Pod.Name }}-native"}]}}}]}`,
+			kruise.AnnotationE2BNetwork:      `{"allowInternetAccess":false,"network":{"allowOut":["*.example.com"],"rules":{"*.example.com":[{"transform":{"headers":{"X-Broad":"broad"}}}],"*.nested.example.com":[{"transform":{"headers":{"X-Tenant":"nested"}}}],"api.example.com":[{"transform":{"headers":{"X-Tenant":"first"}}},{"transform":{"headers":{"x-tenant":"{{ .Pod.Name }}-e2b"}}}]}}}`,
 		},
 	}}
 	local, err := NewSandboxProfile(obj)
@@ -107,16 +107,22 @@ func TestSandboxHeaderTransformsRunInMergedOrder(t *testing.T) {
 					t.Fatal("TCP checkpoint must follow all HTTP rules")
 				}
 				if tc.host == "api.example.com" {
-					mutation := bound.rules[2].Cfgs[0].(headermutation.Config)
-					if len(mutation.Request.Set) != 1 {
-						t.Fatal("sequential assignments were not collapsed")
-					}
-					value, err := eval.RenderToString(
-						mutation.Request.Set[0].Value,
-						inputs.NewScope(inputs.Request{}, inputs.Workload{}, inputs.Profile{}, inputs.Rule{}, nil),
-					)
-					if err != nil || value != "{{ literal }}" {
-						t.Fatalf("last assignment must remain literal: %q %v", value, err)
+					scope := inputs.NewScope(inputs.Request{}, inputs.Workload{Name: "sandbox"}, inputs.Profile{}, inputs.Rule{}, nil)
+					for _, want := range []struct {
+						ruleIndex int
+						value     string
+					}{
+						{0, "sandbox-native"},
+						{2, "sandbox-e2b"},
+					} {
+						mutation := bound.rules[want.ruleIndex].Cfgs[0].(headermutation.Config)
+						if len(mutation.Request.Set) != 1 {
+							t.Fatal("expected one header assignment per rule")
+						}
+						value, err := eval.RenderToString(mutation.Request.Set[0].Value, scope)
+						if err != nil || value != want.value {
+							t.Fatalf("rendered header = %q, want %q: %v", value, want.value, err)
+						}
 					}
 				}
 			})

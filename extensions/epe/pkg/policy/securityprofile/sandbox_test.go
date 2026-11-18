@@ -170,7 +170,7 @@ func TestPayloadsForHeaderManipulation(t *testing.T) {
 			Remove: []string{"X-Carried"},
 		},
 	}}
-	m, err := payloadsFor(rule, false)
+	m, err := payloadsFor(rule)
 	if err != nil {
 		t.Fatalf("payloadsFor: %v", err)
 	}
@@ -259,14 +259,11 @@ func TestInlineHeaderManipulationBindsThroughRealFilter(t *testing.T) {
 	}
 }
 
-// Inline header values are plaintext by the E2B contract; a value that looks
-// like a Go template must reach the wire verbatim instead of being rendered
-// against the filter's scope.
-func TestInlineHeaderValuesStayLiteral(t *testing.T) {
-	const literal = `{{ .pod.name }}-suffix`
+func TestInlineHeaderValuesRenderTemplates(t *testing.T) {
+	const value = `{{ .Pod.Name }}-suffix`
 	inline, err := NewSandboxProfile(sandboxWithRules("sbx-1", "ns",
 		`[{"name":"trace","match":[{"domains":["*"]}],"actions":{"headerManipulation":`+
-			`{"set":[{"name":"X-A","value":"`+literal+`"}]}}}]`))
+			`{"set":[{"name":"X-A","value":"`+value+`"}]}}}]`))
 	if err != nil {
 		t.Fatalf("NewInlineProfile: %v", err)
 	}
@@ -277,17 +274,17 @@ func TestInlineHeaderValuesStayLiteral(t *testing.T) {
 	if err := inline.Project(regs); err != nil {
 		t.Fatal(err)
 	}
-	if got := inline.Spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != literal {
-		t.Fatalf("profile spec header = %q, want %q", got, literal)
+	if got := inline.Spec.Rules[0].Actions.HeaderManipulation.Set[0].Value; got != value {
+		t.Fatalf("profile spec header = %q, want %q", got, value)
 	}
 	cfg := inline.Projections[0].Cfgs[0].(headermutation.Config)
 	scope := inputs.NewScope(inputs.Request{}, inputs.Workload{Name: "sbx-1"}, inputs.Profile{}, inputs.Rule{}, nil)
 	got, err := eval.RenderToString(cfg.Request.Set[0].Value, scope)
 	if err != nil {
-		t.Fatalf("render escaped value: %v", err)
+		t.Fatalf("render header template: %v", err)
 	}
-	if got != literal {
-		t.Errorf("rendered = %q, want the untouched literal %q", got, literal)
+	if got != "sbx-1-suffix" {
+		t.Errorf("rendered = %q, want sbx-1-suffix", got)
 	}
 }
 

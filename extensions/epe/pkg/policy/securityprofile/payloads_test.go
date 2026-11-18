@@ -45,7 +45,7 @@ var registeredNames = map[string]bool{
 
 func payloadsOrFail(t *testing.T, rule *Rule) map[string]json.RawMessage {
 	t.Helper()
-	m, err := payloadsFor(rule, false)
+	m, err := payloadsFor(rule)
 	if err != nil {
 		t.Fatalf("payloadsFor: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestPayloadsForRejectsMalformedCredentialRef(t *testing.T) {
 				CredentialRef: v1alpha1.CredentialRef{Kind: "Unknown", Name: "ref"},
 			},
 		},
-	}, false)
+	})
 	if err == nil {
 		t.Fatal("payloadsFor accepted an unsupported credentialRef kind")
 	}
