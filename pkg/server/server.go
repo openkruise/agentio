@@ -52,6 +52,10 @@ import (
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
 
+func Run(ctx context.Context, options Options, opts ...Option) error {
+	return run(ctx, options, opts...)
+}
+
 func newRunContext(shutdown context.Context) (context.Context, func() bool, func()) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(shutdown))
 	cancelStartup := context.AfterFunc(shutdown, cancel)
@@ -86,7 +90,7 @@ func loadGatewayTrustBundle(packagePath string) (string, error) {
 	return p.Bundle, nil
 }
 
-func Run(shutdownCtx context.Context, options Options, opts ...Option) error {
+func run(ctx context.Context, options Options, opts ...Option) error {
 	started := time.Now()
 	composition := applyOptions(opts)
 	if err := options.Validate(); err != nil {
@@ -99,9 +103,10 @@ func Run(shutdownCtx context.Context, options Options, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if shutdownCtx.Err() != nil {
+	if ctx.Err() != nil {
 		return nil
 	}
+	shutdownCtx := ctx
 	ctx, finishStartup, cancel := newRunContext(shutdownCtx)
 	defer cancel()
 	logStartup(options)

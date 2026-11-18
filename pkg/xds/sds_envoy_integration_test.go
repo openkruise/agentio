@@ -340,7 +340,9 @@ func TestSDSEnvoyECDSACompatibility(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", "127.0.0.1:18443", &tls.Config{
-				RootCAs: roots, ServerName: "cold-after-cancel.example.com", MinVersion: tls.VersionTLS13,
+				RootCAs:    roots,
+				ServerName: "cold-after-cancel.example.com",
+				MinVersion: tls.VersionTLS13,
 			})
 			if err == nil {
 				err = c.Close()
