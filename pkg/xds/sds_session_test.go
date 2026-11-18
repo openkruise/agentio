@@ -27,6 +27,8 @@ import (
 	"time"
 
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/istio/pkg/util/sets"
 
@@ -492,6 +494,32 @@ func TestSDSReconnectThirtyThousandVersionsOnlySignsNewDemand(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestSDSCanceledIssuerClosesStreamWithoutRemovingSecret(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		provider := &controlledCertificates{requests: make(chan pendingCertificate, 1), revision: "one"}
+		server := newTestServer(t, gatewayScope(), nil, provider)
+		stream := newFakeStream(t.Context(), 2)
+		stream.send(nodeRequest(model.SecretType, "api.example.com"))
+
+		done := make(chan error, 1)
+		go func() { done <- server.server.serveDelta(stream) }()
+		pending := <-provider.requests
+		pending.err <- fmt.Errorf("issuer canceled: %w", context.Canceled)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("stream error = %v, want Unavailable", err)
+			}
+		default:
+			t.Fatal("stream did not close for reconnect")
+		}
+		if responses := stream.responsesFor(model.SecretType); len(responses) != 0 {
+			t.Fatalf("canceled issuer sent an SDS response: %v", responses)
+		}
+	})
 }
 
 func TestSDSFailedCompletionRetriesOnlyAfterSignerChanges(t *testing.T) {

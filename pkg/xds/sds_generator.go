@@ -17,6 +17,7 @@ package xds
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/istio/pkg/util/sets"
 
@@ -131,8 +134,12 @@ func (g *SDSGenerator) Generate(ctx context.Context, request GenerationRequest) 
 		}
 		certificate, err := g.provider.Get(ctx, request.Scope, name)
 		if err != nil {
-			if ctx.Err() != nil {
-				return GeneratedDelta{}, ctx.Err()
+			if canceled := ctx.Err(); canceled != nil {
+				return GeneratedDelta{}, canceled
+			}
+			// An issuer shutting down cannot tell Envoy to forget the secret.
+			if errors.Is(err, context.Canceled) {
+				return GeneratedDelta{}, status.Error(codes.Unavailable, "certificate issuer stopped")
 			}
 			removed.Insert(name)
 			result.denied = append(result.denied, generatedDenial{name: name, err: err})

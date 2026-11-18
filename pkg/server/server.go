@@ -52,16 +52,16 @@ import (
 	xdsstore "github.com/openkruise/agentio/pkg/xds/store"
 )
 
-func Run(ctx context.Context, options Options, opts ...Option) error {
-	return withRunContext(ctx, func(runCtx context.Context) error {
-		return run(runCtx, options, opts...)
-	})
-}
-
-func withRunContext(parent context.Context, run func(context.Context) error) error {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	return run(ctx)
+func newRunContext(shutdown context.Context) (context.Context, func() bool, func()) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(shutdown))
+	cancelStartup := context.AfterFunc(shutdown, cancel)
+	// Once serving, keep dependencies alive until gRPC drains.
+	finishStartup := func() bool { return cancelStartup() && shutdown.Err() == nil }
+	stop := func() {
+		cancelStartup()
+		cancel()
+	}
+	return ctx, finishStartup, stop
 }
 
 func grpcServerKeepaliveParameters() keepalive.ServerParameters {
@@ -86,7 +86,7 @@ func loadGatewayTrustBundle(packagePath string) (string, error) {
 	return p.Bundle, nil
 }
 
-func run(ctx context.Context, options Options, opts ...Option) error {
+func Run(shutdownCtx context.Context, options Options, opts ...Option) error {
 	started := time.Now()
 	composition := applyOptions(opts)
 	if err := options.Validate(); err != nil {
@@ -99,9 +99,11 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if ctx.Err() != nil {
+	if shutdownCtx.Err() != nil {
 		return nil
 	}
+	ctx, finishStartup, cancel := newRunContext(shutdownCtx)
+	defer cancel()
 	logStartup(options)
 	gatewayTrustBundle, err := loadGatewayTrustBundle(features.ClientTrustPackagePath)
 	if err != nil {
@@ -511,6 +513,9 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		return fmt.Errorf("compile initial configuration: %w", err)
 	}
 	store.Replace(initial)
+	if !finishStartup() {
+		return nil
+	}
 	ready.Store(true)
 	go func() { errorsChannel <- controller.Run(ctx) }()
 	go func() {
@@ -534,19 +539,15 @@ func run(ctx context.Context, options Options, opts ...Option) error {
 		initial.CountsByType(),
 	)
 
+	var runErr error
 	select {
-	case <-ctx.Done():
-		ready.Store(false)
-		shutdown(grpcServer)
-		return nil
-	case err := <-errorsChannel:
-		ready.Store(false)
-		shutdown(grpcServer)
-		if err == nil && ctx.Err() != nil {
-			return nil
-		}
-		return err
+	case <-shutdownCtx.Done():
+	case runErr = <-errorsChannel:
 	}
+	ready.Store(false)
+	shutdown(grpcServer)
+	cancel()
+	return runErr
 }
 
 func newMonitoringHandler(ready func() bool, debugHandler http.Handler) http.Handler {
