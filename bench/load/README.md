@@ -24,6 +24,8 @@ Results contain completed operations/errors, actual identities attempted, per-se
 
 This is a deterministic load primitive, not a claim of realistic application traffic. A reusable protocol adapter can map identities onto requests; scenarios choose inventory, hot/cold ranges and lifecycle events. The current Porter suites compose concurrent schedulers for mixed hot/cold traffic.
 
+`NewQueue` supports continuous open-loop traffic with live rate updates. It keeps workers alive, bounds pending arrivals, reports drops separately, and drains accepted work when canceled. Callers aggregate observations incrementally using the scheduled arrival time. The finite-batch `Run` retains its original result and scheduling behavior.
+
 Validate scheduling, queueing latency and cancellation with `go test -race ./bench/load`.
 
 The [CONNECT benchmark](../connect/README.md) reuses this scheduler for tunnel establishment only, then measures sustained byte throughput independently after warmup. Its adapter detaches established tunnel lifetime from the setup deadline while preserving transfer cancellation.

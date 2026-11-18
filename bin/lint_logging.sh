@@ -115,7 +115,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 4. Only main decides that the process should stop.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/epe/demand/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/gateway/main.go | bench/gateway/load/main.go | bench/sandbox/main.go | bench/sandbox/stability/upstream/main.go) ;;
+      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/epe/demand/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/gateway/main.go | bench/gateway/load/main.go | bench/sandbox/main.go | bench/sandbox/stability/client/main.go | bench/sandbox/stability/upstream/main.go) ;;
       *)
         scan "${f}" 'os\.Exit\(' \
           "os.Exit belongs in main; return the error and let the entrypoint log it"
