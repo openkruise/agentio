@@ -39,7 +39,10 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/openkruise/agentio/bench/load"
+	agentlog "github.com/openkruise/agentio/pkg/log"
 )
+
+var log = agentlog.New("gateway-load")
 
 type options struct {
 	mode             string
@@ -438,7 +441,7 @@ func (o *options) serve() error {
 		}
 		w.Header().Set("X-Policy", r.Header.Get("X-Policy"))
 		if _, err := io.WriteString(w, "ok\n"); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Error("write origin response", "error", err)
 		}
 	})
 	var listeners []net.Listener
@@ -484,7 +487,7 @@ func (o *options) serve() error {
 					go func() {
 						defer closeResource(c)
 						if _, err := io.Copy(c, c); err != nil && !errors.Is(err, net.ErrClosed) {
-							fmt.Fprintln(os.Stderr, err)
+							log.Error("copy TCP echo", "error", err)
 						}
 					}()
 				}
@@ -543,7 +546,7 @@ func run(o *options) error {
 
 func closeResource(c io.Closer) {
 	if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		fmt.Fprintln(os.Stderr, "close resource:", err)
+		log.Error("close resource", "error", err)
 	}
 }
 
@@ -551,7 +554,7 @@ func main() {
 	o := flags(flag.CommandLine)
 	flag.Parse()
 	if err := run(o); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Error("gateway load failed", "error", err)
 		os.Exit(1)
 	}
 }

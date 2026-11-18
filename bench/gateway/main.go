@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -137,7 +138,7 @@ func origin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Policy", r.Header.Get("X-Policy"))
 	w.Header().Set("Content-Type", "text/plain")
 	if _, err := io.WriteString(w, "ok\n"); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		ctrllog.Log.Error(err, "write origin response")
 	}
 }
 
@@ -249,9 +250,9 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func main() {
-	ctrllog.SetLogger(logr.Discard())
+	ctrllog.SetLogger(logr.FromSlogHandler(slog.Default().Handler()))
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		ctrllog.Log.Error(err, "gateway fixture failed")
 		os.Exit(1)
 	}
 }

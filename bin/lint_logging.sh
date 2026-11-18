@@ -63,9 +63,10 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   checked=$((checked + 1))
 
   # 1. Stacks are split by process. agentiod and Porter use pkg/log; EPE
-  #    uses controller-runtime's logr. agentiod bridges dependency logs at startup.
+  #    and its gateway benchmark fixture use controller-runtime's logr.
+  #    agentiod bridges dependency logs at startup.
   case "${f}" in
-    extensions/epe/*)
+    extensions/epe/* | bench/gateway/main.go)
       case "${f}" in
         # This test asserts the bridge that routes pkg/log records into EPE's
         # zap core, so it must import both sides.
@@ -114,7 +115,7 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
   # 4. Only main decides that the process should stop.
   if ! is_test "${f}"; then
     case "${f}" in
-      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/epe/demand/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/sandbox/main.go) ;;
+      cmd/*/main.go | extensions/*/cmd/*/main.go | test/e2e/cmd/*/main.go | tools/*/main.go | bench/xds/load/main.go | bench/xds/run/main.go | bench/porter/load/main.go | bench/porter/run/main.go | bench/epe/demand/main.go | bench/connect/load/main.go | bench/connect/run/main.go | bench/connect/scenarios/main.go | bench/scenario/run/main.go | bench/gateway/main.go | bench/gateway/load/main.go | bench/sandbox/main.go | bench/sandbox/stability/upstream/main.go) ;;
       *)
         scan "${f}" 'os\.Exit\(' \
           "os.Exit belongs in main; return the error and let the entrypoint log it"

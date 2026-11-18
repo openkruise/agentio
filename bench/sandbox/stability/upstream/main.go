@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Test-only upstream, with no product imports.
+// Test-only HTTP and HTTPS upstream for Sandbox stability tests.
 package main
 
 import (
@@ -20,13 +20,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	agentlog "github.com/openkruise/agentio/pkg/log"
 )
+
+var log = agentlog.New("sandbox-stability-upstream")
 
 func handler() http.Handler {
 	mux := http.NewServeMux()
@@ -66,7 +69,7 @@ func handler() http.Handler {
 				return
 			}
 			if _, err := fmt.Fprintf(w, "uploaded:%d", n); err != nil {
-				log.Print(err)
+				log.Error("write upload response", "error", err)
 			}
 		default:
 			sni := ""
@@ -76,7 +79,7 @@ func handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).
 				Encode(map[string]any{"marker": "STABILITY-UPSTREAM", "tls_sni": sni, "host": r.Host, "path": r.URL.Path, "proto": r.Proto, "headers": r.Header, "backend": os.Getenv("HOSTNAME")}); err != nil {
-				log.Print(err)
+				log.Error("write upstream response", "error", err)
 			}
 		}
 	})
@@ -91,10 +94,15 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
-		HTTP2:             &http.HTTP2Config{CountError: func(kind string) { log.Printf("http2_error=%s", kind) }},
+		HTTP2:             &http.HTTP2Config{CountError: func(kind string) { log.Warn("HTTP/2 error", "kind", kind) }},
 	}
-	go func() { log.Fatal(http.ListenAndServe(":8080", mux)) }()
-	log.Fatal(srv.ListenAndServeTLS("/tls/tls.crt", "/tls/tls.key"))
+	failures := make(chan error, 2)
+	go func() { failures <- http.ListenAndServe(":8080", mux) }()
+	go func() { failures <- srv.ListenAndServeTLS("/tls/tls.crt", "/tls/tls.key") }()
+	if err := <-failures; err != nil {
+		log.Error("serve stability upstream", "error", err)
+		os.Exit(1)
+	}
 }
 
 func injectFault(w http.ResponseWriter) bool {
@@ -110,7 +118,7 @@ func injectFault(w http.ResponseWriter) bool {
 			c, _, e := h.Hijack()
 			if e == nil {
 				if err := c.Close(); err != nil {
-					log.Print(err)
+					log.Error("close fault connection", "error", err)
 				}
 			}
 			return true

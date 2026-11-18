@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -32,8 +31,11 @@ import (
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	workloadv1 "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/bench/xds/fakeclient"
+	agentlog "github.com/openkruise/agentio/pkg/log"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+var prepareLog = agentlog.New("sandbox-prepare-bench")
 
 type prepareCommand struct {
 	Name       string `json:"name"`
@@ -305,7 +307,7 @@ func (p *prepareController) serve(ctx context.Context) (func(), error) {
 		p.optimized = command.Optimized
 		p.mu.Unlock()
 		if err := json.NewEncoder(w).Encode(command); err != nil {
-			log.Print(err)
+			prepareLog.Error("write retry configuration", "error", err)
 		}
 	})
 	mux.HandleFunc("/connections", func(w http.ResponseWriter, r *http.Request) {
@@ -320,7 +322,7 @@ func (p *prepareController) serve(ctx context.Context) (func(), error) {
 		}
 		if err := json.NewEncoder(w).
 			Encode(map[string]any{"connected": s.Connected, "ready": ready, "responses": s.Responses, "reconnects": s.Reconnects, "last_error": s.LastError}); err != nil {
-			log.Print(err)
+			prepareLog.Error("write ADS connection stats", "error", err)
 		}
 	})
 	mux.HandleFunc("/details", func(w http.ResponseWriter, r *http.Request) {
