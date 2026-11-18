@@ -78,7 +78,7 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 	if err := json.Unmarshal(profile.PolicyJson, &http); err != nil {
 		t.Fatal(err)
 	}
-	if len(http.Rules) != 3 || http.Rules[0].Name != "native" || http.Rules[1].Name != "e2b-transform-0" ||
+	if len(http.Rules) != 3 || http.Rules[0].Name != "native" || http.Rules[1].Name != "agentio-e2b-transform-0" ||
 		http.Inputs[0].Inline == nil {
 		t.Fatalf("HTTP composition or inputs lost: %s", profile.PolicyJson)
 	}
@@ -86,7 +86,7 @@ func TestSandboxAnnotationsCompileIntoOneProfile(t *testing.T) {
 		t.Fatalf("audit configuration changed in transit: %s", profile.PolicyJson)
 	}
 	if len(profile.TcpPolicy.Rules) != 3 || profile.TcpPolicy.Rules[0].Name != "native-deny" ||
-		profile.TcpPolicy.Rules[2].Name != "e2b-deny-rest" {
+		profile.TcpPolicy.Rules[2].Name != "agentio-e2b-deny-rest" {
 		t.Fatalf("TCP order lost: %v", profile.TcpPolicy)
 	}
 	if profile.SniPolicy.Rules[0].Action != securityv1.SniAction_SNI_ACTION_TLS_TERMINATION {

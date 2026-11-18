@@ -83,37 +83,12 @@ func SandboxSecurityProfile(sandbox metav1.Object) (*agents.SecurityProfileSpec,
 			return nil, fmt.Errorf("%s: %w", AnnotationE2BNetwork, err)
 		}
 		if result == nil {
-			result = &agents.SecurityProfileSpec{}
+			return profile, nil
 		}
-		appendE2BProfile(result, profile)
+		result.Rules = append(result.Rules, profile.Rules...)
+		result.TCPRules = append(result.TCPRules, profile.TCPRules...)
 	}
 	return result, nil
-}
-
-func appendE2BProfile(combined, profile *agents.SecurityProfileSpec) {
-	names := map[string]bool{}
-	for _, rule := range combined.Rules {
-		names[rule.Name] = true
-	}
-	for _, rule := range combined.TCPRules {
-		names[rule.Name] = true
-	}
-	generatedName := func(name string) string {
-		name = "e2b-" + name
-		for names[name] {
-			name += "-e2b"
-		}
-		names[name] = true
-		return name
-	}
-	for i := range profile.Rules {
-		profile.Rules[i].Name = generatedName(profile.Rules[i].Name)
-	}
-	for i := range profile.TCPRules {
-		profile.TCPRules[i].Name = generatedName(profile.TCPRules[i].Name)
-	}
-	combined.Rules = append(combined.Rules, profile.Rules...)
-	combined.TCPRules = append(combined.TCPRules, profile.TCPRules...)
 }
 
 func validateSandboxProfile(namespace string, spec *agents.SecurityProfileSpec) error {
@@ -204,12 +179,12 @@ func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
 		spec.Rules = append(
 			spec.Rules,
 			agents.SecurityRule{
-				Name:    "allow-tls",
+				Name:    "agentio-e2b-allow-tls",
 				Match:   []agents.RuleMatch{{Domains: allowDomains}},
 				Actions: agents.SecurityRuleActions{TLS: &agents.TLSAction{Action: agents.TLSActionPassthrough}},
 			},
 			agents.SecurityRule{
-				Name:    "allow-web",
+				Name:    "agentio-e2b-allow-web",
 				Match:   []agents.RuleMatch{{Domains: allowDomains, Schemes: []string{"http", "https"}}},
 				Actions: agents.SecurityRuleActions{Bypass: true},
 			},
@@ -219,7 +194,7 @@ func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
 		spec.TCPRules = append(
 			spec.TCPRules,
 			agents.TCPRule{
-				Name:   "allow-addresses",
+				Name:   "agentio-e2b-allow-addresses",
 				Match:  []agents.TCPMatch{{CIDRs: allowIPs}},
 				Action: agents.TCPActionAllow,
 			},
@@ -227,7 +202,7 @@ func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
 	}
 	if len(config.Network.DenyOut) > 0 {
 		rule := agents.TCPRule{
-			Name:   "deny-addresses",
+			Name:   "agentio-e2b-deny-addresses",
 			Match:  []agents.TCPMatch{{CIDRs: config.Network.DenyOut}},
 			Action: agents.TCPActionDeny,
 		}
@@ -239,7 +214,7 @@ func e2bProfile(raw string) (*agents.SecurityProfileSpec, error) {
 	if config.AllowInternetAccess != nil && !*config.AllowInternetAccess {
 		spec.TCPRules = append(
 			spec.TCPRules,
-			agents.TCPRule{Name: "deny-rest", Match: []agents.TCPMatch{{}}, Action: agents.TCPActionDeny},
+			agents.TCPRule{Name: "agentio-e2b-deny-rest", Match: []agents.TCPMatch{{}}, Action: agents.TCPActionDeny},
 		)
 	}
 	return spec, nil
@@ -300,7 +275,7 @@ func e2bHeaderRules(config *e2bNetwork) ([]agents.SecurityRule, error) {
 			return nil, fmt.Errorf("transform domain %q requires at least one header assignment", domain)
 		}
 		rules = append(rules, agents.SecurityRule{
-			Name:    fmt.Sprintf("transform-%d", len(rules)),
+			Name:    fmt.Sprintf("agentio-e2b-transform-%d", len(rules)),
 			Match:   []agents.RuleMatch{{Domains: []string{normalized}, Schemes: []string{"https"}}},
 			Actions: agents.SecurityRuleActions{HeaderManipulation: mutation},
 		})

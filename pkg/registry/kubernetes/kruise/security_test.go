@@ -79,12 +79,12 @@ func TestSandboxAnnotationComposition(t *testing.T) {
 		t.Fatalf("native inputs lost: %+v", spec.Inputs)
 	}
 	if spec.Rules[0].Name != "native-tls" || spec.Rules[1].Name != "native-http" ||
-		spec.Rules[2].Name != "e2b-allow-tls" ||
-		spec.TCPRules[0].Name != "e2b-deny-rest" {
+		spec.Rules[2].Name != "agentio-e2b-allow-tls" || spec.Rules[3].Name != "agentio-e2b-allow-web" ||
+		spec.TCPRules[0].Name != "e2b-deny-rest" || spec.TCPRules[2].Name != "agentio-e2b-deny-rest" {
 		t.Fatalf("native rules must precede generated rules: %+v", spec)
 	}
 	if _, err := policy.CompileTCPRules(spec.TCPRules); err != nil {
-		t.Fatal("generated names collide with native rules:", err)
+		t.Fatal("compile combined TCP rules:", err)
 	}
 	stripped, err := stripSandbox(sandbox)
 	if err != nil {

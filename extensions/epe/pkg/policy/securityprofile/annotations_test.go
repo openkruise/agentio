@@ -84,10 +84,10 @@ func TestSandboxHeaderTransformsRunInMergedOrder(t *testing.T) {
 			host  string
 			rules []string
 		}{
-			{"api.example.com", []string{"native", "e2b-transform-0", "e2b-transform-2", "e2b-allow-web"}},
-			{"api.nested.example.com", []string{"native", "e2b-transform-0", "e2b-transform-1", "e2b-allow-web"}},
-			{"api.example.com.", []string{"native", "e2b-transform-0", "e2b-transform-2", "e2b-allow-web"}},
-			{"other.example.com", []string{"native", "e2b-transform-0", "e2b-allow-web"}},
+			{"api.example.com", []string{"native", "agentio-e2b-transform-0", "agentio-e2b-transform-2", "agentio-e2b-allow-web"}},
+			{"api.nested.example.com", []string{"native", "agentio-e2b-transform-0", "agentio-e2b-transform-1", "agentio-e2b-allow-web"}},
+			{"api.example.com.", []string{"native", "agentio-e2b-transform-0", "agentio-e2b-transform-2", "agentio-e2b-allow-web"}},
+			{"other.example.com", []string{"native", "agentio-e2b-transform-0", "agentio-e2b-allow-web"}},
 		} {
 			t.Run(source+"/"+tc.host, func(t *testing.T) {
 				req := testRequest(tc.host)
