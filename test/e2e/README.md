@@ -247,7 +247,7 @@ cd test/e2e
 go run ./cmd/product-e2e run --suites gateway --tests '^TestSandboxOnDemandCARotation$'
 ```
 
-The `gateway-runtime` PR job also runs `TestSDSEnvoyECDSACompatibility` against real Envoy via `bin/test_gateway_runtime.sh`, including an ADS outage spanning X.509 expiry. That faster integration test uses fake Kubernetes CA events and gateway identity; the cluster suite above validates the actual Kubernetes and authentication path. Deterministic issuer/ADS tests cover precise concurrent cancellation interleavings. The 30,000-certificate pressure scenario stays opt-in.
+The `gateway-runtime` PR job runs `TestSDSEnvoyECDSACompatibility` against real Envoy via `bin/test_gateway_runtime.sh`. It covers an ADS outage spanning X.509 expiry and verifies that a cold TLS handshake completes across ADS reconnect after issuer cancellation, while cached certificates and established TLS connections remain usable. The runtime test uses fake Kubernetes CA events and gateway identity; the cluster suite above validates the actual Kubernetes and authentication path. The 30,000-certificate pressure scenario stays opt-in.
 
 ## On-demand certificate rotation (opt-in)
 
