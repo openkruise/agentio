@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/openkruise/agentio/pkg/model"
@@ -207,6 +208,11 @@ func TestControllerUsesMasterBootstrapOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy := config.InitContainers[1]
+	security := proxy.SecurityContext
+	if ptr.Deref(security.RunAsUser, -1) != 1337 || !ptr.Deref(security.RunAsNonRoot, false) ||
+		len(security.Capabilities.Add) != 0 {
+		t.Fatalf("firewall-disabled traffic-proxy security context = %+v, capabilities = %+v", security, security.Capabilities)
+	}
 	for name, want := range map[string]string{
 		"AGENTIO_REDIRECT_DNS":                    "true",
 		"AGENTIO_NATIVE_NFTABLES":                 "true",
