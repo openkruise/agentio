@@ -4,7 +4,7 @@
 
 ## Package source and pinning
 
-The default public CA package is trust-manager's Debian Bookworm bundle, pinned by tag and digest in `agentio.deps` and the root `Dockerfile`. The image build copies its `/debian-package/` directory into `/usr/local/share/agentio/trust-package/`.
+The default public CA package uses the [Mozilla root certificates published by curl](https://curl.se/docs/caextract.html). The dependency BOM and root `Dockerfile` pin the dated PEM URL and its SHA-256 checksum. The image build verifies the checksum and converts the PEM into the package JSON.
 
 `agentiod` defaults `AGENTIO_CLIENT_TRUST_PACKAGE_PATH` to `/usr/local/share/agentio/trust-package/cert-manager-package-debian.json`. The environment variable only overrides this path; the Dockerfile does not set it.
 
@@ -14,9 +14,9 @@ Official `agentiod` images include the package JSON in both debug and distroless
 
 ## Package synchronization
 
-The daily `Sync public CA package` workflow checks for newer Bookworm package revisions and opens or updates a PR containing both pins. It runs at 09:17 Asia/Shanghai and also supports a manual `dry_run`. It reuses `AGENTIO_SYNC_APP_CLIENT_ID` and `AGENTIO_SYNC_APP_PRIVATE_KEY` to open PRs that trigger existing CI.
+The daily `Sync public CA package` workflow checks for the latest dated curl snapshot, verifies the published checksum and opens or updates a PR with matching pins in both files. It runs at 09:17 Asia/Shanghai and also supports a manual `dry_run`. It reuses `AGENTIO_SYNC_APP_CLIENT_ID` and `AGENTIO_SYNC_APP_PRIVATE_KEY` to open PRs that trigger existing CI.
 
-Dependabot checks Dockerfile base images weekly on Mondays at 04:00 Asia/Shanghai. The CA package is excluded there because its Debian revisions and BOM synchronization are handled by the daily workflow.
+Dependabot checks Dockerfile base images weekly on Mondays at 04:00 Asia/Shanghai.
 
 Merging uses the existing image build pipeline; release and deployment remain separate operations.
 

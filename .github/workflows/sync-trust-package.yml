@@ -32,32 +32,37 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install crane
-        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.3
       - name: Update public CA package
         id: update
+        shell: bash
         run: |
-          repository=$(jq -er '[.[] | select(.name == "TRUST_PACKAGE_IMAGE")] | if length == 1 then .[0].repository else error("expected one TRUST_PACKAGE_IMAGE") end' agentio.deps)
-          if [[ "$repository" != quay.io/jetstack/trust-pkg-debian-bookworm ]]; then
-            echo "Update the CA tag selection when changing the Debian distribution" >&2
+          index=$(curl -fsSL https://curl.se/docs/caextract.html)
+          path=$(printf '%s\n' "$index" | grep -Eo '/ca/cacert-[0-9]{4}-[0-9]{2}-[0-9]{2}[.]pem' | LC_ALL=C sort | tail -n 1)
+          url="https://curl.se$path"
+          bundle="${RUNNER_TEMP}/${path##*/}"
+          checksum=$(curl -fsSL "$url.sha256")
+          read -r hash _ <<< "$checksum"
+          if [[ ! "$hash" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid public CA bundle checksum: $hash" >&2
             exit 1
           fi
-          tag=$(crane ls "$repository" | grep -E '^[0-9]{8}-deb12u[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-          digest=$(crane digest "${repository}:${tag}")
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Invalid public CA image digest: $digest" >&2
-            exit 1
-          fi
-          image="${repository}:${tag}@${digest}"
-          jq --arg tag "$tag" --arg digest "$digest" \
-            'map(if .name == "TRUST_PACKAGE_IMAGE" then .tag = $tag | .digest = $digest else . end)' \
+          curl -fsSL "$url" -o "$bundle"
+          printf '%s  %s\n' "$hash" "$bundle" | sha256sum -c -
+          digest="sha256:$hash"
+          jq --arg url "$url" --arg digest "$digest" \
+            'map(if .name == "PUBLIC_CA_BUNDLE" then .url = $url | .digest = $digest else . end)' \
             agentio.deps > agentio.deps.next
           mv agentio.deps.next agentio.deps
-          sed "s|^ARG TRUST_PACKAGE_IMAGE=.*$|ARG TRUST_PACKAGE_IMAGE=${image}|" Dockerfile > Dockerfile.next
+          sed "s|^ADD --checksum=sha256:.* https://curl[.]se/ca/cacert-.*[.]pem /tmp/$|ADD --checksum=$digest $url /tmp/|" Dockerfile > Dockerfile.next
           mv Dockerfile.next Dockerfile
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-      - name: Validate CA build pin
-        run: go test ./internal/ci -run TestTrustPackageImagePin -count=1
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+      - name: Validate CA build pin and package
+        env:
+          BUNDLE: ${{ steps.update.outputs.bundle }}
+        run: |
+          go test ./internal/ci -run '^TestTrustPackagePin$' -count=1
+          go run ./tools/public-ca-package "$BUNDLE" > /dev/null
       - name: Create GitHub App token
         if: inputs.dry_run != true
         id: app-token
@@ -85,6 +90,5 @@ jobs:
           body: |
             Updates the public CA package embedded in Agentiod, keeping the BOM and Dockerfile synchronized.
 
-            - Image: `${{ steps.update.outputs.image }}`
-            - Tracks Debian Bookworm package revisions, excluding signature tags.
+            - Mozilla CA snapshot: ${{ steps.update.outputs.url }}
             - Existing presubmit builds and product E2E validate the candidate before merge.

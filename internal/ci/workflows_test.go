@@ -440,12 +440,13 @@ func TestExternalDependencyUpdatesUsePublishedImages(t *testing.T) {
 		t.Fatalf("parse agentio.deps: %v", err)
 	}
 	want := map[string]bool{
-		"ZTUNNEL_REPO_SHA": false, "CNI_IMAGE": false,
-		"GATEWAY_IMAGE":       false,
-		"TRUST_PACKAGE_IMAGE": false,
+		"ZTUNNEL_REPO_SHA": false,
+		"CNI_IMAGE":        false,
+		"GATEWAY_IMAGE":    false,
+		"PUBLIC_CA_BUNDLE": false,
 	}
 	if len(pins) != len(want) {
-		t.Fatalf("agentio.deps has %d entries, want one source pin and three external image pins", len(pins))
+		t.Fatalf("agentio.deps has %d entries, want one source pin, two image pins and one CA bundle pin", len(pins))
 	}
 	for _, pin := range pins {
 		if _, found := want[pin.Name]; !found {
@@ -461,6 +462,9 @@ func TestExternalDependencyUpdatesUsePublishedImages(t *testing.T) {
 				t.Errorf("invalid ztunnel source pin: %+v", pin)
 			}
 			continue
+		}
+		if pin.Name == "PUBLIC_CA_BUNDLE" {
+			continue // Checked by TestTrustPackagePin.
 		}
 		if pin.Repository == "" || pin.Digest == "" {
 			t.Errorf("agentio.deps pin %q is incomplete", pin.Name)
