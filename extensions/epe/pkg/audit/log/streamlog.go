@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package auditlog
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 )
 
 // StreamLog adapts a Logger to the StreamLogger contract: it reduces the
-// finished stream's StreamInfo to one accesslog Entry and submits it.
+// finished stream to one access entry and separate entries for captured content.
 type StreamLog struct {
 	l Logger
 }
@@ -62,37 +62,35 @@ func (s *StreamLog) Log(_ context.Context, st *filter.Stream, info *filter.Strea
 		Authorization: info.Authorization,
 	}
 
-	// A filter that asked for the body is owed an entry until it resolves. Both
-	// committing and erroring resolve it — an error-open filter did get its body
-	// and did run, it just failed — so only a promise that nothing ever answered
-	// survives to be reported.
-	type pendingKey struct {
-		unit   filter.UnitID
-		filter string
-	}
-	pending := map[pendingKey]filter.UnitID{}
-
 	for _, u := range info.Matched {
 		for _, a := range u.FilterActions {
-			key := pendingKey{unit: u.ID, filter: a.Filter}
 			switch {
 			case committedKinds[a.Kind]:
 				entry.Actions = append(entry.Actions, unitAction(a, u.ID))
-				delete(pending, key)
-			case a.Kind == filter.ActionErrorOpen:
+			case a.Kind == filter.ActionErrorOpen || a.Kind == filter.ActionNeedBody:
 				entry.Skipped = append(entry.Skipped, unitAction(a, u.ID))
-				delete(pending, key)
-			case a.Kind == filter.ActionNeedBody:
-				pending[key] = u.ID
 			}
 		}
 	}
-	for k, id := range pending {
-		entry.Skipped = append(entry.Skipped,
-			unitAction(filter.UnitAction{Filter: k.filter, Kind: filter.ActionNeedBody}, id))
-	}
 
 	s.l.Submit(entry)
+	content := ContentEntry{
+		RequestID: st.RequestID,
+		Method:    st.Request.Method,
+		Host:      st.Request.Host,
+		Path:      st.Request.Path,
+	}
+	for _, unit := range info.Matched {
+		content.Unit = unit.ID.String()
+		if record, ok := info.Content(unit.ID); ok {
+			content.Direction, content.Record = "request", record
+			s.l.Submit(content)
+		}
+		if record, ok := info.ResponseContent(unit.ID); ok {
+			content.Direction, content.Record = "response", record
+			s.l.Submit(content)
+		}
+	}
 }
 
 // unitAction renders one recorded action as "<filter>:<kind>:<unit>". Actions

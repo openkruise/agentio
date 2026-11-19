@@ -117,7 +117,7 @@ func tokenConfig(grant string) Config {
 func runBody(t *testing.T, f *Filter, st *filter.Stream, body string) filter.Action {
 	t.Helper()
 	action, err := f.OnRequestHeaders(t.Context(), st)
-	if err != nil || action.Kind() != filter.KindNeedBody {
+	if err != nil || !action.Equal(filter.NeedBody(filter.CompleteBody)) {
 		t.Fatalf("headers: %+v, %v", action, err)
 	}
 	action, err = f.OnRequestBody(t.Context(), st, filter.Body{Bytes: []byte(body), Complete: true})

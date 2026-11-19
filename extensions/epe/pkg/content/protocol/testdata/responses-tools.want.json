@@ -1,0 +1,38 @@
+{
+  "format": "openai-responses",
+  "model": "gpt-4.1-mini",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ],
+      "index": 0
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_call",
+          "id": "call_xxx",
+          "name": "get_weather",
+          "arguments": {
+            "location": "San Francisco"
+          }
+        }
+      ],
+      "index": 1
+    }
+  ],
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 8,
+    "totalTokens": 20,
+    "cachedInputTokens": 0,
+    "reasoningTokens": 0
+  },
+  "status": "completed"
+}

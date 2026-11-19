@@ -32,22 +32,32 @@ func (e *Engine) invoke(
 	m *filterMetrics,
 	call func(context.Context) (filter.Action, error),
 ) (filter.Action, error) {
+	act, rec := invokeMeasured(ctx, m, call)
+	if st != nil {
+		st.Info.RecordFilter(rec)
+	}
+	return act, rec.Err
+}
+
+// invokeMeasured also serves incremental callbacks, whose audit records are
+// aggregated per consumer rather than retained once per chunk.
+func invokeMeasured(
+	ctx context.Context,
+	m *filterMetrics,
+	call func(context.Context) (filter.Action, error),
+) (filter.Action, filter.FilterRecord) {
 	start := time.Now()
 	act, err := call(ctx)
 	elapsed := time.Since(start)
 	oc := classifyOutcome(act, err)
 	m.observe(elapsed, oc)
-	if st != nil {
-		// Err is recorded even when a fail-open policy later swallows it.
-		st.Info.RecordFilter(filter.FilterRecord{
-			Filter:   m.filter,
-			Phase:    m.phase,
-			Outcome:  oc.String(),
-			Duration: elapsed,
-			Err:      err,
-		})
+	return act, filter.FilterRecord{
+		Filter:   m.filter,
+		Phase:    m.phase,
+		Outcome:  oc.String(),
+		Duration: elapsed,
+		Err:      err,
 	}
-	return act, err
 }
 
 // classifyOutcome maps a filter's return to its low-cardinality outcome.

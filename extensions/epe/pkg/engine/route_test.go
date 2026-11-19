@@ -27,15 +27,17 @@ import (
 
 type routeTestFilter struct {
 	filter.PassThrough
-	headers filter.Action
-	body    filter.Action
+	headers      filter.Action
+	body         filter.Action
+	bodyUpstream *filter.UpstreamTarget
 }
 
 func (f *routeTestFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	return f.headers, nil
 }
 
-func (f *routeTestFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
+func (f *routeTestFilter) OnRequestBody(_ context.Context, st *filter.Stream, _ filter.Body) (filter.Action, error) {
+	f.bodyUpstream = st.Upstream
 	return f.body, nil
 }
 
@@ -59,6 +61,23 @@ func routeMutation(address string, clear bool) filter.Mutation {
 		Upstream:   &filter.UpstreamTarget{Address: &a},
 		ClearCache: clear,
 	}}
+}
+
+func TestStreamedPathRewritePreservesUpstream(t *testing.T) {
+	probe := &routeTestFilter{headers: filter.NeedBody(filter.IncrementalBody, filter.SetPath("/new", true))}
+	e, units := routeTestEngine(t, probe)
+	target := routeMutation("192.0.2.9:443", false).Route.Upstream
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Upstream: target}}
+	result, err := e.EvalRequestHeaders(t.Context(), st, units, WithRequestStreaming())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.EvalRequestBodyChunk(t.Context(), st, result, filter.Body{Complete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.bodyUpstream != target {
+		t.Fatalf("path rewrite changed body callback upstream: got %v want %v", probe.bodyUpstream, target)
+	}
 }
 
 func TestRouteMutationHeaders(t *testing.T) {
@@ -112,7 +131,7 @@ func TestRouteMutationHeaders(t *testing.T) {
 func TestRequestCheckpointSeesEffectiveTargetAndRetainsEarlierBodyWork(t *testing.T) {
 	pin := routeMutation("203.0.113.8:443", false)
 	e, units := routeTestEngine(t, &routeTestFilter{
-		headers: filter.NeedBody(filter.SetHeader("host", "api.example.com")),
+		headers: filter.NeedBody(filter.CompleteBody, filter.SetHeader("host", "api.example.com")),
 		body:    filter.Continue(filter.SetHeader("x-body", "checked")),
 	})
 	units = append(units, Unit{
@@ -165,7 +184,7 @@ func TestRouteMutationContinuation(t *testing.T) {
 			}
 			e, units := routeTestEngine(
 				t,
-				&routeTestFilter{headers: filter.NeedBody(target), body: filter.Continue()},
+				&routeTestFilter{headers: filter.NeedBody(filter.CompleteBody, target), body: filter.Continue()},
 				&routeTestFilter{headers: next},
 			)
 			st := &filter.Stream{}
@@ -237,7 +256,7 @@ func TestRequestBodyCannotChangeDestination(t *testing.T) {
 func TestRequestStreamViewReuse(t *testing.T) {
 	for _, routed := range []bool{false, true} {
 		t.Run(strconv.FormatBool(routed), func(t *testing.T) {
-			walk := requestWalk{actionWalk: newActionWalk(&filter.Stream{})}
+			walk := phaseWalk{actionWalk: newActionWalk(&filter.Stream{})}
 			if routed {
 				walk.pending = []filter.Mutation{routeMutation("192.0.2.1:443", false)}
 			}
@@ -261,7 +280,7 @@ func TestRequestStreamViewReuse(t *testing.T) {
 func TestRequestStreamViewSnapshots(t *testing.T) {
 	st := &filter.Stream{}
 	st.Request.Host = "original.example"
-	walk := requestWalk{actionWalk: newActionWalk(st)}
+	walk := phaseWalk{actionWalk: newActionWalk(st)}
 	first, err := walk.streamView()
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +331,7 @@ func TestIncrementalRoutePreservesPrior(t *testing.T) {
 func TestRequestStreamViewPreservesGatewayTarget(t *testing.T) {
 	initial := routeMutation("192.0.2.1:8443", false).Route.Upstream
 	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Upstream: initial}}
-	walk := requestWalk{actionWalk: newActionWalk(st)}
+	walk := phaseWalk{actionWalk: newActionWalk(st), phase: filter.PhaseRequestHeaders}
 	for _, mutation := range []filter.Mutation{
 		filter.SetPath("/rewritten", true),
 		{Route: &filter.RouteMutation{ClearCache: true}},

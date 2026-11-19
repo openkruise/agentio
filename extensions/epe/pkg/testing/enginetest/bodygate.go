@@ -39,7 +39,7 @@ type bodyGate struct {
 }
 
 func (*bodyGate) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (g *bodyGate) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

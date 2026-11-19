@@ -80,7 +80,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 		return filter.Continue(), nil
 	}
 	if f.cfg.Request.Body {
-		return filter.NeedBody(), nil
+		return filter.NeedBody(filter.CompleteBody), nil
 	}
 	return f.requestCallout(ctx, st, filter.Body{})
 }
@@ -91,7 +91,7 @@ func (f *Filter) OnResponseHeaders(ctx context.Context, st *filter.Stream) (filt
 		return filter.Continue(), nil
 	}
 	if f.cfg.Response.Body {
-		return filter.NeedBody(), nil
+		return filter.NeedBody(filter.CompleteBody), nil
 	}
 	return f.responseCallout(ctx, st, filter.Body{})
 }

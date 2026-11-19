@@ -35,10 +35,13 @@ import (
 // an exported method exactly as it treats an exported field. Those accessors
 // take value receivers, so they promote through the embedded value whether the
 // render root is a *Scope or a Scope value; TestAuditScopeRendersTemplatePaths
-// pins both. All fields are populated at request-resolution time and are safe
-// for read-only template access.
+// pins both. Request inputs are fixed at resolution; outcome and content are
+// attached at stream end. All fields are read-only once handed to a sink.
 type Scope struct {
 	inputs.Scope
+	// Content holds this rule's request observation and optional "response"
+	// observation, or nil when neither ran. Nested values are read-only.
+	Content map[string]any
 	// Result is the stream's derived audit outcome, surfaced to SecurityProfile
 	// authors as the CEL `result` variable (bound in Activation below, declared
 	// in pkg/eval/cel.go). It is one of "error", "blocked", "mutated",
@@ -52,7 +55,7 @@ type Scope struct {
 }
 
 // Activation shadows the embedded inputs.Scope.Activation: the audit projection
-// additionally exposes the audit-only `result` variable. It is layered as a
+// additionally exposes audit-only `result` and `content`. It is layered as a
 // hierarchical child rather than written into the base, so the
 // base stays immutable and shared with the unit's Scope — which is what makes
 // audit see the request exactly as it was evaluated at request time.
@@ -61,7 +64,8 @@ type Scope struct {
 // inputs.Scope.buildBag, the site it constrains.
 func (s *Scope) Activation() cel.Activation {
 	top, err := cel.NewActivation(map[string]any{
-		"result": s.Result,
+		"result":  s.Result,
+		"content": s.Content,
 	})
 	if err != nil {
 		// Unreachable: NewActivation rejects only nil and non-map bindings.

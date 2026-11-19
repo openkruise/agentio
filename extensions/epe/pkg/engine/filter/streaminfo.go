@@ -62,6 +62,7 @@ type UnitRecord struct {
 }
 
 // FilterRecord is one filter invocation as the framework observed it.
+// Incremental body callbacks aggregate duration and outcome per consumer.
 type FilterRecord struct {
 	Filter   string
 	Phase    string
@@ -90,11 +91,14 @@ type AuthorizationDecision struct {
 	RuleIndex   *int   `json:"ruleIndex,omitempty"`
 }
 
-// StreamInfo accumulates observations for the stream-end loggers.
+// StreamInfo accumulates execution records and bounded content observations.
 type StreamInfo struct {
-	Matched       []UnitRecord
-	Filters       []FilterRecord
-	Authorization *AuthorizationDecision
+	// Entries are replaced, never mutated, so a sink can retain a completed record.
+	content         map[UnitID]ContentRecord
+	responseContent map[UnitID]ContentRecord
+	Matched         []UnitRecord
+	Filters         []FilterRecord
+	Authorization   *AuthorizationDecision
 	// authorizationMatches holds rule matches until the final destination is selected.
 	// It is audit data only; authorizers do not consult it when making decisions.
 	authorizationMatches map[netip.AddrPort]AuthorizationDecision
@@ -106,6 +110,63 @@ type StreamInfo struct {
 	Outcome Disposition
 	// Error records the failure that resolved the stream, when one did.
 	Error string
+}
+
+// ContentRecord describes content capture, independently of enforcement.
+// Content is an owned JSON-native value; complete or truncated observations may carry it.
+type ContentRecord struct {
+	Status        string `json:"status"`
+	BytesSeen     int64  `json:"bytesSeen"`
+	CapturedBytes int    `json:"capturedBytes"`
+	Content       any    `json:"content"`
+}
+
+// RecordContent replaces this unit's observation. The caller transfers ownership
+// of Content and must not modify it afterwards. Calls are serialized with the stream.
+func (i *StreamInfo) RecordContent(id UnitID, record ContentRecord) {
+	if i == nil {
+		return
+	}
+	if i.content == nil {
+		i.content = make(map[UnitID]ContentRecord)
+	}
+	if _, exists := i.content[id]; !exists {
+		i.unitIndex(id)
+	}
+	i.content[id] = record
+}
+
+// Content returns a read-only observation for one matched unit.
+func (i *StreamInfo) Content(id UnitID) (ContentRecord, bool) {
+	if i == nil {
+		return ContentRecord{}, false
+	}
+	r, ok := i.content[id]
+	return r, ok
+}
+
+// RecordResponseContent replaces the response observation without overwriting
+// request content. It has the same ownership contract as RecordContent.
+func (i *StreamInfo) RecordResponseContent(id UnitID, record ContentRecord) {
+	if i == nil {
+		return
+	}
+	if i.responseContent == nil {
+		i.responseContent = make(map[UnitID]ContentRecord)
+	}
+	if _, exists := i.responseContent[id]; !exists {
+		i.unitIndex(id)
+	}
+	i.responseContent[id] = record
+}
+
+// ResponseContent returns a read-only response observation for one matched unit.
+func (i *StreamInfo) ResponseContent(id UnitID) (ContentRecord, bool) {
+	if i == nil {
+		return ContentRecord{}, false
+	}
+	r, ok := i.responseContent[id]
+	return r, ok
 }
 
 // NewStreamInfo builds an empty info for one stream.
@@ -140,6 +201,8 @@ const (
 	// deferred its verdict. It only reaches the audit when the promise went
 	// unkept, because a filter that got its body records what it then decided.
 	ActionNeedBody UnitActionKind = "need-body"
+	// ActionBodyReceived marks a body request whose callback finished.
+	ActionBodyReceived UnitActionKind = "body-received"
 	// ActionErrorOpen is a filter that errored where the rule's FailOpen policy
 	// admitted the request anyway — so the rule was not enforced.
 	ActionErrorOpen UnitActionKind = "error-open"
@@ -150,17 +213,46 @@ const (
 // tests build one without), and every call site would otherwise restate that
 // guard.
 func (i *StreamInfo) RecordUnitAction(id UnitID, filterName string, kind UnitActionKind) {
-	if i == nil {
-		return
+	i.recordUnitAction(id, UnitAction{Filter: filterName, Kind: kind})
+}
+
+// BodyDemand identifies one body callback's audit entry. A request and a response
+// on the same unit can be outstanding at the same time.
+type BodyDemand struct {
+	unit   int
+	action int
+}
+
+// RecordBodyDemand marks a callback as outstanding until it completes or returns a verdict.
+func (i *StreamInfo) RecordBodyDemand(id UnitID, filterName string) BodyDemand {
+	return i.recordUnitAction(id, UnitAction{Filter: filterName, Kind: ActionNeedBody})
+}
+
+// ResolveBodyDemand settles only the callback that requested the body.
+func (i *StreamInfo) ResolveBodyDemand(demand BodyDemand) {
+	if i != nil {
+		i.Matched[demand.unit].FilterActions[demand.action].Kind = ActionBodyReceived
 	}
-	action := UnitAction{Filter: filterName, Kind: kind}
+}
+
+func (i *StreamInfo) recordUnitAction(id UnitID, action UnitAction) BodyDemand {
+	if i == nil {
+		return BodyDemand{}
+	}
+	idx := i.unitIndex(id)
+	unit := &i.Matched[idx]
+	unit.FilterActions = append(unit.FilterActions, action)
+	return BodyDemand{unit: idx, action: len(unit.FilterActions) - 1}
+}
+
+func (i *StreamInfo) unitIndex(id UnitID) int {
 	for idx := range i.Matched {
 		if i.Matched[idx].ID == id {
-			i.Matched[idx].FilterActions = append(i.Matched[idx].FilterActions, action)
-			return
+			return idx
 		}
 	}
-	i.Matched = append(i.Matched, UnitRecord{ID: id, FilterActions: []UnitAction{action}})
+	i.Matched = append(i.Matched, UnitRecord{ID: id})
+	return len(i.Matched) - 1
 }
 
 // RecordFilter appends one filter invocation record. A nil *StreamInfo is a

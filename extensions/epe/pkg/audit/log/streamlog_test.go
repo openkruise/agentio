@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package accesslog
+package auditlog
 
 import (
 	"context"
@@ -23,7 +23,11 @@ import (
 
 type captureLogger struct{ fn func(Entry) }
 
-func (c *captureLogger) Submit(e Entry) { c.fn(e) }
+func (c *captureLogger) Submit(r Record) {
+	if e, ok := r.(Entry); ok {
+		c.fn(e)
+	}
+}
 
 // logOne runs record against a fresh StreamInfo and returns the logged entry.
 func logOne(t *testing.T, record func(*filter.StreamInfo)) Entry {
@@ -135,7 +139,8 @@ func TestStreamLog_ResolvedNeedBodyIsNotAlsoReported(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := logOne(t, func(info *filter.StreamInfo) {
-				info.RecordUnitAction(testUnit, "mcpacl", filter.ActionNeedBody)
+				demand := info.RecordBodyDemand(testUnit, "mcpacl")
+				info.ResolveBodyDemand(demand)
 				info.RecordUnitAction(testUnit, "mcpacl", tc.resolve)
 			})
 
@@ -159,13 +164,29 @@ func TestStreamLog_ResolvedNeedBodyIsNotAlsoReported(t *testing.T) {
 func TestStreamLog_NeedBodyIsTrackedPerRule(t *testing.T) {
 	other := filter.UnitID{Scope: "ns/p", Name: "r2", Ordinal: 1}
 	got := logOne(t, func(info *filter.StreamInfo) {
-		info.RecordUnitAction(testUnit, "mcpacl", filter.ActionNeedBody)
-		info.RecordUnitAction(testUnit, "mcpacl", filter.ActionBlock)
-		info.RecordUnitAction(other, "mcpacl", filter.ActionNeedBody)
+		demand := info.RecordBodyDemand(testUnit, "mcpacl")
+		info.RecordBodyDemand(other, "mcpacl")
+		info.ResolveBodyDemand(demand)
 	})
 
 	want := "mcpacl:need-body:" + other.String()
 	if !slices.Equal(got.Skipped, []string{want}) {
 		t.Errorf("Skipped = %v, want [%s] — only the unanswered rule", got.Skipped, want)
+	}
+}
+
+func TestStreamLogExcludesCapturedContent(t *testing.T) {
+	entry := logOne(t, func(info *filter.StreamInfo) {
+		info.Matched = []filter.UnitRecord{{ID: testUnit}}
+		info.RecordContent(testUnit, filter.ContentRecord{Status: "complete", Content: "request-only"})
+		info.RecordResponseContent(testUnit, filter.ContentRecord{Status: "complete", Content: "response-only"})
+	})
+	logger, sink := newRecorderLogger()
+	entry.emit(logger)
+	fields := kvMap(sink.snapshot()[0].kvs)
+	for _, key := range []string{"content", "requestContent", "responseContent"} {
+		if _, present := fields[key]; present {
+			t.Fatalf("access log contains %s: %v", key, fields)
+		}
 	}
 }

@@ -206,7 +206,7 @@ type authorityRewrite struct {
 
 func (f *authorityRewrite) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	if f.buffered {
-		return filter.NeedBody(f.mutation), nil
+		return filter.NeedBody(filter.CompleteBody, f.mutation), nil
 	}
 	return filter.Continue(f.mutation), nil
 }

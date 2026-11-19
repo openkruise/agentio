@@ -157,3 +157,58 @@ spec:
 		})
 	}
 }
+
+func TestResponseBodyCalloutStopsLaterHeaderCallout(t *testing.T) {
+	var calls atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var inv httpcallout.Invocation
+		if err := json.NewDecoder(r.Body).Decode(&inv); err != nil {
+			t.Error(err)
+			return
+		}
+		if inv.Response == nil || inv.Response.Body == nil || *inv.Response.Body != "deny" {
+			t.Errorf("unexpected header-only callout or wrong body: %+v", inv.Response)
+		}
+		if _, err := fmt.Fprint(w, `{"version":"0.1","action":"respond","response":{"statusCode":403}}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(endpoint.Close)
+	providers := &extensionprovider.Registry{}
+	t.Cleanup(providers.Close)
+	if err := providers.Apply(&configv1.AgentioConfig{ExtensionProviders: []*configv1.ExtensionProvider{{
+		Name: "scanner",
+		Provider: &configv1.ExtensionProvider_HttpCallout{
+			HttpCallout: &configv1.HTTPCalloutProvider{Url: endpoint.URL},
+		},
+	}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h := New(t, Options{Providers: providers})
+	h.Fixture.ApplyYAML(`apiVersion: agents.kruise.io/v1alpha1
+kind: SecurityProfile
+metadata: {name: scanner, namespace: test-ns}
+spec:
+  selector: {}
+  rules:
+  - name: inspect-body
+    match: [{domains: ["*"]}]
+    actions:
+      httpCallout:
+        provider: {name: scanner}
+        response: {body: {enabled: true}}
+  - name: later-headers
+    match: [{domains: ["*"]}]
+    actions:
+      httpCallout:
+        provider: {name: scanner}
+        response: {}
+`)
+	v := h.Run(t, enginetest.NewRequest("GET", "api.example.com", "/").Workload("test-ns", "sandbox", nil).
+		ResponseHeaders(200).ResponseBody([]byte("deny")))
+	v.RequireBlocked(t, http.StatusForbidden)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want only the body callout", got)
+	}
+}

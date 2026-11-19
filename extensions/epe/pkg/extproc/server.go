@@ -20,13 +20,14 @@ import (
 	"io"
 	"time"
 
+	extProcV3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	log "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/audit/accesslog"
+	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/logging"
@@ -56,10 +57,10 @@ type ServerDeps struct {
 	AuthorizeRequest engine.RequestAuthorizer
 	// Registrations is the action order applied inside every rule.
 	Registrations []filter.Registration
-	// AuditLogger receives one accesslog Entry per stream. May be nil in
+	// AuditLogger receives an access entry and any content entries per stream. May be nil in
 	// tests; a no-op replaces it.
-	AuditLogger accesslog.Logger
-	// StreamLoggers are invoked once per stream, after the accesslog logger.
+	AuditLogger auditlog.Logger
+	// StreamLoggers are invoked once per stream, after the audit logger.
 	// Terminal results commit after a successful response send; teardown and
 	// error paths use fallback finalization.
 	StreamLoggers []filter.StreamLogger
@@ -76,7 +77,7 @@ type ServerDeps struct {
 
 // NewServer builds the ext-proc server from deps.
 func NewServer(deps ServerDeps) *Server {
-	loggers := []filter.StreamLogger{accesslog.NewStreamLog(deps.AuditLogger)}
+	loggers := []filter.StreamLogger{auditlog.NewStreamLog(deps.AuditLogger)}
 	loggers = append(loggers, deps.StreamLoggers...)
 	return &Server{
 		resolve:                     deps.Resolve,
@@ -147,7 +148,7 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) (retErr 
 
 		var responses []*extProcPb.ProcessingResponse
 		var err error
-		switch v := req.Request.(type) {
+		switch req.Request.(type) {
 		case *extProcPb.ProcessingRequest_RequestHeaders:
 			responses, err = s.HandleRequestHeaders(ctx, req.GetRequestHeaders(), req.Attributes, state)
 			// Keep the header phase's ID for transport errors, later phases,
@@ -158,23 +159,23 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) (retErr 
 		case *extProcPb.ProcessingRequest_RequestBody:
 			if loggerD.Enabled() {
 				loggerD.Info("incoming body chunk",
-					"bodyLen", len(v.RequestBody.Body), "EoS", v.RequestBody.EndOfStream)
+					"bodyLen", len(req.GetRequestBody().GetBody()), "EoS", req.GetRequestBody().GetEndOfStream())
 			}
 			responses, err = s.processRequestBody(ctx, req.GetRequestBody(), state, logger)
 		case *extProcPb.ProcessingRequest_RequestTrailers:
-			responses, err = s.HandleRequestTrailers(ctx, req.GetRequestTrailers())
+			responses, err = s.handleTrailers(ctx, req.GetRequestTrailers(), state, false)
 		case *extProcPb.ProcessingRequest_ResponseHeaders:
 			responses, err = s.HandleResponseHeaders(ctx, req.GetResponseHeaders(), state)
 		case *extProcPb.ProcessingRequest_ResponseBody:
 			responses, err = s.HandleResponseBody(ctx, req.GetResponseBody(), state)
 		case *extProcPb.ProcessingRequest_ResponseTrailers:
-			responses, err = s.HandleResponseTrailers(ctx, req.GetResponseTrailers())
+			responses, err = s.handleTrailers(ctx, req.GetResponseTrailers(), state, true)
 		default:
 			// The Go type names which oneof arm arrived, which is what says
 			// how processing modes are misconfigured. Its contents are not
 			// logged, for the same reason the failure path below does not.
 			logger.Error(nil, "unknown request type",
-				"messageType", fmt.Sprintf("%T", v))
+				"messageType", fmt.Sprintf("%T", req.Request))
 			return status.Error(codes.Unknown, "unknown request type")
 		}
 
@@ -246,7 +247,7 @@ func (s *Server) finishStream(ctx context.Context, state *streamState, err error
 // finishAfterSend commits a pending finalization only after Envoy accepted the
 // complete response slice for the current processing request.
 func (s *Server) finishAfterSend(ctx context.Context, state *streamState) {
-	if state == nil || state.lifecycle != lifecycleFinalizePending {
+	if state == nil || state.lifecycle != lifecycleFinalizePending || state.awaitingInput() {
 		return
 	}
 	s.finishStream(context.WithoutCancel(ctx), state, nil)
@@ -279,20 +280,23 @@ type streamState struct {
 	// RequestContext is fixed after preparation; StreamRuntime follows the message phases.
 	stream *filter.Stream
 
-	// Request phase — the headers result with registered body callbacks, consumed exactly
-	// once by the body phase. Non-nil is what "a request body is owed" means;
+	// Request phase — the headers result retained until body callbacks complete.
+	// Non-nil is what "a request body is owed" means;
 	// there is deliberately no separate flag that could drift from it.
 	requestBodyContinuation *engine.RequestHeadersResult
 	// upstreamMutation distinguishes a policy rewrite from authorization-only pinning.
 	upstreamMutation bool
+	// Restated in response mode overrides: an early upstream response must
+	// not disable an upload that is still in progress.
+	requestWireMode extProcV3.ProcessingMode_BodySendMode
 
 	// Response phase — the walk's bypass point plus the protocol obligations.
 	// responseScope is zero until a walk bypasses; a bypass can happen in the
 	// headers walk or the resumed body walk, so both handlers write it.
 	responseScope        engine.ResponseScope
 	awaitResponseHeaders bool
-	// responseBodyContinuation is the response walk paused at NeedBody. Its
-	// presence is the response-body protocol obligation.
+	// responseBodyContinuation retains callbacks registered by response headers.
+	// Its presence is the response-body protocol obligation.
 	responseBodyContinuation *engine.ResponseHeadersResult
 
 	// Lifecycle / audit — see streamLifecycle.
@@ -318,8 +322,7 @@ func (st *streamState) markRequestSeen() {
 	}
 }
 
-// awaitingRequestBody reports whether registered callbacks still await the
-// buffered request body.
+// awaitingRequestBody reports whether request-body callbacks remain incomplete.
 func (st *streamState) awaitingRequestBody() bool { return st.requestBodyContinuation != nil }
 
 func (st *streamState) awaitingResponseBody() bool { return st.responseBodyContinuation != nil }
@@ -345,7 +348,7 @@ func (st *streamState) armFinalization(d engine.Disposition) {
 	}
 }
 
-// processRequestBody dispatches the complete buffered body. BUFFERED may flush
+// processRequestBody dispatches a chunk or complete body. BUFFERED may flush
 // before trailers with EndOfStream unset, so delivery is not gated on that flag.
 func (s *Server) processRequestBody(
 	ctx context.Context,
