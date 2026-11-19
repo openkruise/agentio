@@ -73,11 +73,25 @@ def bootstrap(port, upstream):
     }
 
 
+FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "testdata"
+STREAMS = {
+    "/v1/chat/completions": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "chat-empty-content"),
+    "/v1/messages": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "anthropic-usage"),
+    "/v1/responses": ({"model": "test", "input": "hello"}, "responses-refusal"),
+}
+
+
 class Echo(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        if self.path in STREAMS:
+            request, stream = STREAMS[self.path]
+            assert body == json.dumps(request).encode()
+            body = (FIXTURES / (stream + ".sse")).read_bytes()
+            self.send_header("Content-Type", "text/event-stream")
+        else:
+            self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -114,20 +128,40 @@ def main(image):
                 response = connection.getresponse()
                 assert response.status == 200 and response.read() == body
                 connection.close()
+                for path, (request, stream) in STREAMS.items():
+                    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    request_body = json.dumps(request).encode()
+                    connection.request("POST", path, request_body, {"Content-Type": "application/json"})
+                    response = connection.getresponse()
+                    assert response.status == 200 and response.read() == (FIXTURES / (stream + ".sse")).read_bytes()
+                    connection.close()
             finally:
                 subprocess.run(["docker", "stop", name], check=False, stdout=subprocess.DEVNULL)
                 process.wait(timeout=15)
                 origin.shutdown()
             logs.seek(0)
             lines = logs.readlines()
-        assert len(lines) == 2, lines
+        assert len(lines) == 2 * (1 + len(STREAMS)), lines
         records = [json.loads(line) for line in lines]
         assert {r["direction"] for r in records} == {"request", "response"}
-        assert records[0]["requestID"] and records[0]["requestID"] == records[1]["requestID"]
+        for path in ["/echo", *STREAMS]:
+            pair = [r for r in records if r["path"] == path]
+            assert len(pair) == 2 and {r["direction"] for r in pair} == {"request", "response"}
+            assert pair[0]["requestID"] and pair[0]["requestID"] == pair[1]["requestID"]
         for line, record in zip(lines, records):
             assert len(line) <= {"request": 2048, "response": 1024}[record["direction"]]
-            assert record["status"] == "truncated" and record["bytesSeen"] == len(body)
-            assert record["content"] == {"image_url": "[omitted]", "text": "after image"}
+            if record["path"] == "/echo":
+                assert record["status"] == "truncated" and record["bytesSeen"] == len(body)
+                assert record["content"] == {"image_url": "[omitted]", "text": "after image"}
+            else:
+                request, stream = STREAMS[record["path"]]
+                assert record["status"] == "complete", record
+                if record["direction"] == "response":
+                    assert record["bytesSeen"] == (FIXTURES / (stream + ".sse")).stat().st_size
+                    assert record["content"] == json.loads((FIXTURES / (stream + ".want.json")).read_text())
+                else:
+                    assert record["bytesSeen"] == len(json.dumps(request).encode())
+                    assert "inputMessages" in record["content"]
 
 
 if __name__ == "__main__":

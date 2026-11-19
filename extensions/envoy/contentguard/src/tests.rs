@@ -12,7 +12,21 @@ fn record(
     limit: usize,
     end: bool,
 ) -> Value {
-    let mut c = Capture::new(dir, path, "test-id", media, "", limit);
+    let settings = json!({"maxLogBytes":limit});
+    configured_record(dir, path, media, chunks, &settings, end)
+}
+
+fn configured_record(
+    dir: &'static str,
+    path: &str,
+    media: &str,
+    chunks: impl Iterator<Item = impl AsRef<[u8]>>,
+    settings: &Value,
+    end: bool,
+) -> Value {
+    let config: crate::Direction = serde_json::from_value(settings.clone()).unwrap();
+    let limit = config.max_log_bytes;
+    let mut c = Capture::new(dir, path, "test-id", media, "", config);
     for chunk in chunks {
         c.push(chunk.as_ref());
     }
@@ -81,7 +95,7 @@ fn response_formats_and_incomplete_streams() {
     let text = "data: 你好\n\n".repeat(500);
     let sse = record(
         "response",
-        "/v1/messages",
+        "/events",
         "text/event-stream",
         text.as_bytes().chunks(7),
         1024,
@@ -90,7 +104,8 @@ fn response_formats_and_incomplete_streams() {
     assert_eq!(sse["direction"], "response");
     assert_eq!(sse["status"], "truncated");
     assert!(sse["content"].as_str().unwrap().starts_with("data: 你好"));
-    let doc = br#"{"choices":[{"message":{"content":"OK"}}]}"#;
+    let doc =
+        br#"{"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"OK"}}]}"#;
     let r = record(
         "response",
         "/v1/chat/completions",
@@ -100,7 +115,10 @@ fn response_formats_and_incomplete_streams() {
         true,
     );
     assert_eq!(r["status"], "complete");
-    assert_eq!(r["content"]["choices"][0]["message"]["content"], "OK");
+    assert_eq!(
+        r["content"]["outputMessages"][0]["content"][0]["text"],
+        "OK"
+    );
     let r = record(
         "request",
         "/text",
@@ -165,4 +183,192 @@ fn integer_ids_survive_audit_serialization() {
         true,
     );
     assert_eq!(r["content"]["id"].as_u64(), Some(9_007_199_254_740_993));
+}
+
+#[test]
+fn epe_protocol_fixtures() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    for (file, path) in [
+        ("anthropic-empty-tool.sse", "/messages"),
+        ("anthropic-usage.sse", "/messages"),
+        ("anthropic-citations.json", "/messages"),
+        ("responses-tools.sse", "/responses"),
+        ("responses-refusal.sse", "/responses"),
+        ("responses-truncated.json", "/responses"),
+        ("responses-parallel.json", "/responses"),
+        ("responses-media.json", "/responses"),
+        ("chat-empty-content.sse", "/completions"),
+        ("chat-truncated.json", "/completions"),
+        ("chat-annotations.sse", "/completions"),
+        ("chat-obfuscation.sse", "/completions"),
+    ] {
+        let (name, ext) = file.rsplit_once('.').unwrap();
+        let input = std::fs::read(base.join(file)).unwrap();
+        let expected: Value =
+            serde_json::from_slice(&std::fs::read(base.join(format!("{name}.want.json"))).unwrap())
+                .unwrap();
+        let direction = if matches!(name, "responses-parallel" | "responses-media") {
+            "request"
+        } else {
+            "response"
+        };
+        let media = if ext == "sse" {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        for chunk in [1, 7, 64, input.len()] {
+            let got = record(direction, path, media, input.chunks(chunk), 16 << 10, true);
+            assert_eq!(
+                got["content"], expected,
+                "{file}, chunk {chunk}, status {}",
+                got["status"]
+            );
+            assert_eq!(
+                got["status"],
+                if expected["partial"] == true {
+                    "partial"
+                } else {
+                    "complete"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_format_and_field_selection() {
+    let chat = json!({"format":"openai-chat-completions","maxLogBytes":2048,"maxCaptureBytes":512,"fields":{"tools":true}});
+    let input = br#"{"model":"m","messages":[{}],"tools":[]}"#;
+    let r = configured_record(
+        "request",
+        "/custom",
+        "application/vnd.agent+json",
+        input.chunks(1),
+        &chat,
+        true,
+    );
+    assert_eq!(
+        r["content"],
+        json!({"format":"openai-chat-completions","model":"m","tools":[]})
+    );
+    let mut config = chat.clone();
+    config["fields"] = json!({"outputMessages":true});
+    for index in ["0.0", "0e0", "0.5", "-1"] {
+        let body = format!(
+            r#"{{"model":"m","choices":[{{"index":{index},"message":{{"role":"assistant"}}}}]}}"#
+        );
+        let r = configured_record(
+            "response",
+            "/custom",
+            "application/json",
+            body.as_bytes().chunks(7),
+            &config,
+            true,
+        );
+        if matches!(index, "0.0" | "0e0") {
+            assert_eq!(r["content"]["outputMessages"][0]["index"], 0);
+        } else {
+            assert_eq!(r["status"], "invalid_content");
+        }
+    }
+    assert_eq!(
+        configured_record(
+            "request",
+            "/custom",
+            "text/event-stream",
+            input.chunks(1),
+            &chat,
+            true
+        )["status"],
+        "unsupported_media_type"
+    );
+    config["maxCaptureBytes"] = json!(8);
+    assert_eq!(
+        configured_record(
+            "request",
+            "/custom",
+            "application/json",
+            input.chunks(3),
+            &config,
+            true
+        )["status"],
+        "too_large"
+    );
+}
+
+#[test]
+fn sse_limits_keep_late_usage_and_distinguish_incomplete_events() {
+    let input = include_str!("../testdata/anthropic-usage.sse");
+    let expected: Value =
+        serde_json::from_str(include_str!("../testdata/anthropic-usage.want.json")).unwrap();
+    let mut config = json!({"format":"anthropic-messages","maxLogBytes":2048,"maxCaptureBytes":4096,"maxContentBytes":2});
+    let run = |body: &str, settings: &Value| {
+        configured_record(
+            "response",
+            "/custom",
+            "text/event-stream",
+            body.as_bytes().chunks(1),
+            settings,
+            true,
+        )
+    };
+    let r = run(input, &config);
+    assert_eq!(r["status"], "truncated");
+    assert_eq!(r["content"]["usage"], expected["usage"]);
+    assert!(r["content"].get("outputMessages").is_none());
+    config["fields"] = json!({});
+    let r = run(input, &config);
+    assert_eq!(r["status"], "complete");
+    assert_eq!(r["content"]["usage"], expected["usage"]);
+    assert!(r["content"].get("outputMessages").is_none());
+    assert_eq!(
+        run(input.trim_end(), &config)["status"],
+        "incomplete_stream"
+    );
+    let crlf = format!("\u{feff}: comment\r\n\r\n{}", input.replace('\n', "\r\n"));
+    assert_eq!(run(&crlf, &config)["content"], r["content"]);
+    config["maxCaptureBytes"] = json!(16);
+    assert_eq!(run(input, &config)["status"], "too_large");
+}
+
+#[test]
+fn partial_stream_still_checks_later_events() {
+    let partial = include_str!("../testdata/chat-annotations.sse");
+    let malformed = partial.replace("data: [DONE]", "data: {broken}");
+    let r = record(
+        "response",
+        "/completions",
+        "text/event-stream",
+        malformed.as_bytes().chunks(7),
+        4096,
+        true,
+    );
+    assert_eq!(r["status"], "invalid_json");
+    assert!(r["content"].is_null());
+}
+
+#[test]
+fn documents_and_streams_produce_the_same_response() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    for (provider, path) in [
+        ("openai", "/completions"),
+        ("responses", "/responses"),
+        ("anthropic", "/messages"),
+    ] {
+        let expected: Value =
+            serde_json::from_slice(&std::fs::read(base.join(format!("{provider}.json"))).unwrap())
+                .unwrap();
+        for (suffix, media) in [
+            ("response.json", "application/json"),
+            ("sse", "text/event-stream"),
+        ] {
+            let input = std::fs::read(base.join(format!("{provider}.{suffix}"))).unwrap();
+            for chunk in [1, 17, input.len()] {
+                let r = record("response", path, media, input.chunks(chunk), 8192, true);
+                assert_eq!(r["status"], "complete");
+                assert_eq!(r["content"], expected, "{provider}.{suffix}, chunk {chunk}");
+            }
+        }
+    }
 }

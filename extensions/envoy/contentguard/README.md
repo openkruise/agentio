@@ -19,6 +19,18 @@ typed_config:
     value: '{"request":{"maxLogBytes":16384},"response":{"maxLogBytes":8192}}'
 ```
 
+Each direction accepts the following settings.
+
+| Setting | Behavior |
+| --- | --- |
+| `format` | Defaults to `auto`. Set `json`, `text`, `openai-chat-completions`, `openai-responses`, or `anthropic-messages` to select a parser regardless of the URL. Explicit formats check the media type. LLM protocols accept JSON in both directions and SSE on responses. |
+| `fields` | Omit to capture all LLM fields. Within an explicit object, only fields set to true are selected. The flags are `inputMessages`, `outputMessages` and `tools`. Use `{}` for protocol metadata and usage only. Generic JSON, text and multipart keep their own representation. |
+| `maxCaptureBytes` | When set, bounds a complete JSON/text document or a single SSE event including its framing. Exceeding it produces `too_large` and forwarding continues. When omitted, documents use streaming clipping and SSE events have a 64 KiB limit. Multipart uses the log budget. |
+| `maxContentBytes` | Bounds retained LLM messages and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the parser drops those fields and continues collecting metadata and usage. |
+| `maxLogBytes` | Required. Bounds the final JSON line independently of the decoder and content limits. |
+
+Both optional byte limits accept 1 through 67,108,864 bytes. For example, `{"response":{"format":"openai-responses","maxCaptureBytes":65536,"maxContentBytes":4096,"maxLogBytes":8192,"fields":{}}}` records Responses metadata and usage on a custom URL.
+
 Add the corresponding entries to the HTTP connection manager's `access_log` list. This example uses Envoy's stdout logger. For request-only auditing, configure just the first entry. A file logger can use the same text format. The formatter writes the serialized record directly; the newline is included in the direction's budget.
 
 ```yaml
@@ -43,12 +55,15 @@ Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared li
 
 | Input | Logged content |
 | --- | --- |
-| JSON requests to paths ending in `/completions`, `/responses` or `/messages` | OpenAI Chat Completions, OpenAI Responses or Anthropic messages and tools, respectively. Unknown provider blocks remain structured. |
-| Other JSON requests and JSON responses | Provider JSON, including arrays and objects. |
-| UTF-8 text, including SSE responses | A bounded text prefix. SSE retains event framing in that prefix. |
+| LLM JSON requests | In auto mode, paths ending in `/completions`, `/responses` and `/messages` select Chat Completions, Responses and Anthropic Messages. Captures normalized messages, tool definitions, calls and results. Provider-specific blocks remain structured. |
+| LLM JSON and SSE responses | Uses the same protocol as the path or explicit response configuration. Reconstructs output messages, calls, arguments, finish reasons and reported usage. Responses also carries provider status, error and incomplete reason when available. |
+| Generic JSON | Provider JSON, including arrays and objects. |
+| UTF-8 text | Explicit `text` accepts `text/plain`. Auto mode also keeps a bounded text prefix for other text media, including SSE on unrecognized paths. |
 | Multipart form data | Ordered form fields with names and byte counts. File entries include the filename, optional content type and base64 if it fits. Oversized files carry `omitted: true`. |
 
-Once a JSON document exceeds the capture budget, the scanner bounds each string across body slices. It replaces oversized inline media with `[omitted]` and continues scanning for later text. If the JSON structure itself fills the budget, the record switches to a bounded `retainedText` projection. Long text may be shortened. The final encoder checks the serialized size after normalization and escaping. If the projected structure still cannot fit, it emits a `truncated` record with null content. A truncated record describes the retained projection and cannot establish validity or reproduce discarded bytes.
+When no hard document limit is set and a JSON document exceeds the available log space, the scanner bounds each string across body slices. It replaces oversized inline media with `[omitted]` and continues scanning for later text. If the JSON structure itself fills the budget, the record switches to a bounded `retainedText` projection. Long text may be shortened. The final encoder checks the serialized size after normalization and escaping. If the projected structure still cannot fit, it emits a `truncated` record with null content. A truncated record describes the retained projection and cannot establish validity or reproduce discarded bytes.
+
+SSE framing accepts multiline data, comments, a leading UTF-8 BOM, and LF, CRLF or CR separators across body callbacks. HTTP EOF ends observation. A missing protocol terminator produces `incomplete_stream`. An unsupported delta produces a `partial` record with available metadata. Exceeding the retention budget produces `truncated`. Both cases continue parsing subsequent events for usage and errors. Invalid JSON, invalid UTF-8 framing and invalid protocol transitions have distinct error statuses. Each direction processes up to 64 MiB of SSE input and tracks up to 1,024 choices, blocks or items.
 
 Multipart capture scans delimiters across slice boundaries. It limits part headers to 8 KiB, skips the bytes of an oversized file, then resumes capture at the next field. Unsupported encodings, unsupported media types and parse failures have distinct statuses. These statuses apply to audit output only.
 

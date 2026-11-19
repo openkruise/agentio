@@ -1,13 +1,16 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{json_capture::JsonCapture, multipart::Multipart, protocol};
+use crate::{
+    Direction, Fields, Format, json_capture::JsonCapture, multipart::Multipart, protocol, sse,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 enum Body {
     Json(JsonCapture, &'static str),
     Multipart(Multipart),
+    Stream(Box<sse::Stream>),
     Text(Vec<u8>),
     Unavailable(&'static str),
 }
@@ -17,6 +20,7 @@ pub struct Capture {
     record: Record,
     content_budget: usize,
     line_limit: usize,
+    settings: Direction,
 }
 
 #[derive(Serialize)]
@@ -53,8 +57,9 @@ impl Capture {
         id: &str,
         media: &str,
         encoding: &str,
-        limit: usize,
+        settings: Direction,
     ) -> Self {
+        let limit = settings.max_log_bytes;
         let path = path.split('?').next().unwrap_or(path);
         let mut record = Record {
             kind: "content",
@@ -71,28 +76,52 @@ impl Capture {
             record.path.clear();
         }
         let room = limit.saturating_sub(serde_json::to_vec(&record).unwrap().len() + 64);
+        let codec = match settings.format {
+            Format::Auto => format(path),
+            Format::Text => "text",
+            Format::Json => "json",
+            Format::OpenaiChatCompletions => protocol::CHAT,
+            Format::OpenaiResponses => protocol::RESPONSES,
+            Format::AnthropicMessages => protocol::ANTHROPIC,
+        };
+        let auto = settings.format == Format::Auto;
+        let llm = !matches!(codec, "json" | "text");
+        let encoding = encoding.trim();
         let body = if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
             Body::Unavailable("unsupported_encoding")
         } else if let Ok(m) = media.parse::<mime::Mime>() {
-            if m == mime::APPLICATION_JSON
-                || m.essence_str() == "application/json"
-                || m.suffix() == Some(mime::JSON)
+            let essence = m.essence_str();
+            let stream = direction == "response" && llm && essence == "text/event-stream";
+            if codec != "text"
+                && m.type_() == mime::APPLICATION
+                && (essence == "application/json" || m.suffix() == Some(mime::JSON))
             {
-                let codec = if direction == "request" {
-                    format(path)
-                } else {
-                    "json"
-                };
-                Body::Json(JsonCapture::new(room), codec)
-            } else if m.essence_str() == "multipart/form-data" {
+                Body::Json(
+                    JsonCapture::new(settings.max_capture_bytes.unwrap_or(room)),
+                    codec,
+                )
+            } else if auto && essence == "multipart/form-data" {
                 m.get_param("boundary")
                     .and_then(|b| Multipart::new(b.as_str(), room))
                     .map_or(Body::Unavailable("invalid_multipart"), Body::Multipart)
-            } else if m.type_() == mime::TEXT {
-                if m.get_param("charset")
-                    .is_some_and(|v| !v.as_str().eq_ignore_ascii_case("utf-8"))
-                {
+            } else if stream
+                || (auto && m.type_() == mime::TEXT && !(llm && essence == "text/event-stream"))
+                || (codec == "text" && essence == "text/plain")
+            {
+                if m.get_param("charset").is_some_and(|v| {
+                    !v.as_str().is_empty() && !v.as_str().eq_ignore_ascii_case("utf-8")
+                }) {
                     Body::Unavailable("unsupported_encoding")
+                } else if stream {
+                    Body::Stream(Box::new(sse::Stream::new(
+                        codec,
+                        settings.max_capture_bytes.unwrap_or(64 << 10),
+                        settings
+                            .max_content_bytes
+                            .or(settings.max_capture_bytes)
+                            .unwrap_or(room),
+                        settings.fields.unwrap_or(Fields::ALL).output_messages,
+                    )))
                 } else {
                     Body::Text(vec![])
                 }
@@ -107,16 +136,33 @@ impl Capture {
             body,
             content_budget: room,
             line_limit: limit,
+            settings,
         }
     }
 
     pub fn push(&mut self, chunk: &[u8]) {
         self.record.bytes_seen += chunk.len();
+        if matches!(self.body, Body::Json(..) | Body::Text(_))
+            && self
+                .settings
+                .max_capture_bytes
+                .is_some_and(|limit| self.record.bytes_seen > limit)
+        {
+            self.body = Body::Unavailable("too_large");
+        }
         match &mut self.body {
+            Body::Stream(stream) => {
+                if let Err(code) = stream.push(chunk) {
+                    self.body = Body::Unavailable(code);
+                }
+            }
             Body::Text(buf) => {
-                let n = chunk
-                    .len()
-                    .min(self.content_budget.saturating_sub(buf.len()));
+                let n = chunk.len().min(
+                    self.settings
+                        .max_capture_bytes
+                        .unwrap_or(self.content_budget)
+                        .saturating_sub(buf.len()),
+                );
                 buf.extend_from_slice(&chunk[..n]);
             }
             Body::Json(c, _) => c.push(chunk),
@@ -135,11 +181,22 @@ impl Capture {
     }
 
     pub fn encode(mut self, complete: bool) -> (&'static [u8], Vec<u8>) {
+        let stream = matches!(&self.body, Body::Stream(_));
+        let llm = stream || matches!(&self.body,Body::Json(_,format) if *format!="json");
         let result = match self.body {
             _ if !complete => Err("incomplete"),
-            _ if self.record.bytes_seen == 0 => Ok((false, Value::Null)),
+            Body::Unavailable("unsupported_media_type")
+                if self.record.bytes_seen == 0 && self.settings.format == Format::Auto =>
+            {
+                Ok((false, Value::Null))
+            }
             Body::Unavailable(e) => Err(e),
-            Body::Json(c, f) => c.finish(f),
+            Body::Json(c, f) => c.finish(
+                f,
+                self.record.direction == "response",
+                self.settings.fields.unwrap_or(Fields::ALL),
+            ),
+            Body::Stream(stream) => stream.finish(),
             Body::Multipart(c) => c.finish(),
             Body::Text(buf) => {
                 let clipped = self.record.bytes_seen > buf.len();
@@ -154,7 +211,21 @@ impl Capture {
             }
         };
         match result {
-            Ok((clipped, v)) => {
+            Ok((mut clipped, mut v)) => {
+                if llm {
+                    if let Some(limit) = self
+                        .settings
+                        .max_content_bytes
+                        .or(self.settings.max_capture_bytes)
+                        .or_else(|| stream.then_some(self.content_budget))
+                        && bound_content(&mut v, limit)
+                    {
+                        clipped = true;
+                    }
+                    if v["partial"] == true {
+                        self.record.status = "partial";
+                    }
+                }
                 self.record.content = v;
                 if clipped {
                     self.record.status = "truncated";
@@ -183,6 +254,25 @@ impl Capture {
         };
         (key, line)
     }
+}
+
+// The normalized messages and tool definitions share one retention budget.
+fn bound_content(view: &mut Value, limit: usize) -> bool {
+    let keys = ["inputMessages", "outputMessages", "tools", "retainedText"];
+    let bytes: usize = keys
+        .iter()
+        .filter_map(|k| view.get(k))
+        .map(protocol::encoded_len)
+        .sum();
+    if bytes <= limit {
+        return false;
+    }
+    let map = view.as_object_mut().expect("LLM view is an object");
+    for k in keys {
+        map.remove(k);
+    }
+    view["truncated"] = true.into();
+    true
 }
 
 fn shrink(v: &mut Value, cap: usize) {

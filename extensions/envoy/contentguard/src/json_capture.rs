@@ -184,14 +184,28 @@ impl Scanner {
         }
     }
 
-    pub fn finish(self, format: &str) -> Result<serde_json::Value, &'static str> {
+    pub fn finish(
+        self,
+        format: &str,
+        response: bool,
+        fields: crate::Fields,
+    ) -> Result<serde_json::Value, &'static str> {
         if self.quoted {
             return Err("invalid_json");
         }
         if self.exhausted {
-            return Ok(serde_json::json!({"format":format, "retainedText":self.text}));
+            let mut view = serde_json::json!({"format":format});
+            // The fallback text projection has no field paths. Only expose it
+            // when all potential source fields were selected.
+            if format == "json"
+                || (response && fields.output_messages)
+                || (!response && fields.input_messages && fields.tools)
+            {
+                view["retainedText"] = self.text.into();
+            }
+            return Ok(view);
         }
-        super::protocol::parse(format, &self.doc)
+        super::protocol::parse(format, &self.doc, response, fields)
     }
 }
 
@@ -225,12 +239,17 @@ impl JsonCapture {
         s.push(chunk);
         self.scanner = Some(s);
     }
-    pub fn finish(self, format: &str) -> Result<(bool, serde_json::Value), &'static str> {
+    pub fn finish(
+        self,
+        format: &str,
+        response: bool,
+        fields: crate::Fields,
+    ) -> Result<(bool, serde_json::Value), &'static str> {
         if let Some(s) = self.scanner {
             let clipped = s.clipped;
-            s.finish(format).map(|v| (clipped, v))
+            s.finish(format, response, fields).map(|v| (clipped, v))
         } else {
-            super::protocol::parse(format, &self.prefix).map(|v| (false, v))
+            super::protocol::parse(format, &self.prefix, response, fields).map(|v| (false, v))
         }
     }
 }

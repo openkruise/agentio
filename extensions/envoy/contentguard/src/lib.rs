@@ -5,6 +5,8 @@ mod capture;
 mod json_capture;
 mod multipart;
 mod protocol;
+mod response;
+mod sse;
 
 use capture::Capture;
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -33,6 +35,39 @@ struct Settings {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Direction {
     max_log_bytes: usize,
+    #[serde(default)]
+    format: Format,
+    max_capture_bytes: Option<usize>,
+    max_content_bytes: Option<usize>,
+    fields: Option<Fields>,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum Format {
+    #[default]
+    Auto,
+    Text,
+    Json,
+    OpenaiChatCompletions,
+    OpenaiResponses,
+    AnthropicMessages,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+struct Fields {
+    input_messages: bool,
+    output_messages: bool,
+    tools: bool,
+}
+
+impl Fields {
+    const ALL: Self = Self {
+        input_messages: true,
+        output_messages: true,
+        tools: true,
+    };
 }
 
 #[derive(Clone)]
@@ -112,7 +147,7 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
                 &id,
                 &header(envoy, true, "content-type"),
                 &header(envoy, true, "content-encoding"),
-                d.max_log_bytes,
+                d,
             )));
             if end {
                 self.finish(&self.request, envoy, true);
@@ -141,7 +176,7 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
                 &identity.1,
                 &header(envoy, false, "content-type"),
                 &header(envoy, false, "content-encoding"),
-                d.max_log_bytes,
+                d,
             )));
             if end {
                 self.finish(&self.response, envoy, true);
@@ -193,9 +228,17 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
     if [settings.request, settings.response]
         .iter()
         .flatten()
-        .any(|d| !(1024..=1048576).contains(&d.max_log_bytes))
+        .any(|d| {
+            !(1024..=1048576).contains(&d.max_log_bytes)
+                || [d.max_capture_bytes, d.max_content_bytes]
+                    .into_iter()
+                    .flatten()
+                    .any(|n| !(1..=64 << 20).contains(&n))
+        })
     {
-        envoy_log_error!("contentguard maxLogBytes must be between 1024 and 1048576");
+        envoy_log_error!(
+            "contentguard requires maxLogBytes in 1024..1048576 and capture/content limits in 1..67108864"
+        );
         return None;
     }
     let publish_errors = envoy

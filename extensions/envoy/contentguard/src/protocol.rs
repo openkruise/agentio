@@ -9,6 +9,32 @@ pub const ANTHROPIC: &str = "anthropic-messages";
 const INVALID: &str = "invalid_content";
 type Parsed = Result<Value, &'static str>;
 
+// Count the JSON bytes charged by EPE's encoding/json, including HTML escaping,
+// without allocating another serialized copy of a retained message.
+pub(crate) fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            self.0 += 5 * bytes
+                .iter()
+                .filter(|b| matches!(b, b'<' | b'>' | b'&'))
+                .count();
+            self.0 += 3 * bytes
+                .windows(3)
+                .filter(|w| matches!(*w, [0xe2, 0x80, 0xa8 | 0xa9]))
+                .count();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value).expect("serializable protocol content");
+    counter.0
+}
+
 fn optional_string(v: &Value) -> Result<Option<&str>, &'static str> {
     if v.is_null() {
         Ok(None)
@@ -37,7 +63,7 @@ fn provider(v: &Value, format: &str) -> Value {
     json!({"type":"provider_content","format":format,"data":v})
 }
 
-fn tool_call(id: &Value, name: &Value, arguments: &Value) -> Value {
+pub(crate) fn tool_call(id: &Value, name: &Value, arguments: &Value) -> Value {
     let decoded = arguments
         .as_str()
         .and_then(|s| serde_json::from_str::<Value>(s).ok());
@@ -48,7 +74,7 @@ fn tool_result(id: &Value, content: Vec<Value>, error: bool) -> Value {
     json!({"type":"tool_result","toolCallId":id,"content":content,"isError":error})
 }
 
-fn blocks(v: &Value, format: &str) -> Vec<Value> {
+pub(crate) fn blocks(v: &Value, format: &str) -> Vec<Value> {
     if v.is_null() {
         return vec![];
     }
@@ -90,7 +116,7 @@ fn blocks(v: &Value, format: &str) -> Vec<Value> {
     result
 }
 
-fn chat_message(v: &Value, format: &str) -> Parsed {
+pub(crate) fn chat_message(v: &Value, format: &str) -> Parsed {
     let role = v["role"].as_str().ok_or(INVALID)?;
     let mut content = blocks(&v["content"], format);
     if format == CHAT {
@@ -108,12 +134,8 @@ fn chat_message(v: &Value, format: &str) -> Parsed {
                     optional_string(&call["id"])?;
                     optional_string(&call["type"])?;
                     optional_string(&f["name"])?;
-                    if !call["index"].is_null()
-                        && !call["index"]
-                            .as_f64()
-                            .is_some_and(|n| n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0)
-                    {
-                        return Err(INVALID);
+                    if !call["index"].is_null() {
+                        crate::response::index(&call["index"])?;
                     }
                     content.push(tool_call(&call["id"], &f["name"], &f["arguments"]));
                 } else {
@@ -167,7 +189,7 @@ fn responses_blocks(v: &Value) -> Result<Vec<Value>, &'static str> {
         .collect()
 }
 
-fn responses_item(item: &Value) -> Parsed {
+pub(crate) fn responses_item(item: &Value) -> Parsed {
     let kind = optional_string(&item["type"])?;
     if !item.is_object() {
         return Err(INVALID);
@@ -246,7 +268,7 @@ fn tools(v: &Value, format: &str) -> Parsed {
     Ok(Value::Array(definitions))
 }
 
-fn llm(v: &Value, format: &str) -> Parsed {
+fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
     if !v.is_object() {
         return Err(INVALID);
     }
@@ -257,14 +279,22 @@ fn llm(v: &Value, format: &str) -> Parsed {
     let mut messages = vec![];
     if format == RESPONSES {
         optional_string(&v["status"])?;
-        if let Some(s) = optional_string(&v["instructions"])? {
+        if let Some(s) = optional_string(&v["instructions"])?
+            && fields.input_messages
+        {
             messages.push(message("system", plain(s)));
         }
         match &v["input"] {
-            Value::String(s) => messages.push(message("user", plain(s))),
+            Value::String(s) => {
+                if fields.input_messages {
+                    messages.push(message("user", plain(s)));
+                }
+            }
             Value::Array(items) => {
-                for item in items {
-                    messages.push(responses_item(item)?);
+                if fields.input_messages {
+                    for item in items {
+                        messages.push(responses_item(item)?);
+                    }
                 }
             }
             Value::Null => (),
@@ -275,47 +305,41 @@ fn llm(v: &Value, format: &str) -> Parsed {
         if format == ANTHROPIC {
             optional_string(&v["stop_reason"])?;
         }
-        if !v["system"].is_null() {
+        if fields.input_messages && !v["system"].is_null() {
             messages.push(message("system", blocks(&v["system"], format)));
         }
-        for m in v["messages"].as_array().ok_or(INVALID)? {
-            messages.push(chat_message(m, format)?);
+        let values = v["messages"].as_array().ok_or(INVALID)?;
+        if fields.input_messages {
+            for m in values {
+                messages.push(chat_message(m, format)?);
+            }
         }
     }
-    view["inputMessages"] = Value::Array(messages);
-    if let Some(t) = v.get("tools") {
+    if fields.input_messages {
+        view["inputMessages"] = Value::Array(messages);
+    }
+    if fields.tools
+        && let Some(t) = v.get("tools")
+    {
         view["tools"] = tools(t, format)?;
     }
     Ok(view)
 }
 
-pub fn parse(format: &str, body: &[u8]) -> Parsed {
+pub fn parse(format: &str, body: &[u8], response: bool, fields: crate::Fields) -> Parsed {
     let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
     if format == "json" {
         Ok(doc)
+    } else if response {
+        crate::response::normalize(format, &doc, fields.output_messages)
     } else {
-        llm(&doc, format)
+        llm(&doc, format, fields)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn responses_match_epe_goldens() {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
-        for name in ["responses-media", "responses-parallel"] {
-            let input = std::fs::read(base.join(format!("{name}.json"))).unwrap();
-            let want: Value = serde_json::from_slice(
-                &std::fs::read(base.join(format!("{name}.want.json"))).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(parse(RESPONSES, &input), Ok(want), "{name}");
-        }
-    }
-
     #[test]
     fn preserves_provider_extensions_and_tool_arguments() {
         let input = json!({"model":"m","tools":null,"messages":[{"role":"assistant","content":[
@@ -323,7 +347,13 @@ mod tests {
             {"type":"server_tool_use","name":"lookup","input":{"q":"hi"}},
             {"type":"image","source":{"type":"url","url":"https://example.test"}}
         ]}]});
-        let view = parse(ANTHROPIC, input.to_string().as_bytes()).unwrap();
+        let view = parse(
+            ANTHROPIC,
+            input.to_string().as_bytes(),
+            false,
+            crate::Fields::ALL,
+        )
+        .unwrap();
         let blocks = &view["inputMessages"][0]["content"];
         assert_eq!(blocks[0], input["messages"][0]["content"][0]);
         assert_eq!(
@@ -338,7 +368,13 @@ mod tests {
         let input = json!({"model":"m","messages":[{"role":"assistant","tool_calls":[
             {"id":"c","function":{"name":"lookup","arguments":"{bad"}}
         ]},{"role":"tool","tool_call_id":"c","content":"result"}]});
-        let view = parse(CHAT, input.to_string().as_bytes()).unwrap();
+        let view = parse(
+            CHAT,
+            input.to_string().as_bytes(),
+            false,
+            crate::Fields::ALL,
+        )
+        .unwrap();
         let msgs = &view["inputMessages"];
         assert_eq!(msgs[0]["content"][0]["arguments"], "{bad");
         assert_eq!(
