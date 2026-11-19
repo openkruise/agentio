@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -644,6 +645,16 @@ func TestPreparedSandboxControllerBundleCreatesConsumableTrafficProxyConfig(t *t
 		t.Fatalf("first init container = %s (%s), want agentio-init (docker.io/openkruise/proxy-init:latest)", got.Name, got.Image)
 	}
 	proxy := config.InitContainers[1]
+	if got := envValue(proxy.Env, "ENABLE_FIREWALL_RULES"); got != "true" {
+		t.Fatalf("ENABLE_FIREWALL_RULES = %q, want true", got)
+	}
+	security := proxy.SecurityContext
+	if ptr.Deref(security.RunAsUser, -1) != 0 || ptr.Deref(security.RunAsGroup, -1) != 1337 ||
+		ptr.Deref(security.RunAsNonRoot, true) || ptr.Deref(security.Privileged, true) ||
+		!slices.Equal(security.Capabilities.Add, []corev1.Capability{"NET_ADMIN"}) ||
+		!slices.Equal(security.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+		t.Fatalf("firewall-enabled traffic-proxy security context = %+v, capabilities = %+v", security, security.Capabilities)
+	}
 	if slices.Contains(proxy.VolumeMounts, corev1.VolumeMount{
 		Name:      "agentio-sandbox-state",
 		MountPath: "/var/lib/ztunnel/sandbox",

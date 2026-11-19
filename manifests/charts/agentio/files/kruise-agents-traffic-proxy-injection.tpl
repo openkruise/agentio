@@ -210,6 +210,11 @@
       "securityContext": {
         "allowPrivilegeEscalation": false,
         "capabilities": {
+          {{- if .Values.agentio.trafficProxy.enableFirewallRules }}
+          "add": [
+            "NET_ADMIN"
+          ],
+          {{- end }}
           "drop": [
             "ALL"
           ]
@@ -217,8 +222,8 @@
         "privileged": false,
         "readOnlyRootFilesystem": true,
         "runAsGroup": 1337,
-        "runAsNonRoot": true,
-        "runAsUser": 1337
+        "runAsNonRoot": {{ not .Values.agentio.trafficProxy.enableFirewallRules }},
+        "runAsUser": {{ if .Values.agentio.trafficProxy.enableFirewallRules }}0{{ else }}1337{{ end }}
       },
       "volumeMounts": [
         {
