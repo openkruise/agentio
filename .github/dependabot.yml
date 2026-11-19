@@ -27,9 +27,6 @@ updates:
       docker-images:
         patterns:
           - "*"
-    ignore:
-      # Debian CA package revisions need their own comparator and BOM synchronization.
-      - dependency-name: quay.io/jetstack/trust-pkg-debian-bookworm
 
   - package-ecosystem: gomod
     directory: /

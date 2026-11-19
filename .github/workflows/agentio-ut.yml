@@ -62,7 +62,10 @@ jobs:
               (.lastStableSHA | test("^[0-9a-f]{40}$"))) and
             image_pin("CNI_IMAGE") and
             image_pin("GATEWAY_IMAGE") and
-            image_pin("TRUST_PACKAGE_IMAGE")
+            ([.[] | select(.name == "PUBLIC_CA_BUNDLE")] | length) == 1 and
+            (.[] | select(.name == "PUBLIC_CA_BUNDLE") |
+              (.url | test("^https://curl[.]se/ca/cacert-[0-9]{4}-[0-9]{2}-[0-9]{2}[.]pem$")) and
+              (.digest | test("^sha256:[0-9a-f]{64}$")))
           ' agentio.deps >/dev/null
       - name: Install Porter build tools
         run: |

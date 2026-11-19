@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-// Package is the public JSON contract of upstream trust-manager CA package images.
+// Package is the public CA package JSON format shared with trust-manager.
 type Package struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
