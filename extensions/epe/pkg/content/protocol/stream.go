@@ -22,5 +22,4 @@ type streamAccumulator interface {
 	add(decoder.Event) capturestatus.Code
 	finish() (*LLMView, capturestatus.Code)
 	discardContent()
-	metadata() *LLMView
 }

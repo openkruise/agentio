@@ -23,10 +23,12 @@
 //
 // Config declares response-header subscriptions before evaluation so the adapter
 // can open that phase on its request-header reply. Body demand remains dynamic.
-// Both directions finish headers in order, registering NeedBody callbacks for
-// the body phase. Request authorization pins the final target before body runs.
-// Header Bypass preserves registered body callbacks; Stop discards them.
-// Body Stop/Bypass skips later body callbacks, not headers that already ran.
+// Request headers register NeedBody callbacks and finish authorization before
+// body evaluation. Response headers can register incremental consumers until a
+// filter requires the complete body. That filter pauses the response walk.
+// Once the body arrives, previously registered consumers run in order; the
+// remaining response rules then run their headers and bodies in policy order.
+// A terminal verdict suppresses later rule callbacks.
 //
 // Complete request-body callbacks run in registration order against the original
 // request and body, with the authorized upstream target available in their view.

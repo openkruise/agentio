@@ -203,7 +203,7 @@ func TestStreamedResponse(t *testing.T) {
 				}
 				if tc.mutated {
 					if _, ok := mutation.GetMutation().(*extProcPb.BodyMutation_Body); !ok ||
-					!bytes.Equal(mutation.GetBody(), tc.output) || classifyResponse(r, false) != effectMutated {
+						!bytes.Equal(mutation.GetBody(), tc.output) || classifyResponse(r, false) != effectMutated {
 						t.Fatalf("replacement lost: %v", r)
 					}
 				} else if mutation != nil || classifyResponse(r, false) != effectNone {
@@ -223,11 +223,20 @@ func TestStreamingContentLength(t *testing.T) {
 			}},
 		},
 	}
-	removeStreamingContentLength(headers)
+	removeStreamingContentLength(headers, map[string]string{"content-length": "123"})
 	m := headers.Response.HeaderMutation
 	if len(m.SetHeaders) != 1 || m.SetHeaders[0].Header.Key != "x-keep" || len(m.RemoveHeaders) != 1 ||
 		m.RemoveHeaders[0] != "content-length" {
 		t.Fatalf("mutation: %v", m)
+	}
+	headers = &extProcPb.HeadersResponse{Response: &extProcPb.CommonResponse{
+		HeaderMutation: &extProcPb.HeaderMutation{SetHeaders: []*corepb.HeaderValueOption{
+			{Header: &corepb.HeaderValue{Key: "content-length", Value: "100"}},
+		}},
+	}}
+	removeStreamingContentLength(headers, nil)
+	if commonEffect(headers.Response) != effectNone {
+		t.Fatalf("suppressed length produced a wire mutation: %v", headers)
 	}
 }
 
@@ -275,6 +284,9 @@ func TestStreamedModeAndEarlyResponse(t *testing.T) {
 			if buffered {
 				return
 			}
+			if classifyResponse(out[0], false) != effectNone {
+				t.Fatalf("read-only request without content-length reported a mutation: %v", out[0])
+			}
 			// A response may finish while the upload is still in progress.
 			out, err = s.HandleResponseHeaders(
 				ctx,
@@ -289,6 +301,9 @@ func TestStreamedModeAndEarlyResponse(t *testing.T) {
 			if out[0].ModeOverride.RequestBodyMode != wantMode ||
 				out[0].ModeOverride.RequestTrailerMode != extProcV3.ProcessingMode_SEND {
 				t.Fatal("response disabled upload")
+			}
+			if classifyResponse(out[0], false) != effectNone {
+				t.Fatalf("read-only response without content-length reported a mutation: %v", out[0])
 			}
 			if _, err = s.HandleResponseBody(
 				ctx,

@@ -280,19 +280,13 @@ func TestSSEPartialDoesNotHideMalformedData(t *testing.T) {
 			Config{Format: "openai-chat-completions", Response: true, MaxCaptureBytes: 4096},
 			map[string]string{"content-type": "text/event-stream"},
 		)
-		count := 0
-		p := a.Feed([]byte(prefix+tail), true, func(obs Observation) {
-			count++
-			if !obs.Partial {
-				t.Fatal("claimed full coverage without DONE")
-			}
-		})
+		p := a.Feed([]byte(prefix+tail), true, func(Observation) { t.Fatal("emitted broken stream") })
 		if tail == "" {
-			if p.Status != capturestatus.Complete || count != 1 {
-				t.Fatalf("%+v count=%d", p, count)
+			if p.Status != capturestatus.IncompleteStream {
+				t.Fatal(p)
 			}
-		} else if p.Status != capturestatus.InvalidJSON || count != 0 {
-			t.Fatalf("%+v count=%d", p, count)
+		} else if p.Status != capturestatus.InvalidJSON {
+			t.Fatal(p)
 		}
 	}
 }

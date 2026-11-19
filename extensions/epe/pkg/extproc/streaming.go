@@ -29,19 +29,23 @@ import (
 )
 
 // Incremental filters can change output length after headers are committed.
-func removeStreamingContentLength(headers *extProcPb.HeadersResponse) {
+func removeStreamingContentLength(headers *extProcPb.HeadersResponse, original map[string]string) {
+	mutation := headers.GetResponse().GetHeaderMutation()
+	if mutation != nil {
+		mutation.SetHeaders = slices.DeleteFunc(mutation.SetHeaders, func(h *corepb.HeaderValueOption) bool {
+			return strings.EqualFold(h.GetHeader().GetKey(), "content-length")
+		})
+	}
+	_, present := original["content-length"]
+	if !present || slices.Contains(mutation.GetRemoveHeaders(), "content-length") {
+		return
+	}
 	if headers.Response == nil {
 		headers.Response = &extProcPb.CommonResponse{}
 	}
 	if headers.Response.HeaderMutation == nil {
 		headers.Response.HeaderMutation = &extProcPb.HeaderMutation{}
 	}
-	headers.Response.HeaderMutation.SetHeaders = slices.DeleteFunc(
-		headers.Response.HeaderMutation.SetHeaders,
-		func(h *corepb.HeaderValueOption) bool {
-			return strings.EqualFold(h.GetHeader().GetKey(), "content-length")
-		},
-	)
 	headers.Response.HeaderMutation.RemoveHeaders = append(
 		headers.Response.HeaderMutation.RemoveHeaders,
 		"content-length",

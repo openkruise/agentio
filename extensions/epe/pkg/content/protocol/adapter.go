@@ -167,24 +167,15 @@ func (a *Adapter) feedStream(chunk []byte, complete bool, emit func(Observation)
 		return progress
 	}
 	if complete {
-		if a.partial {
-			view := a.stream.metadata()
-			view.Partial, view.Truncated = true, a.retention.truncated
-			emit(Observation{Content: view, Partial: true, Truncated: view.Truncated})
-			return progress
-		}
 		view, status := a.stream.finish()
 		progress.Status = status
 		if status == capturestatus.Complete {
-			if !a.fields.OutputMessages {
+			view.Partial, view.Truncated = a.partial, a.retention.truncated
+			if !a.fields.OutputMessages || view.Partial || view.Truncated {
 				view.OutputMessages = nil
-			}
-			if a.retention.truncated {
-				view.OutputMessages = nil
-				view.Truncated = true
 			}
 			a.boundView(view)
-			emit(Observation{Content: view, Truncated: view.Truncated})
+			emit(Observation{Content: view, Partial: view.Partial, Truncated: view.Truncated})
 		}
 	}
 	return progress

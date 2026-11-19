@@ -27,8 +27,8 @@ const (
 	// KindBypass skips following actions and rules in every phase while
 	// preserving earlier work and the bypassing pair itself.
 	KindBypass
-	// KindNeedBody registers a body callback while header evaluation continues.
-	// It is valid only from request or response headers.
+	// KindNeedBody registers a body callback from request or response headers.
+	// A complete response body must be evaluated before later rules run.
 	KindNeedBody
 )
 

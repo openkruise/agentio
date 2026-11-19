@@ -49,10 +49,7 @@ func (r *retention) keep(value any) bool {
 }
 
 func (r *retention) keepRaw(raw json.RawMessage) bool {
-	if !r.enabled || r.truncated {
-		return false
-	}
-	return r.keep(rawValue(raw))
+	return r.reserve(len(raw))
 }
 
 func (r *retention) item() bool {

@@ -130,6 +130,9 @@ func (i *StreamInfo) RecordContent(id UnitID, record ContentRecord) {
 	if i.content == nil {
 		i.content = make(map[UnitID]ContentRecord)
 	}
+	if _, exists := i.content[id]; !exists {
+		i.unitIndex(id)
+	}
 	i.content[id] = record
 }
 
@@ -150,6 +153,9 @@ func (i *StreamInfo) RecordResponseContent(id UnitID, record ContentRecord) {
 	}
 	if i.responseContent == nil {
 		i.responseContent = make(map[UnitID]ContentRecord)
+	}
+	if _, exists := i.responseContent[id]; !exists {
+		i.unitIndex(id)
 	}
 	i.responseContent[id] = record
 }
@@ -195,6 +201,8 @@ const (
 	// deferred its verdict. It only reaches the audit when the promise went
 	// unkept, because a filter that got its body records what it then decided.
 	ActionNeedBody UnitActionKind = "need-body"
+	// ActionBodyReceived marks a body request whose callback finished.
+	ActionBodyReceived UnitActionKind = "body-received"
 	// ActionErrorOpen is a filter that errored where the rule's FailOpen policy
 	// admitted the request anyway — so the rule was not enforced.
 	ActionErrorOpen UnitActionKind = "error-open"
@@ -205,17 +213,46 @@ const (
 // tests build one without), and every call site would otherwise restate that
 // guard.
 func (i *StreamInfo) RecordUnitAction(id UnitID, filterName string, kind UnitActionKind) {
-	if i == nil {
-		return
+	i.recordUnitAction(id, UnitAction{Filter: filterName, Kind: kind})
+}
+
+// BodyDemand identifies one body callback's audit entry. A request and a response
+// on the same unit can be outstanding at the same time.
+type BodyDemand struct {
+	unit   int
+	action int
+}
+
+// RecordBodyDemand marks a callback as outstanding until it completes or returns a verdict.
+func (i *StreamInfo) RecordBodyDemand(id UnitID, filterName string) BodyDemand {
+	return i.recordUnitAction(id, UnitAction{Filter: filterName, Kind: ActionNeedBody})
+}
+
+// ResolveBodyDemand settles only the callback that requested the body.
+func (i *StreamInfo) ResolveBodyDemand(demand BodyDemand) {
+	if i != nil {
+		i.Matched[demand.unit].FilterActions[demand.action].Kind = ActionBodyReceived
 	}
-	action := UnitAction{Filter: filterName, Kind: kind}
+}
+
+func (i *StreamInfo) recordUnitAction(id UnitID, action UnitAction) BodyDemand {
+	if i == nil {
+		return BodyDemand{}
+	}
+	idx := i.unitIndex(id)
+	unit := &i.Matched[idx]
+	unit.FilterActions = append(unit.FilterActions, action)
+	return BodyDemand{unit: idx, action: len(unit.FilterActions) - 1}
+}
+
+func (i *StreamInfo) unitIndex(id UnitID) int {
 	for idx := range i.Matched {
 		if i.Matched[idx].ID == id {
-			i.Matched[idx].FilterActions = append(i.Matched[idx].FilterActions, action)
-			return
+			return idx
 		}
 	}
-	i.Matched = append(i.Matched, UnitRecord{ID: id, FilterActions: []UnitAction{action}})
+	i.Matched = append(i.Matched, UnitRecord{ID: id})
+	return len(i.Matched) - 1
 }
 
 // RecordFilter appends one filter invocation record. A nil *StreamInfo is a

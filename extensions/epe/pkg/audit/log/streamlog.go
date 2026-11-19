@@ -62,34 +62,15 @@ func (s *StreamLog) Log(_ context.Context, st *filter.Stream, info *filter.Strea
 		Authorization: info.Authorization,
 	}
 
-	// A filter that asked for the body is owed an entry until it resolves. Both
-	// committing and erroring resolve it — an error-open filter did get its body
-	// and did run, it just failed — so only a promise that nothing ever answered
-	// survives to be reported.
-	type pendingKey struct {
-		unit   filter.UnitID
-		filter string
-	}
-	pending := map[pendingKey]filter.UnitID{}
-
 	for _, u := range info.Matched {
 		for _, a := range u.FilterActions {
-			key := pendingKey{unit: u.ID, filter: a.Filter}
 			switch {
 			case committedKinds[a.Kind]:
 				entry.Actions = append(entry.Actions, unitAction(a, u.ID))
-				delete(pending, key)
-			case a.Kind == filter.ActionErrorOpen:
+			case a.Kind == filter.ActionErrorOpen || a.Kind == filter.ActionNeedBody:
 				entry.Skipped = append(entry.Skipped, unitAction(a, u.ID))
-				delete(pending, key)
-			case a.Kind == filter.ActionNeedBody:
-				pending[key] = u.ID
 			}
 		}
-	}
-	for k, id := range pending {
-		entry.Skipped = append(entry.Skipped,
-			unitAction(filter.UnitAction{Filter: k.filter, Kind: filter.ActionNeedBody}, id))
 	}
 
 	s.l.Submit(entry)

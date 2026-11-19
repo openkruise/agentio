@@ -144,10 +144,10 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 	if !headersResult.NeedsBody() {
 		t.Fatal("response headers did not request a body")
 	}
-	if headersResult.Disposition != DispositionMutated || len(headersResult.HeaderOps) != 4 ||
+	if headersResult.Disposition != DispositionMutated || len(headersResult.HeaderOps) != 2 ||
 		headersResult.Body != nil || headersResult.StatusCode == nil || *headersResult.StatusCode != 201 ||
-		laterCounters.headerCalls != 1 || pausedCounters.bodyCalls != 0 || laterCounters.bodyCalls != 0 {
-		t.Fatalf("response headers did not finish before body: %+v", headersResult)
+		laterCounters.headerCalls != 0 || pausedCounters.bodyCalls != 0 || laterCounters.bodyCalls != 0 {
+		t.Fatalf("response walk did not pause at the first complete-body filter: %+v", headersResult)
 	}
 
 	original := filter.Body{Bytes: []byte("original response"), Complete: true}
@@ -156,7 +156,7 @@ func TestEvalResponseBody_FoldsPendingAndPreservesOriginalInput(t *testing.T) {
 		t.Fatalf("EvalResponseBody: %v", err)
 	}
 	requireDisposition(t, bodyResult.Disposition, DispositionMutated)
-	wantNames := []string{"x-before", "x-paused-header", "x-later-header", "x-after", "x-paused-body", "x-later-body"}
+	wantNames := []string{"x-before", "x-paused-header", "x-paused-body", "x-later-header", "x-later-body", "x-after"}
 	gotNames := make([]string, 0, len(bodyResult.HeaderOps))
 	for _, op := range bodyResult.HeaderOps {
 		gotNames = append(gotNames, op.Name)
@@ -352,8 +352,8 @@ func TestEvalResponseBody_StopAndBypassReducePendingConsistently(t *testing.T) {
 			if got := len(br.HeaderOps) > 0; got != tc.wantPending {
 				t.Fatalf("pending mutation present = %v, want %v", got, tc.wantPending)
 			}
-			if laterCalls != 1 {
-				t.Fatalf("later header filter constructed %d times, want once before body", laterCalls)
+			if laterCalls != 0 {
+				t.Fatalf("later header filter constructed %d times after a terminal body decision", laterCalls)
 			}
 		})
 	}

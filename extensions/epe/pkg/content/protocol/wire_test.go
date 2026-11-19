@@ -114,28 +114,79 @@ func TestTypedProtocolPreservesOpaqueFields(t *testing.T) {
 	}
 }
 
+func TestChatResponsePreservesAnnotationsAndAudio(t *testing.T) {
+	for _, tt := range []struct {
+		field   string
+		value   string
+		content string
+	}{
+		{"annotations", `[{"type":"url_citation","url_citation":{"url":"https://example.com"}}]`, `"See here"`},
+		{"audio", `{"id":"audio_1","data":"YWJj","transcript":"hello"}`, `null`},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			a, _ := New(
+				Config{Format: "openai-chat-completions", Response: true, MaxCaptureBytes: 4096},
+				map[string]string{"content-type": "application/json"},
+			)
+			message := `{"role":"assistant","content":` + tt.content + `,"` + tt.field + `":` + tt.value + `}`
+			body := `{"model":"m","choices":[{"index":0,"message":` + message + `}]}`
+			var obs Observation
+			progress := a.Feed([]byte(body), true, func(v Observation) { obs = v })
+			if progress.Status != capturestatus.Complete || obs.Partial || obs.Truncated {
+				t.Fatalf("progress=%+v observation=%+v", progress, obs)
+			}
+			blocks := obs.Content.(*LLMView).OutputMessages[0].Content
+			want := map[string]any{tt.field: rawValue(json.RawMessage(tt.value))}
+			var found bool
+			for _, block := range blocks {
+				if provider, ok := block.(ProviderBlock); ok && reflect.DeepEqual(provider.Data, want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("content=%+v missing=%+v", blocks, want)
+			}
+		})
+	}
+}
+
 func TestTypedUnknownSSEDoesNotValidateAnotherEventShape(t *testing.T) {
 	for _, tt := range []struct {
 		format string
 		input  string
+		end    string
 	}{
-		{"openai-responses", responsesEvent("response.future", map[string]any{"output_index": "opaque", "delta": map[string]any{"future": true}})},
-		{"anthropic-messages", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"content\":[]}}\n\nevent: future\ndata: {\"type\":\"future\",\"index\":\"opaque\"}\n\n"},
+		{
+			"openai-responses",
+			responsesEvent("response.future", map[string]any{"output_index": "opaque", "delta": map[string]any{"future": true}}),
+			responsesEvent("response.completed", map[string]any{"response": map[string]any{"model": "m", "status": "completed", "output": []any{}}}),
+		},
+		{
+			"anthropic-messages",
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"content\":[]}}\n\nevent: future\ndata: {\"type\":\"future\",\"index\":\"opaque\"}\n\n",
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		},
 	} {
 		t.Run(tt.format, func(t *testing.T) {
-			a, _ := New(
-				Config{Format: tt.format, Response: true, MaxCaptureBytes: 4096},
-				map[string]string{"content-type": "text/event-stream"},
-			)
-			count := 0
-			p := a.Feed([]byte(tt.input), true, func(obs Observation) {
-				count++
-				if !obs.Partial {
-					t.Fatal("unknown event reported complete coverage")
+			for _, end := range []string{"", tt.end} {
+				a, _ := New(
+					Config{Format: tt.format, Response: true, MaxCaptureBytes: 4096},
+					map[string]string{"content-type": "text/event-stream"},
+				)
+				count := 0
+				p := a.Feed([]byte(tt.input+end), true, func(obs Observation) {
+					count++
+					if !obs.Partial {
+						t.Fatal("unknown event reported complete coverage")
+					}
+				})
+				if end == "" {
+					if p.Status != capturestatus.IncompleteStream || count != 0 {
+						t.Fatalf("early EOF: %+v count=%d", p, count)
+					}
+				} else if p.Status != capturestatus.Complete || count != 1 {
+					t.Fatalf("%+v count=%d", p, count)
 				}
-			})
-			if p.Status != capturestatus.Complete || count != 1 {
-				t.Fatalf("%+v count=%d", p, count)
 			}
 		})
 	}

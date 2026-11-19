@@ -256,7 +256,7 @@ func configureRequestModes(
 			resp := cloneResponse(responses[0])
 			resp.ModeOverride = override
 			if override.RequestBodyMode == extProcV3.ProcessingMode_STREAMED {
-				removeStreamingContentLength(resp.GetRequestHeaders())
+				removeStreamingContentLength(resp.GetRequestHeaders(), state.stream.Request.Headers)
 			}
 			responses = append([]*extProcPb.ProcessingResponse{resp}, responses[1:]...)
 		}
@@ -352,7 +352,7 @@ func (s *Server) HandleResponseHeaders(
 		resp := cloneResponse(responses[0])
 		resp.ModeOverride = override
 		if override.ResponseBodyMode == extProcV3.ProcessingMode_STREAMED {
-			removeStreamingContentLength(resp.GetResponseHeaders())
+			removeStreamingContentLength(resp.GetResponseHeaders(), respHeaders)
 		}
 		responses = append([]*extProcPb.ProcessingResponse{resp}, responses[1:]...)
 		state.responseBodyContinuation = respHeadersRes

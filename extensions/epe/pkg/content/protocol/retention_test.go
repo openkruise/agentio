@@ -20,7 +20,7 @@ import (
 )
 
 func TestKeepRawSkipsUnretainedContent(t *testing.T) {
-	raw := json.RawMessage(`{"text":"` + strings.Repeat("x", 4096) + `"}`)
+	raw := json.RawMessage(`{ "text": "\u4f60` + strings.Repeat("x", 4096) + `" }`)
 	for _, r := range []retention{{limit: 8192}, {limit: 8192, enabled: true, truncated: true}} {
 		before := r
 		allocs := testing.AllocsPerRun(10, func() {

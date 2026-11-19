@@ -27,15 +27,17 @@ import (
 
 type routeTestFilter struct {
 	filter.PassThrough
-	headers filter.Action
-	body    filter.Action
+	headers      filter.Action
+	body         filter.Action
+	bodyUpstream *filter.UpstreamTarget
 }
 
 func (f *routeTestFilter) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
 	return f.headers, nil
 }
 
-func (f *routeTestFilter) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
+func (f *routeTestFilter) OnRequestBody(_ context.Context, st *filter.Stream, _ filter.Body) (filter.Action, error) {
+	f.bodyUpstream = st.Upstream
 	return f.body, nil
 }
 
@@ -59,6 +61,23 @@ func routeMutation(address string, clear bool) filter.Mutation {
 		Upstream:   &filter.UpstreamTarget{Address: &a},
 		ClearCache: clear,
 	}}
+}
+
+func TestStreamedPathRewritePreservesUpstream(t *testing.T) {
+	probe := &routeTestFilter{headers: filter.NeedBody(filter.IncrementalBody, filter.SetPath("/new", true))}
+	e, units := routeTestEngine(t, probe)
+	target := routeMutation("192.0.2.9:443", false).Route.Upstream
+	st := &filter.Stream{StreamRuntime: filter.StreamRuntime{Upstream: target}}
+	result, err := e.EvalRequestHeaders(t.Context(), st, units, WithRequestStreaming())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.EvalRequestBodyChunk(t.Context(), st, result, filter.Body{Complete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.bodyUpstream != target {
+		t.Fatalf("path rewrite changed body callback upstream: got %v want %v", probe.bodyUpstream, target)
+	}
 }
 
 func TestRouteMutationHeaders(t *testing.T) {

@@ -16,12 +16,17 @@ package contentguard
 
 import (
 	"context"
+	"net/http"
+	"strings"
 
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 )
 
 // FilterName is the registry name used for attribution.
 const FilterName = "contentguard"
+
+// CONNECT carries tunnel data and has no HTTP content to capture.
+const statusUnsupportedTunnel = "unsupported_tunnel"
 
 // Definition accepts incremental or complete input; the engine chooses delivery.
 func Definition() filter.Definition {
@@ -46,12 +51,20 @@ type guard struct {
 }
 
 func (g *guard) OnRequestHeaders(_ context.Context, st *filter.Stream) (filter.Action, error) {
+	if strings.EqualFold(st.Request.Method, http.MethodConnect) {
+		st.Info.RecordContent(g.rule.ID, filter.ContentRecord{Status: statusUnsupportedTunnel})
+		return filter.Continue(), nil
+	}
 	g.capture = newCapture(g.rule.Cfg.request, st.Request.Headers)
 	return filter.NeedBody(filter.IncrementalBody), nil
 }
 
 func (g *guard) OnResponseHeaders(_ context.Context, st *filter.Stream) (filter.Action, error) {
 	if g.rule.Cfg.response == nil {
+		return filter.Continue(), nil
+	}
+	if strings.EqualFold(st.Request.Method, http.MethodConnect) {
+		st.Info.RecordResponseContent(g.rule.ID, filter.ContentRecord{Status: statusUnsupportedTunnel})
 		return filter.Continue(), nil
 	}
 	g.capture = newCapture(*g.rule.Cfg.response, st.Response.Headers)

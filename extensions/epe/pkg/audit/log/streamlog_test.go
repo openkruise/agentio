@@ -139,7 +139,8 @@ func TestStreamLog_ResolvedNeedBodyIsNotAlsoReported(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := logOne(t, func(info *filter.StreamInfo) {
-				info.RecordUnitAction(testUnit, "mcpacl", filter.ActionNeedBody)
+				demand := info.RecordBodyDemand(testUnit, "mcpacl")
+				info.ResolveBodyDemand(demand)
 				info.RecordUnitAction(testUnit, "mcpacl", tc.resolve)
 			})
 
@@ -163,9 +164,9 @@ func TestStreamLog_ResolvedNeedBodyIsNotAlsoReported(t *testing.T) {
 func TestStreamLog_NeedBodyIsTrackedPerRule(t *testing.T) {
 	other := filter.UnitID{Scope: "ns/p", Name: "r2", Ordinal: 1}
 	got := logOne(t, func(info *filter.StreamInfo) {
-		info.RecordUnitAction(testUnit, "mcpacl", filter.ActionNeedBody)
-		info.RecordUnitAction(testUnit, "mcpacl", filter.ActionBlock)
-		info.RecordUnitAction(other, "mcpacl", filter.ActionNeedBody)
+		demand := info.RecordBodyDemand(testUnit, "mcpacl")
+		info.RecordBodyDemand(other, "mcpacl")
+		info.ResolveBodyDemand(demand)
 	})
 
 	want := "mcpacl:need-body:" + other.String()

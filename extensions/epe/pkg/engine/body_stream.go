@@ -87,7 +87,7 @@ func (e *Engine) EvalRequestBodyChunk(
 		return nil, fmt.Errorf("request has no incremental body continuation")
 	}
 	view := *st
-	if prior.Route != nil {
+	if prior.Route != nil && prior.Route.Upstream != nil {
 		view.Upstream = prior.Route.Upstream
 	}
 	return e.evalBodyChunk(ctx, st, &view, prior.stream, body)
@@ -152,6 +152,9 @@ func (e *Engine) evalBodyChunk(
 			return act, err
 		})
 		stage.record(st.Info, rec)
+		if body.Complete || rec.Err != nil || act.Kind() == filter.KindStop {
+			st.Info.ResolveBodyDemand(stage.demand)
+		}
 		if rec.Err != nil {
 			walk := newActionWalk(st)
 			walk.filterFailed(stage.p, session.phase, rec.Err)

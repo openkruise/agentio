@@ -35,6 +35,8 @@ type chatDocument struct {
 type chatMessage struct {
 	Role         *string         `json:"role"`
 	Content      json.RawMessage `json:"content"`
+	Annotations  json.RawMessage `json:"annotations"`
+	Audio        json.RawMessage `json:"audio"`
 	ToolCallID   *string         `json:"tool_call_id"`
 	ToolCalls    json.RawMessage `json:"tool_calls"`
 	FunctionCall json.RawMessage `json:"function_call"`

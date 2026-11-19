@@ -318,10 +318,23 @@ func TestBufferedFallbackKeepsBodyAndExecutionOrder(t *testing.T) {
 		}
 		h := newChunkHarness(t, response,
 			chunkSpec{req: filter.IncrementalBody, probe: probe("incremental", "first", filter.IncrementalBody)},
-			chunkSpec{probe: probe("buffered", "last", filter.CompleteBody)})
+			chunkSpec{probe: probe("buffered", "last", filter.CompleteBody)},
+			chunkSpec{
+				headerOnly: true,
+				probe: &chunkProbe{header: func() (filter.Action, error) {
+					calls = append(calls, "last.headers")
+					return filter.Continue(), nil
+				}},
+			})
 		mode, _, err := h.start()
 		wantHeaders := "incremental.headers,buffered.headers"
+		if !response {
+			wantHeaders += ",last.headers"
+		}
 		wantCalls := wantHeaders + ",incremental.body,buffered.body"
+		if response {
+			wantCalls += ",last.headers"
+		}
 		if err != nil || mode != filter.BodyBuffered || strings.Join(calls, ",") != wantHeaders {
 			t.Fatalf("premature execution: %v mode=%v err=%v", calls, mode, err)
 		}
@@ -631,6 +644,22 @@ func TestHeaderTerminalActionsPreserveOrDiscardRegisteredBodies(t *testing.T) {
 						chunkSpec{headerOnly: true, probe: terminal},
 						chunkSpec{req: req, probe: later})
 					mode, _, err := h.start()
+					body := filter.Body{Bytes: []byte("original"), Complete: true}
+					if response && !incremental {
+						if err != nil || mode != filter.BodyBuffered || terminal.headers != 0 {
+							t.Fatalf("complete response did not pause later headers: mode=%v err=%v", mode, err)
+						}
+						result, err := h.e.EvalResponseBody(t.Context(), h.st, h.resp, body)
+						want := DispositionBypassed
+						if stop {
+							want = DispositionBlocked
+						}
+						if err != nil || result.Disposition != want || first.bodies != 1 ||
+							terminal.headers != 1 || later.headers != 0 {
+							t.Fatalf("buffered response: result=%+v later=%+v err=%v", result, later, err)
+						}
+						return
+					}
 					if err != nil || first.headers != 1 || first.bodies != 0 || terminal.headers != 1 ||
 						later.headers != 0 {
 						t.Fatalf("header calls: first=%+v terminal=%+v later=%+v err=%v", first, terminal, later, err)
@@ -641,7 +670,6 @@ func TestHeaderTerminalActionsPreserveOrDiscardRegisteredBodies(t *testing.T) {
 						}
 						return
 					}
-					body := filter.Body{Bytes: []byte("original"), Complete: true}
 					if incremental {
 						if mode != filter.BodyStreamed {
 							t.Fatalf("header Bypass changed streaming mode: %v", mode)
@@ -651,16 +679,10 @@ func TestHeaderTerminalActionsPreserveOrDiscardRegisteredBodies(t *testing.T) {
 						if mode != filter.BodyBuffered {
 							t.Fatalf("header Bypass discarded buffered callbacks: %v", mode)
 						}
-						var disposition Disposition
-						if response {
-							result, bodyErr := h.e.EvalResponseBody(t.Context(), h.st, h.resp, body)
-							disposition, err = result.Disposition, bodyErr
-						} else {
-							result, bodyErr := h.e.EvalRequestBody(t.Context(), h.st, h.req, body)
-							disposition, err = result.Disposition, bodyErr
-						}
-						if disposition != DispositionBypassed {
-							t.Fatalf("lost header bypass: %v", disposition)
+						result, bodyErr := h.e.EvalRequestBody(t.Context(), h.st, h.req, body)
+						err = bodyErr
+						if result.Disposition != DispositionBypassed {
+							t.Fatalf("lost header bypass: %v", result.Disposition)
 						}
 					}
 					if err != nil || first.bodies != 1 || terminal.bodies != 0 || later.bodies != 0 {
@@ -672,7 +694,7 @@ func TestHeaderTerminalActionsPreserveOrDiscardRegisteredBodies(t *testing.T) {
 	}
 }
 
-func TestAvailableBodyRunsAfterAllHeaders(t *testing.T) {
+func TestAvailableBodyPreservesDirectionOrder(t *testing.T) {
 	for _, response := range []bool{false, true} {
 		for _, terminal := range []string{"continue", "stop", "bypass"} {
 			t.Run(fmt.Sprintf("response=%t/%s", response, terminal), func(t *testing.T) {
@@ -715,8 +737,14 @@ func TestAvailableBodyRunsAfterAllHeaders(t *testing.T) {
 					disposition, output, needsBody, err = r.Disposition, r.Body, r.NeedsBody(), e
 				}
 				wantCalls := "first.header,second.header,first.body"
+				if response {
+					wantCalls = "first.header,first.body"
+				}
 				wantDisposition, wantOutput := DispositionBypassed, "header"
 				if terminal == "continue" {
+					if response {
+						wantCalls += ",second.header"
+					}
 					wantCalls += ",second.body"
 					wantDisposition, wantOutput = DispositionMutated, "second"
 				} else if terminal == "stop" {

@@ -169,25 +169,11 @@ func messageView(raw json.RawMessage, format string) (Message, capturestatus.Cod
 		}
 		if calls, ok := rawArray(wire.ToolCalls); ok {
 			for _, raw := range calls {
-				var header struct {
-					Function json.RawMessage `json:"function"`
+				block, code := chatToolCall(raw)
+				if code != capturestatus.Complete {
+					return Message{}, code
 				}
-				if decodeObject(raw, &header) != capturestatus.Complete {
-					return Message{}, capturestatus.InvalidContent
-				}
-				if !isObject(header.Function) {
-					content = append(content, providerBlock(rawValue(raw), format))
-					continue
-				}
-				var call toolWire
-				if decodeObject(raw, &call) != capturestatus.Complete {
-					return Message{}, capturestatus.InvalidContent
-				}
-				var fn functionWire
-				if decodeObject(call.Function, &fn) != capturestatus.Complete {
-					return Message{}, capturestatus.InvalidContent
-				}
-				content = append(content, newToolCall(call.ID, fn.Name, rawValue(fn.Arguments)))
+				content = append(content, block)
 			}
 		}
 		if isObject(wire.FunctionCall) {
@@ -200,8 +186,35 @@ func messageView(raw json.RawMessage, format string) (Message, capturestatus.Cod
 		if refusal, ok := rawString(wire.Refusal); ok && refusal != nil && *refusal != "" {
 			content = append(content, TextBlock{Type: "refusal", Text: *refusal})
 		}
+		if !isNull(wire.Annotations) {
+			content = append(content, providerBlock(map[string]any{"annotations": rawValue(wire.Annotations)}, format))
+		}
+		if !isNull(wire.Audio) {
+			content = append(content, providerBlock(map[string]any{"audio": rawValue(wire.Audio)}, format))
+		}
 	}
 	return Message{Role: *wire.Role, Content: content}, capturestatus.Complete
+}
+
+func chatToolCall(raw json.RawMessage) (ContentBlock, capturestatus.Code) {
+	var header struct {
+		Function json.RawMessage `json:"function"`
+	}
+	if code := decodeObject(raw, &header); code != capturestatus.Complete {
+		return nil, code
+	}
+	if !isObject(header.Function) {
+		return providerBlock(rawValue(raw), "openai-chat-completions"), capturestatus.Complete
+	}
+	var call toolWire
+	if code := decodeObject(raw, &call); code != capturestatus.Complete {
+		return nil, code
+	}
+	var fn functionWire
+	if code := decodeObject(call.Function, &fn); code != capturestatus.Complete {
+		return nil, code
+	}
+	return newToolCall(call.ID, fn.Name, rawValue(fn.Arguments)), capturestatus.Complete
 }
 
 func blocks(raw json.RawMessage, format string) []ContentBlock {

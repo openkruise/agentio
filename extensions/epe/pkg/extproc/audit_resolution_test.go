@@ -20,21 +20,120 @@ package extproc
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
 	"testing"
 
+	corepb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	extProcV3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
 	auditlog "github.com/openkruise/agentio/extensions/epe/pkg/audit/log"
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/filters/contentguard"
+	"github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
+	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 )
 
 // captureLogger records every submitted auditlog entry so a test can assert
 // how many were submitted and what they say.
-type captureLogger struct{ entries []auditlog.Entry }
+type captureLogger struct {
+	entries []auditlog.Entry
+	content []auditlog.ContentEntry
+}
 
 func (c *captureLogger) Submit(r auditlog.Record) {
-	if e, ok := r.(auditlog.Entry); ok {
+	switch e := r.(type) {
+	case auditlog.Entry:
 		c.entries = append(c.entries, e)
+	case auditlog.ContentEntry:
+		c.content = append(c.content, e)
+	}
+}
+
+func TestContentGuardBodyDemandAudit(t *testing.T) {
+	id := filter.UnitID{Name: "capture"}
+	for _, tc := range []struct {
+		name   string
+		method string
+		mode   extProcV3.ProcessingMode_BodySendMode
+		early  bool
+	}{
+		{"streamed", http.MethodPost, extProcV3.ProcessingMode_STREAMED, false},
+		{"buffered", http.MethodPost, extProcV3.ProcessingMode_BUFFERED, false},
+		{"response finishes before upload", http.MethodPost, extProcV3.ProcessingMode_STREAMED, true},
+		{"CONNECT passes without body capture", http.MethodConnect, extProcV3.ProcessingMode_NONE, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			regs, err := filter.Build(contentguard.Definition())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := regs[0].Parse([]byte(`{"format":"text","response":{"enabled":true,"format":"text"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.mode == extProcV3.ProcessingMode_BUFFERED {
+				regs[0].OnError = filter.Always[any](filter.FailOpen)
+			}
+			logger := &captureLogger{}
+			s := NewServer(ServerDeps{
+				Registrations: regs,
+				AuditLogger:   logger,
+				Resolve: func(context.Context, subject.Subject, *httpreq.HTTPRequest) (engine.Resolution, error) {
+					return engine.Resolution{Units: []engine.Unit{{ID: id, Cfgs: []any{cfg}}}}, nil
+				},
+			})
+			state := newStreamState()
+			req := makeRequestHeaders("example.com:443", "/", tc.method)
+			media := &corepb.HeaderValue{Key: "content-type", RawValue: []byte("text/plain")}
+			req.Headers.Headers = append(req.Headers.Headers, media)
+			out, err := s.HandleRequestHeaders(t.Context(), req, makeAttrsWithLabels("test", "pod", ""), state)
+			if err != nil || len(out) != 1 || out[0].GetRequestHeaders() == nil ||
+				out[0].GetModeOverride().GetRequestBodyMode() != tc.mode {
+				t.Fatalf("request headers: %v, %v", out, err)
+			}
+			if tc.method != http.MethodConnect {
+				body := &extProcPb.HttpBody{Body: []byte("hello"), EndOfStream: !tc.early}
+				if _, err := s.HandleRequestBody(t.Context(), body, state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp := responseHeaderMsg("200")
+			resp.Headers.Headers = append(resp.Headers.Headers, media)
+			out, err = s.HandleResponseHeaders(t.Context(), resp, state)
+			if err != nil || len(out) != 1 || out[0].GetResponseHeaders() == nil ||
+				out[0].GetModeOverride().GetResponseBodyMode() != tc.mode {
+				t.Fatalf("response headers: %v, %v", out, err)
+			}
+			if tc.method != http.MethodConnect {
+				body := &extProcPb.HttpBody{Body: []byte("world"), EndOfStream: true}
+				if _, err := s.HandleResponseBody(t.Context(), body, state); err != nil {
+					t.Fatal(err)
+				}
+				record, ok := state.stream.Info.ResponseContent(id)
+				if !ok || record.Status != "complete" || record.Content != "world" {
+					t.Fatalf("response content: %+v", record)
+				}
+			}
+			s.finishStream(t.Context(), state, nil)
+			if tc.method == http.MethodConnect {
+				want := filter.ContentRecord{Status: "unsupported_tunnel"}
+				if len(logger.content) != 2 || logger.content[0].Direction != "request" ||
+					logger.content[1].Direction != "response" || logger.content[0].Record != want ||
+					logger.content[1].Record != want {
+					t.Fatalf("CONNECT audit: %+v", logger.content)
+				}
+			}
+			var wantSkipped []string
+			if tc.early {
+				wantSkipped = []string{"contentguard:need-body:" + id.String()}
+			}
+			if len(logger.entries) != 1 || !slices.Equal(logger.entries[0].Skipped, wantSkipped) {
+				t.Fatalf("audit entries: %+v, want skipped %v", logger.entries, wantSkipped)
+			}
+		})
 	}
 }
 
