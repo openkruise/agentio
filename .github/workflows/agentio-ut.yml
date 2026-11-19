@@ -118,6 +118,25 @@ jobs:
           rustup default 1.93.0
           bash extensions/envoy/connection-policy/build.sh
 
+  contentguard-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and test ContentGuard in Envoy
+        working-directory: extensions/envoy/contentguard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+          rustup toolchain install 1.93.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.93.0
+          ./build.sh
+          cargo clippy --release --locked --all-targets -- -D warnings
+          docker build -t envoy-contentguard:test .
+          python3 tests/smoke.py envoy-contentguard:test
+
   network-limits-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 30

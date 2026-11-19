@@ -289,30 +289,13 @@ fn llm(v: &Value, format: &str) -> Parsed {
     Ok(view)
 }
 
-// Go decodes schema-less JSON numbers into doubles, including tool arguments.
-fn align_numbers(v: &mut Value) {
-    match v {
-        Value::Array(a) => a.iter_mut().for_each(align_numbers),
-        Value::Object(m) => m.values_mut().for_each(align_numbers),
-        Value::Number(n)
-            if n.as_u64().is_some_and(|i| i > (1 << 53))
-                || n.as_i64().is_some_and(|i| i < -(1 << 53)) =>
-        {
-            *v = Value::from(n.as_f64().unwrap());
-        }
-        _ => (),
-    }
-}
-
 pub fn parse(format: &str, body: &[u8]) -> Parsed {
     let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
-    let mut view = if format == "json" {
-        doc
+    if format == "json" {
+        Ok(doc)
     } else {
-        llm(&doc, format)?
-    };
-    align_numbers(&mut view);
-    Ok(view)
+        llm(&doc, format)
+    }
 }
 
 #[cfg(test)]

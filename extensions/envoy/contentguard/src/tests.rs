@@ -153,3 +153,16 @@ fn many_omitted_images_cannot_displace_the_following_text() {
     assert_eq!(r["status"], "truncated");
     assert_eq!(r["content"]["retainedText"], json!(["after many files"]));
 }
+
+#[test]
+fn integer_ids_survive_audit_serialization() {
+    let r = record(
+        "request",
+        "/event",
+        "application/json",
+        br#"{"id":9007199254740993}"#.chunks(2),
+        1024,
+        true,
+    );
+    assert_eq!(r["content"]["id"].as_u64(), Some(9_007_199_254_740_993));
+}

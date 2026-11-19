@@ -111,23 +111,23 @@ impl Scanner {
         self.text_value = false;
         self.last_key_media = !self.overflow && media_key(&self.token);
         let media = self.media_value || self.token.starts_with(b"data:");
-        if self.exhausted {
-            // Only collect later text fields once structural capacity is spent.
-        } else if self.overflow || (media && self.token.len() > self.media_room) {
-            self.clipped = true;
-            if media {
-                self.doc.extend_from_slice(br#""[omitted]""#);
+        if !self.exhausted {
+            if self.overflow || (media && self.token.len() > self.media_room) {
+                self.clipped = true;
+                if media {
+                    self.doc.extend_from_slice(br#""[omitted]""#);
+                } else {
+                    let prefix = &self.token[..self.token.len() / 2];
+                    self.doc.extend_from_slice(&close_prefix(prefix));
+                }
             } else {
-                let prefix = &self.token[..self.token.len() / 2];
-                self.doc.extend_from_slice(&close_prefix(prefix));
+                if media {
+                    self.media_room -= self.token.len();
+                }
+                self.doc.push(b'"');
+                self.doc.extend_from_slice(&self.token);
+                self.doc.push(b'"');
             }
-        } else {
-            if media {
-                self.media_room -= self.token.len();
-            }
-            self.doc.push(b'"');
-            self.doc.extend_from_slice(&self.token);
-            self.doc.push(b'"');
         }
         self.quoted = false;
         self.media_value = false;
