@@ -372,3 +372,87 @@ fn documents_and_streams_produce_the_same_response() {
         }
     }
 }
+
+#[test]
+fn explicit_document_decoders_validate_media_encoding_and_limits() {
+    for (format, media, encoding, body, status, content) in [
+        (
+            "json",
+            "application/vnd.test+json",
+            "identity",
+            b"[42]".as_slice(),
+            "complete",
+            json!([42]),
+        ),
+        (
+            "json",
+            "application/json",
+            "",
+            b"{",
+            "invalid_json",
+            Value::Null,
+        ),
+        (
+            "json",
+            "text/test+json",
+            "",
+            b"{}",
+            "unsupported_media_type",
+            Value::Null,
+        ),
+        (
+            "text",
+            "text/plain; charset=utf-8",
+            "",
+            b"",
+            "complete",
+            json!(""),
+        ),
+        ("text", "text/plain", "", b"1234", "complete", json!("1234")),
+        ("text", "text/plain", "", b"12345", "too_large", Value::Null),
+        (
+            "text",
+            "text/plain",
+            "",
+            b"\xff",
+            "invalid_text",
+            Value::Null,
+        ),
+        (
+            "text",
+            "text/plain; charset=iso-8859-1",
+            "",
+            b"abc",
+            "unsupported_encoding",
+            Value::Null,
+        ),
+        (
+            "text",
+            "text/plain",
+            "gzip",
+            b"abc",
+            "unsupported_encoding",
+            Value::Null,
+        ),
+        (
+            "text",
+            "text/event-stream",
+            "",
+            b"abc",
+            "unsupported_media_type",
+            Value::Null,
+        ),
+    ] {
+        let config =
+            serde_json::from_value(json!({"format":format,"maxCaptureBytes":4,"maxLogBytes":1024}))
+                .unwrap();
+        let mut capture = Capture::new("request", "/custom", "id", media, encoding, config);
+        for chunk in body.chunks(1) {
+            capture.push(chunk);
+        }
+        let record: Value = serde_json::from_slice(&capture.encode(true).1).unwrap();
+        assert_eq!(record["status"], status, "{format} {media} {body:?}");
+        assert_eq!(record["content"], content);
+        assert_eq!(record["bytesSeen"], body.len());
+    }
+}
