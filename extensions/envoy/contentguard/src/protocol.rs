@@ -331,7 +331,6 @@ pub fn parse(
     body: &[u8],
     response: bool,
     fields: crate::Fields,
-    schema: crate::audit::Schema,
     log_limit: usize,
 ) -> Parsed {
     let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
@@ -348,51 +347,49 @@ pub fn parse(
         calls.document(format, &doc, response);
         calls.publish(&mut view);
     }
-    if schema == crate::audit::Schema::Genai {
-        if response {
-            if let Some(id) = doc["id"].as_str() {
-                view["responseId"] = id.into();
-            }
-            let mut reasons = Vec::new();
-            if format == CHAT {
-                for (i, c) in doc["choices"].as_array().into_iter().flatten().enumerate() {
-                    if let Some(reason) = c["finish_reason"].as_str() {
-                        reasons.push((c["index"].as_u64().unwrap_or(i as u64), reason));
-                    }
+    if response {
+        if let Some(id) = doc["id"].as_str() {
+            view["responseId"] = id.into();
+        }
+        let mut reasons = Vec::new();
+        if format == CHAT {
+            for (i, c) in doc["choices"].as_array().into_iter().flatten().enumerate() {
+                if let Some(reason) = c["finish_reason"].as_str() {
+                    reasons.push((c["index"].as_u64().unwrap_or(i as u64), reason));
                 }
-                reasons.sort_by_key(|(i, _)| *i);
-            } else if format == ANTHROPIC
-                && let Some(reason) = doc["stop_reason"].as_str()
+            }
+            reasons.sort_by_key(|(i, _)| *i);
+        } else if format == ANTHROPIC
+            && let Some(reason) = doc["stop_reason"].as_str()
+        {
+            reasons.push((0, reason));
+        }
+        if !reasons.is_empty() {
+            view["finishReasons"] = reasons.into_iter().map(|(_, s)| Value::from(s)).collect();
+        }
+    } else {
+        if let Some(stream) = doc["stream"].as_bool() {
+            view["requestStream"] = stream.into();
+        }
+        let max_tokens = match format {
+            CHAT => doc["max_completion_tokens"]
+                .as_u64()
+                .or_else(|| doc["max_tokens"].as_u64()),
+            RESPONSES => doc["max_output_tokens"].as_u64(),
+            _ => doc["max_tokens"].as_u64(),
+        };
+        if let Some(n) = max_tokens {
+            view["maxTokens"] = n.into();
+        }
+        if format == RESPONSES {
+            if let Some(id) = doc["conversation"]
+                .as_str()
+                .or_else(|| doc["conversation"]["id"].as_str())
             {
-                reasons.push((0, reason));
+                view["conversationId"] = id.into();
             }
-            if !reasons.is_empty() {
-                view["finishReasons"] = reasons.into_iter().map(|(_, s)| Value::from(s)).collect();
-            }
-        } else {
-            if let Some(stream) = doc["stream"].as_bool() {
-                view["requestStream"] = stream.into();
-            }
-            let max_tokens = match format {
-                CHAT => doc["max_completion_tokens"]
-                    .as_u64()
-                    .or_else(|| doc["max_tokens"].as_u64()),
-                RESPONSES => doc["max_output_tokens"].as_u64(),
-                _ => doc["max_tokens"].as_u64(),
-            };
-            if let Some(n) = max_tokens {
-                view["maxTokens"] = n.into();
-            }
-            if format == RESPONSES {
-                if let Some(id) = doc["conversation"]
-                    .as_str()
-                    .or_else(|| doc["conversation"]["id"].as_str())
-                {
-                    view["conversationId"] = id.into();
-                }
-                if let Some(id) = doc["previous_response_id"].as_str() {
-                    view["previousResponseId"] = id.into();
-                }
+            if let Some(id) = doc["previous_response_id"].as_str() {
+                view["previousResponseId"] = id.into();
             }
         }
     }
@@ -414,7 +411,6 @@ mod tests {
             input.to_string().as_bytes(),
             false,
             crate::Fields::DEFAULT,
-            Default::default(),
             8192,
         )
         .unwrap();
@@ -437,7 +433,6 @@ mod tests {
             input.to_string().as_bytes(),
             false,
             crate::Fields::DEFAULT,
-            Default::default(),
             8192,
         )
         .unwrap();

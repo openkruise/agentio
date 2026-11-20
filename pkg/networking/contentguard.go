@@ -35,8 +35,7 @@ func (b *resourceBuilder) contentGuardConfig() ([]*hcm.HttpFilter, []*access.Acc
 	var filters []*hcm.HttpFilter
 	// The HTTP module ABI exposes only top-level metadata. Envoy's native
 	// formatter can resolve a nested path and publish it as a stream-local string.
-	audit, _ := cfg["audit"].(map[string]any)
-	attrs, _ := audit["attributes"].(map[string]any)
+	attrs, _ := cfg["attributes"].(map[string]any)
 	projection := &state.Config{}
 	for _, name := range slices.Sorted(maps.Keys(attrs)) {
 		source, _ := attrs[name].(map[string]any)
@@ -96,9 +95,22 @@ func (b *resourceBuilder) contentGuardConfig() ([]*hcm.HttpFilter, []*access.Acc
 			},
 		}),
 	})))
+	enabled := map[string]bool{}
+	for _, rule := range b.contentGuard.GetFields()["rules"].GetListValue().GetValues() {
+		audit := rule.GetStructValue().GetFields()["audit"].GetStructValue()
+		parsers := audit.GetFields()["parsers"].GetStructValue()
+		for _, name := range []string{"llm", "generic"} {
+			parser := parsers.GetFields()[name].GetStructValue()
+			for _, direction := range []string{"request", "response"} {
+				if parser.GetFields()[direction].GetStructValue() != nil {
+					enabled[direction] = true
+				}
+			}
+		}
+	}
 	var logs []*access.AccessLog
 	for _, direction := range []string{"request", "response"} {
-		if cfg[direction] == nil {
+		if !enabled[direction] {
 			continue
 		}
 		key := "agentio.contentguard." + direction

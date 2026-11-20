@@ -475,20 +475,41 @@ fn explicit_document_decoders_validate_media_encoding_and_limits() {
 
 #[test]
 fn invalid_rule_or_attribute_rejects_configuration() {
+    let skip = json!({"match":{},"skip":true});
     for bad in [
-        json!({"rules":[{"match":{"hosts":["exa*mple.com"]},"action":"audit"}]}),
-        json!({"rules":[{"match":{"hosts":[]},"action":"skip"}]}),
-        json!({"rules":[{"match":{},"action":"skip","format":"auto"}]}),
-        json!({"rules":[{"match":{},"action":"audit"},{"match":{},"action":"skip"}]}),
-        json!({"rules":[{"match":{"filterState":[{"key":"id","present":true,"values":["x"]}]},"action":"audit"}]}),
-        json!({"rules":[{"match":{"filterState":[{"key":"id","values":[]}]},"action":"audit"}]}),
-        json!({"rules":[{"match":{"format":"json"},"action":"audit"}]}),
-        json!({"audit":{"attributes":{"tenant":{"requestHeader":"x-tenant","filterState":"other"}}}}),
+        json!({}),
+        json!({"rules":[]}),
+        json!({"rules":[skip,skip]}),
+        json!({"request":{},"rules":[skip]}),
+        json!({"attributes":{"tenant":{"requestHeader":"x-tenant","filterState":"id"}},"rules":[skip]}),
+        json!({"rules":[{"match":{},"skip":false}]}),
+        json!({"rules":[{"match":{},"skip":true,"audit":{"parsers":{"llm":{"request":{}}}}}]}),
+        json!({"rules":[{"match":{"hosts":["exa*mple.com"]},"skip":true}]}),
+        json!({"rules":[{"match":{"hosts":[]},"skip":true}]}),
+        json!({"rules":[{"match":{"filterState":[{"key":"id","present":true,"values":["x"]}]},"skip":true}]}),
+        json!({"rules":[{"match":{"filterState":[{"key":"id","values":[]}]},"skip":true}]}),
+        json!({"rules":[{"match":{"format":"json"},"skip":true}]}),
+        json!({"defaults":{"schema":"unknown"},"rules":[skip]}),
+        json!({"defaults":{"maxLogBytes":12},"rules":[skip]}),
     ] {
-        let mut config = bad.clone();
-        config["response"] = json!({"maxLogBytes":1024});
         assert!(
-            !serde_json::from_value::<crate::Settings>(config).is_ok_and(|c| c.validate().is_ok()),
+            crate::Settings::parse(bad.to_string().as_bytes()).is_err(),
+            "{bad}"
+        );
+    }
+    for parsers in [
+        json!({}),
+        json!({"llm":{}}),
+        json!({"generic":{"request":{"include":["messages"]}}}),
+        json!({"generic":{"response":{"maxContentBytes":1}}}),
+        json!({"llm":{"request":{"include":["body"]}}}),
+        json!({"llm":{"response":{"include":["toolDefinitions"]}}}),
+        json!({"llm":{"protocol":"unknown","request":{}}}),
+        json!({"llm":{"request":{"maxCaptureBytes":0}}}),
+    ] {
+        let bad = json!({"rules":[{"match":{},"audit":{"parsers":parsers}}]});
+        assert!(
+            crate::Settings::parse(bad.to_string().as_bytes()).is_err(),
             "{bad}"
         );
     }
@@ -716,6 +737,7 @@ fn response_errors_and_incomplete_status_are_independent_of_message_capture() {
         );
         assert_eq!(r["attributes"]["gen_ai.response.id"], "r");
         assert_eq!(r["content"]["status"], "failed");
+        assert!(r["content"].get("error").is_none());
     }
     let incomplete = r#"{"id":"r","status":"incomplete","model":"m","output":[],"incomplete_details":{"reason":"max_output_tokens"}}"#;
     let r = genai_record(

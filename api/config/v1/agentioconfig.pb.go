@@ -229,7 +229,7 @@ type AgentioConfig struct {
 	// Default services used when a policy does not select a provider explicitly.
 	DefaultProviders *DefaultExtensionProviders `protobuf:"bytes,9,opt,name=default_providers,json=defaultProviders,proto3" json:"default_providers,omitempty"`
 	// Global ContentGuard module configuration for forwarded HTTP on native gateways.
-	// The module validates its request, response, rules and audit settings at LDS load.
+	// The module validates ordered rules and parser settings at LDS load.
 	ContentGuard  *_struct.Struct `protobuf:"bytes,10,opt,name=content_guard,json=contentGuard,proto3" json:"content_guard,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

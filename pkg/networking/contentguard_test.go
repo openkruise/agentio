@@ -30,24 +30,24 @@ import (
 
 const contentGuardYAML = `
 contentGuard:
-  request: {maxLogBytes: 4096}
-  response: {maxLogBytes: 2048}
+  defaults: {schema: genai, maxLogBytes: 4096}
+  attributes:
+    tenant.id: {requestHeader: x-tenant}
+    agentio.sandbox.id: {filterState: agentio.sandbox.id}
+    agentio.workload.namespace: {dynamicMetadata: {namespace: agentio, path: [workload, namespace]}}
   rules:
     - match: {hosts: [skip.llm.test]}
-      action: skip
+      skip: true
     - match:
         hosts: ["*.llm.test"]
         filterState:
           - {key: agentio.sandbox.id, values: [box-1, box-2]}
           - {key: agentio.sandbox.id, present: true}
-      action: audit
-      format: openai-responses
-  audit:
-    schema: genai
-    attributes:
-      tenant.id: {requestHeader: x-tenant}
-      agentio.sandbox.id: {filterState: agentio.sandbox.id}
-      agentio.workload.namespace: {dynamicMetadata: {namespace: agentio, path: [workload, namespace]}}
+      audit:
+        schema: agentio
+        parsers:
+          llm: {protocol: openai-responses, response: {include: [messages]}}
+          generic: {request: {}}
 `
 
 func TestContentGuardGatewayConfig(t *testing.T) {
@@ -80,15 +80,15 @@ func TestContentGuardGatewayConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 		var moduleSettings struct {
-			Rules []map[string]any
-			Audit struct{ Attributes map[string]map[string]string }
+			Rules      []map[string]any
+			Attributes map[string]map[string]string
 		}
 		raw := wire.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStringValue()
 		if err := json.Unmarshal([]byte(raw), &moduleSettings); err != nil {
 			t.Fatal(err)
 		}
 		if len(moduleSettings.Rules) != 2 ||
-			moduleSettings.Audit.Attributes["agentio.workload.namespace"]["filterState"] != p.OnRequestHeaders[0].GetObjectKey() {
+			moduleSettings.Attributes["agentio.workload.namespace"]["filterState"] != p.OnRequestHeaders[0].GetObjectKey() {
 			t.Fatal(raw)
 		}
 		if len(manager.AccessLog) != 2 {
@@ -107,5 +107,35 @@ func TestContentGuardGatewayConfig(t *testing.T) {
 	// Building both chains must leave the immutable configuration usable on the next update.
 	if !proto.Equal(settings.ContentGuard, original) {
 		t.Fatal("builder mutated shared config")
+	}
+}
+
+func TestContentGuardLogDirections(t *testing.T) {
+	for _, tc := range []struct {
+		rule string
+		logs int
+	}{
+		{"skip: true", 0},
+		{"audit: {parsers: {generic: {response: {}}}}", 1},
+	} {
+		settings, err := config.ApplyAgentioConfig(
+			"contentGuard:\n  rules:\n    - match: {}\n      "+tc.rule,
+			&configv1.AgentioConfig{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := resourceBuilder{contentGuard: settings.ContentGuard}
+		_, logs, err := b.contentGuardConfig()
+		if err != nil || len(logs) != tc.logs {
+			t.Fatalf("%s: logs=%v err=%v", tc.rule, logs, err)
+		}
+		if len(logs) == 1 {
+			f := &cel.ExpressionFilter{}
+			if err := logs[0].Filter.GetExtensionFilter().GetTypedConfig().UnmarshalTo(f); err != nil ||
+				f.Expression != "'agentio.contentguard.response' in filter_state" {
+				t.Fatal(f, err)
+			}
+		}
 	}
 }

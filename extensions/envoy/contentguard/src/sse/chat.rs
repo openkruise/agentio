@@ -194,7 +194,7 @@ impl Stream {
         }
     }
 
-    pub(super) fn finish(self, keep: bool, genai: bool) -> Result<Value> {
+    pub(super) fn finish(self, keep: bool) -> Result<Value> {
         if !self.done {
             return Err("incomplete_stream");
         }
@@ -212,9 +212,7 @@ impl Stream {
         let mut out = vec![];
         for (i, c) in self.choices {
             let reason = c.finish.ok_or("incomplete_stream")?;
-            if genai {
-                reasons.push(reason.clone());
-            }
+            reasons.push(reason.clone());
             if !keep {
                 continue;
             }

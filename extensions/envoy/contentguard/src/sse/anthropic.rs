@@ -163,7 +163,7 @@ impl Stream {
         }
     }
 
-    pub(super) fn finish(self, keep: bool, genai: bool) -> Result<Value> {
+    pub(super) fn finish(self, keep: bool) -> Result<Value> {
         if !self.done {
             return Err("incomplete_stream");
         }
@@ -179,9 +179,7 @@ impl Stream {
             anthropic_totals(&mut counts);
             view["usage"] = counts;
         }
-        if genai {
-            view["finishReasons"] = json!([reason]);
-        }
+        view["finishReasons"] = json!([reason]);
         if keep {
             let raw = Value::Array(self.blocks.into_iter().map(|b| b.source).collect());
             view["outputMessages"] = json!([{"role":"assistant","index":0,"finishReason":reason,"content":blocks(&raw,ANTHROPIC)}]);

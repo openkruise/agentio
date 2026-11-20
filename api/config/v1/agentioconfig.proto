@@ -71,7 +71,7 @@ message AgentioConfig {
   DefaultExtensionProviders default_providers = 9;
 
   // Global ContentGuard module configuration for forwarded HTTP on native gateways.
-  // The module validates its request, response, rules and audit settings at LDS load.
+  // The module validates ordered rules and parser settings at LDS load.
   google.protobuf.Struct content_guard = 10;
 }
 

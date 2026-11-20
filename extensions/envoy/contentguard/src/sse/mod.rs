@@ -18,7 +18,6 @@ enum Provider {
 // Retain output independently of framing. A late usage event is still processed
 // after content has been discarded, as are malformed transitions.
 struct Retention {
-    genai: bool,
     response_id: Option<String>,
     tools: Option<crate::tool_summary::ToolSummary>,
     limit: usize,
@@ -30,8 +29,7 @@ struct Retention {
 }
 impl Retention {
     fn response_id(&mut self, id: &Value) {
-        if self.genai
-            && self.response_id.is_none()
+        if self.response_id.is_none()
             && let Some(id) = id.as_str()
         {
             self.response_id = Some(id.into());
@@ -86,7 +84,6 @@ impl Stream {
         event_limit: usize,
         room: usize,
         fields: crate::Fields,
-        schema: crate::audit::Schema,
         log_limit: usize,
     ) -> Self {
         let provider = match format {
@@ -101,7 +98,6 @@ impl Stream {
                 limit: room,
                 room,
                 enabled: fields.output_messages,
-                genai: schema == crate::audit::Schema::Genai,
                 response_id: None,
                 tools: fields
                     .tool_calls
@@ -222,8 +218,8 @@ impl Stream {
     pub fn finish(self) -> Result<(bool, Value)> {
         let keep = self.budget.retaining();
         let mut result = match self.provider {
-            Provider::Chat(s) => s.finish(keep, self.budget.genai)?,
-            Provider::Anthropic(s) => s.finish(keep, self.budget.genai)?,
+            Provider::Chat(s) => s.finish(keep)?,
+            Provider::Anthropic(s) => s.finish(keep)?,
             Provider::Responses(s) => s.finish(keep)?,
         };
         if let Some(id) = self.budget.response_id {

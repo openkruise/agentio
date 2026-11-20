@@ -7,12 +7,10 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Audit {
-    pub schema: Schema,
-    attributes: BTreeMap<String, Source>,
-}
-#[derive(Default, Clone, Copy, Deserialize, PartialEq)]
+#[serde(transparent)]
+pub struct AttributeSources(BTreeMap<String, Source>);
+
+#[derive(Default, Clone, Copy, Deserialize, serde::Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Schema {
     #[default]
@@ -27,9 +25,9 @@ enum Source {
     FilterState(String),
 }
 
-impl Audit {
+impl AttributeSources {
     pub fn validate(&self) -> Result<(), &'static str> {
-        for (name, source) in &self.attributes {
+        for (name, source) in &self.0 {
             if name.is_empty() {
                 return Err("attribute name must be non-empty");
             }
@@ -54,7 +52,7 @@ impl Audit {
     pub fn snapshot(&self, envoy: &impl EnvoyHttpFilter, limit: usize) -> Attributes {
         let mut attrs = Attributes::default();
         let mut remaining = limit;
-        for (name, source) in &self.attributes {
+        for (name, source) in &self.0 {
             let value = match source {
                 Source::RequestHeader(k) => envoy.get_request_header_value(k),
                 Source::FilterState(k) => envoy.get_filter_state_typed(k.as_bytes()),
@@ -123,10 +121,46 @@ fn messages(value: &mut Value) {
 
 // Move normalized fields into the audit attributes so prompt/response text is
 // serialized once. Keep unmapped provider details in the bounded content field.
-pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool) {
+pub fn project(
+    view: &mut Value,
+    attrs: &mut Map<String, Value>,
+    response: bool,
+    schema: Schema,
+    include_errors: bool,
+) {
     let Some(doc) = view.as_object_mut() else {
         return;
     };
+    for (key, attr) in [
+        ("responseId", "gen_ai.response.id"),
+        ("previousResponseId", "gen_ai.request.previous_response.id"),
+        ("requestStream", "gen_ai.request.stream"),
+        ("maxTokens", "gen_ai.request.max_tokens"),
+        ("finishReasons", "gen_ai.response.finish_reasons"),
+        ("conversationId", "gen_ai.conversation.id"),
+    ] {
+        if let Some(value) = doc.remove(key) {
+            attrs.insert(attr.into(), value);
+        }
+    }
+    if let Some(error) = doc.get("error") {
+        if let Some(code) = error["code"].as_str() {
+            attrs.insert("agentio.response.error_code".into(), code.into());
+        }
+        if let Some(kind) = error["type"]
+            .as_str()
+            .filter(|s| *s != "error")
+            .or_else(|| error["code"].as_str())
+        {
+            attrs.insert("error.type".into(), kind.into());
+        }
+    }
+    if !include_errors {
+        doc.remove("error");
+    }
+    if schema == Schema::Agentio {
+        return;
+    }
     attrs.insert("gen_ai.operation.name".into(), "chat".into());
     for (key, field) in [
         (
@@ -137,12 +171,6 @@ pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool)
                 "gen_ai.request.model"
             },
         ),
-        ("responseId", "gen_ai.response.id"),
-        ("previousResponseId", "gen_ai.request.previous_response.id"),
-        ("requestStream", "gen_ai.request.stream"),
-        ("maxTokens", "gen_ai.request.max_tokens"),
-        ("finishReasons", "gen_ai.response.finish_reasons"),
-        ("conversationId", "gen_ai.conversation.id"),
         ("inputMessages", "gen_ai.input.messages"),
         ("outputMessages", "gen_ai.output.messages"),
         ("tools", "gen_ai.tool.definitions"),
@@ -161,18 +189,6 @@ pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool)
                 }
             }
             attrs.insert(field.into(), v);
-        }
-    }
-    if let Some(error) = doc.get("error") {
-        if let Some(code) = error["code"].as_str() {
-            attrs.insert("agentio.response.error_code".into(), code.into());
-        }
-        if let Some(kind) = error["type"]
-            .as_str()
-            .filter(|s| *s != "error")
-            .or_else(|| error["code"].as_str())
-        {
-            attrs.insert("error.type".into(), kind.into());
         }
     }
     if let Some(Value::Object(usage)) = doc.remove("usage") {

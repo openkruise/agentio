@@ -48,7 +48,7 @@ The Helm-only merge happens earlier: `.Values.agentiod.config.values` is merged 
 
 ## Global HTTP content auditing
 
-Set `contentGuard` in the effective configuration to audit forwarded HTTP on native egress gateways. It accepts ordered host and Filter State rules, per-direction parsers and budgets, and audit attributes. The gateway image must include the ContentGuard dynamic module. See the [configuration example and matching semantics](../../extensions/envoy/contentguard/README.md#configuration).
+Set `contentGuard` in the effective configuration to audit forwarded HTTP on native egress gateways. It accepts ordered host and Filter State rules, per-rule LLM and generic parsers with per-direction content selection and budgets, and audit attributes. The gateway image must include the ContentGuard dynamic module. See the [configuration example and matching semantics](../../extensions/envoy/contentguard/README.md#configuration).
 
 ## Configure the Helm-managed base
 

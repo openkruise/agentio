@@ -8,48 +8,55 @@ Set `contentGuard` in the global AgentioConfig to install the module and its std
 
 ```yaml
 contentGuard:
+  defaults: {schema: genai, maxLogBytes: 8192}
+  attributes:
+    agentio.sandbox.id: {filterState: agentio.sandbox.id}
+    app.tenant.id: {requestHeader: x-tenant-id}
+    gen_ai.conversation.id: {requestHeader: x-session-id}
+    agentio.workload.namespace:
+      dynamicMetadata: {namespace: agentio, path: [workload, namespace]}
   rules:
-    - match:
-        hosts: [test.llm.example.com]
-      action: skip
+    - match: {hosts: [health.llm.example.com]}
+      skip: true
     - match:
         hosts: ["*.llm.example.com"]
         filterState:
-          - key: agentio.sandbox.id
-            present: true
-      action: audit
-      format: openai-chat-completions
-    - match:
-        hosts: [api.openai.com, api.anthropic.com]
-      action: audit
-  request:
-    maxLogBytes: 16384
-    fields: {inputMessages: true, tools: true}
-  response:
-    maxLogBytes: 8192
-    fields: {outputMessages: true}
-  audit:
-    schema: genai
-    attributes:
-      agentio.sandbox.id: {filterState: agentio.sandbox.id}
-      app.tenant.id: {requestHeader: x-tenant-id}
-      gen_ai.conversation.id: {requestHeader: x-session-id}
-      agentio.workload.namespace:
-        dynamicMetadata: {namespace: agentio, path: [workload, namespace]}
+          - {key: agentio.sandbox.id, present: true}
+      audit:
+        schema: agentio
+        parsers:
+          llm:
+            protocol: auto
+            request: {include: [messages, toolDefinitions], maxLogBytes: 16384}
+            response: {include: [toolCalls]}
+          generic:
+            request: {include: [body]}
+    - match: {}
+      audit:
+        parsers:
+          llm: {request: {}, response: {include: [toolCalls]}}
 ```
 
-Rules run in order when request headers arrive. The first matching rule applies to the entire stream, including response-only audits. In a rule, any listed host may match and every Filter State condition must match. Hosts ignore ASCII case and the authority port. A leading `*.` matches one or more complete labels. For a state key, use `present: true` to test existence or `values: [box-a, box-b]` to compare its serialized string exactly. An audit rule can override both direction parsers with `format`. Without an override, each enabled direction uses its own parser setting.
+Rules run in order at request headers. The first match controls the entire stream. Within a rule any listed host may match and every Filter State condition must match. Hosts ignore ASCII case and the authority port. A leading `*.` matches one or more complete labels. Use `present: true` for existence or `values: [box-a, box-b]` for an exact serialized string match. Each rule requires either `skip: true` or `audit`. Skipped and unmatched streams emit zero records. Supply at least one rule. A catch-all `match: {}` goes last. Remove `contentGuard` to disable the module.
 
-Omitted or empty rules audit all streams in the configured directions. With a nonempty list, unmatched streams skip capture and emit zero content records. A final `match: {}` supplies an explicit default. Configure at least one direction. Remove the global setting to uninstall the filter. The Rust module validates rule, parser and schema settings when Envoy loads the listener.
+Each audit rule enables at least one parser. A parser needs at least one direction. Omitting a direction suppresses its record. An enabled direction with `{}` or `include: []` emits metadata only. The LLM parser still reads the document or SSE events to extract protocol metadata. The generic parser counts bytes without fetching the body slices in this mode.
 
-The default `audit.schema: agentio` retains the original envelope. `genai` puts model, ordered message parts, tools and reported token counts under OpenTelemetry GenAI attribute names in the JSON record. Protocol-specific details remain in `content`. Generic JSON, text, and multipart keep their existing representations. A provider name is not inferred from the wire protocol.
+| Parser direction | Allowed `include` values |
+| --- | --- |
+| `llm.request` | `messages`, `toolDefinitions`, `toolCalls` |
+| `llm.response` | `messages`, `toolCalls` |
+| `generic.request`, `generic.response` | `body` |
+
+`llm.protocol` defaults to `auto`. It recognizes final path segments `completions`, `responses` and `messages`, ignoring query parameters and trailing slashes. Other paths use the generic parser when configured. For a custom URL, set `openai-chat-completions`, `openai-responses` or `anthropic-messages`. With both parsers configured, an explicit LLM protocol takes recognized paths and JSON requests (including `application/*+json`), leaving other custom-path media such as multipart to the generic parser. With only an explicit LLM parser it takes all paths. The selected parser owns both directions. Unsupported media or malformed LLM payloads produce a capture status. A disabled direction emits no record.
+
+Every record identifies its `schema`. The default is `agentio`; `defaults.schema` sets the global format and `rules[].audit.schema` overrides it. The same selections feed both schemas. The Agentio schema retains normalized LLM messages, model and usage in `content`. The GenAI schema moves these to OpenTelemetry GenAI attribute names. Generic bodies retain their JSON, text or multipart representation in both schemas. A provider name is not inferred from the wire protocol.
 
 Configured attributes appear under `attributes` in either schema. Request headers use lowercase names. Header and serialized Filter State values are sampled at request headers and carried into each enabled direction. A metadata path reads the named namespace on that HTTP stream. The controller renders an Envoy formatter and a stream-local string Filter State entry for each configured path before the module runs. Metadata values are logged as strings. Missing values are omitted. Extracted protocol values take precedence over configured attributes with the same names, including a Responses request's native conversation ID. Attribute values share the direction's final line budget with content. Oversized context entries are omitted and set `attributesTruncated: true`.
 
 For example, a request to a custom Responses-compatible endpoint can produce the following JSON line.
 
 ```json
-{"type":"content","requestID":"req-7","direction":"request","path":"/invoke","status":"complete","bytesSeen":29,"attributes":{"app.tenant.id":"team-a","gen_ai.input.messages":[{"parts":[{"content":"hello","type":"text"}],"role":"user"}],"gen_ai.operation.name":"chat","gen_ai.request.model":"m"},"content":{"format":"openai-responses"}}
+{"type":"content","schema":"genai","requestID":"req-7","direction":"request","path":"/invoke","status":"complete","bytesSeen":29,"attributes":{"app.tenant.id":"team-a","gen_ai.input.messages":[{"parts":[{"content":"hello","type":"text"}],"role":"user"}],"gen_ai.operation.name":"chat","gen_ai.request.model":"m"},"content":{"format":"openai-responses"}}
 ```
 
 ### GenAI metadata with tool references
@@ -58,9 +65,14 @@ To correlate calls without retaining message text, tool arguments or result bodi
 
 ```yaml
 contentGuard:
-  audit: {schema: genai}
-  request: {maxLogBytes: 4096, fields: {toolCalls: true}}
-  response: {maxLogBytes: 4096, fields: {toolCalls: true}}
+  defaults: {schema: genai, maxLogBytes: 4096}
+  rules:
+    - match: {}
+      audit:
+        parsers:
+          llm:
+            request: {include: [toolCalls]}
+            response: {include: [toolCalls]}
 ```
 
 | Field | Wire source |
@@ -69,11 +81,11 @@ contentGuard:
 | `gen_ai.request.max_tokens` | Chat `max_completion_tokens` (or legacy `max_tokens`), Responses `max_output_tokens`, Anthropic `max_tokens`. |
 | `gen_ai.request.previous_response.id` | Responses `previous_response_id` identifies the preceding generation. `gen_ai.conversation.id` separately identifies the conversation. |
 | `gen_ai.response.id` | Top-level JSON response ID, Chat chunk ID, Responses lifecycle event's response ID or Anthropic `message_start.message.id`. |
-| `gen_ai.response.finish_reasons` | Reported Chat finish reasons in choice-index order or Anthropic stop reason. Available with `fields: {}`. Responses reports its native `content.status` and `content.incompleteReason`. |
+| `gen_ai.response.finish_reasons` | Reported Chat finish reasons in choice-index order or Anthropic stop reason. Available with an empty `include`. Responses reports its native `content.status` and `content.incompleteReason`. |
 | `error.type`, `agentio.response.error_code` | Upstream structured error type and string code. If only a code is available, it also supplies `error.type`. The envelope's `status` describes audit capture. |
-| `agentio.tool.calls` | With `fields.toolCalls: true`, each entry contains `kind` (`call` or `result`), plus the ID and name when supplied. Available in both schemas. |
+| `agentio.tool.calls` | With `toolCalls` in `include`, each entry contains `kind` (`call` or `result`), plus the ID and name when supplied. Available in both schemas. |
 
-The summary covers Chat function calls and tool messages, Responses function calls and outputs, and Anthropic tool use, server tool use and tool results. JSON and SSE use the same representation. A result can be joined to its call by ID. Summary capture tracks up to 1,024 references and at most `maxLogBytes` bytes of names and IDs per direction. Overflow omits the summary and marks the record truncated. The serialized line budget also applies. Raw provider errors remain in `content.error` and may include provider-supplied text.
+The summary covers Chat function calls and tool messages, Responses function calls and outputs, and Anthropic tool use, server tool use and tool results. JSON and SSE use the same representation. A result can be joined to its call by ID. Summary capture tracks up to 1,024 references and at most `maxLogBytes` bytes of names and IDs per direction. Overflow omits the summary and marks the record truncated. The serialized line budget also applies. Including response `messages` also retains provider error details in `content.error`. Other selections retain the structured error type and code.
 
 ### Standalone Envoy configuration
 
@@ -89,20 +101,19 @@ typed_config:
   filter_name: contentguard
   filter_config:
     "@type": type.googleapis.com/google.protobuf.StringValue
-    value: '{"request":{"maxLogBytes":16384},"response":{"maxLogBytes":8192}}'
+    value: '{"rules":[{"match":{},"audit":{"parsers":{"llm":{"request":{"include":["messages"],"maxLogBytes":16384},"response":{}}}}}]}'
 ```
 
 Each direction accepts the following settings.
 
 | Setting | Behavior |
 | --- | --- |
-| `format` | Defaults to `auto`. Set `json`, `text`, `openai-chat-completions`, `openai-responses`, or `anthropic-messages` to select a parser regardless of the URL. Explicit formats check the media type. LLM protocols accept JSON in both directions and SSE on responses. |
-| `fields` | Omit to capture messages and tool definitions. In an explicit object, select `inputMessages`, `outputMessages`, `tools` (definitions) and/or `toolCalls` (compact call/result references). The summary requires explicit opt-in. Use `{}` for metadata and usage only. Generic JSON, text and multipart keep their own representation. |
+| `include` | Selects content groups for the parser and direction as listed above. Defaults to an empty list. |
 | `maxCaptureBytes` | When set, bounds a complete JSON/text document or a single SSE event including its framing. Exceeding it produces `too_large` and forwarding continues. When omitted, documents use streaming clipping and SSE events have a 64 KiB limit. Multipart uses the log budget. |
-| `maxContentBytes` | Bounds retained LLM messages and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the parser drops those fields and continues collecting metadata and usage. |
-| `maxLogBytes` | Required. Bounds the final JSON line independently of the decoder and content limits. |
+| `maxContentBytes` | LLM only. Bounds retained LLM messages and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the parser drops those fields and continues collecting metadata and usage. |
+| `maxLogBytes` | Bounds the serialized line including its newline. Inherits `defaults.maxLogBytes`, which defaults to 8,192 bytes. |
 
-Both optional byte limits accept 1 through 67,108,864 bytes. For example, `{"response":{"format":"openai-responses","maxCaptureBytes":65536,"maxContentBytes":4096,"maxLogBytes":8192,"fields":{}}}` records Responses metadata and usage on a custom URL.
+Both optional byte limits accept 1 through 67,108,864 bytes.
 
 Add the corresponding entries to the HTTP connection manager's `access_log` list. This example uses Envoy's stdout logger. For request-only auditing, configure just the first entry. A file logger can use the same text format. The formatter writes the serialized record directly; the newline is included in the direction's budget.
 
@@ -141,9 +152,9 @@ Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared li
 | Input | Logged content |
 | --- | --- |
 | LLM JSON requests | In auto mode, paths ending in `/completions`, `/responses` and `/messages` select Chat Completions, Responses and Anthropic Messages. Captures normalized messages, tool definitions, calls and results. Provider-specific blocks remain structured. |
-| LLM JSON and SSE responses | Uses the same protocol as the path or explicit response configuration. Reconstructs output messages, calls, arguments, finish reasons and reported usage. Responses also carries provider status, error and incomplete reason when available. |
+| LLM JSON and SSE responses | Uses the same protocol selected at request headers. Reconstructs output messages, calls, arguments, finish reasons and reported usage. Responses also carries provider status, error and incomplete reason when available. |
 | Generic JSON | Provider JSON, including arrays and objects. |
-| UTF-8 text | Explicit `text` accepts `text/plain`. Auto mode also keeps a bounded text prefix for other text media, including SSE on unrecognized paths. |
+| UTF-8 text | The generic parser keeps a bounded prefix for text media, including SSE on generic streams. |
 | Multipart form data | Ordered form fields with names and byte counts. File entries include the filename, optional content type and base64 if it fits. Oversized files carry `omitted: true`. |
 
 When no hard document limit is set and a JSON document exceeds the available log space, the scanner bounds each string across body slices. It replaces oversized inline media with `[omitted]` and continues scanning for later text. If the JSON structure itself fills the budget, the record switches to a bounded `retainedText` projection. Long text may be shortened. The final encoder checks the serialized size after normalization and escaping. If the projected structure still cannot fit, it emits a `truncated` record with null content. A truncated record describes the retained projection and cannot establish validity or reproduce discarded bytes.

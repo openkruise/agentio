@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::audit::{self, Attributes, Schema};
-use crate::{
-    Direction, Fields, Format, json_capture::JsonCapture, multipart::Multipart, protocol, sse,
-};
+use crate::{Direction, Format, json_capture::JsonCapture, multipart::Multipart, protocol, sse};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 enum Body {
+    Metadata,
     Json(JsonCapture, &'static str),
     Multipart(Multipart),
     Stream(Box<sse::Stream>),
@@ -17,7 +16,6 @@ enum Body {
 }
 
 pub struct Capture {
-    schema: Schema,
     body: Body,
     record: Record,
     content_budget: usize,
@@ -30,6 +28,7 @@ pub struct Capture {
 struct Record {
     #[serde(rename = "type")]
     kind: &'static str,
+    schema: Schema,
     #[serde(rename = "requestID")]
     id: String,
     direction: &'static str,
@@ -41,15 +40,6 @@ struct Record {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     attributes_truncated: bool,
     content: Value,
-}
-
-fn format(path: &str) -> &'static str {
-    match path.trim_end_matches('/').rsplit('/').next() {
-        Some("completions") => protocol::CHAT,
-        Some("responses") => protocol::RESPONSES,
-        Some("messages") => protocol::ANTHROPIC,
-        _ => "json",
-    }
 }
 
 fn prefix(s: &str, limit: usize) -> &str {
@@ -70,6 +60,7 @@ impl Capture {
         let path = path.split('?').next().unwrap_or(path);
         let mut record = Record {
             kind: "content",
+            schema,
             id: prefix(id, 128).to_owned(),
             direction,
             path: prefix(path, 256).to_owned(),
@@ -104,18 +95,26 @@ impl Capture {
             envelope = serde_json::to_vec(&record).unwrap().len();
         }
         let room = limit.saturating_sub(envelope + 64);
-        let codec = match settings.format {
-            Format::Auto => format(path),
+        let format = if settings.format == Format::Auto {
+            Format::from_path(path).unwrap_or(Format::Generic)
+        } else {
+            settings.format
+        };
+        let codec = match format {
+            Format::Auto => unreachable!(),
+            Format::Generic | Format::Metadata => "json",
             Format::Text => "text",
             Format::Json => "json",
             Format::OpenaiChatCompletions => protocol::CHAT,
             Format::OpenaiResponses => protocol::RESPONSES,
             Format::AnthropicMessages => protocol::ANTHROPIC,
         };
-        let auto = settings.format == Format::Auto;
+        let auto = matches!(settings.format, Format::Auto | Format::Generic);
         let llm = !matches!(codec, "json" | "text");
         let encoding = encoding.trim();
-        let body = if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
+        let body = if settings.format == Format::Metadata {
+            Body::Metadata
+        } else if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
             Body::Unavailable("unsupported_encoding")
         } else if let Ok(m) = media.parse::<mime::Mime>() {
             let essence = m.essence_str();
@@ -148,8 +147,7 @@ impl Capture {
                             .max_content_bytes
                             .or(settings.max_capture_bytes)
                             .unwrap_or(room),
-                        settings.fields.unwrap_or(Fields::DEFAULT),
-                        schema,
+                        settings.fields,
                         limit,
                     )))
                 } else {
@@ -162,7 +160,6 @@ impl Capture {
             Body::Unavailable("unsupported_media_type")
         };
         Self {
-            schema,
             record,
             body,
             content_budget: room,
@@ -171,6 +168,12 @@ impl Capture {
         }
     }
 
+    pub fn metadata_only(&self) -> bool {
+        matches!(self.body, Body::Metadata)
+    }
+    pub fn count_bytes(&mut self, size: usize) {
+        self.record.bytes_seen += size;
+    }
     pub fn push(&mut self, chunk: &[u8]) {
         self.record.bytes_seen += chunk.len();
         if matches!(self.body, Body::Json(..) | Body::Text(_))
@@ -202,7 +205,7 @@ impl Capture {
                     self.body = Body::Unavailable(e);
                 }
             }
-            Body::Unavailable(_) => {}
+            Body::Metadata | Body::Unavailable(_) => {}
         }
     }
 
@@ -217,16 +220,17 @@ impl Capture {
         let result = match self.body {
             _ if !complete => Err("incomplete"),
             Body::Unavailable("unsupported_media_type")
-                if self.record.bytes_seen == 0 && self.settings.format == Format::Auto =>
+                if self.record.bytes_seen == 0
+                    && matches!(self.settings.format, Format::Generic | Format::Auto) =>
             {
                 Ok((false, Value::Null))
             }
+            Body::Metadata => Ok((false, Value::Null)),
             Body::Unavailable(e) => Err(e),
             Body::Json(c, f) => c.finish(
                 f,
                 self.record.direction == "response",
-                self.settings.fields.unwrap_or(Fields::DEFAULT),
-                self.schema,
+                self.settings.fields,
                 self.line_limit,
             ),
             Body::Stream(stream) => stream.finish(),
@@ -247,7 +251,7 @@ impl Capture {
             Ok((mut clipped, mut v)) => {
                 if llm {
                     clipped |= v["toolCallsTruncated"] == true;
-                    if self.settings.fields.is_some_and(|f| f.tool_calls)
+                    if self.settings.fields.tool_calls
                         && let Some(summary) =
                             v.as_object_mut().and_then(|doc| doc.remove("toolCalls"))
                     {
@@ -267,12 +271,12 @@ impl Capture {
                     if v["partial"] == true {
                         self.record.status = "partial";
                     }
-                }
-                if llm && self.schema == Schema::Genai {
                     audit::project(
                         &mut v,
                         &mut self.record.attributes,
                         self.record.direction == "response",
+                        self.record.schema,
+                        self.settings.fields.output_messages,
                     );
                 }
                 self.record.content = v;
@@ -288,7 +292,7 @@ impl Capture {
             // Discard large binary leaves first, then shorten oversized text.
             self.record.status = "truncated";
             shrink(&mut self.record.content, self.content_budget / 4);
-            if self.schema == Schema::Genai {
+            if self.record.schema == Schema::Genai {
                 for key in [
                     "gen_ai.input.messages",
                     "gen_ai.output.messages",
@@ -303,7 +307,7 @@ impl Capture {
             serde_json::to_writer(&mut line, &self.record).unwrap();
             if line.len() >= self.line_limit {
                 self.record.content = Value::Null;
-                if self.schema == Schema::Genai {
+                if self.record.schema == Schema::Genai {
                     for key in [
                         "gen_ai.input.messages",
                         "gen_ai.output.messages",
