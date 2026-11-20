@@ -66,7 +66,9 @@ func (b *resourceBuilder) contentGuardConfig() ([]*hcm.HttpFilter, []*access.Acc
 			FactoryKey:  "envoy.string",
 			ReadOnly:    true,
 			SkipIfEmpty: true,
-			Value:       &common.FilterStateValue_FormatString{FormatString: formatString("%DYNAMIC_METADATA(" + strings.Join(parts, ":") + ")%")},
+			Value: &common.FilterStateValue_FormatString{
+				FormatString: formatString("%DYNAMIC_METADATA(" + strings.Join(parts, ":") + ")%"),
+			},
 		})
 		attrs[name] = map[string]any{"filterState": key}
 	}
@@ -83,10 +85,15 @@ func (b *resourceBuilder) contentGuardConfig() ([]*hcm.HttpFilter, []*access.Acc
 			"dynamic_module_config": map[string]any{
 				"name":         "envoy_agentio_contentguard",
 				"do_not_close": true,
-				"module":       map[string]any{"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_contentguard.so"}},
+				"module": map[string]any{
+					"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_contentguard.so"},
+				},
 			},
-			"filter_name":   "contentguard",
-			"filter_config": map[string]any{"@type": "type.googleapis.com/google.protobuf.StringValue", "value": string(data)},
+			"filter_name": "contentguard",
+			"filter_config": map[string]any{
+				"@type": "type.googleapis.com/google.protobuf.StringValue",
+				"value": string(data),
+			},
 		}),
 	})))
 	var logs []*access.AccessLog

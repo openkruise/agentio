@@ -16,8 +16,9 @@ package networking
 
 import (
 	"encoding/json"
-	"google.golang.org/protobuf/proto"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 
 	udpa "github.com/cncf/xds/go/udpa/type/v1"
 	cel "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/filters/cel/v3"
@@ -67,7 +68,11 @@ func TestContentGuardGatewayConfig(t *testing.T) {
 		if err := projector.GetTypedConfig().UnmarshalTo(p); err != nil {
 			t.Fatal(err)
 		}
-		if len(p.OnRequestHeaders) != 1 || p.OnRequestHeaders[0].GetFormatString().GetTextFormatSource().GetInlineString() != "%DYNAMIC_METADATA(agentio:workload:namespace)%" {
+		if len(p.OnRequestHeaders) != 1 ||
+			p.OnRequestHeaders[0].GetFormatString().
+				GetTextFormatSource().
+				GetInlineString() !=
+				"%DYNAMIC_METADATA(agentio:workload:namespace)%" {
 			t.Fatal(p)
 		}
 		wire := &udpa.TypedStruct{}
@@ -82,7 +87,8 @@ func TestContentGuardGatewayConfig(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &moduleSettings); err != nil {
 			t.Fatal(err)
 		}
-		if len(moduleSettings.Rules) != 2 || moduleSettings.Audit.Attributes["agentio.workload.namespace"]["filterState"] != p.OnRequestHeaders[0].GetObjectKey() {
+		if len(moduleSettings.Rules) != 2 ||
+			moduleSettings.Audit.Attributes["agentio.workload.namespace"]["filterState"] != p.OnRequestHeaders[0].GetObjectKey() {
 			t.Fatal(raw)
 		}
 		if len(manager.AccessLog) != 2 {
