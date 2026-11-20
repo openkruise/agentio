@@ -57,6 +57,7 @@ impl Stream {
             | "response.failed"
             | "response.incomplete" => {
                 let doc = &v["response"];
+                b.response_id(&doc["id"]);
                 let model = string(&doc["model"])?;
                 let status = string(&doc["status"])?;
                 if kind != "response.created" && kind.strip_prefix("response.") != Some(status) {
@@ -88,6 +89,9 @@ impl Stream {
                         return Err("too_large");
                     }
                     if !out.is_empty() {
+                        if let Some(tools) = &mut b.tools {
+                            tools.document(RESPONSES, doc, true);
+                        }
                         self.items.clear();
                         b.room = b.limit;
                         #[derive(serde::Deserialize)]
@@ -153,6 +157,9 @@ impl Stream {
                 } else {
                     None
                 };
+                if let Some(tools) = &mut b.tools {
+                    tools.responses(i as usize, item);
+                }
                 self.items.insert(
                     i,
                     Item {

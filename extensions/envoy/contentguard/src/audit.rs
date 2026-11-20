@@ -137,6 +137,11 @@ pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool)
                 "gen_ai.request.model"
             },
         ),
+        ("responseId", "gen_ai.response.id"),
+        ("previousResponseId", "gen_ai.request.previous_response.id"),
+        ("requestStream", "gen_ai.request.stream"),
+        ("maxTokens", "gen_ai.request.max_tokens"),
+        ("finishReasons", "gen_ai.response.finish_reasons"),
         ("conversationId", "gen_ai.conversation.id"),
         ("inputMessages", "gen_ai.input.messages"),
         ("outputMessages", "gen_ai.output.messages"),
@@ -145,17 +150,6 @@ pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool)
         if let Some(mut v) = doc.remove(key) {
             if key.ends_with("Messages") {
                 messages(&mut v);
-                if response {
-                    let reasons: Vec<_> = v
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|m| m.get("finish_reason").cloned())
-                        .collect();
-                    if !reasons.is_empty() {
-                        attrs.insert("gen_ai.response.finish_reasons".into(), reasons.into());
-                    }
-                }
             } else if key == "tools" {
                 for tool in v
                     .as_array_mut()
@@ -167,6 +161,18 @@ pub fn project(view: &mut Value, attrs: &mut Map<String, Value>, response: bool)
                 }
             }
             attrs.insert(field.into(), v);
+        }
+    }
+    if let Some(error) = doc.get("error") {
+        if let Some(code) = error["code"].as_str() {
+            attrs.insert("agentio.response.error_code".into(), code.into());
+        }
+        if let Some(kind) = error["type"]
+            .as_str()
+            .filter(|s| *s != "error")
+            .or_else(|| error["code"].as_str())
+        {
+            attrs.insert("error.type".into(), kind.into());
         }
     }
     if let Some(Value::Object(usage)) = doc.remove("usage") {

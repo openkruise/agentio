@@ -54,6 +54,7 @@ impl Stream {
                 if self.model.is_some() || !m["content"].as_array().is_some_and(Vec::is_empty) {
                     return Err(INVALID);
                 }
+                b.response_id(&m["id"]);
                 self.model = Some(string(&m["model"])?.into());
                 self.merge_usage(&m["usage"]);
             }
@@ -85,6 +86,9 @@ impl Stream {
                 } else {
                     Value::Null
                 };
+                if let Some(tools) = &mut b.tools {
+                    tools.anthropic((0, self.blocks.len()), source);
+                }
                 self.blocks.push(Block {
                     kind: kind.into(),
                     source: kept,
@@ -159,7 +163,7 @@ impl Stream {
         }
     }
 
-    pub(super) fn finish(self, keep: bool) -> Result<Value> {
+    pub(super) fn finish(self, keep: bool, genai: bool) -> Result<Value> {
         if !self.done {
             return Err("incomplete_stream");
         }
@@ -174,6 +178,9 @@ impl Stream {
         if let Some(mut counts) = self.usage {
             anthropic_totals(&mut counts);
             view["usage"] = counts;
+        }
+        if genai {
+            view["finishReasons"] = json!([reason]);
         }
         if keep {
             let raw = Value::Array(self.blocks.into_iter().map(|b| b.source).collect());

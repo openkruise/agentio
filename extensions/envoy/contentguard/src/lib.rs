@@ -9,6 +9,7 @@ mod protocol;
 mod response;
 mod rules;
 mod sse;
+mod tool_summary;
 
 use audit::{Attributes, Audit};
 use capture::Capture;
@@ -67,13 +68,15 @@ struct Fields {
     input_messages: bool,
     output_messages: bool,
     tools: bool,
+    tool_calls: bool,
 }
 
 impl Fields {
-    const ALL: Self = Self {
+    const DEFAULT: Self = Self {
         input_messages: true,
         output_messages: true,
         tools: true,
+        tool_calls: false,
     };
 }
 

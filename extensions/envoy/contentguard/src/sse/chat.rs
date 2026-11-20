@@ -70,6 +70,7 @@ impl Stream {
         if self.done {
             return Err(INVALID);
         }
+        b.response_id(&v["id"]);
         if let Some(e) = v.get("error") {
             self.error = (!e.is_null()).then(|| e.clone());
             self.done = true;
@@ -127,6 +128,14 @@ impl Stream {
                             string(&t[key])?;
                         }
                     }
+                    if let Some(tools) = &mut b.tools {
+                        tools.chat_delta(
+                            i as usize,
+                            idx as usize,
+                            &t["id"],
+                            &t["function"]["name"],
+                        );
+                    }
                     if !b.retaining() {
                         if let Some(f) = t.get("function") {
                             Function::default().add(f, b)?;
@@ -154,6 +163,14 @@ impl Stream {
                 }
             }
             if !d["function_call"].is_null() {
+                if let Some(tools) = &mut b.tools {
+                    tools.chat_delta(
+                        i as usize,
+                        usize::MAX,
+                        &Value::Null,
+                        &d["function_call"]["name"],
+                    );
+                }
                 c.legacy
                     .get_or_insert_default()
                     .add(&d["function_call"], b)?;
@@ -177,7 +194,7 @@ impl Stream {
         }
     }
 
-    pub(super) fn finish(self, keep: bool) -> Result<Value> {
+    pub(super) fn finish(self, keep: bool, genai: bool) -> Result<Value> {
         if !self.done {
             return Err("incomplete_stream");
         }
@@ -191,9 +208,13 @@ impl Stream {
         if let Some(usage) = self.usage {
             v["usage"] = usage;
         }
+        let mut reasons = vec![];
         let mut out = vec![];
         for (i, c) in self.choices {
             let reason = c.finish.ok_or("incomplete_stream")?;
+            if genai {
+                reasons.push(reason.clone());
+            }
             if !keep {
                 continue;
             }
@@ -222,6 +243,9 @@ impl Stream {
                 blocks.push(json!({"type":"refusal","text":c.refusal}));
             }
             out.push(json!({"index":i,"role":c.role.as_deref().unwrap_or("assistant"),"content":blocks,"finishReason":reason}));
+        }
+        if !reasons.is_empty() {
+            v["finishReasons"] = reasons.into();
         }
         if keep {
             v["outputMessages"] = out.into();

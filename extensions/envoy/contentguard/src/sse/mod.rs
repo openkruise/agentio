@@ -18,6 +18,9 @@ enum Provider {
 // Retain output independently of framing. A late usage event is still processed
 // after content has been discarded, as are malformed transitions.
 struct Retention {
+    genai: bool,
+    response_id: Option<String>,
+    tools: Option<crate::tool_summary::ToolSummary>,
     limit: usize,
     room: usize,
     enabled: bool,
@@ -26,6 +29,14 @@ struct Retention {
     items: usize,
 }
 impl Retention {
+    fn response_id(&mut self, id: &Value) {
+        if self.genai
+            && self.response_id.is_none()
+            && let Some(id) = id.as_str()
+        {
+            self.response_id = Some(id.into());
+        }
+    }
     fn retaining(&self) -> bool {
         self.enabled && !self.truncated
     }
@@ -70,7 +81,14 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn new(format: &str, event_limit: usize, room: usize, output: bool) -> Self {
+    pub fn new(
+        format: &str,
+        event_limit: usize,
+        room: usize,
+        fields: crate::Fields,
+        schema: crate::audit::Schema,
+        log_limit: usize,
+    ) -> Self {
         let provider = match format {
             CHAT => Provider::Chat(Default::default()),
             ANTHROPIC => Provider::Anthropic(Default::default()),
@@ -82,7 +100,12 @@ impl Stream {
             budget: Retention {
                 limit: room,
                 room,
-                enabled: output,
+                enabled: fields.output_messages,
+                genai: schema == crate::audit::Schema::Genai,
+                response_id: None,
+                tools: fields
+                    .tool_calls
+                    .then(|| crate::tool_summary::ToolSummary::new(log_limit)),
                 truncated: false,
                 partial: false,
                 items: 0,
@@ -199,10 +222,16 @@ impl Stream {
     pub fn finish(self) -> Result<(bool, Value)> {
         let keep = self.budget.retaining();
         let mut result = match self.provider {
-            Provider::Chat(s) => s.finish(keep)?,
-            Provider::Anthropic(s) => s.finish(keep)?,
+            Provider::Chat(s) => s.finish(keep, self.budget.genai)?,
+            Provider::Anthropic(s) => s.finish(keep, self.budget.genai)?,
             Provider::Responses(s) => s.finish(keep)?,
         };
+        if let Some(id) = self.budget.response_id {
+            result["responseId"] = id.into();
+        }
+        if let Some(tools) = self.budget.tools {
+            tools.publish(&mut result);
+        }
         if self.budget.partial {
             result["partial"] = true.into();
         }

@@ -52,6 +52,29 @@ For example, a request to a custom Responses-compatible endpoint can produce the
 {"type":"content","requestID":"req-7","direction":"request","path":"/invoke","status":"complete","bytesSeen":29,"attributes":{"app.tenant.id":"team-a","gen_ai.input.messages":[{"parts":[{"content":"hello","type":"text"}],"role":"user"}],"gen_ai.operation.name":"chat","gen_ai.request.model":"m"},"content":{"format":"openai-responses"}}
 ```
 
+### GenAI metadata with tool references
+
+To correlate calls without retaining message text, tool arguments or result bodies, enable the summary on each desired direction.
+
+```yaml
+contentGuard:
+  audit: {schema: genai}
+  request: {maxLogBytes: 4096, fields: {toolCalls: true}}
+  response: {maxLogBytes: 4096, fields: {toolCalls: true}}
+```
+
+| Field | Wire source |
+| --- | --- |
+| `gen_ai.request.stream` | Explicit boolean `stream` in any of the three protocols. |
+| `gen_ai.request.max_tokens` | Chat `max_completion_tokens` (or legacy `max_tokens`), Responses `max_output_tokens`, Anthropic `max_tokens`. |
+| `gen_ai.request.previous_response.id` | Responses `previous_response_id` identifies the preceding generation. `gen_ai.conversation.id` separately identifies the conversation. |
+| `gen_ai.response.id` | Top-level JSON response ID, Chat chunk ID, Responses lifecycle event's response ID or Anthropic `message_start.message.id`. |
+| `gen_ai.response.finish_reasons` | Reported Chat finish reasons in choice-index order or Anthropic stop reason. Available with `fields: {}`. Responses reports its native `content.status` and `content.incompleteReason`. |
+| `error.type`, `agentio.response.error_code` | Upstream structured error type and string code. If only a code is available, it also supplies `error.type`. The envelope's `status` describes audit capture. |
+| `agentio.tool.calls` | With `fields.toolCalls: true`, each entry contains `kind` (`call` or `result`), plus the ID and name when supplied. Available in both schemas. |
+
+The summary covers Chat function calls and tool messages, Responses function calls and outputs, and Anthropic tool use, server tool use and tool results. JSON and SSE use the same representation. A result can be joined to its call by ID. Summary capture tracks up to 1,024 references and at most `maxLogBytes` bytes of names and IDs per direction. Overflow omits the summary and marks the record truncated. The serialized line budget also applies. Raw provider errors remain in `content.error` and may include provider-supplied text.
+
 ### Standalone Envoy configuration
 
 The following filter enables both directions. Omit the `response` member for request-only auditing. `maxLogBytes` is a per-direction limit on the serialized JSON line, including its envelope and newline, in the range 1,024 to 1,048,576 bytes.
@@ -74,7 +97,7 @@ Each direction accepts the following settings.
 | Setting | Behavior |
 | --- | --- |
 | `format` | Defaults to `auto`. Set `json`, `text`, `openai-chat-completions`, `openai-responses`, or `anthropic-messages` to select a parser regardless of the URL. Explicit formats check the media type. LLM protocols accept JSON in both directions and SSE on responses. |
-| `fields` | Omit to capture all LLM fields. Within an explicit object, only fields set to true are selected. The flags are `inputMessages`, `outputMessages` and `tools`. Use `{}` for protocol metadata and usage only. Generic JSON, text and multipart keep their own representation. |
+| `fields` | Omit to capture messages and tool definitions. In an explicit object, select `inputMessages`, `outputMessages`, `tools` (definitions) and/or `toolCalls` (compact call/result references). The summary requires explicit opt-in. Use `{}` for metadata and usage only. Generic JSON, text and multipart keep their own representation. |
 | `maxCaptureBytes` | When set, bounds a complete JSON/text document or a single SSE event including its framing. Exceeding it produces `too_large` and forwarding continues. When omitted, documents use streaming clipping and SSE events have a 64 KiB limit. Multipart uses the log budget. |
 | `maxContentBytes` | Bounds retained LLM messages and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the parser drops those fields and continues collecting metadata and usage. |
 | `maxLogBytes` | Required. Bounds the final JSON line independently of the decoder and content limits. |

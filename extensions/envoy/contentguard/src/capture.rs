@@ -148,7 +148,9 @@ impl Capture {
                             .max_content_bytes
                             .or(settings.max_capture_bytes)
                             .unwrap_or(room),
-                        settings.fields.unwrap_or(Fields::ALL).output_messages,
+                        settings.fields.unwrap_or(Fields::DEFAULT),
+                        schema,
+                        limit,
                     )))
                 } else {
                     Body::Text(vec![])
@@ -223,8 +225,9 @@ impl Capture {
             Body::Json(c, f) => c.finish(
                 f,
                 self.record.direction == "response",
-                self.settings.fields.unwrap_or(Fields::ALL),
+                self.settings.fields.unwrap_or(Fields::DEFAULT),
                 self.schema,
+                self.line_limit,
             ),
             Body::Stream(stream) => stream.finish(),
             Body::Multipart(c) => c.finish(),
@@ -243,6 +246,15 @@ impl Capture {
         match result {
             Ok((mut clipped, mut v)) => {
                 if llm {
+                    clipped |= v["toolCallsTruncated"] == true;
+                    if self.settings.fields.is_some_and(|f| f.tool_calls)
+                        && let Some(summary) =
+                            v.as_object_mut().and_then(|doc| doc.remove("toolCalls"))
+                    {
+                        self.record
+                            .attributes
+                            .insert("agentio.tool.calls".into(), summary);
+                    }
                     if let Some(limit) = self
                         .settings
                         .max_content_bytes
@@ -303,6 +315,17 @@ impl Capture {
                 line.clear();
                 serde_json::to_writer(&mut line, &self.record).unwrap();
             }
+        }
+        if line.len() >= self.line_limit
+            && self
+                .record
+                .attributes
+                .remove("agentio.tool.calls")
+                .is_some()
+        {
+            self.record.attributes_truncated = true;
+            line.clear();
+            serde_json::to_writer(&mut line, &self.record).unwrap();
         }
         if line.len() >= self.line_limit {
             self.record.attributes.clear();

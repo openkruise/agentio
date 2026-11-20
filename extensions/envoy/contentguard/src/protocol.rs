@@ -332,24 +332,71 @@ pub fn parse(
     response: bool,
     fields: crate::Fields,
     schema: crate::audit::Schema,
+    log_limit: usize,
 ) -> Parsed {
     let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
     if format == "json" {
-        Ok(doc)
-    } else if response {
-        crate::response::normalize(format, &doc, fields.output_messages)
-    } else {
-        let mut view = llm(&doc, format, fields)?;
-        if schema == crate::audit::Schema::Genai
-            && format == RESPONSES
-            && let Some(id) = doc["conversation"]
-                .as_str()
-                .or_else(|| doc["conversation"]["id"].as_str())
-        {
-            view["conversationId"] = id.into();
-        }
-        Ok(view)
+        return Ok(doc);
     }
+    let mut view = if response {
+        crate::response::normalize(format, &doc, fields.output_messages)?
+    } else {
+        llm(&doc, format, fields)?
+    };
+    if fields.tool_calls {
+        let mut calls = crate::tool_summary::ToolSummary::new(log_limit);
+        calls.document(format, &doc, response);
+        calls.publish(&mut view);
+    }
+    if schema == crate::audit::Schema::Genai {
+        if response {
+            if let Some(id) = doc["id"].as_str() {
+                view["responseId"] = id.into();
+            }
+            let mut reasons = Vec::new();
+            if format == CHAT {
+                for (i, c) in doc["choices"].as_array().into_iter().flatten().enumerate() {
+                    if let Some(reason) = c["finish_reason"].as_str() {
+                        reasons.push((c["index"].as_u64().unwrap_or(i as u64), reason));
+                    }
+                }
+                reasons.sort_by_key(|(i, _)| *i);
+            } else if format == ANTHROPIC
+                && let Some(reason) = doc["stop_reason"].as_str()
+            {
+                reasons.push((0, reason));
+            }
+            if !reasons.is_empty() {
+                view["finishReasons"] = reasons.into_iter().map(|(_, s)| Value::from(s)).collect();
+            }
+        } else {
+            if let Some(stream) = doc["stream"].as_bool() {
+                view["requestStream"] = stream.into();
+            }
+            let max_tokens = match format {
+                CHAT => doc["max_completion_tokens"]
+                    .as_u64()
+                    .or_else(|| doc["max_tokens"].as_u64()),
+                RESPONSES => doc["max_output_tokens"].as_u64(),
+                _ => doc["max_tokens"].as_u64(),
+            };
+            if let Some(n) = max_tokens {
+                view["maxTokens"] = n.into();
+            }
+            if format == RESPONSES {
+                if let Some(id) = doc["conversation"]
+                    .as_str()
+                    .or_else(|| doc["conversation"]["id"].as_str())
+                {
+                    view["conversationId"] = id.into();
+                }
+                if let Some(id) = doc["previous_response_id"].as_str() {
+                    view["previousResponseId"] = id.into();
+                }
+            }
+        }
+    }
+    Ok(view)
 }
 
 #[cfg(test)]
@@ -366,8 +413,9 @@ mod tests {
             ANTHROPIC,
             input.to_string().as_bytes(),
             false,
-            crate::Fields::ALL,
+            crate::Fields::DEFAULT,
             Default::default(),
+            8192,
         )
         .unwrap();
         let blocks = &view["inputMessages"][0]["content"];
@@ -388,8 +436,9 @@ mod tests {
             CHAT,
             input.to_string().as_bytes(),
             false,
-            crate::Fields::ALL,
+            crate::Fields::DEFAULT,
             Default::default(),
+            8192,
         )
         .unwrap();
         let msgs = &view["inputMessages"];

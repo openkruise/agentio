@@ -543,3 +543,228 @@ fn genai_uses_native_conversation_and_obeys_whole_line_limit() {
         assert_eq!(record["content"], json!({"format":"openai-responses"}));
     }
 }
+
+fn genai_record(
+    direction: &'static str,
+    path: &str,
+    media: &str,
+    body: &str,
+    fields: Value,
+) -> Value {
+    let settings = serde_json::from_value(json!({"maxLogBytes":8192,"fields":fields})).unwrap();
+    let mut c = Capture::new(
+        direction,
+        path,
+        "req",
+        media,
+        "",
+        settings,
+        (crate::audit::Schema::Genai, &Default::default()),
+    );
+    for chunk in body.as_bytes().chunks(7) {
+        c.push(chunk)
+    }
+    let (_, line) = c.encode(true);
+    assert!(line.len() < 8192);
+    serde_json::from_slice(&line).unwrap()
+}
+
+#[test]
+fn summary_only_requests_preserve_call_result_link_and_explicit_parameters() {
+    for (path, mut body) in [
+        (
+            "/completions",
+            json!({"model":"m","max_tokens":123,"max_completion_tokens":42,"messages":[
+            {"role":"assistant","tool_calls":[{"id":"c","function":{"name":"lookup","arguments":"secret"}}]},
+            {"role":"tool","tool_call_id":"c","content":"secret"}]}),
+        ),
+        (
+            "/messages",
+            json!({"model":"m","max_tokens":42,"messages":[
+            {"role":"assistant","content":[{"type":"tool_use","name":"lookup","id":"c","input":{"arg":"secret"}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":"secret"}]}]}),
+        ),
+        (
+            "/responses",
+            json!({"model":"m","max_output_tokens":42,"previous_response_id":"resp-prev","input":[
+            {"type":"function_call","call_id":"c","name":"lookup","arguments":"secret"},
+            {"type":"function_call_output","call_id":"c","output":"secret"}]}),
+        ),
+    ] {
+        body["stream"] = false.into();
+        let r = genai_record(
+            "request",
+            path,
+            "application/json",
+            &body.to_string(),
+            json!({"toolCalls":true}),
+        );
+        assert_eq!(r["status"], "complete");
+        assert!(!r.to_string().contains("secret"));
+        let a = &r["attributes"];
+        assert_eq!(a["gen_ai.request.stream"], false);
+        assert_eq!(a["gen_ai.request.max_tokens"], 42);
+        assert_eq!(
+            a["agentio.tool.calls"],
+            json!([{"id":"c","name":"lookup","kind":"call"},{"id":"c","kind":"result"}])
+        );
+        assert!(a.get("gen_ai.input.messages").is_none());
+        assert_eq!(
+            a["gen_ai.request.previous_response.id"],
+            body["previous_response_id"]
+        );
+    }
+    let r = genai_record(
+        "request",
+        "/completions",
+        "application/json",
+        r#"{"model":"m","max_tokens":7,"messages":[]}"#,
+        json!({}),
+    );
+    assert_eq!(r["attributes"]["gen_ai.request.max_tokens"], 7);
+    assert!(r["attributes"].get("gen_ai.request.stream").is_none());
+}
+
+#[test]
+fn metadata_and_summary_match_across_json_and_stream_when_messages_are_disabled() {
+    for (path, doc, stream, id, reasons) in [
+        (
+            "/completions",
+            include_str!("../testdata/openai.response.json"),
+            include_str!("../testdata/openai.sse"),
+            "chat-1",
+            json!(["tool_calls", "stop"]),
+        ),
+        (
+            "/messages",
+            include_str!("../testdata/anthropic.response.json"),
+            include_str!("../testdata/anthropic.sse"),
+            "msg_test",
+            json!(["tool_use"]),
+        ),
+        (
+            "/responses",
+            include_str!("../testdata/responses.response.json"),
+            include_str!("../testdata/responses.sse"),
+            "resp_1",
+            Value::Null,
+        ),
+    ] {
+        let mut doc: Value = serde_json::from_str(doc).unwrap();
+        doc["id"] = id.into();
+        let mut wire = stream.to_string();
+        if path == "/completions" {
+            wire = wire
+                .replacen(
+                    r#"{"model":"test-model""#,
+                    r#"{"id":"chat-1","model":"test-model""#,
+                    1,
+                )
+                .replace(r#""name":"lookup""#, r#""name":"look""#)
+                .replace(
+                    r#"{"arguments":"\"北京\"}""#,
+                    r#"{"name":"up","arguments":"\"北京\"}""#,
+                );
+        }
+        for enabled in [false, true] {
+            let fields = if enabled {
+                json!({"toolCalls":true})
+            } else {
+                json!({})
+            };
+            let json = genai_record(
+                "response",
+                path,
+                "application/json",
+                &doc.to_string(),
+                fields.clone(),
+            );
+            let streamed = genai_record("response", path, "text/event-stream", &wire, fields);
+            assert_eq!(streamed["status"], "complete");
+            assert_eq!(streamed["attributes"], json["attributes"], "{path}");
+            assert_eq!(streamed["content"], json["content"]);
+            let a = &json["attributes"];
+            assert_eq!(a["gen_ai.response.id"], id);
+            assert_eq!(a["gen_ai.response.finish_reasons"], reasons);
+            assert!(a.get("gen_ai.output.messages").is_none());
+            assert_eq!(a.get("agentio.tool.calls").is_some(), enabled);
+            if enabled {
+                assert_eq!(a["agentio.tool.calls"][0]["name"], "lookup");
+                assert!(a["agentio.tool.calls"][0].get("arguments").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn response_errors_and_incomplete_status_are_independent_of_message_capture() {
+    let body = r#"{"id":"r","status":"failed","model":"m","error":{"code":"server_error","message":"failed"}}"#;
+    for (media, data) in [
+        ("application/json", body.to_owned()),
+        (
+            "text/event-stream",
+            format!(
+                "event: response.failed\ndata: {{\"type\":\"response.failed\",\"response\":{body}}}\n\n"
+            ),
+        ),
+    ] {
+        let r = genai_record("response", "/responses", media, &data, json!({}));
+        assert_eq!(r["attributes"]["error.type"], "server_error");
+        assert_eq!(
+            r["attributes"]["agentio.response.error_code"],
+            "server_error"
+        );
+        assert_eq!(r["attributes"]["gen_ai.response.id"], "r");
+        assert_eq!(r["content"]["status"], "failed");
+    }
+    let incomplete = r#"{"id":"r","status":"incomplete","model":"m","output":[],"incomplete_details":{"reason":"max_output_tokens"}}"#;
+    let r = genai_record(
+        "response",
+        "/responses",
+        "application/json",
+        incomplete,
+        json!({}),
+    );
+    assert_eq!(r["content"]["incompleteReason"], "max_output_tokens");
+    let r = genai_record(
+        "response",
+        "/messages",
+        "application/json",
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+        json!({}),
+    );
+    assert_eq!(r["attributes"]["error.type"], "overloaded_error");
+    assert!(
+        r["attributes"]
+            .get("gen_ai.response.finish_reasons")
+            .is_none()
+    );
+}
+
+#[test]
+fn oversized_tool_summary_keeps_independent_response_metadata() {
+    let body = json!({"id":"resp-test","model":"m","status":"completed","output":[
+        {"type":"function_call","call_id":"c","name":"x".repeat(1500),"arguments":"{}"}
+    ]});
+    let settings = serde_json::from_value(
+        json!({"maxLogBytes":1024,"maxCaptureBytes":8192,"fields":{"toolCalls":true}}),
+    )
+    .unwrap();
+    let mut c = Capture::new(
+        "response",
+        "/responses",
+        "req",
+        "application/json",
+        "",
+        settings,
+        (crate::audit::Schema::Genai, &Default::default()),
+    );
+    c.push(body.to_string().as_bytes());
+    let (_, line) = c.encode(true);
+    assert!(line.len() < 1024);
+    let r: Value = serde_json::from_slice(&line).unwrap();
+    assert_eq!(r["status"], "truncated");
+    assert_eq!(r["content"]["toolCallsTruncated"], true);
+    assert_eq!(r["attributes"]["gen_ai.response.id"], "resp-test");
+    assert!(r["attributes"].get("agentio.tool.calls").is_none());
+}
