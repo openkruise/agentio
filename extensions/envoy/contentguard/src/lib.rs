@@ -1,13 +1,16 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit;
 mod capture;
 mod json_capture;
 mod multipart;
 mod protocol;
 mod response;
+mod rules;
 mod sse;
 
+use audit::{Attributes, Audit};
 use capture::Capture;
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyCounterId, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
@@ -22,11 +25,15 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     declare_init_functions, envoy_log_error,
 };
 use serde::Deserialize;
-use std::cell::RefCell;
+use std::{cell::RefCell, sync::Arc};
 
-#[derive(Clone, Copy, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Settings {
+    #[serde(default)]
+    rules: Vec<rules::Rule>,
+    #[serde(default)]
+    audit: Audit,
     request: Option<Direction>,
     response: Option<Direction>,
 }
@@ -72,7 +79,7 @@ impl Fields {
 
 #[derive(Clone)]
 struct Config {
-    settings: Settings,
+    settings: Arc<Settings>,
     publish_errors: EnvoyCounterId,
 }
 
@@ -80,7 +87,14 @@ struct Filter {
     config: Config,
     request: RefCell<Option<Capture>>,
     response: RefCell<Option<Capture>>,
-    identity: RefCell<(String, String)>,
+    response_context: RefCell<Option<ResponseContext>>,
+}
+
+struct ResponseContext {
+    path: String,
+    id: String,
+    direction: Direction,
+    attributes: Attributes,
 }
 
 impl Filter {
@@ -138,9 +152,23 @@ fn header(envoy: &impl EnvoyHttpFilter, request: bool, key: &str) -> String {
 
 impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
     fn on_request_headers(&self, envoy: &mut H, end: bool) -> ReqHeaders {
+        let settings = &self.config.settings;
+        let Some(format) = settings.select(envoy) else {
+            return ReqHeaders::Continue;
+        };
+        let limit = [settings.request, settings.response]
+            .into_iter()
+            .flatten()
+            .map(|d| d.max_log_bytes)
+            .max()
+            .unwrap();
+        let attributes = settings.audit.snapshot(envoy, limit);
         let path = header(envoy, true, ":path");
         let id = header(envoy, true, "x-request-id");
-        if let Some(d) = self.config.settings.request {
+        if let Some(mut d) = settings.request {
+            if let Some(f) = format {
+                d.format = f;
+            }
             self.request.replace(Some(Capture::new(
                 "request",
                 &path,
@@ -148,13 +176,22 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
                 &header(envoy, true, "content-type"),
                 &header(envoy, true, "content-encoding"),
                 d,
+                (settings.audit.schema, &attributes),
             )));
             if end {
                 self.finish(&self.request, envoy, true);
             }
         }
-        if self.config.settings.response.is_some() {
-            self.identity.replace((path, id));
+        if let Some(mut direction) = settings.response {
+            if let Some(f) = format {
+                direction.format = f;
+            }
+            self.response_context.replace(Some(ResponseContext {
+                path,
+                id,
+                direction,
+                attributes,
+            }));
         }
         ReqHeaders::Continue
     }
@@ -168,15 +205,15 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
         ReqTrailers::Continue
     }
     fn on_response_headers(&self, envoy: &mut H, end: bool) -> ResHeaders {
-        if let Some(d) = self.config.settings.response {
-            let identity = self.identity.borrow();
+        if let Some(ctx) = self.response_context.take() {
             self.response.replace(Some(Capture::new(
                 "response",
-                &identity.0,
-                &identity.1,
+                &ctx.path,
+                &ctx.id,
                 &header(envoy, false, "content-type"),
                 &header(envoy, false, "content-encoding"),
-                d,
+                ctx.direction,
+                (self.config.settings.audit.schema, &ctx.attributes),
             )));
             if end {
                 self.finish(&self.response, envoy, true);
@@ -204,7 +241,7 @@ impl<H: EnvoyHttpFilter> HttpFilterConfig<H> for Config {
             config: self.clone(),
             request: Default::default(),
             response: Default::default(),
-            identity: Default::default(),
+            response_context: Default::default(),
         })
     }
 }
@@ -225,20 +262,8 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
     let settings: Settings = serde_json::from_slice(bytes)
         .map_err(|e| envoy_log_error!("invalid contentguard config: {}", e))
         .ok()?;
-    if [settings.request, settings.response]
-        .iter()
-        .flatten()
-        .any(|d| {
-            !(1024..=1048576).contains(&d.max_log_bytes)
-                || [d.max_capture_bytes, d.max_content_bytes]
-                    .into_iter()
-                    .flatten()
-                    .any(|n| !(1..=64 << 20).contains(&n))
-        })
-    {
-        envoy_log_error!(
-            "contentguard requires maxLogBytes in 1024..1048576 and capture/content limits in 1..67108864"
-        );
+    if let Err(e) = settings.validate() {
+        envoy_log_error!("invalid contentguard config: {}", e);
         return None;
     }
     let publish_errors = envoy
@@ -246,7 +271,7 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
         .map_err(|e| envoy_log_error!("cannot register contentguard error counter: {:?}", e))
         .ok()?;
     Some(Box::new(Config {
-        settings,
+        settings: Arc::new(settings),
         publish_errors,
     }))
 }

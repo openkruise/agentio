@@ -33,6 +33,7 @@ import (
 // resourceBuilder belongs to one build. Nested helpers record the first encoding
 // failure; the entry points discard the entire result if any extension failed.
 type resourceBuilder struct {
+	contentGuard        *structpb.Struct
 	legacyGateway       bool
 	upstreamTrustBundle string
 	egressAuthorization *configv1.EgressAuthorization

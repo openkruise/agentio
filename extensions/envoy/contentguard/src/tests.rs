@@ -26,7 +26,15 @@ fn configured_record(
 ) -> Value {
     let config: crate::Direction = serde_json::from_value(settings.clone()).unwrap();
     let limit = config.max_log_bytes;
-    let mut c = Capture::new(dir, path, "test-id", media, "", config);
+    let mut c = Capture::new(
+        dir,
+        path,
+        "test-id",
+        media,
+        "",
+        config,
+        (Default::default(), &Default::default()),
+    );
     for chunk in chunks {
         c.push(chunk.as_ref());
     }
@@ -446,7 +454,15 @@ fn explicit_document_decoders_validate_media_encoding_and_limits() {
         let config =
             serde_json::from_value(json!({"format":format,"maxCaptureBytes":4,"maxLogBytes":1024}))
                 .unwrap();
-        let mut capture = Capture::new("request", "/custom", "id", media, encoding, config);
+        let mut capture = Capture::new(
+            "request",
+            "/custom",
+            "id",
+            media,
+            encoding,
+            config,
+            (Default::default(), &Default::default()),
+        );
         for chunk in body.chunks(1) {
             capture.push(chunk);
         }
@@ -454,5 +470,76 @@ fn explicit_document_decoders_validate_media_encoding_and_limits() {
         assert_eq!(record["status"], status, "{format} {media} {body:?}");
         assert_eq!(record["content"], content);
         assert_eq!(record["bytesSeen"], body.len());
+    }
+}
+
+#[test]
+fn invalid_rule_or_attribute_rejects_configuration() {
+    for bad in [
+        json!({"rules":[{"match":{"hosts":["exa*mple.com"]},"action":"audit"}]}),
+        json!({"rules":[{"match":{"hosts":[]},"action":"skip"}]}),
+        json!({"rules":[{"match":{},"action":"skip","format":"auto"}]}),
+        json!({"rules":[{"match":{},"action":"audit"},{"match":{},"action":"skip"}]}),
+        json!({"rules":[{"match":{"filterState":[{"key":"id","present":true,"values":["x"]}]},"action":"audit"}]}),
+        json!({"rules":[{"match":{"filterState":[{"key":"id","values":[]}]},"action":"audit"}]}),
+        json!({"rules":[{"match":{"format":"json"},"action":"audit"}]}),
+        json!({"audit":{"attributes":{"tenant":{"requestHeader":"x-tenant","filterState":"other"}}}}),
+    ] {
+        let mut config = bad.clone();
+        config["response"] = json!({"maxLogBytes":1024});
+        assert!(
+            !serde_json::from_value::<crate::Settings>(config).is_ok_and(|c| c.validate().is_ok()),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn genai_uses_native_conversation_and_obeys_whole_line_limit() {
+    let settings = serde_json::from_value(json!({"maxLogBytes":1024})).unwrap();
+    let mut attrs = crate::audit::Attributes::default();
+    attrs
+        .values
+        .insert("gen_ai.conversation.id".into(), "header-session".into());
+    attrs.values.insert("tenant".into(), "tenant-a".into());
+    // Escapes expand significantly in JSON even when the source fits in 1 KiB.
+    attrs
+        .values
+        .insert("oversize".into(), "\n".repeat(700).into());
+    for conversation in [json!("native"), json!({"id":"native"}), Value::Null] {
+        let mut c = Capture::new(
+            "request",
+            "/responses",
+            "id",
+            "application/json",
+            "",
+            settings,
+            (crate::audit::Schema::Genai, &attrs),
+        );
+        c.push(
+            json!({"input":"hello","model":"m","conversation":conversation})
+                .to_string()
+                .as_bytes(),
+        );
+        let (_, line) = c.encode(true);
+        assert!(line.len() < 1024);
+        let record: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(record["attributesTruncated"], true);
+        let a = &record["attributes"];
+        assert_eq!(
+            a["gen_ai.conversation.id"],
+            if conversation.is_null() {
+                "header-session"
+            } else {
+                "native"
+            }
+        );
+        assert_eq!(
+            a["gen_ai.input.messages"][0]["parts"][0],
+            json!({"type":"text","content":"hello"})
+        );
+        assert_eq!(a["tenant"], "tenant-a");
+        assert!(a.get("oversize").is_none());
+        assert_eq!(record["content"], json!({"format":"openai-responses"}));
     }
 }

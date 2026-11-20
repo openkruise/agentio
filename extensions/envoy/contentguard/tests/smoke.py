@@ -23,6 +23,13 @@ def address(port):
 def access_log(direction):
     return {
         "name": "envoy.access_loggers.stdout",
+        "filter": {"extension_filter": {
+            "name": "envoy.access_loggers.extension_filters.cel",
+            "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter",
+                "expression": f"'agentio.contentguard.{direction}' in filter_state",
+            },
+        }},
         "typed_config": {
             "@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
             "log_format": {"text_format_source": {
@@ -104,7 +111,18 @@ def main(image):
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         cfg = pathlib.Path(tmp, "envoy.json")
-        cfg.write_text(json.dumps(bootstrap(port, origin.server_port)))
+        config = bootstrap(port, origin.server_port)
+        manager = config["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]["typed_config"]
+        module_config = manager["http_filters"][0]["typed_config"]["filter_config"]
+        settings = json.loads(module_config["value"])
+        settings["rules"] = [
+            {"match": {"hosts": ["skip.llm.test"]}, "action": "skip"},
+            {"match": {"hosts": ["*.llm.test"]}, "action": "audit", "format": "openai-responses"},
+            {"match": {"hosts": ["127.0.0.1"]}, "action": "audit"},
+        ]
+        settings["audit"] = {"attributes": {"app.tenant.id": {"requestHeader": "x-tenant"}}}
+        module_config["value"] = json.dumps(settings)
+        cfg.write_text(json.dumps(config))
         name = f"contentguard-{uuid.uuid4().hex}"
         with pathlib.Path(tmp, "audit.jsonl").open("w+b") as logs:
             process = subprocess.Popen([
@@ -128,6 +146,15 @@ def main(image):
                 response = connection.getresponse()
                 assert response.status == 200 and response.read() == body
                 connection.close()
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                custom = b'{"input":"hello","model":"m","output":[]}'
+                for host in ["skip.llm.test", "llm.test", "other.test", "Custom.LLM.test:443"]:
+                    connection.request("POST", "/custom", custom, {
+                        "Host": host, "Content-Type": "application/json", "x-tenant": "green",
+                    })
+                    response = connection.getresponse()
+                    assert response.status == 200 and response.read() == custom
+                connection.close()
                 for path, (request, stream) in STREAMS.items():
                     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
                     request_body = json.dumps(request).encode()
@@ -141,16 +168,20 @@ def main(image):
                 origin.shutdown()
             logs.seek(0)
             lines = logs.readlines()
-        assert len(lines) == 2 * (1 + len(STREAMS)), lines
+        assert len(lines) == 2 * (2 + len(STREAMS)), lines
         records = [json.loads(line) for line in lines]
         assert {r["direction"] for r in records} == {"request", "response"}
-        for path in ["/echo", *STREAMS]:
+        for path in ["/echo", "/custom", *STREAMS]:
             pair = [r for r in records if r["path"] == path]
             assert len(pair) == 2 and {r["direction"] for r in pair} == {"request", "response"}
             assert pair[0]["requestID"] and pair[0]["requestID"] == pair[1]["requestID"]
         for line, record in zip(lines, records):
             assert len(line) <= {"request": 2048, "response": 1024}[record["direction"]]
-            if record["path"] == "/echo":
+            if record["path"] == "/custom":
+                assert record["attributes"] == {"app.tenant.id": "green"}
+                assert record["content"]["format"] == "openai-responses"
+                assert record["status"] == "complete", record
+            elif record["path"] == "/echo":
                 assert record["status"] == "truncated" and record["bytesSeen"] == len(body)
                 assert record["content"] == {"image_url": "[omitted]", "text": "after image"}
             else:

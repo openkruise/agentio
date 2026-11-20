@@ -69,6 +69,10 @@ message AgentioConfig {
 
   // Default services used when a policy does not select a provider explicitly.
   DefaultExtensionProviders default_providers = 9;
+
+  // Global ContentGuard module configuration for forwarded HTTP on native gateways.
+  // The module validates its request, response, rules and audit settings at LDS load.
+  google.protobuf.Struct content_guard = 10;
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same

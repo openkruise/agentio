@@ -28,6 +28,7 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	meshv1alpha1 "istio.io/api/mesh/v1alpha1"
 
 	"github.com/openkruise/agentio/pkg/features"
@@ -61,6 +62,7 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	ContentGuard               *structpb.Struct
 	EgressAuthorization        *configv1.EgressAuthorization
 	Services                   []model.Service
 	Endpoints                  []model.Endpoint
@@ -173,6 +175,7 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 		legacyGateway:       inputs.LegacyGateway,
 		upstreamTrustBundle: inputs.UpstreamTrustBundle,
 		egressAuthorization: inputs.EgressAuthorization,
+		contentGuard:        inputs.ContentGuard,
 		dnsCacheSettings:    inputs.Gateway.Config.GetDnsCache(),
 	}
 	clusters, err := b.clusters(effective)

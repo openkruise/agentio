@@ -4,6 +4,56 @@ ContentGuard is an Envoy HTTP dynamic module for auditing request and response b
 
 ## Configuration
 
+Set `contentGuard` in the global AgentioConfig to install the module and its stdout access loggers on native gateways, for forwarded cleartext HTTP and HTTP after TLS termination. With Helm, set `agentiod.config.values.contentGuard`. The gateway image must contain the module. CONNECT setup, TLS passthrough and legacy proxyv2 gateways do not run this HTTP filter. A local denial from an earlier filter ends the stream before ContentGuard sees its request headers.
+
+```yaml
+contentGuard:
+  rules:
+    - match:
+        hosts: [test.llm.example.com]
+      action: skip
+    - match:
+        hosts: ["*.llm.example.com"]
+        filterState:
+          - key: agentio.sandbox.id
+            present: true
+      action: audit
+      format: openai-chat-completions
+    - match:
+        hosts: [api.openai.com, api.anthropic.com]
+      action: audit
+  request:
+    maxLogBytes: 16384
+    fields: {inputMessages: true, tools: true}
+  response:
+    maxLogBytes: 8192
+    fields: {outputMessages: true}
+  audit:
+    schema: genai
+    attributes:
+      agentio.sandbox.id: {filterState: agentio.sandbox.id}
+      app.tenant.id: {requestHeader: x-tenant-id}
+      gen_ai.conversation.id: {requestHeader: x-session-id}
+      agentio.workload.namespace:
+        dynamicMetadata: {namespace: agentio, path: [workload, namespace]}
+```
+
+Rules run in order when request headers arrive. The first matching rule applies to the entire stream, including response-only audits. In a rule, any listed host may match and every Filter State condition must match. Hosts ignore ASCII case and the authority port. A leading `*.` matches one or more complete labels. For a state key, use `present: true` to test existence or `values: [box-a, box-b]` to compare its serialized string exactly. An audit rule can override both direction parsers with `format`. Without an override, each enabled direction uses its own parser setting.
+
+Omitted or empty rules audit all streams in the configured directions. With a nonempty list, unmatched streams skip capture and emit zero content records. A final `match: {}` supplies an explicit default. Configure at least one direction. Remove the global setting to uninstall the filter. The Rust module validates rule, parser and schema settings when Envoy loads the listener.
+
+The default `audit.schema: agentio` retains the original envelope. `genai` puts model, ordered message parts, tools and reported token counts under OpenTelemetry GenAI attribute names in the JSON record. Protocol-specific details remain in `content`. Generic JSON, text, and multipart keep their existing representations. A provider name is not inferred from the wire protocol.
+
+Configured attributes appear under `attributes` in either schema. Request headers use lowercase names. Header and serialized Filter State values are sampled at request headers and carried into each enabled direction. A metadata path reads the named namespace on that HTTP stream. The controller renders an Envoy formatter and a stream-local string Filter State entry for each configured path before the module runs. Metadata values are logged as strings. Missing values are omitted. Extracted protocol values take precedence over configured attributes with the same names, including a Responses request's native conversation ID. Attribute values share the direction's final line budget with content. Oversized context entries are omitted and set `attributesTruncated: true`.
+
+For example, a request to a custom Responses-compatible endpoint can produce the following JSON line.
+
+```json
+{"type":"content","requestID":"req-7","direction":"request","path":"/invoke","status":"complete","bytesSeen":29,"attributes":{"app.tenant.id":"team-a","gen_ai.input.messages":[{"parts":[{"content":"hello","type":"text"}],"role":"user"}],"gen_ai.operation.name":"chat","gen_ai.request.model":"m"},"content":{"format":"openai-responses"}}
+```
+
+### Standalone Envoy configuration
+
 The following filter enables both directions. Omit the `response` member for request-only auditing. `maxLogBytes` is a per-direction limit on the serialized JSON line, including its envelope and newline, in the range 1,024 to 1,048,576 bytes.
 
 ```yaml
@@ -36,12 +86,24 @@ Add the corresponding entries to the HTTP connection manager's `access_log` list
 ```yaml
 access_log:
   - name: envoy.access_loggers.stdout
+    filter:
+      extension_filter:
+        name: envoy.access_loggers.extension_filters.cel
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
+          expression: "'agentio.contentguard.request' in filter_state"
     typed_config:
       "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
       log_format:
         text_format_source:
           inline_string: "%FILTER_STATE(agentio.contentguard.request:PLAIN)%\n"
   - name: envoy.access_loggers.stdout
+    filter:
+      extension_filter:
+        name: envoy.access_loggers.extension_filters.cel
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
+          expression: "'agentio.contentguard.response' in filter_state"
     typed_config:
       "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
       log_format:

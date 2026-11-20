@@ -7,3 +7,4 @@ ztunnel-src
 ztunnel-context
 **/*_test.go
 **/target
+extensions/envoy/contentguard/.envoy-sdk*

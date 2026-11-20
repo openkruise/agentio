@@ -46,6 +46,10 @@ sandboxExtProc:
 
 The Helm-only merge happens earlier: `.Values.agentiod.config.values` is merged over the chart-generated base document, with maps deep-merged and lists replaced. The resulting YAML becomes `agentio-config`; runtime precedence between the base and primary ConfigMaps then follows the rules above.
 
+## Global HTTP content auditing
+
+Set `contentGuard` in the effective configuration to audit forwarded HTTP on native egress gateways. It accepts ordered host and Filter State rules, per-direction parsers and budgets, and audit attributes. The gateway image must include the ContentGuard dynamic module. See the [configuration example and matching semantics](../../extensions/envoy/contentguard/README.md#configuration).
+
 ## Configure the Helm-managed base
 
 Use the chart's task-oriented values for common settings and `agentiod.config.values` for the raw configuration API:

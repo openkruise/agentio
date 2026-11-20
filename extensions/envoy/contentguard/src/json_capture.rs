@@ -189,6 +189,7 @@ impl Scanner {
         format: &str,
         response: bool,
         fields: crate::Fields,
+        schema: crate::audit::Schema,
     ) -> Result<serde_json::Value, &'static str> {
         if self.quoted {
             return Err("invalid_json");
@@ -205,7 +206,7 @@ impl Scanner {
             }
             return Ok(view);
         }
-        super::protocol::parse(format, &self.doc, response, fields)
+        super::protocol::parse(format, &self.doc, response, fields, schema)
     }
 }
 
@@ -244,12 +245,15 @@ impl JsonCapture {
         format: &str,
         response: bool,
         fields: crate::Fields,
+        schema: crate::audit::Schema,
     ) -> Result<(bool, serde_json::Value), &'static str> {
         if let Some(s) = self.scanner {
             let clipped = s.clipped;
-            s.finish(format, response, fields).map(|v| (clipped, v))
+            s.finish(format, response, fields, schema)
+                .map(|v| (clipped, v))
         } else {
-            super::protocol::parse(format, &self.prefix, response, fields).map(|v| (false, v))
+            super::protocol::parse(format, &self.prefix, response, fields, schema)
+                .map(|v| (false, v))
         }
     }
 }

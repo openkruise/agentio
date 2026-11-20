@@ -326,14 +326,29 @@ fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
     Ok(view)
 }
 
-pub fn parse(format: &str, body: &[u8], response: bool, fields: crate::Fields) -> Parsed {
+pub fn parse(
+    format: &str,
+    body: &[u8],
+    response: bool,
+    fields: crate::Fields,
+    schema: crate::audit::Schema,
+) -> Parsed {
     let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
     if format == "json" {
         Ok(doc)
     } else if response {
         crate::response::normalize(format, &doc, fields.output_messages)
     } else {
-        llm(&doc, format, fields)
+        let mut view = llm(&doc, format, fields)?;
+        if schema == crate::audit::Schema::Genai
+            && format == RESPONSES
+            && let Some(id) = doc["conversation"]
+                .as_str()
+                .or_else(|| doc["conversation"]["id"].as_str())
+        {
+            view["conversationId"] = id.into();
+        }
+        Ok(view)
     }
 }
 
@@ -352,6 +367,7 @@ mod tests {
             input.to_string().as_bytes(),
             false,
             crate::Fields::ALL,
+            Default::default(),
         )
         .unwrap();
         let blocks = &view["inputMessages"][0]["content"];
@@ -373,6 +389,7 @@ mod tests {
             input.to_string().as_bytes(),
             false,
             crate::Fields::ALL,
+            Default::default(),
         )
         .unwrap();
         let msgs = &view["inputMessages"];

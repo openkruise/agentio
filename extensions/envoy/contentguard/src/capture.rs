@@ -1,11 +1,12 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::audit::{self, Attributes, Schema};
 use crate::{
     Direction, Fields, Format, json_capture::JsonCapture, multipart::Multipart, protocol, sse,
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 enum Body {
     Json(JsonCapture, &'static str),
@@ -16,6 +17,7 @@ enum Body {
 }
 
 pub struct Capture {
+    schema: Schema,
     body: Body,
     record: Record,
     content_budget: usize,
@@ -34,6 +36,10 @@ struct Record {
     path: String,
     status: &'static str,
     bytes_seen: usize,
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    attributes: Map<String, Value>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    attributes_truncated: bool,
     content: Value,
 }
 
@@ -58,6 +64,7 @@ impl Capture {
         media: &str,
         encoding: &str,
         settings: Direction,
+        (schema, attrs): (Schema, &Attributes),
     ) -> Self {
         let limit = settings.max_log_bytes;
         let path = path.split('?').next().unwrap_or(path);
@@ -68,14 +75,35 @@ impl Capture {
             path: prefix(path, 256).to_owned(),
             status: "complete",
             bytes_seen: 0,
+            attributes: Map::new(),
+            attributes_truncated: attrs.truncated,
             content: Value::Null,
         };
         // Reserve room for the longest status, byte count and newline. HTTP
         // header strings can expand when escaped into JSON.
-        if serde_json::to_vec(&record).unwrap().len() + 128 >= limit {
+        let mut envelope = serde_json::to_vec(&record).unwrap().len();
+        if envelope + 128 >= limit {
             record.path.clear();
+            envelope = serde_json::to_vec(&record).unwrap().len();
         }
-        let room = limit.saturating_sub(serde_json::to_vec(&record).unwrap().len() + 64);
+        if !attrs.values.is_empty() {
+            // Reserve the attributes object, truncation flag, and the longest
+            // status and byte count before charging each escaped key/value.
+            let mut remaining = limit.saturating_sub(envelope + 112);
+            for (key, value) in &attrs.values {
+                let cost = serde_json::to_vec(key).unwrap().len()
+                    + serde_json::to_vec(value).unwrap().len()
+                    + 2;
+                if cost > remaining {
+                    record.attributes_truncated = true;
+                    continue;
+                }
+                remaining -= cost;
+                record.attributes.insert(key.clone(), value.clone());
+            }
+            envelope = serde_json::to_vec(&record).unwrap().len();
+        }
+        let room = limit.saturating_sub(envelope + 64);
         let codec = match settings.format {
             Format::Auto => format(path),
             Format::Text => "text",
@@ -132,6 +160,7 @@ impl Capture {
             Body::Unavailable("unsupported_media_type")
         };
         Self {
+            schema,
             record,
             body,
             content_budget: room,
@@ -195,6 +224,7 @@ impl Capture {
                 f,
                 self.record.direction == "response",
                 self.settings.fields.unwrap_or(Fields::ALL),
+                self.schema,
             ),
             Body::Stream(stream) => stream.finish(),
             Body::Multipart(c) => c.finish(),
@@ -226,6 +256,13 @@ impl Capture {
                         self.record.status = "partial";
                     }
                 }
+                if llm && self.schema == Schema::Genai {
+                    audit::project(
+                        &mut v,
+                        &mut self.record.attributes,
+                        self.record.direction == "response",
+                    );
+                }
                 self.record.content = v;
                 if clipped {
                     self.record.status = "truncated";
@@ -239,13 +276,39 @@ impl Capture {
             // Discard large binary leaves first, then shorten oversized text.
             self.record.status = "truncated";
             shrink(&mut self.record.content, self.content_budget / 4);
+            if self.schema == Schema::Genai {
+                for key in [
+                    "gen_ai.input.messages",
+                    "gen_ai.output.messages",
+                    "gen_ai.tool.definitions",
+                ] {
+                    if let Some(v) = self.record.attributes.get_mut(key) {
+                        shrink(v, self.content_budget / 4);
+                    }
+                }
+            }
             line.clear();
             serde_json::to_writer(&mut line, &self.record).unwrap();
             if line.len() >= self.line_limit {
                 self.record.content = Value::Null;
+                if self.schema == Schema::Genai {
+                    for key in [
+                        "gen_ai.input.messages",
+                        "gen_ai.output.messages",
+                        "gen_ai.tool.definitions",
+                    ] {
+                        self.record.attributes.remove(key);
+                    }
+                }
                 line.clear();
                 serde_json::to_writer(&mut line, &self.record).unwrap();
             }
+        }
+        if line.len() >= self.line_limit {
+            self.record.attributes.clear();
+            self.record.attributes_truncated = true;
+            line.clear();
+            serde_json::to_writer(&mut line, &self.record).unwrap();
         }
         let key: &[u8] = if self.record.direction == "request" {
             b"agentio.contentguard.request"
