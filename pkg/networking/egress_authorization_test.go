@@ -189,7 +189,7 @@ func TestNativeForwardingWithoutEPEOrServiceEntries(t *testing.T) {
 		h,
 	); !slices.Equal(
 		got,
-		[]string{"agentio.egress_authorization", "envoy.filters.http.router"},
+		[]string{"agentio.egress_authorization", bodyProcessingName, "envoy.filters.http.router"},
 	) {
 		t.Fatalf("unexpected filters: %v", got)
 	}

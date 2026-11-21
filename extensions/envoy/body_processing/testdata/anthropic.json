@@ -1,0 +1,39 @@
+{
+  "format": "anthropic-messages",
+  "model": "test-claude",
+  "outputMessages": [
+    {
+      "index": 0,
+      "role": "assistant",
+      "finishReason": "tool_use",
+      "content": [
+        {
+          "type": "text",
+          "text": "你好"
+        },
+        {
+          "type": "provider_content",
+          "format": "anthropic-messages",
+          "data": {
+            "type": "thinking",
+            "thinking": "reason",
+            "signature": "signature"
+          }
+        },
+        {
+          "type": "tool_call",
+          "id": "tool_1",
+          "name": "lookup",
+          "arguments": {
+            "city": "北京"
+          }
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "inputTokens": 5,
+    "outputTokens": 7,
+    "totalTokens": 12
+  }
+}

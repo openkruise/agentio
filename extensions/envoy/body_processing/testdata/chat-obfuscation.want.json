@@ -1,0 +1,17 @@
+{
+  "format": "openai-chat-completions",
+  "model": "test",
+  "outputMessages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello world"
+        }
+      ],
+      "index": 0,
+      "finishReason": "stop"
+    }
+  ]
+}

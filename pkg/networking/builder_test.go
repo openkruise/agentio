@@ -257,11 +257,11 @@ func TestBuildGatewayFormatWithoutTelemetryInputs(t *testing.T) {
 		func() *listenerv3.Listener { return &listenerv3.Listener{} },
 	)
 	logs := findHCM(t, listeners[MainForward]).GetAccessLog()
-	if len(logs) != 1 {
-		t.Fatalf("HTTP logs = %d, want 1", len(logs))
+	if len(logs) != 2 {
+		t.Fatalf("HTTP logs = %d, want audit and telemetry", len(logs))
 	}
 	fileLog := &fileaccesslogv3.FileAccessLog{}
-	if err := logs[0].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
+	if err := logs[1].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
 		t.Fatal(err)
 	}
 	if got := fileLog.GetLogFormat().GetTextFormatSource().GetInlineString(); got != format+"\n" {
@@ -312,11 +312,11 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 		hcm := findHCM(t, listeners[listenerName])
 		filters := httpFilterNames(hcm)
 		routerIndex := slices.Index(filters, "envoy.filters.http.router")
-		if slices.Contains(filters, "istio.stats") || routerIndex != len(filters)-1 || len(hcm.GetAccessLog()) != 1 ||
+		if slices.Contains(filters, "istio.stats") || routerIndex != len(filters)-1 || len(hcm.GetAccessLog()) != 2 ||
 			filters[0] != "envoy.filters.http.dynamic_modules" {
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
-		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-2 {
+		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter)+1 != slices.Index(filters, "agentio.egress_authorization") {
 			t.Fatal("proxy TLS identity must precede authorization")
 		}
 	}

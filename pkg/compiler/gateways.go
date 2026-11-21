@@ -23,6 +23,7 @@ import (
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"istio.io/istio/pkg/util/sets"
 
@@ -121,6 +122,10 @@ func newGatewayResources(
 		func(_ krt.HandlerContext, current configuration) *config.Config[*configv1.EgressAuthorization] {
 			return &config.Config[*configv1.EgressAuthorization]{Value: current.Config.GetEgressAuthorization()}
 		}, options("gateway-egress-authorization")...)
+	bodyProcessing := krt.NewCollection(configurations.AsCollection(),
+		func(_ krt.HandlerContext, current configuration) *config.Config[*structpb.Struct] {
+			return &config.Config[*structpb.Struct]{Value: current.Config.GetBodyProcessing()}
+		}, options("gateway-contentguard")...)
 	extProcs := globalExtProc.AsCollection()
 	// Overrides retain additional processors without depending on the global primary.
 	additionalExtProcs := krt.NewCollection(extProcs,
@@ -167,6 +172,10 @@ func newGatewayResources(
 					krt.FilterIndex(base.telemetryDefaultsByNamespace, inputs.RootNamespace))...)
 			}
 			providerOverride := krt.FetchOne(ctx, providerOverrides)
+			var audit *structpb.Struct
+			if current := krt.FetchOne(ctx, bodyProcessing); current != nil {
+				audit = current.Value
+			}
 			var egressAuthorization *configv1.EgressAuthorization
 			if current := krt.FetchOne(ctx, authorization); current != nil {
 				egressAuthorization = current.Value
@@ -188,6 +197,7 @@ func newGatewayResources(
 				GlobalExtProc:              provider,
 				AdditionalExtProcs:         additional,
 				EgressAuthorization:        egressAuthorization,
+				BodyProcessing:             audit,
 				DiscoveryAddress:           inputs.DiscoveryAddress,
 				TrustDomain:                inputs.TrustDomain,
 				UpstreamTrustBundle:        trustBundle,

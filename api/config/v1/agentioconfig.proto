@@ -69,6 +69,10 @@ message AgentioConfig {
 
   // Default services used when a policy does not select a provider explicitly.
   DefaultExtensionProviders default_providers = 9;
+
+  // Global BodyProcessing module configuration for forwarded HTTP on native gateways.
+  // The module validates filter chains, matchers, parsers and audit filters at LDS load.
+  google.protobuf.Struct body_processing = 10;
 }
 
 // EgressGateway describes one sandbox egress gateway's behavior. The same

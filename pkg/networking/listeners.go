@@ -520,6 +520,11 @@ func (b *resourceBuilder) buildForwardHCM(
 		})))
 	}
 
+	var auditLogs []*accesslogv3.AccessLog
+	if !b.legacyGateway {
+		filters = append(filters, b.bodyProcessingFilter())
+		auditLogs = append(auditLogs, b.bodyProcessingLogger())
+	}
 	if terminatedTLS && b.legacyGateway {
 		filters = append(filters, legacyConnectProxyTLSIdentityHTTPFilter)
 	}
@@ -537,6 +542,7 @@ func (b *resourceBuilder) buildForwardHCM(
 	}
 	hcm := &hcmv3.HttpConnectionManager{
 		StatPrefix:                   forwardHCMStatPrefix,
+		AccessLog:                    auditLogs,
 		RouteSpecifier:               &hcmv3.HttpConnectionManager_Rds{Rds: rds(routeName)},
 		ServerHeaderTransformation:   hcmv3.HttpConnectionManager_PASS_THROUGH,
 		Proxy_100Continue:            true,
