@@ -17,6 +17,8 @@ import threading
 import time
 import uuid
 
+import llm_streaming
+
 
 def address(port):
     return {"socket_address": {"address": "127.0.0.1", "port_value": port}}
@@ -52,6 +54,8 @@ def bootstrap(port, upstream):
                 "gen_ai.usage.output_tokens":"%EVENT(llm.usage.outputTokens)%"}
     question = {"llm.question":"%EVENT(llm.question)%"}
     tools = {"gen_ai.tool.definitions":"%EVENT(llm.toolDefinitions)%"}
+    stream_fields = {"chain": "%CHAIN%", "case": "%REQ(X-LLM-CASE)%", "id": "%REQ(X-REQUEST-ID)%",
+                     "bytes": "%BYTES_SEEN%"}
     attributes = {
         "app.tenant.id": "%REQ(X-TENANT)%",
         "sandbox": "%FILTER_STATE(test.tenant:PLAIN)%",
@@ -80,6 +84,16 @@ def bootstrap(port, upstream):
              "filters": [
                  audit({"text": "%EVENT(llm.answer)%"}, response={"maxSize": "1KiB", "maxContentBytes": 16384}),
                  audit({"tokens": "%EVENT(llm.usage.totalTokens)%"}, response={"maxSize": "2KiB"}),
+             ]},
+            {"name": "streaming", "matcher": {"hosts": [llm_streaming.HOST], "paths": list(STREAMS)},
+             "parser": {"llm": {}}, "filters": [
+                 {"audit": {"response": {"maxSize": "1KiB", "maxCaptureBytes": 1024},
+                            "format": {"json": {**stream_fields, "answerStatus": "%CAPTURE_STATUS%",
+                                                "answer": "%EVENT(llm.answer)%"}}}},
+                 {"audit": {"response": {"maxSize": "2KiB"},
+                            "format": {"json": {**stream_fields, "usageStatus": "%CAPTURE_STATUS%",
+                                                "tokens": "%EVENT(llm.usage.totalTokens)%",
+                                                "calls": "%EVENT(llm.toolCallRefs)%"}}}},
              ]},
             {"name":"standard","matcher":{"hosts":["127.0.0.1","custom.llm.test"],"paths":[*STREAMS,"/custom","/internal/messages"]},
              "parser":{"llm":{}},"filters":[audit(messages,request={},response={"maxSize":"1KiB"},maxSize="2KiB")]},
@@ -145,7 +159,7 @@ def bootstrap(port, upstream):
     }
 
 
-FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "testdata"
+FIXTURES = llm_streaming.FIXTURES
 STREAMS = {
     "/v1/chat/completions": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "chat-empty-content"),
     "/v1/messages": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "anthropic-usage"),
@@ -181,8 +195,10 @@ def dual_sse(path):
     return wire.replace("你", json.dumps(LONG_TEXT, ensure_ascii=False)[1:-1]).encode()
 
 
-class Echo(http.server.BaseHTTPRequestHandler):
+class Echo(llm_streaming.StreamHandler):
     def do_POST(self):
+        if self.headers["Host"] == llm_streaming.HOST:
+            return super().do_POST()
         body = self.rfile.read(int(self.headers["Content-Length"]))
         if self.path.startswith("/gzip/"):
             assert self.headers.get("Content-Encoding") == "gzip"
@@ -279,12 +295,16 @@ def check_records(lines, json_bytes):
     dual = {"dual": [], "dual-small": []}
     extra = []
     qa_records = []
+    streaming_lines = []
     sse_records = {path: [] for path in STREAMS}
     other_lines = []
     custom_directions = []
     for line in lines:
         assert line.endswith(b"\n")
         record = json.loads(line)
+        if record["chain"] == "streaming":
+            streaming_lines.append(line)
+            continue
         if record["chain"] == "sse-audits":
             sse_records[record["path"]].append((record, len(line)))
             continue
@@ -308,6 +328,7 @@ def check_records(lines, json_bytes):
             qa_records.append(record)
         else:
             other_lines.append(line)
+    llm_streaming.check_audits(streaming_lines)
     for path, pair in sse_records.items():
         (answer, answer_bytes), (usage, usage_bytes) = pair
         assert answer["requestID"] == usage["requestID"] and answer["bytesSeen"] == usage["bytesSeen"] == len(dual_sse(path))
@@ -419,6 +440,7 @@ def main(image):
                     except ConnectionRefusedError:
                         time.sleep(0.05)
                 json_bytes = exercise(port)
+                llm_streaming.exercise(f"127.0.0.1:{port}")
             finally:
                 subprocess.run(["docker", "stop", name], check=False, stdout=subprocess.DEVNULL)
                 process.wait(timeout=15)

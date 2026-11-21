@@ -157,3 +157,18 @@ cd extensions/envoy/body_processing
 ./build.sh
 docker build -t envoy-contentguard .
 ```
+
+## Streaming audit E2E
+
+On Linux, run `python3 tests/smoke.py envoy-contentguard` after building the image. This starts a fixture upstream and Envoy, sends OpenAI Chat Completions, OpenAI Responses and Anthropic Messages requests, and checks the forwarded bytes and Envoy's stdout audit records.
+
+The upstream and client can also run as separate processes. Use the `streaming` chain from `tests/smoke.py` and route the host `stream.llm.test` to the fixture upstream, including the client's `/_fixture/continue/` handshake. The client uses a second connection to release the Chat stream after receiving its first event and part of the next UTF-8 character.
+
+```sh
+python3 tests/llm_streaming.py serve --listen 0.0.0.0 --port 9000
+# In another terminal, point the client at the gateway.
+python3 tests/llm_streaming.py client --gateway 127.0.0.1:8080
+python3 tests/llm_streaming.py check-logs < envoy-audit.jsonl
+```
+
+The upstream accepts streaming POST requests on the three provider paths. It replays the default fixture for each path. The test client sends `X-LLM-Case` to select individual fixtures. The log check expects one client run and verifies the answer and usage/tool audit lines separately, including a revised terminal answer, a per-audit frame limit, missing stream termination and malformed event JSON.
