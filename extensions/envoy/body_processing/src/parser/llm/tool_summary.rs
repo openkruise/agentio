@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::protocol::{ANTHROPIC, CHAT, RESPONSES};
+use super::{ANTHROPIC, CHAT, RESPONSES, ToolKind, anthropic_tool, responses_tool};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -85,17 +85,17 @@ impl ToolSummary {
         }
     }
 
-    pub(super) fn chat_delta(&mut self, choice: usize, slot: usize, id: &Value, name: &Value) {
+    pub(crate) fn chat_delta(&mut self, choice: usize, slot: usize, id: &Value, name: &Value) {
         self.record((choice, slot), "call", id, name, true);
     }
 
     fn chat(&mut self, index: usize, message: &Value) {
-        if message["role"] == "tool" {
+        if matches!(message["role"].as_str(), Some("tool" | "function")) {
             self.record(
                 (index, 0),
                 "result",
                 &message["tool_call_id"],
-                &Value::Null,
+                &message["name"],
                 false,
             );
             return;
@@ -126,11 +126,11 @@ impl ToolSummary {
     }
 
     pub(crate) fn anthropic(&mut self, position: (usize, usize), block: &Value) {
-        match block["type"].as_str() {
-            Some("tool_use" | "server_tool_use") => {
+        match block["type"].as_str().and_then(anthropic_tool) {
+            Some(ToolKind::Call) => {
                 self.record(position, "call", &block["id"], &block["name"], false)
             }
-            Some("tool_result") => self.record(
+            Some(ToolKind::Result) => self.record(
                 position,
                 "result",
                 &block["tool_use_id"],
@@ -142,14 +142,27 @@ impl ToolSummary {
     }
 
     pub(crate) fn responses(&mut self, index: usize, item: &Value) {
-        match item["type"].as_str() {
-            Some("function_call") => {
+        match item["type"].as_str().and_then(responses_tool) {
+            Some(ToolKind::Call) => {
                 self.record((index, 0), "call", &item["call_id"], &item["name"], false)
             }
-            Some("function_call_output") => {
+            Some(ToolKind::Result) => {
                 self.record((index, 0), "result", &item["call_id"], &Value::Null, false)
             }
             _ => (),
+        }
+    }
+
+    pub(crate) fn request_item(&mut self, format: &str, i: usize, item: &Value) {
+        match format {
+            CHAT => self.chat(i, item),
+            ANTHROPIC => {
+                for (j, block) in item["content"].as_array().into_iter().flatten().enumerate() {
+                    self.anthropic((i, j), block);
+                }
+            }
+            RESPONSES => self.responses(i, item),
+            _ => unreachable!(),
         }
     }
 
@@ -171,14 +184,9 @@ impl ToolSummary {
                     item["index"].as_u64().unwrap_or(i as u64) as usize,
                     &item["message"],
                 ),
-                CHAT => self.chat(i, item),
                 ANTHROPIC if response => self.anthropic((0, i), item),
-                ANTHROPIC => {
-                    for (j, block) in item["content"].as_array().into_iter().flatten().enumerate() {
-                        self.anthropic((i, j), block)
-                    }
-                }
-                RESPONSES => self.responses(i, item),
+                RESPONSES if response => self.responses(i, item),
+                _ if !response => self.request_item(format, i, item),
                 _ => unreachable!(),
             }
         }

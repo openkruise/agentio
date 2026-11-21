@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Retention, obj, string, unknown};
-use crate::{
-    protocol::{CHAT, tool_call},
+use crate::parser::llm::{
+    CHAT,
     response::{INVALID, Result, index, usage},
+    tool_call,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -112,10 +113,17 @@ impl Stream {
                     return Err(INVALID);
                 }
                 c.role = Some(role.into());
+                if i == 0 {
+                    b.chat_assistant = role == "assistant";
+                }
             }
             for (k, dst) in [("content", &mut c.text), ("refusal", &mut c.refusal)] {
                 if !d[k].is_null() {
-                    b.append(dst, string(&d[k])?);
+                    let part = string(&d[k])?;
+                    if i == 0 {
+                        b.visible(u32::from(k == "refusal"), part);
+                    }
+                    b.append(dst, part);
                 }
             }
             if !d["tool_calls"].is_null() {
@@ -128,14 +136,8 @@ impl Stream {
                             string(&t[key])?;
                         }
                     }
-                    if let Some(tools) = &mut b.tools {
-                        tools.chat_delta(
-                            i as usize,
-                            idx as usize,
-                            &t["id"],
-                            &t["function"]["name"],
-                        );
-                    }
+                    b.tools
+                        .chat_delta(i as usize, idx as usize, &t["id"], &t["function"]["name"]);
                     if !b.retaining() {
                         if let Some(f) = t.get("function") {
                             Function::default().add(f, b)?;
@@ -152,7 +154,7 @@ impl Stream {
                             if dst.as_ref().is_some_and(|old| old != s) {
                                 return Err(INVALID);
                             }
-                            if dst.is_none() && b.take(crate::protocol::encoded_len(s)) {
+                            if dst.is_none() && b.take(crate::parser::encoded_len(s)) {
                                 *dst = Some(s.into());
                             }
                         }
@@ -163,14 +165,12 @@ impl Stream {
                 }
             }
             if !d["function_call"].is_null() {
-                if let Some(tools) = &mut b.tools {
-                    tools.chat_delta(
-                        i as usize,
-                        usize::MAX,
-                        &Value::Null,
-                        &d["function_call"]["name"],
-                    );
-                }
+                b.tools.chat_delta(
+                    i as usize,
+                    usize::MAX,
+                    &Value::Null,
+                    &d["function_call"]["name"],
+                );
                 c.legacy
                     .get_or_insert_default()
                     .add(&d["function_call"], b)?;

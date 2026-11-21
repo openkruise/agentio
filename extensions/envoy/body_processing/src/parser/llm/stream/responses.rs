@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Retention, string};
-use crate::{
-    protocol::{RESPONSES, responses_item},
+use crate::parser::llm::{
+    RESPONSES, answer_parts,
     response::{INVALID, Result, index, metadata},
+    responses_item,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -24,9 +25,8 @@ struct Item {
 impl Stream {
     pub(super) fn add(
         &mut self,
-        event: &str,
+        kind: &str,
         v: &Value,
-        raw: &str,
         done: bool,
         b: &mut Retention,
     ) -> Result<()> {
@@ -38,10 +38,6 @@ impl Stream {
             };
         }
         if self.done {
-            return Err(INVALID);
-        }
-        let kind = string(&v["type"])?;
-        if !event.is_empty() && event != "message" && event != kind {
             return Err(INVALID);
         }
         match kind {
@@ -89,34 +85,22 @@ impl Stream {
                         return Err("too_large");
                     }
                     if !out.is_empty() {
-                        if let Some(tools) = &mut b.tools {
-                            tools.document(RESPONSES, doc, true);
-                        }
+                        b.tools.document(RESPONSES, doc, true);
                         self.items.clear();
                         b.room = b.limit;
-                        #[derive(serde::Deserialize)]
-                        struct Envelope<'a> {
-                            #[serde(borrow)]
-                            response: Output<'a>,
+                        b.reset_answer();
+                        let keep = b.take(crate::parser::encoded_len(out));
+                        let mut messages = Vec::new();
+                        for (index, item) in out.iter().enumerate() {
+                            let message = responses_item(item)?;
+                            for text in answer_parts(&message) {
+                                b.visible(index as u32, text);
+                            }
+                            if keep {
+                                messages.push(message);
+                            }
                         }
-                        #[derive(serde::Deserialize)]
-                        struct Output<'a> {
-                            #[serde(borrow)]
-                            output: &'a serde_json::value::RawValue,
-                        }
-                        if b.retaining()
-                            && b.take(
-                                serde_json::from_str::<Envelope>(raw)
-                                    .map_err(|_| INVALID)?
-                                    .response
-                                    .output
-                                    .get()
-                                    .len(),
-                            )
-                        {
-                            self.terminal =
-                                Some(out.iter().map(responses_item).collect::<Result<_>>()?);
-                        }
+                        self.terminal = Some(messages);
                     }
                 }
             }
@@ -139,27 +123,15 @@ impl Stream {
                     b.item()?;
                 }
                 let message = if closed {
-                    let m = responses_item(item)?;
-                    #[derive(serde::Deserialize)]
-                    struct Snapshot<'a> {
-                        #[serde(borrow)]
-                        item: &'a serde_json::value::RawValue,
+                    let message = responses_item(item)?;
+                    for text in answer_parts(&message) {
+                        b.visible(i, text);
                     }
-                    (b.retaining()
-                        && b.take(
-                            serde_json::from_str::<Snapshot>(raw)
-                                .map_err(|_| INVALID)?
-                                .item
-                                .get()
-                                .len(),
-                        ))
-                    .then_some(m)
+                    b.take(crate::parser::encoded_len(item)).then_some(message)
                 } else {
                     None
                 };
-                if let Some(tools) = &mut b.tools {
-                    tools.responses(i as usize, item);
-                }
+                b.tools.responses(i as usize, item);
                 self.items.insert(
                     i,
                     Item {

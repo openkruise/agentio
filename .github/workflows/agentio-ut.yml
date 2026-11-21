@@ -126,7 +126,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build and test ContentGuard in Envoy
-        working-directory: extensions/envoy/contentguard
+        working-directory: extensions/envoy/body_processing
         run: |
           sudo apt-get update
           sudo apt-get install -y clang libclang-dev

@@ -1424,6 +1424,36 @@
                       }
                     },
                     {
+                      "name": "agentio.contentguard",
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "defaultConfig": {
+                          "@type": "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
+                          "dynamicModuleConfig": {
+                            "name": "envoy_agentio_contentguard",
+                            "doNotClose": true,
+                            "module": {
+                              "local": {
+                                "filename": "/usr/local/lib/libenvoy_agentio_contentguard.so"
+                              }
+                            }
+                          },
+                          "filterName": "contentguard",
+                          "filterConfig": {
+                            "@type": "type.googleapis.com/google.protobuf.StringValue",
+                            "value": "{\"filterChains\":[]}"
+                          }
+                        },
+                        "applyDefaultConfigWithoutWarming": true,
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+                        ]
+                      }
+                    },
+                    {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
@@ -1450,7 +1480,30 @@
                     }
                   ],
                   "normalizePath": true,
-                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED"
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
+                  "accessLog": [
+                    {
+                      "name": "envoy.access_loggers.stdout",
+                      "filter": {
+                        "extensionFilter": {
+                          "name": "envoy.access_loggers.extension_filters.cel",
+                          "typedConfig": {
+                            "@type": "type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter",
+                            "expression": "'agentio.body_processing.audit' in filter_state"
+                          }
+                        }
+                      },
+                      "typedConfig": {
+                        "@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
+                        "logFormat": {
+                          "textFormatSource": {
+                            "inlineString": "%FILTER_STATE(agentio.body_processing.audit:PLAIN)%"
+                          },
+                          "omitEmptyValues": true
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ],
@@ -1759,6 +1812,36 @@
                       }
                     },
                     {
+                      "name": "agentio.contentguard",
+                      "configDiscovery": {
+                        "configSource": {
+                          "ads": {},
+                          "resourceApiVersion": "V3"
+                        },
+                        "defaultConfig": {
+                          "@type": "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
+                          "dynamicModuleConfig": {
+                            "name": "envoy_agentio_contentguard",
+                            "doNotClose": true,
+                            "module": {
+                              "local": {
+                                "filename": "/usr/local/lib/libenvoy_agentio_contentguard.so"
+                              }
+                            }
+                          },
+                          "filterName": "contentguard",
+                          "filterConfig": {
+                            "@type": "type.googleapis.com/google.protobuf.StringValue",
+                            "value": "{\"filterChains\":[]}"
+                          }
+                        },
+                        "applyDefaultConfigWithoutWarming": true,
+                        "typeUrls": [
+                          "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+                        ]
+                      }
+                    },
+                    {
                       "name": "envoy.filters.http.router",
                       "typedConfig": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
@@ -1782,7 +1865,30 @@
                     }
                   ],
                   "normalizePath": true,
-                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED"
+                  "pathWithEscapedSlashesAction": "KEEP_UNCHANGED",
+                  "accessLog": [
+                    {
+                      "name": "envoy.access_loggers.stdout",
+                      "filter": {
+                        "extensionFilter": {
+                          "name": "envoy.access_loggers.extension_filters.cel",
+                          "typedConfig": {
+                            "@type": "type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter",
+                            "expression": "'agentio.body_processing.audit' in filter_state"
+                          }
+                        }
+                      },
+                      "typedConfig": {
+                        "@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
+                        "logFormat": {
+                          "textFormatSource": {
+                            "inlineString": "%FILTER_STATE(agentio.body_processing.audit:PLAIN)%"
+                          },
+                          "omitEmptyValues": true
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ],

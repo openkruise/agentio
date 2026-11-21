@@ -24,7 +24,7 @@ RUN bash build.sh --build-only
 FROM connection-builder AS contentguard-builder
 WORKDIR /contentguard
 COPY --from=connection-builder /src/.envoy-sdk/ ./.envoy-sdk/
-COPY extensions/envoy/contentguard/ ./
+COPY extensions/envoy/body_processing/ ./
 RUN bash build.sh --build-only
 
 FROM metrics-artifact AS gateway-test-artifacts

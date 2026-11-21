@@ -1,6 +1,12 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+pub(crate) mod response;
+pub(crate) mod sse;
+pub(crate) mod stream;
+pub(super) mod tool_summary;
+
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub const CHAT: &str = "openai-chat-completions";
@@ -9,33 +15,43 @@ pub const ANTHROPIC: &str = "anthropic-messages";
 const INVALID: &str = "invalid_content";
 type Parsed = Result<Value, &'static str>;
 
-// Count the JSON bytes charged by EPE's encoding/json, including HTML escaping,
-// without allocating another serialized copy of a retained message.
-pub(crate) fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            self.0 += 5 * bytes
-                .iter()
-                .filter(|b| matches!(b, b'<' | b'>' | b'&'))
-                .count();
-            self.0 += 3 * bytes
-                .windows(3)
-                .filter(|w| matches!(*w, [0xe2, 0x80, 0xa8 | 0xa9]))
-                .count();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    serde_json::to_writer(&mut counter, value).expect("serializable protocol content");
-    counter.0
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Fields {
+    pub(crate) input_messages: bool,
+    pub(crate) output_messages: bool,
+    pub(crate) tools: bool,
+    pub(crate) tool_call_refs: bool,
+    pub(crate) question: bool,
+    pub(crate) answer: bool,
 }
 
-fn optional_string(v: &Value) -> Result<Option<&str>, &'static str> {
+impl Fields {
+    pub(crate) const ALL: Self = Self {
+        input_messages: true,
+        output_messages: true,
+        tools: true,
+        tool_call_refs: true,
+        question: true,
+        answer: true,
+    };
+}
+#[cfg(test)]
+impl Fields {
+    pub(crate) fn fixture_default() -> Self {
+        Self::DEFAULT
+    }
+    pub(crate) const DEFAULT: Self = Self {
+        input_messages: true,
+        output_messages: true,
+        tools: true,
+        tool_call_refs: false,
+        question: false,
+        answer: false,
+    };
+}
+
+pub(super) fn optional_string(v: &Value) -> Result<Option<&str>, &'static str> {
     if v.is_null() {
         Ok(None)
     } else {
@@ -51,7 +67,7 @@ fn text_block(s: &str) -> Value {
     json!({"type":"text", "text":s})
 }
 
-fn plain(s: &str) -> Vec<Value> {
+pub(super) fn plain(s: &str) -> Vec<Value> {
     if s.is_empty() {
         vec![]
     } else {
@@ -74,6 +90,29 @@ fn tool_result(id: &Value, content: Vec<Value>, error: bool) -> Value {
     json!({"type":"tool_result","toolCallId":id,"content":content,"isError":error})
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ToolKind {
+    Call,
+    Result,
+}
+
+fn anthropic_tool(kind: &str) -> Option<ToolKind> {
+    match kind {
+        "tool_use" | "server_tool_use" | "mcp_tool_use" => Some(ToolKind::Call),
+        "tool_result" => Some(ToolKind::Result),
+        k if k.ends_with("_tool_result") => Some(ToolKind::Result),
+        _ => None,
+    }
+}
+
+fn responses_tool(kind: &str) -> Option<ToolKind> {
+    match kind {
+        "function_call" | "custom_tool_call" => Some(ToolKind::Call),
+        "function_call_output" | "custom_tool_call_output" => Some(ToolKind::Result),
+        _ => None,
+    }
+}
+
 pub(crate) fn blocks(v: &Value, format: &str) -> Vec<Value> {
     if v.is_null() {
         return vec![];
@@ -93,8 +132,9 @@ pub(crate) fn blocks(v: &Value, format: &str) -> Vec<Value> {
                 }
                 item.clone()
             }
-            Some("tool_use" | "server_tool_use")
+            Some(kind)
                 if format == ANTHROPIC
+                    && anthropic_tool(kind) == Some(ToolKind::Call)
                     && optional_string(&item["id"]).is_ok()
                     && optional_string(&item["name"]).is_ok() =>
             {
@@ -102,13 +142,25 @@ pub(crate) fn blocks(v: &Value, format: &str) -> Vec<Value> {
                 if item["type"] == "server_tool_use" {
                     call["server"] = true.into();
                 }
+                if let Some(server) = item.get("server_name") {
+                    call["server_name"] = server.clone();
+                }
                 call
             }
-            Some("tool_result") if optional_string(&item["tool_use_id"]).is_ok() => tool_result(
-                &item["tool_use_id"],
-                blocks(&item["content"], format),
-                item["is_error"] == true,
-            ),
+            Some(kind)
+                if format == ANTHROPIC
+                    && anthropic_tool(kind) == Some(ToolKind::Result)
+                    && optional_string(&item["tool_use_id"]).is_ok() =>
+            {
+                tool_result(
+                    &item["tool_use_id"],
+                    blocks(&item["content"], format),
+                    item["is_error"] == true
+                        || item["content"]["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind.ends_with("_tool_result_error")),
+                )
+            }
             _ => provider(item, format),
         };
         result.push(block);
@@ -121,8 +173,12 @@ pub(crate) fn chat_message(v: &Value, format: &str) -> Parsed {
     let mut content = blocks(&v["content"], format);
     if format == CHAT {
         optional_string(&v["tool_call_id"])?;
-        if role == "tool" {
-            content = vec![tool_result(&v["tool_call_id"], content, false)];
+        if matches!(role, "tool" | "function") {
+            let mut result = tool_result(&v["tool_call_id"], content, false);
+            if let Some(name) = v["name"].as_str() {
+                result["name"] = name.into();
+            }
+            content = vec![result];
         }
         if let Some(calls) = v["tool_calls"].as_array() {
             for call in calls {
@@ -135,7 +191,7 @@ pub(crate) fn chat_message(v: &Value, format: &str) -> Parsed {
                     optional_string(&call["type"])?;
                     optional_string(&f["name"])?;
                     if !call["index"].is_null() {
-                        crate::response::index(&call["index"])?;
+                        response::index(&call["index"])?;
                     }
                     content.push(tool_call(&call["id"], &f["name"], &f["arguments"]));
                 } else {
@@ -175,11 +231,15 @@ fn responses_blocks(v: &Value) -> Result<Vec<Value>, &'static str> {
             if refusal || matches!(item["type"].as_str(), Some("input_text" | "output_text")) {
                 optional_string(&item["text"])?;
                 optional_string(&item["refusal"])?;
-                let key = if refusal { "refusal" } else { "text" };
+                let key = if refusal && !item["refusal"].is_null() {
+                    "refusal"
+                } else {
+                    "text"
+                };
                 let text = item[key].as_str().ok_or(INVALID)?;
                 let mut b = item.clone();
                 b.as_object_mut().unwrap().remove(key);
-                b["type"] = key.into();
+                b["type"] = if refusal { "refusal" } else { "text" }.into();
                 b["text"] = text.into();
                 Ok(b)
             } else {
@@ -194,30 +254,31 @@ pub(crate) fn responses_item(item: &Value) -> Parsed {
     if !item.is_object() {
         return Err(INVALID);
     }
-    if !matches!(
-        kind,
-        None | Some("message" | "function_call" | "function_call_output")
-    ) {
+    let tool = kind.and_then(responses_tool);
+    if tool.is_none() && !matches!(kind, None | Some("message")) {
         return Ok(message("assistant", vec![provider(item, RESPONSES)]));
     }
     for key in ["id", "role", "call_id", "name", "arguments"] {
         optional_string(&item[key])?;
     }
-    Ok(match kind {
-        Some("function_call") => {
-            for key in ["call_id", "name", "arguments"] {
+    Ok(match tool {
+        Some(ToolKind::Call) => {
+            let custom = kind == Some("custom_tool_call");
+            let input_key = if custom { "input" } else { "arguments" };
+            for key in ["call_id", "name", input_key] {
                 item[key].as_str().ok_or(INVALID)?;
             }
-            message(
-                "assistant",
-                vec![tool_call(
-                    &item["call_id"],
-                    &item["name"],
-                    &item["arguments"],
-                )],
-            )
+            let mut call = if custom {
+                json!({"type":"tool_call","id":item["call_id"],"name":item["name"],"arguments":item[input_key]})
+            } else {
+                tool_call(&item["call_id"], &item["name"], &item[input_key])
+            };
+            if let Some(namespace) = item["namespace"].as_str() {
+                call["namespace"] = namespace.into();
+            }
+            message("assistant", vec![call])
         }
-        Some("function_call_output") => {
+        Some(ToolKind::Result) => {
             item["call_id"].as_str().ok_or(INVALID)?;
             message(
                 "tool",
@@ -241,48 +302,103 @@ fn tools(v: &Value, format: &str) -> Parsed {
     }
     let mut definitions = Vec::new();
     for item in v.as_array().ok_or(INVALID)? {
-        let source = match format {
-            CHAT if item["function"].is_object() => &item["function"],
-            ANTHROPIC
-                if item.is_object() && (item["type"].is_null() || item["type"] == "custom") =>
-            {
-                item
-            }
-            RESPONSES if item["type"] == "function" => item,
-            _ => {
-                definitions.push(provider(item, format));
-                continue;
-            }
-        };
-        let schema = if format == ANTHROPIC {
-            "input_schema"
-        } else {
-            "parameters"
-        };
-        definitions.push(json!({
-            "name": optional_string(&source["name"])?,
-            "description": optional_string(&source["description"])?,
-            "parameters": &source[schema],
-        }));
+        definitions.push(tool_definition(item, format)?);
     }
     Ok(Value::Array(definitions))
 }
 
-fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
+pub(super) fn tool_definition(item: &Value, format: &str) -> Parsed {
+    let source = match format {
+        CHAT if item["function"].is_object() => &item["function"],
+        ANTHROPIC if item.is_object() && (item["type"].is_null() || item["type"] == "custom") => {
+            item
+        }
+        RESPONSES if item["type"] == "function" => item,
+        _ => {
+            return Ok(provider(item, format));
+        }
+    };
+    let schema = if format == ANTHROPIC {
+        "input_schema"
+    } else {
+        "parameters"
+    };
+    Ok(json!({
+        "name": optional_string(&source["name"])?,
+        "description": optional_string(&source["description"])?,
+        "parameters": &source[schema],
+    }))
+}
+
+// Select immediate user text parts only. A tool_result can itself contain text.
+fn question(doc: &Value, format: &str) -> Option<String> {
+    let input = if format == RESPONSES {
+        &doc["input"]
+    } else {
+        &doc["messages"]
+    };
+    if let Some(text) = input.as_str() {
+        return (!text.is_empty()).then(|| text.to_owned());
+    }
+    input
+        .as_array()?
+        .iter()
+        .rev()
+        .find_map(|message| user_question(message, format))
+}
+
+pub(super) fn user_question(message: &Value, format: &str) -> Option<String> {
+    let text_type = if format == RESPONSES {
+        "input_text"
+    } else {
+        "text"
+    };
+
+    if message["role"] != "user"
+        || (format == RESPONSES && !message["type"].is_null() && message["type"] != "message")
+    {
+        return None;
+    }
+    let content = &message["content"];
+    let text = if let Some(s) = content.as_str() {
+        s.to_owned()
+    } else {
+        content
+            .as_array()?
+            .iter()
+            .filter(|p| p["type"] == text_type)
+            .filter_map(|p| p["text"].as_str())
+            .collect()
+    };
+    (!text.is_empty()).then_some(text)
+}
+
+// Consume only top-level visible blocks from a normalized assistant message.
+pub(crate) fn answer_parts(message: &Value) -> impl Iterator<Item = &str> {
+    message["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(move |part| {
+            message["role"] == "assistant"
+                && matches!(part["type"].as_str(), Some("text" | "refusal"))
+        })
+        .filter_map(|part| part["text"].as_str())
+}
+
+fn llm(v: &Value, format: &str, fields: Fields) -> Parsed {
     if !v.is_object() {
         return Err(INVALID);
     }
     let mut view = json!({"format":format});
-    if let Some(model) = optional_string(&v["model"])? {
-        view["model"] = model.into();
-    }
+    optional_string(&v["model"])?;
     let mut messages = vec![];
     if format == RESPONSES {
         optional_string(&v["status"])?;
         if let Some(s) = optional_string(&v["instructions"])?
             && fields.input_messages
         {
-            messages.push(message("system", plain(s)));
+            view["systemInstructions"] = plain(s).into();
         }
         match &v["input"] {
             Value::String(s) => {
@@ -301,12 +417,12 @@ fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
             _ => return Err(INVALID),
         }
     } else {
-        v["model"].as_str().ok_or(INVALID)?;
         if format == ANTHROPIC {
+            v["model"].as_str().ok_or(INVALID)?;
             optional_string(&v["stop_reason"])?;
         }
-        if fields.input_messages && !v["system"].is_null() {
-            messages.push(message("system", blocks(&v["system"], format)));
+        if format == ANTHROPIC && fields.input_messages && !v["system"].is_null() {
+            view["systemInstructions"] = blocks(&v["system"], format).into();
         }
         let values = v["messages"].as_array().ok_or(INVALID)?;
         if fields.input_messages {
@@ -314,6 +430,11 @@ fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
                 messages.push(chat_message(m, format)?);
             }
         }
+    }
+    if fields.question
+        && let Some(text) = question(v, format)
+    {
+        view["question"] = text.into();
     }
     if fields.input_messages {
         view["inputMessages"] = Value::Array(messages);
@@ -323,30 +444,35 @@ fn llm(v: &Value, format: &str, fields: crate::Fields) -> Parsed {
     {
         view["tools"] = tools(t, format)?;
     }
+    if fields.tools
+        && format == CHAT
+        && let Some(legacy) = v["functions"].as_array()
+    {
+        let definitions = view
+            .as_object_mut()
+            .unwrap()
+            .entry("tools")
+            .or_insert_with(|| json!([]));
+        if definitions.is_null() {
+            *definitions = json!([]);
+        }
+        definitions
+            .as_array_mut()
+            .ok_or(INVALID)?
+            .extend(legacy.iter().cloned());
+    }
     Ok(view)
 }
 
-pub fn parse(
-    format: &str,
-    body: &[u8],
-    response: bool,
-    fields: crate::Fields,
-    log_limit: usize,
-) -> Parsed {
-    let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
+pub(crate) fn document(format: &str, doc: &Value, response: bool, fields: Fields) -> Parsed {
     if format == "json" {
-        return Ok(doc);
+        return Ok(doc.clone());
     }
     let mut view = if response {
-        crate::response::normalize(format, &doc, fields.output_messages)?
+        response::normalize(format, doc, fields.output_messages || fields.answer)?
     } else {
-        llm(&doc, format, fields)?
+        llm(doc, format, fields)?
     };
-    if fields.tool_calls {
-        let mut calls = crate::tool_summary::ToolSummary::new(log_limit);
-        calls.document(format, &doc, response);
-        calls.publish(&mut view);
-    }
     if response {
         if let Some(id) = doc["id"].as_str() {
             view["responseId"] = id.into();
@@ -368,32 +494,39 @@ pub fn parse(
             view["finishReasons"] = reasons.into_iter().map(|(_, s)| Value::from(s)).collect();
         }
     } else {
-        if let Some(stream) = doc["stream"].as_bool() {
-            view["requestStream"] = stream.into();
-        }
-        let max_tokens = match format {
-            CHAT => doc["max_completion_tokens"]
-                .as_u64()
-                .or_else(|| doc["max_tokens"].as_u64()),
-            RESPONSES => doc["max_output_tokens"].as_u64(),
-            _ => doc["max_tokens"].as_u64(),
-        };
-        if let Some(n) = max_tokens {
-            view["maxTokens"] = n.into();
-        }
-        if format == RESPONSES {
-            if let Some(id) = doc["conversation"]
-                .as_str()
-                .or_else(|| doc["conversation"]["id"].as_str())
-            {
-                view["conversationId"] = id.into();
-            }
-            if let Some(id) = doc["previous_response_id"].as_str() {
-                view["previousResponseId"] = id.into();
-            }
-        }
+        request_metadata(format, doc, &mut view);
     }
     Ok(view)
+}
+
+pub(super) fn request_metadata(format: &str, doc: &Value, view: &mut Value) {
+    if let Some(model) = doc["model"].as_str() {
+        view["model"] = model.into();
+    }
+    if let Some(stream) = doc["stream"].as_bool() {
+        view["requestStream"] = stream.into();
+    }
+    let max_tokens = match format {
+        CHAT => doc["max_completion_tokens"]
+            .as_u64()
+            .or_else(|| doc["max_tokens"].as_u64()),
+        RESPONSES => doc["max_output_tokens"].as_u64(),
+        _ => doc["max_tokens"].as_u64(),
+    };
+    if let Some(n) = max_tokens {
+        view["maxTokens"] = n.into();
+    }
+    if format == RESPONSES {
+        if let Some(id) = doc["conversation"]
+            .as_str()
+            .or_else(|| doc["conversation"]["id"].as_str())
+        {
+            view["conversationId"] = id.into();
+        }
+        if let Some(id) = doc["previous_response_id"].as_str() {
+            view["previousResponseId"] = id.into();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -406,14 +539,7 @@ mod tests {
             {"type":"server_tool_use","name":"lookup","input":{"q":"hi"}},
             {"type":"image","source":{"type":"url","url":"https://example.test"}}
         ]}]});
-        let view = parse(
-            ANTHROPIC,
-            input.to_string().as_bytes(),
-            false,
-            crate::Fields::DEFAULT,
-            8192,
-        )
-        .unwrap();
+        let view = document(ANTHROPIC, &input, false, Fields::DEFAULT).unwrap();
         let blocks = &view["inputMessages"][0]["content"];
         assert_eq!(blocks[0], input["messages"][0]["content"][0]);
         assert_eq!(
@@ -428,14 +554,7 @@ mod tests {
         let input = json!({"model":"m","messages":[{"role":"assistant","tool_calls":[
             {"id":"c","function":{"name":"lookup","arguments":"{bad"}}
         ]},{"role":"tool","tool_call_id":"c","content":"result"}]});
-        let view = parse(
-            CHAT,
-            input.to_string().as_bytes(),
-            false,
-            crate::Fields::DEFAULT,
-            8192,
-        )
-        .unwrap();
+        let view = document(CHAT, &input, false, Fields::DEFAULT).unwrap();
         let msgs = &view["inputMessages"];
         assert_eq!(msgs[0]["content"][0]["arguments"], "{bad");
         assert_eq!(

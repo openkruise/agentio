@@ -48,7 +48,7 @@ The Helm-only merge happens earlier: `.Values.agentiod.config.values` is merged 
 
 ## Global HTTP content auditing
 
-Set `contentGuard` in the effective configuration to audit forwarded HTTP on native egress gateways. It accepts ordered host and Filter State rules, per-rule LLM and generic parsers with per-direction content selection and budgets, and audit attributes. The gateway image must include the ContentGuard dynamic module. See the [configuration example and matching semantics](../../extensions/envoy/contentguard/README.md#configuration).
+Set `bodyProcessing.filterChains` in the effective configuration to audit LLM traffic on native egress gateways. At request headers the Rust module selects the first matching chain by host, path and Filter State. Each chain selects one LLM parser and runs its audit filters in order, with independent request and response fields, attributes and size limits. Native HTTP forwarding listeners subscribe to the rules through ECDS. Omitting the setting or using `filterChains: []` forwards traffic without audit records. Existing streams retain the rules they started with. The initial rollout requires a gateway image with the ContentGuard dynamic module before the control plane installs the listener wiring. See the [configuration example and matching semantics](../../extensions/envoy/body_processing/README.md#configuration).
 
 ## Configure the Helm-managed base
 

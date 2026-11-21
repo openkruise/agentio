@@ -521,13 +521,9 @@ func (b *resourceBuilder) buildForwardHCM(
 	}
 
 	var auditLogs []*accesslogv3.AccessLog
-	if b.contentGuard != nil && !b.legacyGateway {
-		auditFilters, logs, err := b.contentGuardConfig()
-		if err != nil {
-			return nil, err
-		}
-		filters = append(filters, auditFilters...)
-		auditLogs = logs
+	if !b.legacyGateway {
+		filters = append(filters, b.bodyProcessingFilter())
+		auditLogs = append(auditLogs, b.bodyProcessingLogger())
 	}
 	if terminatedTLS && b.legacyGateway {
 		filters = append(filters, legacyConnectProxyTLSIdentityHTTPFilter)

@@ -62,7 +62,7 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
-	ContentGuard               *structpb.Struct
+	BodyProcessing             *structpb.Struct
 	EgressAuthorization        *configv1.EgressAuthorization
 	Services                   []model.Service
 	Endpoints                  []model.Endpoint
@@ -175,7 +175,6 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 		legacyGateway:       inputs.LegacyGateway,
 		upstreamTrustBundle: inputs.UpstreamTrustBundle,
 		egressAuthorization: inputs.EgressAuthorization,
-		contentGuard:        inputs.ContentGuard,
 		dnsCacheSettings:    inputs.Gateway.Config.GetDnsCache(),
 	}
 	clusters, err := b.clusters(effective)
@@ -191,6 +190,13 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 		return nil, err
 	}
 	extensionConfigurations := b.extensions
+	if !inputs.LegacyGateway {
+		extension, err := b.bodyProcessingExtension(inputs.BodyProcessing)
+		if err != nil {
+			return nil, fmt.Errorf("build body processing extension: %w", err)
+		}
+		extensionConfigurations = append(extensionConfigurations, extension)
+	}
 	if len(inputs.GatewayPatches) > 0 {
 		patches := envoyfilterpatch.NewPatchSet(inputs.GatewayPatches)
 		clusters, err = envoyfilterpatch.ApplyClusters(patches, clusters)

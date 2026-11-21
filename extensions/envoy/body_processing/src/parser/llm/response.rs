@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::protocol::{ANTHROPIC, CHAT, RESPONSES, blocks, chat_message, responses_item};
+use crate::parser::llm::{ANTHROPIC, CHAT, RESPONSES, blocks, chat_message, responses_item};
 use serde_json::{Value, json};
 
 pub(crate) const INVALID: &str = "invalid_content";

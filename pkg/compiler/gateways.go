@@ -122,9 +122,9 @@ func newGatewayResources(
 		func(_ krt.HandlerContext, current configuration) *config.Config[*configv1.EgressAuthorization] {
 			return &config.Config[*configv1.EgressAuthorization]{Value: current.Config.GetEgressAuthorization()}
 		}, options("gateway-egress-authorization")...)
-	contentGuard := krt.NewCollection(configurations.AsCollection(),
+	bodyProcessing := krt.NewCollection(configurations.AsCollection(),
 		func(_ krt.HandlerContext, current configuration) *config.Config[*structpb.Struct] {
-			return &config.Config[*structpb.Struct]{Value: current.Config.GetContentGuard()}
+			return &config.Config[*structpb.Struct]{Value: current.Config.GetBodyProcessing()}
 		}, options("gateway-contentguard")...)
 	extProcs := globalExtProc.AsCollection()
 	// Overrides retain additional processors without depending on the global primary.
@@ -173,7 +173,7 @@ func newGatewayResources(
 			}
 			providerOverride := krt.FetchOne(ctx, providerOverrides)
 			var audit *structpb.Struct
-			if current := krt.FetchOne(ctx, contentGuard); current != nil {
+			if current := krt.FetchOne(ctx, bodyProcessing); current != nil {
 				audit = current.Value
 			}
 			var egressAuthorization *configv1.EgressAuthorization
@@ -197,7 +197,7 @@ func newGatewayResources(
 				GlobalExtProc:              provider,
 				AdditionalExtProcs:         additional,
 				EgressAuthorization:        egressAuthorization,
-				ContentGuard:               audit,
+				BodyProcessing:             audit,
 				DiscoveryAddress:           inputs.DiscoveryAddress,
 				TrustDomain:                inputs.TrustDomain,
 				UpstreamTrustBundle:        trustBundle,

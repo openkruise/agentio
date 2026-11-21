@@ -16,122 +16,77 @@ package networking
 
 import (
 	"encoding/json"
-	"fmt"
-	"maps"
-	"slices"
-	"strings"
 
-	udpa "github.com/cncf/xds/go/udpa/type/v1"
 	access "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	cel "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/filters/cel/v3"
 	stream "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
-	common "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
-	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	dynamicmodule "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
+	dynamicfilter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func (b *resourceBuilder) contentGuardConfig() ([]*hcm.HttpFilter, []*access.AccessLog, error) {
-	cfg := b.contentGuard.AsMap()
-	var filters []*hcm.HttpFilter
-	// The HTTP module ABI exposes only top-level metadata. Envoy's native
-	// formatter can resolve a nested path and publish it as a stream-local string.
-	attrs, _ := cfg["attributes"].(map[string]any)
-	projection := &state.Config{}
-	for _, name := range slices.Sorted(maps.Keys(attrs)) {
-		source, _ := attrs[name].(map[string]any)
-		raw, found := source["dynamicMetadata"]
-		if !found {
-			continue
+const (
+	bodyProcessingName  = "agentio.contentguard"
+	bodyProcessingType  = "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter"
+	emptyBodyProcessing = `{"filterChains":[]}`
+	auditStateKey       = "agentio.body_processing.audit"
+)
+
+func (b *resourceBuilder) bodyProcessingModule(rules string) *anypb.Any {
+	return b.pack(&dynamicfilter.DynamicModuleFilter{
+		DynamicModuleConfig: &dynamicmodule.DynamicModuleConfig{
+			Name: "envoy_agentio_contentguard", DoNotClose: true,
+			Module: &core.AsyncDataSource{Specifier: &core.AsyncDataSource_Local{Local: &core.DataSource{
+				Specifier: &core.DataSource_Filename{Filename: "/usr/local/lib/libenvoy_agentio_contentguard.so"},
+			}}},
+		},
+		FilterName:   "contentguard",
+		FilterConfig: b.pack(wrapperspb.String(rules)),
+	})
+}
+
+func (b *resourceBuilder) bodyProcessingExtension(settings *structpb.Struct) (*core.TypedExtensionConfig, error) {
+	rules := emptyBodyProcessing
+	if settings != nil {
+		data, err := json.Marshal(settings.AsMap())
+		if err != nil {
+			return nil, err
 		}
-		meta, _ := raw.(map[string]any)
-		ns, _ := meta["namespace"].(string)
-		path, _ := meta["path"].([]any)
-		if len(source) != 1 || len(meta) != 2 || len(path) == 0 {
-			return nil, nil, fmt.Errorf("contentGuard attribute %q requires a metadata namespace and path", name)
-		}
-		parts := []string{ns}
-		for _, key := range path {
-			s, _ := key.(string)
-			parts = append(parts, s)
-		}
-		for _, part := range parts {
-			if part == "" || strings.ContainsAny(part, ":()%\r\n") {
-				return nil, nil, fmt.Errorf("invalid contentGuard metadata path for %q", name)
-			}
-		}
-		key := "agentio.contentguard.metadata." + name
-		projection.OnRequestHeaders = append(projection.OnRequestHeaders, &common.FilterStateValue{
-			Key:         &common.FilterStateValue_ObjectKey{ObjectKey: key},
-			FactoryKey:  "envoy.string",
-			ReadOnly:    true,
-			SkipIfEmpty: true,
-			Value: &common.FilterStateValue_FormatString{
-				FormatString: formatString("%DYNAMIC_METADATA(" + strings.Join(parts, ":") + ")%"),
-			},
-		})
-		attrs[name] = map[string]any{"filterState": key}
+		rules = string(data)
 	}
-	if len(projection.OnRequestHeaders) > 0 {
-		filters = append(filters, httpFilter("agentio.contentguard.metadata", b.pack(projection)))
+	return &core.TypedExtensionConfig{Name: bodyProcessingName, TypedConfig: b.bodyProcessingModule(rules)}, b.err
+}
+
+func (b *resourceBuilder) bodyProcessingFilter() *hcm.HttpFilter {
+	return &hcm.HttpFilter{
+		Name: bodyProcessingName,
+		ConfigType: &hcm.HttpFilter_ConfigDiscovery{ConfigDiscovery: &core.ExtensionConfigSource{
+			ConfigSource:                     adsConfigSource(),
+			TypeUrls:                         []string{bodyProcessingType},
+			DefaultConfig:                    b.bodyProcessingModule(emptyBodyProcessing),
+			ApplyDefaultConfigWithoutWarming: true,
+		}},
 	}
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, nil, err
+}
+
+func (b *resourceBuilder) bodyProcessingLogger() *access.AccessLog {
+	predicate := &access.ExtensionFilter{
+		Name: "envoy.access_loggers.extension_filters.cel",
+		ConfigType: &access.ExtensionFilter_TypedConfig{TypedConfig: b.pack(&cel.ExpressionFilter{
+			Expression: "'" + auditStateKey + "' in filter_state",
+		})},
 	}
-	filters = append(filters, httpFilter("agentio.contentguard", b.pack(&udpa.TypedStruct{
-		TypeUrl: "type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter",
-		Value: b.structure(map[string]any{
-			"dynamic_module_config": map[string]any{
-				"name":         "envoy_agentio_contentguard",
-				"do_not_close": true,
-				"module": map[string]any{
-					"local": map[string]any{"filename": "/usr/local/lib/libenvoy_agentio_contentguard.so"},
-				},
-			},
-			"filter_name": "contentguard",
-			"filter_config": map[string]any{
-				"@type": "type.googleapis.com/google.protobuf.StringValue",
-				"value": string(data),
-			},
-		}),
-	})))
-	enabled := map[string]bool{}
-	for _, rule := range b.contentGuard.GetFields()["rules"].GetListValue().GetValues() {
-		audit := rule.GetStructValue().GetFields()["audit"].GetStructValue()
-		parsers := audit.GetFields()["parsers"].GetStructValue()
-		for _, name := range []string{"llm", "generic"} {
-			parser := parsers.GetFields()[name].GetStructValue()
-			for _, direction := range []string{"request", "response"} {
-				if parser.GetFields()[direction].GetStructValue() != nil {
-					enabled[direction] = true
-				}
-			}
-		}
+	return &access.AccessLog{
+		Name: "envoy.access_loggers.stdout",
+		Filter: &access.AccessLogFilter{
+			FilterSpecifier: &access.AccessLogFilter_ExtensionFilter{ExtensionFilter: predicate},
+		},
+		ConfigType: &access.AccessLog_TypedConfig{TypedConfig: b.pack(&stream.StdoutAccessLog{
+			AccessLogFormat: &stream.StdoutAccessLog_LogFormat{LogFormat: formatString("%FILTER_STATE(" + auditStateKey + ":PLAIN)%")},
+		})},
 	}
-	var logs []*access.AccessLog
-	for _, direction := range []string{"request", "response"} {
-		if !enabled[direction] {
-			continue
-		}
-		key := "agentio.contentguard." + direction
-		predicate := &access.ExtensionFilter{
-			Name: "envoy.access_loggers.extension_filters.cel",
-			ConfigType: &access.ExtensionFilter_TypedConfig{TypedConfig: b.pack(&cel.ExpressionFilter{
-				Expression: "'" + key + "' in filter_state",
-			})},
-		}
-		logger := &stream.StdoutAccessLog{
-			AccessLogFormat: &stream.StdoutAccessLog_LogFormat{
-				LogFormat: formatString("%FILTER_STATE(" + key + ":PLAIN)%\n"),
-			},
-		}
-		logs = append(logs, &access.AccessLog{
-			Name: "envoy.access_loggers.stdout",
-			Filter: &access.AccessLogFilter{
-				FilterSpecifier: &access.AccessLogFilter_ExtensionFilter{ExtensionFilter: predicate},
-			},
-			ConfigType: &access.AccessLog_TypedConfig{TypedConfig: b.pack(logger)},
-		})
-	}
-	return filters, logs, b.err
 }

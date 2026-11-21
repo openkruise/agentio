@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Retention, obj, string, unknown};
-use crate::{
-    protocol::{ANTHROPIC, blocks},
+use crate::parser::llm::{
+    ANTHROPIC, blocks,
     response::{INVALID, Result, anthropic_totals, index, usage_counts},
 };
 use serde_json::{Value, json};
@@ -26,17 +26,7 @@ struct Block {
 }
 
 impl Stream {
-    pub(super) fn add(
-        &mut self,
-        event: &str,
-        v: &Value,
-        raw: &str,
-        b: &mut Retention,
-    ) -> Result<()> {
-        let kind = string(&v["type"])?;
-        if kind != event {
-            return Err(INVALID);
-        }
+    pub(super) fn add(&mut self, kind: &str, v: &Value, b: &mut Retention) -> Result<()> {
         if kind == "ping" {
             return Ok(());
         }
@@ -69,26 +59,17 @@ impl Stream {
                     return Err(INVALID);
                 }
                 b.item()?;
-                #[derive(serde::Deserialize)]
-                struct Start<'a> {
-                    #[serde(borrow)]
-                    content_block: &'a serde_json::value::RawValue,
+                if kind == "text"
+                    && let Some(text) = source["text"].as_str()
+                {
+                    b.visible(self.blocks.len() as u32, text);
                 }
-                let kept = if b.retaining()
-                    && b.take(
-                        serde_json::from_str::<Start>(raw)
-                            .map_err(|_| INVALID)?
-                            .content_block
-                            .get()
-                            .len(),
-                    ) {
+                let kept = if b.take(crate::parser::encoded_len(source)) {
                     source.clone()
                 } else {
                     Value::Null
                 };
-                if let Some(tools) = &mut b.tools {
-                    tools.anthropic((0, self.blocks.len()), source);
-                }
+                b.tools.anthropic((0, self.blocks.len()), source);
                 self.blocks.push(Block {
                     kind: kind.into(),
                     source: kept,
@@ -97,10 +78,8 @@ impl Stream {
                 });
             }
             "content_block_delta" | "content_block_stop" => {
-                let block = self
-                    .blocks
-                    .get_mut(index(&v["index"])? as usize)
-                    .ok_or(INVALID)?;
+                let i = index(&v["index"])?;
+                let block = self.blocks.get_mut(i as usize).ok_or(INVALID)?;
                 if block.closed {
                     return Err(INVALID);
                 }
@@ -115,6 +94,9 @@ impl Stream {
                     block.input.clear();
                 } else {
                     block.delta(&v["delta"], b)?;
+                    if v["delta"]["type"] == "text_delta" {
+                        b.visible(i, string(&v["delta"]["text"])?);
+                    }
                 }
             }
             "message_delta" => {
@@ -198,7 +180,8 @@ impl Block {
                 if !matches!(self.kind.as_str(), "tool_use" | "server_tool_use") {
                     return Err(INVALID);
                 }
-                b.append(&mut self.input, string(&delta["partial_json"])?);
+                let part = string(&delta["partial_json"])?;
+                b.append(&mut self.input, part);
                 return Ok(());
             }
             Some("citations_delta") => {
@@ -207,7 +190,7 @@ impl Block {
                 }
                 let citation = &delta["citation"];
                 obj(citation)?;
-                if b.retaining() && b.take(crate::protocol::encoded_len(citation)) {
+                if b.retaining() && b.take(crate::parser::encoded_len(citation)) {
                     if self.source["citations"].is_null() {
                         self.source["citations"] = json!([]);
                     }

@@ -1,5 +1,5 @@
 [package]
-name = "agentio-envoy-contentguard"
+name = "agentio-envoy-body-processing"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
@@ -17,5 +17,6 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 mime = "0.3"
 memchr = "2"
 base64 = "0.22"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 
 [workspace]

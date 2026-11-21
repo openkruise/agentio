@@ -228,11 +228,11 @@ type AgentioConfig struct {
 	ExtensionProviders []*ExtensionProvider `protobuf:"bytes,8,rep,name=extension_providers,json=extensionProviders,proto3" json:"extension_providers,omitempty"`
 	// Default services used when a policy does not select a provider explicitly.
 	DefaultProviders *DefaultExtensionProviders `protobuf:"bytes,9,opt,name=default_providers,json=defaultProviders,proto3" json:"default_providers,omitempty"`
-	// Global ContentGuard module configuration for forwarded HTTP on native gateways.
-	// The module validates ordered rules and parser settings at LDS load.
-	ContentGuard  *_struct.Struct `protobuf:"bytes,10,opt,name=content_guard,json=contentGuard,proto3" json:"content_guard,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Global BodyProcessing module configuration for forwarded HTTP on native gateways.
+	// The module validates filter chains, matchers, parsers and audit filters at LDS load.
+	BodyProcessing *_struct.Struct `protobuf:"bytes,10,opt,name=body_processing,json=bodyProcessing,proto3" json:"body_processing,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentioConfig) Reset() {
@@ -328,9 +328,9 @@ func (x *AgentioConfig) GetDefaultProviders() *DefaultExtensionProviders {
 	return nil
 }
 
-func (x *AgentioConfig) GetContentGuard() *_struct.Struct {
+func (x *AgentioConfig) GetBodyProcessing() *_struct.Struct {
 	if x != nil {
-		return x.ContentGuard
+		return x.BodyProcessing
 	}
 	return nil
 }
@@ -2773,7 +2773,7 @@ var File_api_config_v1_agentioconfig_proto protoreflect.FileDescriptor
 
 const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\n" +
-	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a%api/config/v1/extensionprovider.proto\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x80\x06\n" +
+	"!api/config/v1/agentioconfig.proto\x12\x11agentio.config.v1\x1a%api/config/v1/extensionprovider.proto\x1a$api/extensions/v1/egresspolicy.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a)networking/v1alpha3/virtual_service.proto\"\x84\x06\n" +
 	"\rAgentioConfig\x12L\n" +
 	"\x10sandbox_ext_proc\x18\x01 \x01(\v2\".agentio.config.v1.ExtProcProviderR\x0esandboxExtProc\x12I\n" +
 	"\x0fegress_policies\x18\x02 \x03(\v2 .agentio.extensions.EgressPolicyR\x0eegressPolicies\x124\n" +
@@ -2783,9 +2783,9 @@ const file_api_config_v1_agentioconfig_proto_rawDesc = "" +
 	"\x16trusted_epe_identities\x18\x06 \x03(\tR\x14trustedEPEIdentities\x12Y\n" +
 	"\x14egress_authorization\x18\a \x01(\v2&.agentio.config.v1.EgressAuthorizationR\x13egressAuthorization\x12U\n" +
 	"\x13extension_providers\x18\b \x03(\v2$.agentio.config.v1.ExtensionProviderR\x12extensionProviders\x12Y\n" +
-	"\x11default_providers\x18\t \x01(\v2,.agentio.config.v1.DefaultExtensionProvidersR\x10defaultProviders\x12<\n" +
-	"\rcontent_guard\x18\n" +
-	" \x01(\v2\x17.google.protobuf.StructR\fcontentGuard\"\xa5\b\n" +
+	"\x11default_providers\x18\t \x01(\v2,.agentio.config.v1.DefaultExtensionProvidersR\x10defaultProviders\x12@\n" +
+	"\x0fbody_processing\x18\n" +
+	" \x01(\v2\x17.google.protobuf.StructR\x0ebodyProcessing\"\xa5\b\n" +
 	"\rEgressGateway\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12P\n" +
@@ -3036,7 +3036,7 @@ var file_api_config_v1_agentioconfig_proto_depIdxs = []int32{
 	41, // 4: agentio.config.v1.AgentioConfig.egress_authorization:type_name -> agentio.config.v1.EgressAuthorization
 	43, // 5: agentio.config.v1.AgentioConfig.extension_providers:type_name -> agentio.config.v1.ExtensionProvider
 	44, // 6: agentio.config.v1.AgentioConfig.default_providers:type_name -> agentio.config.v1.DefaultExtensionProviders
-	45, // 7: agentio.config.v1.AgentioConfig.content_guard:type_name -> google.protobuf.Struct
+	45, // 7: agentio.config.v1.AgentioConfig.body_processing:type_name -> google.protobuf.Struct
 	22, // 8: agentio.config.v1.EgressGateway.tls_termination:type_name -> agentio.config.v1.TlsTerminationConfig
 	23, // 9: agentio.config.v1.EgressGateway.ext_proc:type_name -> agentio.config.v1.ExtProcProvider
 	33, // 10: agentio.config.v1.EgressGateway.connect_rate_limit:type_name -> agentio.config.v1.LocalRateLimitSettings

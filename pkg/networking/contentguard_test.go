@@ -20,122 +20,150 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	udpa "github.com/cncf/xds/go/udpa/type/v1"
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	cel "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/filters/cel/v3"
-	state "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	stream "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
+	dynamicfilter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
+	"github.com/openkruise/agentio/pkg/model"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 	"github.com/openkruise/agentio/pkg/config"
 )
 
-const contentGuardYAML = `
-contentGuard:
-  defaults: {schema: genai, maxLogBytes: 4096}
-  attributes:
-    tenant.id: {requestHeader: x-tenant}
-    agentio.sandbox.id: {filterState: agentio.sandbox.id}
-    agentio.workload.namespace: {dynamicMetadata: {namespace: agentio, path: [workload, namespace]}}
-  rules:
-    - match: {hosts: [skip.llm.test]}
-      skip: true
-    - match:
+const bodyProcessingYAML = `
+bodyProcessing:
+  filterChains:
+    - name: custom
+      matcher:
         hosts: ["*.llm.test"]
-        filterState:
-          - {key: agentio.sandbox.id, values: [box-1, box-2]}
-          - {key: agentio.sandbox.id, present: true}
-      audit:
-        schema: agentio
-        parsers:
-          llm: {protocol: openai-responses, response: {include: [messages]}}
-          generic: {request: {}}
+        filterState: [{key: agentio.sandbox.id, values: [box-1, box-2]}]
+      parser: {llm: {protocol: openai-responses}}
+      filters:
+        - audit:
+            maxSize: 8KiB
+            format:
+              attributes:
+                agentio.workload.namespace: "%DYNAMIC_METADATA(workload:namespace)%"
+                tenant: "%REQ(X-TENANT-ID)%"
+                sandbox: "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
+            request: {}
+            response: {include: [llm.messages]}
+    - name: catch-all
+      parser: {llm: {}}
+      filters:
+        - audit:
+            format:
+              attributes:
+                agentio.workload.namespace: "%DYNAMIC_METADATA(alternate:ns)%"
+            response: {}
+
 `
 
-func TestContentGuardGatewayConfig(t *testing.T) {
-	settings, err := config.ApplyAgentioConfig(contentGuardYAML, &configv1.AgentioConfig{})
-	if err != nil {
+func unpackBodyRules(t *testing.T, value *anypb.Any) *structpb.Struct {
+	t.Helper()
+	wire := &dynamicfilter.DynamicModuleFilter{}
+	if err := value.UnmarshalTo(wire); err != nil {
 		t.Fatal(err)
 	}
-	original := proto.CloneOf(settings.ContentGuard)
-	b := resourceBuilder{contentGuard: settings.ContentGuard}
+	config := &wrapperspb.StringValue{}
+	if err := wire.FilterConfig.UnmarshalTo(config); err != nil {
+		t.Fatal(err)
+	}
+	var rules structpb.Struct
+	raw := config.Value
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		t.Fatal(err)
+	}
+	return &rules
+}
+
+func TestBodyProcessingGatewayConfig(t *testing.T) {
+	cfg := effectiveConfig{gateway: &configv1.EgressGateway{}}
 	for _, tls := range []bool{false, true} {
-		manager, err := b.buildForwardHCM(HTTPForwardProxy, effectiveConfig{gateway: &configv1.EgressGateway{}}, tls)
+		b := resourceBuilder{}
+		manager, err := b.buildForwardHCM(HTTPForwardProxy, cfg, tls)
 		if err != nil {
 			t.Fatal(err)
 		}
-		filters := manager.HttpFilters
-		projector, module := filters[len(filters)-3], filters[len(filters)-2]
-		p := &state.Config{}
-		if err := projector.GetTypedConfig().UnmarshalTo(p); err != nil {
-			t.Fatal(err)
+		module := manager.HttpFilters[len(manager.HttpFilters)-2]
+		source := module.GetConfigDiscovery()
+		if module.Name != bodyProcessingName || module.Disabled || source.GetConfigSource().GetAds() == nil ||
+			!source.GetApplyDefaultConfigWithoutWarming() || len(source.TypeUrls) != 1 || source.TypeUrls[0] != bodyProcessingType {
+			t.Fatal(module)
 		}
-		if len(p.OnRequestHeaders) != 1 ||
-			p.OnRequestHeaders[0].GetFormatString().
-				GetTextFormatSource().
-				GetInlineString() !=
-				"%DYNAMIC_METADATA(agentio:workload:namespace)%" {
-			t.Fatal(p)
+		rules := unpackBodyRules(t, source.DefaultConfig)
+		if chains := rules.Fields["filterChains"].GetListValue(); chains == nil || len(chains.Values) != 0 {
+			t.Fatal(rules)
 		}
-		wire := &udpa.TypedStruct{}
-		if err := module.GetTypedConfig().UnmarshalTo(wire); err != nil {
-			t.Fatal(err)
-		}
-		var moduleSettings struct {
-			Rules      []map[string]any
-			Attributes map[string]map[string]string
-		}
-		raw := wire.Value.Fields["filter_config"].GetStructValue().Fields["value"].GetStringValue()
-		if err := json.Unmarshal([]byte(raw), &moduleSettings); err != nil {
-			t.Fatal(err)
-		}
-		if len(moduleSettings.Rules) != 2 ||
-			moduleSettings.Attributes["agentio.workload.namespace"]["filterState"] != p.OnRequestHeaders[0].GetObjectKey() {
-			t.Fatal(raw)
-		}
-		if len(manager.AccessLog) != 2 {
+		if len(manager.AccessLog) != 1 {
 			t.Fatal(manager.AccessLog)
 		}
-		for i, direction := range []string{"request", "response"} {
-			f := &cel.ExpressionFilter{}
-			if err := manager.AccessLog[i].Filter.GetExtensionFilter().GetTypedConfig().UnmarshalTo(f); err != nil {
-				t.Fatal(err)
-			}
-			if f.Expression != "'agentio.contentguard."+direction+"' in filter_state" {
-				t.Fatal(f)
-			}
+		logger := manager.AccessLog[0]
+		f := &cel.ExpressionFilter{}
+		if err := logger.Filter.GetExtensionFilter().GetTypedConfig().UnmarshalTo(f); err != nil {
+			t.Fatal(err)
 		}
-	}
-	// Building both chains must leave the immutable configuration usable on the next update.
-	if !proto.Equal(settings.ContentGuard, original) {
-		t.Fatal("builder mutated shared config")
+		if f.Expression != "'agentio.body_processing.audit' in filter_state" {
+			t.Fatal(f.Expression)
+		}
+		out := &stream.StdoutAccessLog{}
+		if err := logger.GetTypedConfig().UnmarshalTo(out); err != nil {
+			t.Fatal(err)
+		}
+		if out.GetLogFormat().GetTextFormatSource().GetInlineString() != "%FILTER_STATE(agentio.body_processing.audit:PLAIN)%" {
+			t.Fatal(out)
+		}
 	}
 }
 
-func TestContentGuardLogDirections(t *testing.T) {
-	for _, tc := range []struct {
-		rule string
-		logs int
-	}{
-		{"skip: true", 0},
-		{"audit: {parsers: {generic: {response: {}}}}", 1},
-	} {
-		settings, err := config.ApplyAgentioConfig(
-			"contentGuard:\n  rules:\n    - match: {}\n      "+tc.rule,
-			&configv1.AgentioConfig{},
-		)
-		if err != nil {
-			t.Fatal(err)
+func TestBodyProcessingRulesOnlyChangeECDS(t *testing.T) {
+	in := Inputs{DiscoveryAddress: "agentiod:15012", TrustDomain: "cluster.local", Gateway: testGateway(&configv1.EgressGateway{})}
+	before, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := config.ApplyAgentioConfig(bodyProcessingYAML, &configv1.AgentioConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.BodyProcessing = settings.BodyProcessing
+	after, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatal("resource count changed")
+	}
+	originals := make(map[model.ResourceKey]model.Resource)
+	for _, res := range before {
+		originals[res.Key] = res
+	}
+	changed := 0
+	for _, res := range after {
+		old, ok := originals[res.Key]
+		if !ok {
+			t.Fatal(res.Key)
 		}
-		b := resourceBuilder{contentGuard: settings.ContentGuard}
-		_, logs, err := b.contentGuardConfig()
-		if err != nil || len(logs) != tc.logs {
-			t.Fatalf("%s: logs=%v err=%v", tc.rule, logs, err)
-		}
-		if len(logs) == 1 {
-			f := &cel.ExpressionFilter{}
-			if err := logs[0].Filter.GetExtensionFilter().GetTypedConfig().UnmarshalTo(f); err != nil ||
-				f.Expression != "'agentio.contentguard.response' in filter_state" {
-				t.Fatal(f, err)
+		if res.Key.TypeURL == model.ExtensionConfigurationType && res.XDSName == bodyProcessingName {
+			changed++
+			ext := &core.TypedExtensionConfig{}
+			if err := res.Value.UnmarshalTo(ext); err != nil {
+				t.Fatal(err)
 			}
+			if ext.Name != bodyProcessingName || !proto.Equal(unpackBodyRules(t, ext.TypedConfig), settings.BodyProcessing) {
+				t.Fatal(ext)
+			}
+			if proto.Equal(old.Value, res.Value) {
+				t.Fatal("rules did not update")
+			}
+		} else if old.Hash != res.Hash || !proto.Equal(old.Value, res.Value) {
+			t.Fatalf("unexpected change to %v", res.Key)
 		}
+	}
+	if changed != 1 {
+		t.Fatalf("got %d body processing resources", changed)
 	}
 }
