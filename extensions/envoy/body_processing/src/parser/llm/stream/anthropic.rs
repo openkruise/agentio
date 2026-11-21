@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Retention, obj, string, unknown};
+use super::{Event, Retention, Trailers, obj, string, unknown};
 use crate::parser::llm::{
     ANTHROPIC, blocks,
     response::{INVALID, Result, anthropic_totals, index, usage_counts},
@@ -15,7 +15,6 @@ pub(super) struct Stream {
     stop: Option<String>,
     usage: Option<Value>,
     error: Option<Value>,
-    done: bool,
 }
 
 struct Block {
@@ -26,18 +25,21 @@ struct Block {
 }
 
 impl Stream {
-    pub(super) fn add(&mut self, kind: &str, v: &Value, b: &mut Retention) -> Result<()> {
+    pub(super) fn add(
+        &mut self,
+        kind: &str,
+        v: &Value,
+        b: &mut Retention,
+        emit: &mut impl FnMut(Event<'_>),
+    ) -> Result<Option<Trailers>> {
         if kind == "ping" {
-            return Ok(());
-        }
-        if self.done {
-            return Err(INVALID);
+            return Ok(None);
         }
         match kind {
             "error" => {
                 obj(&v["error"])?;
+                emit(Event::Usage(&Value::Null));
                 self.error = Some(v["error"].clone());
-                self.done = true;
             }
             "message_start" => {
                 let m = &v["message"];
@@ -46,7 +48,7 @@ impl Stream {
                 }
                 b.response_id(&m["id"]);
                 self.model = Some(string(&m["model"])?.into());
-                self.merge_usage(&m["usage"]);
+                self.merge_usage(&m["usage"], emit);
             }
             _ if self.model.is_none() => return Err(INVALID),
             "content_block_start" => {
@@ -62,7 +64,12 @@ impl Stream {
                 if kind == "text"
                     && let Some(text) = source["text"].as_str()
                 {
-                    b.visible(self.blocks.len() as u32, text);
+                    emit(Event::TextDelta {
+                        provisional: false,
+                        output: 0,
+                        part: Some(self.blocks.len() as u32),
+                        text,
+                    });
                 }
                 let kept = if b.take(crate::parser::encoded_len(source)) {
                     source.clone()
@@ -95,7 +102,12 @@ impl Stream {
                 } else {
                     block.delta(&v["delta"], b)?;
                     if v["delta"]["type"] == "text_delta" {
-                        b.visible(i, string(&v["delta"]["text"])?);
+                        emit(Event::TextDelta {
+                            provisional: false,
+                            output: 0,
+                            part: Some(i),
+                            text: string(&v["delta"]["text"])?,
+                        });
                     }
                 }
             }
@@ -118,23 +130,30 @@ impl Stream {
                 }
                 if let Some(u) = v.get("usage") {
                     obj(u)?;
-                    self.merge_usage(u);
+                    self.merge_usage(u, emit);
                 }
                 b.partial |= unknown(delta, &["stop_reason", "stop_sequence"], false);
             }
-            "message_stop" => self.done = true,
+            "message_stop" => {}
             _ => b.partial = true,
         }
-        Ok(())
+        if kind != "content_block_delta" || v["delta"]["type"] != "text_delta" {
+            emit(Event::Detail { kind, value: v });
+        }
+        Ok(matches!(kind, "message_stop" | "error").then_some(Trailers::Ping))
     }
 
-    fn merge_usage(&mut self, raw: &Value) {
+    fn merge_usage(&mut self, raw: &Value, emit: &mut impl FnMut(Event<'_>)) {
         if raw.is_object() {
             let latest = usage_counts(ANTHROPIC, raw);
             let target = self.usage.get_or_insert_with(|| json!({}));
             for (key, value) in latest.as_object().unwrap() {
                 target[key] = value.clone();
             }
+            // Totals include cached tokens. Keep the unadjusted counters for later patches.
+            let mut snapshot = target.clone();
+            anthropic_totals(&mut snapshot);
+            emit(Event::Usage(&snapshot));
         }
     }
 
@@ -146,9 +165,6 @@ impl Stream {
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
-        if !self.done {
-            return Err("incomplete_stream");
-        }
         if let Some(e) = self.error {
             return Ok(json!({"format":ANTHROPIC,"error":e}));
         }
@@ -157,10 +173,6 @@ impl Stream {
             return Err("incomplete_stream");
         }
         let mut view = json!({"format":ANTHROPIC,"model":self.model.ok_or("incomplete_stream")?});
-        if let Some(mut counts) = self.usage {
-            anthropic_totals(&mut counts);
-            view["usage"] = counts;
-        }
         view["finishReasons"] = json!([reason]);
         if keep {
             let raw = Value::Array(self.blocks.into_iter().map(|b| b.source).collect());

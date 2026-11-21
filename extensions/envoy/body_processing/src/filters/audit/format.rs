@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value, json};
 
-const METADATA: &[(&str, &str)] = &[
+pub(super) const METADATA: &[(&str, &str)] = &[
     ("responseId", "gen_ai.response.id"),
     ("previousResponseId", "gen_ai.request.previous_response.id"),
     ("requestStream", "gen_ai.request.stream"),
@@ -20,7 +20,7 @@ const METADATA: &[(&str, &str)] = &[
     ("retainedText", "llm.retainedText"),
 ];
 
-const USAGE: &[(&str, &str)] = &[
+pub(super) const USAGE: &[(&str, &str)] = &[
     ("inputTokens", "gen_ai.usage.input_tokens"),
     ("outputTokens", "gen_ai.usage.output_tokens"),
     ("cachedInputTokens", "gen_ai.usage.cache_read.input_tokens"),
@@ -31,34 +31,6 @@ const USAGE: &[(&str, &str)] = &[
     ("reasoningTokens", "gen_ai.usage.reasoning.output_tokens"),
     ("totalTokens", "agentio.usage.total_tokens"),
 ];
-
-pub(super) fn reserved_field(name: &str) -> bool {
-    matches!(
-        name,
-        "type"
-            | "chain"
-            | "direction"
-            | "requestID"
-            | "path"
-            | "captureStatus"
-            | "bytesSeen"
-            | "decodedBytes"
-            | "attributesTruncated"
-            | "http.body"
-            | "llm.protocol"
-            | "llm.error"
-            | "agentio.tool.calls"
-            | "error.type"
-            | "agentio.response.error_code"
-            | "gen_ai.operation.name"
-            | "gen_ai.request.model"
-            | "gen_ai.response.model"
-            | "gen_ai.system_instructions"
-            | "gen_ai.input.messages"
-            | "gen_ai.output.messages"
-            | "gen_ai.tool.definitions"
-    ) || METADATA.iter().chain(USAGE).any(|&(_, key)| key == name)
-}
 
 fn image_part(data: &Value) -> Option<Value> {
     let source = &data["source"];

@@ -45,18 +45,19 @@ bodyProcessing:
         - audit:
             maxSize: 8KiB
             format:
-              attributes:
+              json:
                 agentio.workload.namespace: "%DYNAMIC_METADATA(workload:namespace)%"
+                messages: "%EVENT(llm.messages)%"
                 tenant: "%REQ(X-TENANT-ID)%"
                 sandbox: "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
             request: {}
-            response: {include: [llm.messages]}
+            response: {}
     - name: catch-all
       parser: {llm: {}}
       filters:
         - audit:
             format:
-              attributes:
+              json:
                 agentio.workload.namespace: "%DYNAMIC_METADATA(alternate:ns)%"
             response: {}
 

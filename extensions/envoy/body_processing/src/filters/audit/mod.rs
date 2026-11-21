@@ -4,6 +4,8 @@
 pub(crate) mod capture;
 pub(crate) mod format;
 pub(crate) mod projection;
+mod sse;
+mod template;
 
 use crate::parser::{Format, llm::Fields};
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -11,13 +13,6 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-
-pub(crate) struct RequestHeaders<'a> {
-    pub chain: &'a std::sync::Arc<str>,
-    pub path: &'a str,
-    pub id: &'a str,
-    pub format: Format,
-}
 
 pub struct AttributeSources(BTreeMap<String, Source>);
 
@@ -77,11 +72,6 @@ impl AttributeSources {
         for (name, expression) in expressions {
             if name.is_empty() {
                 return Err("attribute name must be non-empty".into());
-            }
-            if format::reserved_field(&name) {
-                return Err(format!(
-                    "attribute {name:?} conflicts with a built-in audit field"
-                ));
             }
             let source =
                 Source::parse(&expression).map_err(|e| format!("attribute {name:?}: {e}"))?;
@@ -147,26 +137,18 @@ pub struct Directions {
 }
 
 pub struct Audit {
+    template: std::sync::Arc<template::Template>,
     pub attributes: AttributeSources,
     pub directions: Directions,
-}
-
-pub(crate) struct ResponseAudit {
-    chain: std::sync::Arc<str>,
-    filter_index: usize,
-    path: String,
-    id: String,
-    direction: Direction,
-    attributes: Attributes,
 }
 
 impl Audit {
     pub(crate) fn start(
         &self,
-        request: &RequestHeaders<'_>,
+        request: &super::RequestHeaders<'_>,
         index: usize,
         envoy: &impl EnvoyHttpFilter,
-    ) -> (Option<capture::Capture>, Option<ResponseAudit>) {
+    ) -> super::StreamFilters {
         let limit = [self.directions.request, self.directions.response]
             .into_iter()
             .flatten()
@@ -174,9 +156,9 @@ impl Audit {
             .max()
             .unwrap();
         let attributes = self.attributes.snapshot(envoy, limit);
-        let capture = self.directions.request.map(|direction| {
-            capture::Capture::start(
-                "request",
+        let start = |side, direction: Direction| -> Box<dyn super::BodyFilter> {
+            Box::new(capture::Capture::with_template(
+                side,
                 request.path,
                 request.id,
                 Direction {
@@ -188,63 +170,178 @@ impl Audit {
                     filter_index: index,
                     attributes: &attributes,
                 },
-            )
-        });
-        let pending = self.directions.response.map(|direction| ResponseAudit {
-            chain: request.chain.clone(),
-            filter_index: index,
-            path: request.path.to_owned(),
-            id: request.id.to_owned(),
-            direction: Direction {
-                format: request.format,
-                ..direction
-            },
-            attributes,
-        });
-        (capture, pending)
-    }
-}
-
-impl ResponseAudit {
-    pub(crate) fn start(self) -> capture::Capture {
-        capture::Capture::start(
-            "response",
-            &self.path,
-            &self.id,
-            self.direction,
-            capture::AuditContext {
-                chain: &self.chain,
-                filter_index: self.filter_index,
-                attributes: &self.attributes,
-            },
-        )
-    }
-}
-
-pub(crate) fn included_fields(selectors: &[String], request: bool) -> Result<Fields, String> {
-    let mut fields = Fields::default();
-    for (index, selector) in selectors.iter().enumerate() {
-        match selector.as_str() {
-            "llm.messages" if request => fields.input_messages = true,
-            "llm.messages" => fields.output_messages = true,
-            "llm.toolCallRefs" => fields.tool_call_refs = true,
-            "llm.toolDefinitions" if request => fields.tools = true,
-            "llm.question" if request => fields.question = true,
-            "llm.answer" if !request => fields.answer = true,
-            _ => {
-                let (direction, allowed) = if request {
-                    (
-                        "request",
-                        "llm.messages, llm.question, llm.toolDefinitions, llm.toolCallRefs",
-                    )
-                } else {
-                    ("response", "llm.messages, llm.answer, llm.toolCallRefs")
-                };
-                return Err(format!(
-                    "{direction}.include[{index}]: unknown or unsupported {selector:?}, expected one of {allowed}"
-                ));
-            }
+                self.template.clone(),
+            ))
+        };
+        super::StreamFilters {
+            request: self.directions.request.map(|d| start("request", d)),
+            response: self.directions.response.map(|d| start("response", d)),
         }
     }
-    Ok(fields)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        FilterOutput,
+        chain::{DirectionStream, ParserDirection},
+        filters::{BodyFilter, Decision},
+    };
+    use serde_json::json;
+
+    fn chat_records(
+        body: &str,
+        side: ParserDirection,
+        specs: &[(usize, &[(&str, &str)])],
+    ) -> Vec<Vec<u8>> {
+        let (direction_name, media) = match side {
+            ParserDirection::Request(_) => ("request", "application/json"),
+            ParserDirection::Response => ("response", "text/event-stream"),
+        };
+        let filters = specs
+            .iter()
+            .enumerate()
+            .map(|(index, (limit, fields))| {
+                let dir: Direction =
+                    serde_json::from_value(json!({"maxSize":limit,"fields":{}})).unwrap();
+                let expressions = fields
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+                let audit = Audit::compile(
+                    expressions,
+                    Directions {
+                        request: matches!(side, ParserDirection::Request(_)).then_some(dir),
+                        response: matches!(side, ParserDirection::Response).then_some(dir),
+                    },
+                )
+                .unwrap();
+                let direction = Direction {
+                    format: Format::OpenaiChatCompletions,
+                    ..audit
+                        .directions
+                        .request
+                        .or(audit.directions.response)
+                        .unwrap()
+                };
+                Box::new(capture::Capture::with_template(
+                    direction_name,
+                    "/chat",
+                    "id",
+                    direction,
+                    capture::AuditContext {
+                        chain: "llm",
+                        filter_index: index,
+                        attributes: &Default::default(),
+                    },
+                    audit.template,
+                )) as Box<dyn BodyFilter>
+            })
+            .collect();
+        let mut stream =
+            DirectionStream::new(side, Format::OpenaiChatCompletions, media, "", filters);
+        for chunk in body.as_bytes().chunks(13) {
+            assert!(matches!(stream.push(chunk), Decision::Continue));
+        }
+        let mut output = FilterOutput::default();
+        assert!(matches!(
+            stream.finish(true, &mut output),
+            Decision::Continue
+        ));
+        output
+            .0
+            .into_iter()
+            .zip(specs)
+            .map(|((_, line), (limit, _))| {
+                assert!(line.len() < *limit);
+                line
+            })
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn independent_templates_share_a_stream_and_report_final_line_clipping() {
+        let question = "水\"".repeat(150);
+        let body=json!({"model":"m","messages":[{"role":"user","content":question}],
+            "tools":[{"type":"function","function":{"name":"weather","parameters":{"description":"d".repeat(3000)}}}]}).to_string();
+        let run = |specs: &[(usize, &[(&str, &str)])]| {
+            chat_records(&body, ParserDirection::Request(Default::default()), specs)
+        };
+        let q = (
+            1024,
+            &[
+                ("first", "%EVENT(llm.question)%"),
+                ("second", "%EVENT(llm.question)%"),
+                ("status", "%CAPTURE_STATUS%"),
+            ][..],
+        );
+        let t = (
+            8192,
+            &[
+                ("tools", "%EVENT(llm.toolDefinitions)%"),
+                ("status", "%CAPTURE_STATUS%"),
+            ][..],
+        );
+        let a = run(&[q]).pop().unwrap();
+        let b = run(&[t]).pop().unwrap();
+        assert_eq!(run(&[q, t]), [a.clone(), b.clone()]);
+        assert_eq!(run(&[t, q]), [b.clone(), a.clone()]);
+        let tight = run(&[q, (1024, t.1)]);
+        assert_eq!(tight[0], a);
+        let read = |line: &[u8]| serde_json::from_slice::<Value>(line).unwrap();
+        assert_eq!(read(&tight[1])["status"], "truncated");
+        let a = read(&a);
+        assert_eq!(a["first"], question);
+        assert!(question.starts_with(a["second"].as_str().unwrap()));
+        assert_ne!(a["first"], a["second"]);
+        assert_eq!(a["status"], "truncated");
+        let b = read(&b);
+        assert_eq!(b["status"], "complete");
+        assert_eq!(
+            b["tools"][0]["parameters"]["description"]
+                .as_str()
+                .unwrap()
+                .len(),
+            3000
+        );
+    }
+
+    #[test]
+    fn sse_answer_and_usage_match_standalone_audits_in_either_order() {
+        let content = "水".repeat(400);
+        let chunk = json!({"model":"m","choices":[{"index":0,"delta":{"content":content},"finish_reason":"stop"}]});
+        let counts =
+            json!({"model":"m","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":7}});
+        let body = format!("data: {chunk}\n\ndata: {counts}\n\ndata: [DONE]\n\n");
+        let answer = (
+            1024,
+            &[
+                ("answer", "%EVENT(llm.answer)%"),
+                ("status", "%CAPTURE_STATUS%"),
+            ][..],
+        );
+        let usage = (
+            2048,
+            &[
+                ("input", "%EVENT(llm.usage.inputTokens)%"),
+                ("output", "%EVENT(llm.usage.outputTokens)%"),
+                ("status", "%CAPTURE_STATUS%"),
+            ][..],
+        );
+        let run = |specs: &[(usize, &[(&str, &str)])]| {
+            chat_records(&body, ParserDirection::Response, specs)
+        };
+        let a = run(&[answer]).pop().unwrap();
+        let u = run(&[usage]).pop().unwrap();
+        assert_eq!(run(&[answer, usage]), [a.clone(), u.clone()]);
+        assert_eq!(run(&[usage, answer]), [u.clone(), a.clone()]);
+        let read = |line: &[u8]| serde_json::from_slice::<Value>(line).unwrap();
+        assert_eq!(read(&a), json!({"status":"truncated"}));
+        assert_eq!(read(&u), json!({"input":5,"output":7,"status":"complete"}));
+        assert_eq!(
+            read(&run(&[(2048, answer.1), usage])[0]),
+            json!({"answer":content,"status":"complete"})
+        );
+    }
 }

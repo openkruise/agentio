@@ -21,9 +21,12 @@ pub(crate) struct Fields {
     pub(crate) input_messages: bool,
     pub(crate) output_messages: bool,
     pub(crate) tools: bool,
+    pub(crate) instructions: bool,
+    pub(crate) error: bool,
     pub(crate) tool_call_refs: bool,
     pub(crate) question: bool,
     pub(crate) answer: bool,
+    pub(crate) usage: bool,
 }
 
 impl Fields {
@@ -31,9 +34,12 @@ impl Fields {
         input_messages: true,
         output_messages: true,
         tools: true,
+        instructions: true,
+        error: true,
         tool_call_refs: true,
         question: true,
         answer: true,
+        usage: true,
     };
 }
 #[cfg(test)]
@@ -45,9 +51,12 @@ impl Fields {
         input_messages: true,
         output_messages: true,
         tools: true,
+        instructions: true,
+        error: true,
         tool_call_refs: false,
         question: false,
         answer: false,
+        usage: true,
     };
 }
 

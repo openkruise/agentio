@@ -42,11 +42,16 @@ def access_log():
 
 
 def bootstrap(port, upstream):
-    messages = {
-        "maxSize": "2KiB",
-        "request": {"include": ["llm.messages", "llm.toolDefinitions"]},
-        "response": {"include": ["llm.messages"], "maxSize": "1KiB"},
-    }
+    common = {"chain":"%CHAIN%", "direction":"%DIRECTION%", "requestID":"%REQ(X-REQUEST-ID)%",
+              "path":"%PATH%", "bytesSeen":"%BYTES_SEEN%", "decodedBytes":"%DECODED_BYTES%",
+              "captureStatus":"%CAPTURE_STATUS%", "llm.protocol":"%EVENT(llm.protocol)%"}
+    def audit(fields, **options):
+        return {"audit": {"format": {"json": {**common, **fields}}, **options}}
+    messages = {"messages":"%EVENT(llm.messages)%", "tools":"%EVENT(llm.toolDefinitions)%",
+                "model":"%EVENT(llm.model)%", "gen_ai.operation.name":"%EVENT(llm.operation)%",
+                "gen_ai.usage.output_tokens":"%EVENT(llm.usage.outputTokens)%"}
+    question = {"llm.question":"%EVENT(llm.question)%"}
+    tools = {"gen_ai.tool.definitions":"%EVENT(llm.toolDefinitions)%"}
     attributes = {
         "app.tenant.id": "%REQ(X-TENANT)%",
         "sandbox": "%FILTER_STATE(test.tenant:PLAIN)%",
@@ -59,25 +64,25 @@ def bootstrap(port, upstream):
             {"name": "custom", "matcher": {"hosts": ["*.llm.test"], "paths": ["/custom"],
                        "filterState": [{"key": "test.tenant", "values": ["green", "blue"]}]},
              "parser": {"llm": {"protocol": "openai-responses"}},
-             "filters": [{"audit": {**messages, "format": {"attributes": attributes}}},
-                         {"audit": {"request": {"include": ["llm.question"], "maxSize": "1KiB"}}}]},
+             "filters": [audit(messages | attributes, request={}, response={"maxSize":"1KiB"}, maxSize="2KiB"),
+                         audit(question, request={}, maxSize="1KiB")]},
             *[{"name": name, "matcher": {"paths": ["/" + name]},
-             "parser": {"llm": {"protocol": "openai-chat-completions", **options}},
+               "parser":{"llm":{"protocol":"openai-chat-completions", **options}},
+               "filters":[audit(question, request={}, maxSize="2KiB"),audit(tools, request={}, maxSize="8KiB")]}
+              for name, options in (("dual",{}),("dual-small",{"request":{"maxItemSize":"2KiB"}}))],
+            {"name":"image","matcher":{"hosts":["image.test"],"filterState":[{"key":"test.empty"}]},
+             "parser":{"llm":{"protocol":"openai-chat-completions"}},
+             "filters":[audit({"messages":"%EVENT(llm.messages)%"}, request={}, maxSize="2KiB")]},
+            {"name":"qa","matcher":{"hosts":["qa.test"]},"parser":{"llm":{}},
+             "filters":[audit(attributes | question | {"llm.answer":"%EVENT(llm.answer)%","agentio.tool.calls":"%EVENT(llm.toolCallRefs)%"},
+                    request={},response={"maxSize":"1KiB"},maxSize="2KiB")]},
+            {"name": "sse-audits", "matcher": {"hosts": ["sse.test"]}, "parser": {"llm": {}},
              "filters": [
-                 {"audit": {"request": {"include": ["llm.question"], "maxSize": "2KiB"}}},
-                 {"audit": {"request": {"include": ["llm.toolDefinitions"], "maxSize": "8KiB"}}},
-             ]} for name, options in (("dual", {}), ("dual-small", {"request": {"maxItemSize": "2KiB"}}))],
-            {"name": "image", "matcher": {"hosts": ["image.test"], "filterState": [{"key": "test.empty"}]},
-             "parser": {"llm": {"protocol": "openai-chat-completions"}},
-             "filters": [{"audit": {"maxSize": "2KiB", "request": {"include": ["llm.messages"]}}}]},
-            {"name": "qa", "matcher": {"hosts": ["qa.test"]}, "parser": {"llm": {}},
-             "filters": [{"audit": {"maxSize": "2KiB", "format": {"attributes": attributes},
-                "request": {"include": ["llm.question", "llm.toolCallRefs"]},
-                "response": {"include": ["llm.answer", "llm.toolCallRefs"], "maxSize": "1KiB"},
-             }}]},
-            {"name": "standard", "matcher": {"hosts": ["127.0.0.1", "custom.llm.test"], "paths":
-                [*STREAMS, "/custom", "/internal/messages"]}, "parser": {"llm": {}},
-             "filters": [{"audit": messages}]},
+                 audit({"text": "%EVENT(llm.answer)%"}, response={"maxSize": "1KiB", "maxContentBytes": 16384}),
+                 audit({"tokens": "%EVENT(llm.usage.totalTokens)%"}, response={"maxSize": "2KiB"}),
+             ]},
+            {"name":"standard","matcher":{"hosts":["127.0.0.1","custom.llm.test"],"paths":[*STREAMS,"/custom","/internal/messages"]},
+             "parser":{"llm":{}},"filters":[audit(messages,request={},response={"maxSize":"1KiB"},maxSize="2KiB")]},
         ],
     }
     module = {
@@ -163,6 +168,19 @@ QA = {
 }
 
 
+# Exercise line clipping with both JSON escapes and multi-byte characters.
+LONG_TEXT = '水"'.join(["问"] * 800)
+
+
+def dual_sse(path):
+    wire = (FIXTURES / (QA[path][1] + ".sse")).read_text()
+    if path == "/v1/responses":
+        # The terminal snapshot revises the already-sealed item.
+        early, terminal = wire.split("event: response.completed")
+        wire = early.replace("你", "draft") + "event: response.completed" + terminal
+    return wire.replace("你", json.dumps(LONG_TEXT, ensure_ascii=False)[1:-1]).encode()
+
+
 class Echo(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
@@ -172,7 +190,7 @@ class Echo(http.server.BaseHTTPRequestHandler):
         if self.path in STREAMS:
             request, stream = QA[self.path][:2] if self.headers["Host"] == "qa.test" else STREAMS[self.path]
             assert body == json.dumps(request).encode()
-            body = (FIXTURES / (stream + ".sse")).read_bytes()
+            body = dual_sse(self.path) if self.headers["Host"] == "sse.test" else (FIXTURES / (stream + ".sse")).read_bytes()
             self.send_header("Content-Type", "text/event-stream")
         else:
             self.send_header("Content-Type", self.headers["Content-Type"])
@@ -249,6 +267,11 @@ def exercise(port):
         response = connection.getresponse()
         assert response.status == 200 and response.read() == (FIXTURES / (stream + ".sse")).read_bytes()
         connection.close()
+    for path, (request, _) in STREAMS.items():
+        connection.request("POST", path, json.dumps(request), {"Host": "sse.test", "Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == 200 and response.read() == dual_sse(path)
+        connection.close()
     return len(body)
 
 
@@ -256,11 +279,15 @@ def check_records(lines, json_bytes):
     dual = {"dual": [], "dual-small": []}
     extra = []
     qa_records = []
+    sse_records = {path: [] for path in STREAMS}
     other_lines = []
     custom_directions = []
     for line in lines:
         assert line.endswith(b"\n")
         record = json.loads(line)
+        if record["chain"] == "sse-audits":
+            sse_records[record["path"]].append((record, len(line)))
+            continue
         if record["chain"] in dual:
             dual[record["chain"]].append((record, len(line)))
             continue
@@ -281,6 +308,13 @@ def check_records(lines, json_bytes):
             qa_records.append(record)
         else:
             other_lines.append(line)
+    for path, pair in sse_records.items():
+        (answer, answer_bytes), (usage, usage_bytes) = pair
+        assert answer["requestID"] == usage["requestID"] and answer["bytesSeen"] == usage["bytesSeen"] == len(dual_sse(path))
+        assert answer_bytes <= 1024 and usage_bytes <= 2048 and answer["direction"] == usage["direction"] == "response"
+        assert answer["captureStatus"] == "truncated" and answer["text"] and LONG_TEXT.startswith(answer["text"])
+        assert "tokens" not in answer and "text" not in usage
+        assert usage["captureStatus"] == "complete" and usage["tokens"] == (12 if path == "/v1/messages" else 8)
     for name, records in dual.items():
         (question, question_bytes), (tools, tools_bytes) = records
         assert question["requestID"] == tools["requestID"] and question["bytesSeen"] == tools["bytesSeen"]
@@ -325,7 +359,7 @@ def check_records(lines, json_bytes):
             assert record["llm.protocol"] == "openai-responses"
             assert record["captureStatus"] == "complete", record
         elif record["path"] == "/gzip/corrupt":
-            assert record["captureStatus"] == "invalid_encoding" and "gen_ai.input.messages" not in record
+            assert record["captureStatus"] == "invalid_encoding" and "messages" not in record
         elif record["path"] in ["/upload", "/gzip/valid"]:
             assert record["chain"] == "image" and record["direction"] == "request"
             assert record["captureStatus"] == "truncated"
@@ -333,13 +367,13 @@ def check_records(lines, json_bytes):
                 assert record["decodedBytes"] == json_bytes and 0 < record["bytesSeen"] < json_bytes
             else:
                 assert record["bytesSeen"] == json_bytes and "decodedBytes" not in record
-            image, text = record["gen_ai.input.messages"][0]["parts"]
+            image, text = record["messages"][0]["parts"]
             assert image == {"type":"blob","modality":"image","mime_type":"image/png"} and text["content"] == "after image"
         elif record["path"] == "/internal/messages":
-            assert record["captureStatus"] == "unknown_protocol" and "http.body" not in record and "gen_ai.input.messages" not in record
+            assert record["captureStatus"] == "unknown_protocol" and "http.body" not in record and "messages" not in record
             assert record["bytesSeen"] == len(b'{"model":"m","messages":[],"secret":"private"}') and b"private" not in line
         elif record["path"] == "/v1/messages/":
-            assert record["captureStatus"] == "unsupported_media_type" and "http.body" not in record and "gen_ai.input.messages" not in record
+            assert record["captureStatus"] == "unsupported_media_type" and "http.body" not in record and "messages" not in record
             assert b"private" not in line
         else:
             request, stream = STREAMS[record["path"]]
@@ -348,14 +382,14 @@ def check_records(lines, json_bytes):
                 assert record["bytesSeen"] == (FIXTURES / (stream + ".sse")).stat().st_size
                 expected = json.loads((FIXTURES / (stream + ".want.json")).read_text())
                 attrs = record
-                assert attrs["gen_ai.response.model"] == expected["model"]
+                assert attrs["model"] == expected["model"]
                 assert attrs["gen_ai.usage.output_tokens"] == expected["usage"]["outputTokens"]
-                for message, actual in zip(expected["outputMessages"], attrs["gen_ai.output.messages"], strict=True):
+                for message, actual in zip(expected["outputMessages"], attrs["messages"], strict=True):
                     assert actual["role"] == message["role"] and actual["parts"] == message["content"]
                 assert record["llm.protocol"] == expected["format"]
             else:
                 assert record["bytesSeen"] == len(json.dumps(request).encode())
-                assert "gen_ai.input.messages" in record
+                assert "messages" in record
 
 
 def main(image):

@@ -20,6 +20,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     },
     declare_init_functions, envoy_log_error,
 };
+use filters::Decision;
 use std::{cell::RefCell, sync::Arc};
 
 #[derive(Clone)]
@@ -31,15 +32,15 @@ struct Config {
 struct Filter {
     config: Config,
     chain: RefCell<ActiveChain>,
-    audit: RefCell<AuditRecords>,
+    audit: RefCell<FilterOutput>,
 }
 
 const AUDIT_STATE_KEY: &[u8] = b"agentio.body_processing.audit";
 
 #[derive(Default)]
-struct AuditRecords(Vec<((usize, &'static str), Vec<u8>)>);
+struct FilterOutput(Vec<((usize, &'static str), Vec<u8>)>);
 
-impl AuditRecords {
+impl FilterOutput {
     fn record_audit(&mut self, index: usize, direction: &'static str, json: Vec<u8>) {
         self.0.push(((index, direction), json));
     }
@@ -66,17 +67,18 @@ impl AuditRecords {
 }
 
 impl Filter {
-    fn finish(&self, side: Side, end: bool) {
+    fn finish(&self, side: Side, end: bool) -> Decision {
         let stream = std::mem::take(self.chain.borrow_mut().stream(side));
-        stream.finish(end, &mut self.audit.borrow_mut());
+        stream.finish(end, &mut self.audit.borrow_mut())
     }
 
-    fn body(&self, envoy: &mut impl EnvoyHttpFilter, side: Side, end: bool) {
+    fn body(&self, envoy: &mut impl EnvoyHttpFilter, side: Side, end: bool) -> Decision {
+        let mut decision = Decision::Continue;
         let mut chain = self.chain.borrow_mut();
         let stream = chain.stream(side);
         let request = matches!(side, Side::Request);
         if stream.is_empty() {
-            return;
+            return decision;
         }
         let size = if request {
             envoy.get_received_request_body_size()
@@ -94,7 +96,7 @@ impl Filter {
                 };
                 if let Some(buffers) = buffers {
                     for buf in buffers {
-                        stream.push(buf.as_slice());
+                        decision = decision.merge(stream.push(buf.as_slice()));
                     }
                 } else {
                     stream.missing_buffer(size);
@@ -103,8 +105,9 @@ impl Filter {
         }
         drop(chain);
         if end {
-            self.finish(side, true);
+            decision = decision.merge(self.finish(side, true));
         }
+        decision
     }
 }
 
@@ -126,37 +129,49 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
             .borrow_mut()
             .start_request(chain, format, path, envoy);
         if end {
-            self.finish(Side::Request, true);
+            match self.finish(Side::Request, true) {
+                Decision::Continue => (),
+            }
         }
         ReqHeaders::Continue
     }
 
     fn on_request_body(&self, envoy: &mut H, end: bool) -> ReqBody {
-        self.body(envoy, Side::Request, end);
-        ReqBody::Continue
+        match self.body(envoy, Side::Request, end) {
+            Decision::Continue => ReqBody::Continue,
+        }
     }
     fn on_request_trailers(&self, _: &mut H) -> ReqTrailers {
-        self.finish(Side::Request, true);
-        ReqTrailers::Continue
+        match self.finish(Side::Request, true) {
+            Decision::Continue => ReqTrailers::Continue,
+        }
     }
     fn on_response_headers(&self, envoy: &mut H, end: bool) -> ResHeaders {
         self.chain.borrow_mut().start_response(envoy);
         if end {
-            self.finish(Side::Response, true);
+            match self.finish(Side::Response, true) {
+                Decision::Continue => (),
+            }
         }
         ResHeaders::Continue
     }
     fn on_response_body(&self, envoy: &mut H, end: bool) -> ResBody {
-        self.body(envoy, Side::Response, end);
-        ResBody::Continue
+        match self.body(envoy, Side::Response, end) {
+            Decision::Continue => ResBody::Continue,
+        }
     }
     fn on_response_trailers(&self, _: &mut H) -> ResTrailers {
-        self.finish(Side::Response, true);
-        ResTrailers::Continue
+        match self.finish(Side::Response, true) {
+            Decision::Continue => ResTrailers::Continue,
+        }
     }
     fn on_stream_complete(&self, envoy: &mut H) {
-        self.finish(Side::Request, false);
-        self.finish(Side::Response, false);
+        match self.finish(Side::Request, false) {
+            Decision::Continue => (),
+        }
+        match self.finish(Side::Response, false) {
+            Decision::Continue => (),
+        }
         if let Some(lines) = self.audit.take().into_json_lines()
             && !envoy.set_filter_state_bytes(AUDIT_STATE_KEY, &lines)
         {

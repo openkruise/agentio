@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
+    BodyEvent,
     json_capture::JsonCapture,
     llm::{self, Fields, response::Result, tool_summary::ToolSummary},
 };
@@ -30,20 +31,11 @@ pub(crate) enum ItemEvent {
     OmittedTool,
 }
 
-/// Synchronous notifications from one pass over the decoded request JSON.
-/// Offsets index the decompressed JSON for gzip requests. An unfinished or
-/// invalid model string can emit data without a matching end notification.
-pub(crate) trait RequestEvents {
-    fn item(&mut self, item: ItemEvent, clipped: bool);
-
-    /// Byte offset just after the opening quote of a top-level model string.
-    fn model_start(&mut self, _start: usize) {}
-
-    /// Borrowed JSON string contents, including escapes, without the quotes.
-    fn model_data(&mut self, _bytes: &[u8]) {}
-
-    /// Range excludes the quotes. A clipped value has no complete decoded string.
-    fn model_end(&mut self, _range: std::ops::Range<usize>, _value: Option<&str>) {}
+fn emit_item(emit: &mut impl FnMut(BodyEvent<'_>), item: ItemEvent, clipped: bool) {
+    emit(BodyEvent::LlmItem {
+        item: &item,
+        clipped,
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -169,7 +161,11 @@ impl Request {
         }
     }
 
-    pub(crate) fn push(&mut self, mut input: &[u8], events: &mut impl RequestEvents) -> Result<()> {
+    pub(crate) fn push(
+        &mut self,
+        mut input: &[u8],
+        events: &mut impl FnMut(BodyEvent<'_>),
+    ) -> Result<()> {
         self.bytes_seen += input.len();
         while !input.is_empty() {
             let offset = self.bytes_seen - input.len();
@@ -180,7 +176,7 @@ impl Request {
                     let from = usize::from(offset < start);
                     let to = n - usize::from(done);
                     if from < to {
-                        events.model_data(&input[from..to]);
+                        events(BodyEvent::ModelData(&input[from..to]));
                     }
                 }
                 input = &input[n..];
@@ -205,7 +201,7 @@ impl Request {
                                     }
                                     _ => ItemEvent::OmittedTool,
                                 };
-                                events.item(event, true);
+                                emit_item(events, event, true);
                             } else {
                                 self.item(value, clipped, events);
                             }
@@ -215,7 +211,10 @@ impl Request {
                         State::Model { start } => {
                             let end = offset + n - 1;
                             let decoded = if clipped { None } else { value.as_str() };
-                            events.model_end(start..end, decoded);
+                            events(BodyEvent::ModelEnd {
+                                range: start..end,
+                                value: decoded,
+                            });
                             self.metadata["model"] = value;
                             self.state = State::AfterValue;
                         }
@@ -249,7 +248,7 @@ impl Request {
                 (State::Colon, b':') => State::Value,
                 (State::Value, b'"') if self.key == "model" => {
                     let start = offset + 1;
-                    events.model_start(start);
+                    events(BodyEvent::ModelStart(start));
                     self.state = State::Model { start };
                     self.fragment = Some(Fragment::new(false, ROOT_FIELD_LIMIT));
                     continue;
@@ -263,7 +262,7 @@ impl Request {
                         },
                         _ => ItemEvent::BeginMessages,
                     };
-                    events.item(event, false);
+                    emit_item(events, event, false);
                     State::Item(true)
                 }
                 (State::Item(true) | State::AfterItem, b']') => State::AfterValue,
@@ -302,16 +301,18 @@ impl Request {
         }
     }
 
-    fn item(&self, v: Value, clipped: bool, events: &mut impl RequestEvents) {
+    fn item(&self, v: Value, clipped: bool, events: &mut impl FnMut(BodyEvent<'_>)) {
         match self.key.as_str() {
-            "tools" => events.item(
+            "tools" => emit_item(
+                events,
                 ItemEvent::Tool {
                     definition: llm::tool_definition(&v, self.format),
                     legacy: false,
                 },
                 clipped,
             ),
-            "functions" => events.item(
+            "functions" => emit_item(
+                events,
                 ItemEvent::Tool {
                     definition: Ok(v),
                     legacy: true,
@@ -329,7 +330,8 @@ impl Request {
                 summary.request_item(self.format, 0, &v);
                 let mut references = Value::Null;
                 summary.publish(&mut references);
-                events.item(
+                emit_item(
+                    events,
                     ItemEvent::Message {
                         message,
                         question,
@@ -345,13 +347,14 @@ impl Request {
         &mut self,
         value: Value,
         clipped: bool,
-        events: &mut impl RequestEvents,
+        events: &mut impl FnMut(BodyEvent<'_>),
     ) -> Result<()> {
         match self.key.as_str() {
             "input" if self.format == llm::RESPONSES && value.is_string() => {
-                events.item(ItemEvent::BeginMessages, false);
+                emit_item(events, ItemEvent::BeginMessages, false);
                 let text = value.as_str().unwrap();
-                events.item(
+                emit_item(
+                    events,
                     ItemEvent::Message {
                         message: Ok(json!({"role":"user","content":llm::plain(text)})),
                         question: (!text.is_empty()).then(|| text.to_owned()),
@@ -361,23 +364,25 @@ impl Request {
                 );
                 self.metadata["input"] = json!([]);
             }
-            "system" if self.format == llm::ANTHROPIC => events.item(
+            "system" if self.format == llm::ANTHROPIC => emit_item(
+                events,
                 ItemEvent::System(llm::blocks(&value, self.format).into()),
                 clipped,
             ),
             "instructions" if self.format == llm::RESPONSES => {
                 if let Some(s) = llm::optional_string(&value)? {
-                    events.item(ItemEvent::System(llm::plain(s).into()), clipped)
+                    emit_item(events, ItemEvent::System(llm::plain(s).into()), clipped)
                 }
             }
-            "tools" if !value.is_null() => events.item(
+            "tools" if !value.is_null() => emit_item(
+                events,
                 ItemEvent::Tool {
                     definition: Err("invalid_content"),
                     legacy: false,
                 },
                 false,
             ),
-            "tools" => events.item(ItemEvent::NullTools, false),
+            "tools" => emit_item(events, ItemEvent::NullTools, false),
             "model"
             | "messages"
             | "input"
@@ -418,8 +423,15 @@ mod tests {
     #[derive(Default)]
     struct Models(Vec<Model>);
 
-    impl RequestEvents for Models {
-        fn item(&mut self, _: ItemEvent, _: bool) {}
+    impl Models {
+        fn observe(&mut self, event: BodyEvent<'_>) {
+            match event {
+                BodyEvent::LlmItem { .. } | BodyEvent::LlmResponse(_) => (),
+                BodyEvent::ModelStart(start) => self.model_start(start),
+                BodyEvent::ModelData(bytes) => self.model_data(bytes),
+                BodyEvent::ModelEnd { range, value } => self.model_end(range, value),
+            }
+        }
 
         fn model_start(&mut self, start: usize) {
             self.0.push(Model {
@@ -452,7 +464,7 @@ mod tests {
         let mut request = Request::new(llm::CHAT, 1024);
         let mut models = Models::default();
         let prefix = br#"{"model":""#;
-        request.push(prefix, &mut models).unwrap();
+        request.push(prefix, &mut |e| models.observe(e)).unwrap();
         let start = prefix.len();
         assert_eq!(
             models.0,
@@ -462,14 +474,18 @@ mod tests {
             }]
         );
 
-        request.push(b"bench-", &mut models).unwrap();
+        request.push(b"bench-", &mut |e| models.observe(e)).unwrap();
         assert_eq!(models.0[0].raw, b"bench-");
         assert!(models.0[0].end.is_none());
 
-        request.push(br#"alias""#, &mut models).unwrap();
+        request
+            .push(br#"alias""#, &mut |e| models.observe(e))
+            .unwrap();
         let range = start..start + b"bench-alias".len();
         assert_eq!(models.0[0].end, Some((range, Some("bench-alias".into()))));
-        request.push(br#","messages":[]}"#, &mut models).unwrap();
+        request
+            .push(br#","messages":[]}"#, &mut |e| models.observe(e))
+            .unwrap();
         assert!(request.finish().is_ok());
     }
 
@@ -483,7 +499,7 @@ mod tests {
             let mut request = Request::new(llm::CHAT, 1024);
             let mut models = Models::default();
             for chunk in body.chunks(size) {
-                request.push(chunk, &mut models).unwrap();
+                request.push(chunk, &mut |e| models.observe(e)).unwrap();
             }
             let [a, b] = models.0.as_slice() else {
                 panic!("expected two model strings")
@@ -504,11 +520,11 @@ mod tests {
         let mut request = Request::new(llm::RESPONSES, 1024);
         let mut models = Models::default();
         let prefix = br#"{"model":""#;
-        request.push(prefix, &mut models).unwrap();
+        request.push(prefix, &mut |e| models.observe(e)).unwrap();
         for chunk in raw.chunks(8192) {
-            request.push(chunk, &mut models).unwrap();
+            request.push(chunk, &mut |e| models.observe(e)).unwrap();
         }
-        request.push(br#""}"#, &mut models).unwrap();
+        request.push(br#""}"#, &mut |e| models.observe(e)).unwrap();
         assert_eq!(models.0[0].raw, raw);
         assert_eq!(
             models.0[0].end,
@@ -518,8 +534,11 @@ mod tests {
         for (suffix, invalid) in [(b"open".as_slice(), false), (br#"bad\q""#.as_slice(), true)] {
             let mut request = Request::new(llm::CHAT, 1024);
             let mut models = Models::default();
-            request.push(prefix, &mut models).unwrap();
-            assert_eq!(request.push(suffix, &mut models).is_err(), invalid);
+            request.push(prefix, &mut |e| models.observe(e)).unwrap();
+            assert_eq!(
+                request.push(suffix, &mut |e| models.observe(e)).is_err(),
+                invalid
+            );
             assert!(models.0[0].end.is_none());
             assert!(request.finish().is_err());
         }

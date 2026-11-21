@@ -1,9 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Retention, string};
+use super::{Event, Retention, Trailers, string};
 use crate::parser::llm::{
-    RESPONSES, answer_parts,
+    RESPONSES,
     response::{INVALID, Result, index, metadata},
     responses_item,
 };
@@ -15,7 +15,6 @@ pub(super) struct Stream {
     view: Option<Value>,
     items: BTreeMap<u32, Item>,
     terminal: Option<Vec<Value>>,
-    done: bool,
 }
 struct Item {
     id: String,
@@ -29,22 +28,17 @@ impl Stream {
         v: &Value,
         done: bool,
         b: &mut Retention,
-    ) -> Result<()> {
+        emit: &mut impl FnMut(Event<'_>),
+    ) -> Result<Option<Trailers>> {
         if done {
-            return if self.done {
-                Ok(())
-            } else {
-                Err("invalid_json")
-            };
+            return Err("invalid_json");
         }
-        if self.done {
-            return Err(INVALID);
-        }
+        let mut terminal = false;
         match kind {
             "error" => {
                 string(&v["message"])?;
                 self.view.get_or_insert_with(|| json!({"format":RESPONSES}))["error"] = v.clone();
-                self.done = true;
+                terminal = true;
             }
             "response.created"
             | "response.in_progress"
@@ -60,26 +54,28 @@ impl Stream {
                     return Err(INVALID);
                 }
                 let mut m = metadata(RESPONSES, doc)?;
+                if let Some(usage) = m.as_object_mut().unwrap().remove("usage") {
+                    emit(Event::Usage(&usage));
+                }
                 if let Some(old) = self.view.as_ref() {
                     if old["model"].as_str().is_some_and(|s| s != model) {
                         return Err(INVALID);
                     }
                     for (key, wire) in [
-                        ("usage", "usage"),
                         ("error", "error"),
                         ("incompleteReason", "incomplete_details"),
                     ] {
                         if let Some(prev) = old.get(key)
-                            && (doc.get(wire).is_none() || (key == "usage" && doc[wire].is_null()))
+                            && doc.get(wire).is_none()
                         {
                             m[key] = prev.clone();
                         }
                     }
                 }
                 self.view = Some(m);
-                self.done = matches!(status, "completed" | "failed" | "incomplete")
+                terminal = matches!(status, "completed" | "failed" | "incomplete")
                     && kind != "response.created";
-                if self.done && !doc["output"].is_null() {
+                if terminal && !doc["output"].is_null() {
                     let out = doc["output"].as_array().ok_or(INVALID)?;
                     if out.len() > 1024 {
                         return Err("too_large");
@@ -88,14 +84,16 @@ impl Stream {
                         b.tools.document(RESPONSES, doc, true);
                         self.items.clear();
                         b.room = b.limit;
-                        b.reset_answer();
+                        b.truncated = false;
+                        emit(Event::ReplaceOutput);
                         let keep = b.take(crate::parser::encoded_len(out));
                         let mut messages = Vec::new();
                         for (index, item) in out.iter().enumerate() {
                             let message = responses_item(item)?;
-                            for text in answer_parts(&message) {
-                                b.visible(index as u32, text);
-                            }
+                            emit(Event::OutputItem {
+                                index: index as u32,
+                                message: &message,
+                            });
                             if keep {
                                 messages.push(message);
                             }
@@ -124,9 +122,10 @@ impl Stream {
                 }
                 let message = if closed {
                     let message = responses_item(item)?;
-                    for text in answer_parts(&message) {
-                        b.visible(i, text);
-                    }
+                    emit(Event::OutputItem {
+                        index: i,
+                        message: &message,
+                    });
                     b.take(crate::parser::encoded_len(item)).then_some(message)
                 } else {
                     None
@@ -154,22 +153,31 @@ impl Stream {
             | "response.reasoning_summary_part.done"
             | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done" => {
-                let item = self.items.get(&index(&v["output_index"])?).ok_or(INVALID)?;
+                let output = index(&v["output_index"])?;
+                let item = self.items.get(&output).ok_or(INVALID)?;
                 if item.closed || string(&v["item_id"])? != item.id {
                     return Err(INVALID);
                 }
-                if matches!(
-                    kind,
-                    "response.output_text.delta"
-                        | "response.refusal.delta"
-                        | "response.function_call_arguments.delta"
-                ) {
-                    string(&v["delta"])?;
+                match kind {
+                    "response.output_text.delta" | "response.refusal.delta" => {
+                        emit(Event::TextDelta {
+                            provisional: true,
+                            output,
+                            part: v.get("content_index").map(index).transpose()?,
+                            text: string(&v["delta"])?,
+                        });
+                        return Ok(None);
+                    }
+                    "response.function_call_arguments.delta" => {
+                        string(&v["delta"])?;
+                    }
+                    _ => {}
                 }
             }
             _ => b.partial = true,
         }
-        Ok(())
+        emit(Event::Detail { kind, value: v });
+        Ok(terminal.then_some(Trailers::Done))
     }
 
     pub(super) fn discard_content(&mut self) {
@@ -180,9 +188,6 @@ impl Stream {
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
-        if !self.done {
-            return Err("incomplete_stream");
-        }
         let mut view = self.view.ok_or(INVALID)?;
         let mut messages = vec![];
         if let Some(output) = self.terminal {

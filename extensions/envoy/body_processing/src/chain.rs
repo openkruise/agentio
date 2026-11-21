@@ -3,7 +3,7 @@
 
 use crate::{
     config::FilterChain,
-    filters::audit::{RequestHeaders, ResponseAudit},
+    filters::{BodyFilter, RequestHeaders},
     parser::Format,
 };
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
@@ -22,7 +22,8 @@ pub(crate) enum Side {
 pub(crate) struct ActiveChain {
     request: DirectionStream,
     response: DirectionStream,
-    pending: Vec<ResponseAudit>,
+    pending: Vec<Box<dyn BodyFilter>>,
+    format: Format,
 }
 
 fn header(envoy: &impl EnvoyHttpFilter, request: bool, key: &str) -> String {
@@ -59,6 +60,7 @@ impl ActiveChain {
             .map(|value| String::from_utf8_lossy(value.as_slice()))
             .collect::<Vec<_>>()
             .join(",");
+        self.format = format;
         let headers = RequestHeaders {
             chain: &chain.name,
             path,
@@ -66,13 +68,14 @@ impl ActiveChain {
             format,
         };
         let mut requests = Vec::new();
-        for (index, audit) in chain.audits.iter().enumerate() {
-            let (request, response) = audit.start(&headers, index, envoy);
-            requests.extend(request);
-            self.pending.extend(response);
+        for (index, filter) in chain.filters.iter().enumerate() {
+            let active = filter.start(&headers, index, envoy);
+            requests.extend(active.request);
+            self.pending.extend(active.response);
         }
         self.request = DirectionStream::new(
             ParserDirection::Request(chain.request_parser()),
+            format,
             &media,
             &encoding,
             requests,
@@ -86,9 +89,10 @@ impl ActiveChain {
             let encoding = header(envoy, false, "content-encoding");
             self.response = DirectionStream::new(
                 ParserDirection::Response,
+                self.format,
                 &media,
                 &encoding,
-                contexts.into_iter().map(ResponseAudit::start),
+                contexts,
             );
         }
     }

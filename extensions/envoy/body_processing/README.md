@@ -2,7 +2,7 @@
 
 ContentGuard is an Envoy HTTP dynamic module for auditing request and response bodies. Install the filter before the router. Configure either direction independently. At the end of each enabled direction, the module retains a bounded JSON record. At HTTP stream completion, it publishes the records to Filter State for the Envoy access logger. A stream that terminates early publishes an `incomplete` record for the direction in progress. The filter observes Envoy's received slices and returns `Continue` without replacing them.
 
-The Rust crate lives in `extensions/envoy/body_processing`. The Envoy filter name is `contentguard`. Each matched chain starts its configured audits directly. Audits share request decompression, small JSON document decoding and compatible SSE framing. Each audit selects its own fields and limits the size of its own records.
+The Rust crate lives in `extensions/envoy/body_processing`. The Envoy filter name is `contentguard`. A matched chain runs one LLM parser per active direction and dispatches its events to filters in declaration order. Request gzip decoding and response SSE reconstruction are shared. Each audit selects its own fields and limits the size of its own records.
 
 ## Configuration
 
@@ -20,18 +20,25 @@ bodyProcessing:
       filters:
         - audit:
             maxSize: 8KiB
+            request: {}
+            response: {}
             format:
-              attributes:
-                agentio.sandbox.id: "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
-                app.tenant.id: "%REQ(X-TENANT-ID)%"
-                agentio.workload.namespace: "%DYNAMIC_METADATA(workload:namespace)%"
-            request: {include: [llm.messages, llm.toolDefinitions], maxSize: 16KiB}
-            response: {include: [llm.answer]}
-    - name: custom-responses
-      matcher: {hosts: [api.example.com], paths: [/internal/invoke]}
-      parser: {llm: {protocol: openai-responses, request: {maxItemSize: 2MiB}}}
-      filters:
-        - audit: {request: {include: [llm.question]}}
+              json:
+                direction: "%DIRECTION%"
+                status: "%CAPTURE_STATUS%"
+                requestID: "%REQ(X-REQUEST-ID)%"
+                tenant: "%REQ(X-TENANT-ID)%"
+                sandbox: "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
+                namespace: "%DYNAMIC_METADATA(workload:namespace)%"
+                prompt: "%EVENT(llm.question)%"
+                answer: "%EVENT(llm.answer)%"
+        - audit:
+            request: {}
+            maxSize: 16KiB
+            format:
+              json:
+                tools: "%EVENT(llm.toolDefinitions)%"
+                status: "%CAPTURE_STATUS%"
 ```
 
 At request headers the module selects the first matching chain and fixes the protocol for both directions. All configured conditions must hold. Unmatched streams are forwarded without audit records. An omitted or empty matcher matches everything and belongs last. Each chain requires a unique, nonempty name (at most 256 bytes as a serialized JSON string, including quotes) and a nonempty list of filters. This release supports the `llm` parser and the `audit` filter.
@@ -42,85 +49,38 @@ At request headers the module selects the first matching chain and fixes the pro
 | `paths` | Any listed path may match. Paths are absolute and case-sensitive. Both the matcher and LLM auto-detection ignore the request query and one trailing slash. For example, `/upload/?part=1` matches `/upload`. Configured paths must be exact, without a wildcard, query or fragment. |
 | `filterState` | Every entry must match. `{key: agentio.sandbox.id}` checks for the key's existence, including an empty value. `{key: agentio.sandbox.id, values: [box-a, box-b]}` matches either serialized string exactly. An explicit `values` requires a nonempty list. |
 
-When migrating a configuration with a top-level `defaults` block, move its size setting to the audit filters that need it, then remove the block. Remove any explicit `audit.schema` setting.
+### Audit templates
 
-Prefix LLM content selections in `include` with `llm.`, for example `llm.messages`. Existing configurations using bare field names must add this prefix.
+Each audit requires at least one enabled direction and one flat `format.json` map. Omit a direction to skip it. An enabled direction produces one JSON line containing the selected keys. A single operator supplies each value. JSON booleans, numbers, arrays and objects retain their types. Dots in output names are literal. Missing values and fields for the opposite direction are omitted. The configuration loader rejects unknown operators, unknown events, and events unavailable in every enabled direction.
 
-Each audit enables at least one direction. Omit a direction to skip it. An enabled direction with `{}` or `include: []` extracts protocol metadata. Filters run in list order and keep independent budgets and attributes. Each enabled direction emits one record per audit filter. The record identifies the selected `chain`.
+To migrate, move header, Filter State and dynamic metadata expressions from `format.attributes` into `format.json`. Replace each `include` selection with a named `%EVENT(...)%` expression. Explicitly select envelope fields your collector uses. For example a request-only audit with `prompt: "%EVENT(llm.question)%"` and `tenant: "%REQ(X-TENANT-ID)%"` can emit `{"prompt":"hello","tenant":"team-a"}`.
 
-| Parser type | Direction | Allowed `include` values |
-| --- | --- | --- |
-| `llm` | request | `llm.messages`, `llm.question`, `llm.toolDefinitions`, `llm.toolCallRefs` |
-| `llm` | response | `llm.messages`, `llm.answer`, `llm.toolCallRefs` |
-
-To audit the latest question, the visible answer and tool references, select the following fields in the audit filter:
-
-```yaml
-request: {include: [llm.question, llm.toolCallRefs]}
-response: {include: [llm.answer, llm.toolCallRefs]}
-```
-
-`llm.question` contains the text from the most recent user message with a nonempty text part. A plain Responses API input string also supplies the question. Tool results, including Anthropic tool results carried in user messages, are skipped. If no user text is available, the field is omitted. `llm.answer` concatenates visible assistant text and refusals in wire order within a reply. Chat Completions uses choice index 0. A completed tool-only reply produces an empty string. Reasoning, tool arguments and tool result bodies are excluded from these two projections. Both fields share the content and log budgets with other selections. When a projection cannot be recovered after clipping, the record reports truncation.
-
-Selections are additive. Adding `llm.messages` also records structured conversation content, including tool arguments and results carried in those messages. The `llm.toolCallRefs` selection adds the call/result references under `agentio.tool.calls`.
-
-For `parser.llm`, `protocol` defaults to `auto`. It maps the exact paths `/v1/chat/completions`, `/v1/responses` and `/v1/messages` to their respective wire protocols. Other paths produce `captureStatus: unknown_protocol`, and the byte count for each enabled direction of a completed stream. Forwarding continues. A custom path can set `protocol` to `openai-chat-completions`, `openai-responses` or `anthropic-messages`. Responses use the protocol selected at request headers. Their content type selects JSON or SSE. Unsupported media and malformed documents produce audit statuses.
-
-All `parser.llm` protocols record messages, model and token usage under OpenTelemetry GenAI attribute names. A provider name is not inferred from the wire protocol.
-
-Each entry in `audit.format.attributes` maps an output name to one quoted expression. The Rust module compiles these at configuration load, and samples their string values at request headers for both audit directions. Agentio and standalone Envoy use the same expressions.
-
-| Expression | Value |
+| Operator | Value |
 | --- | --- |
-| `%REQ(X-TENANT-ID)%` | Request header. Header names are case-insensitive. |
-| `%FILTER_STATE(my.sandbox:PLAIN)%` | The Filter State object's string serialization. |
-| `%DYNAMIC_METADATA(workload:namespace)%` | The top-level string field `namespace` in the stream's dynamic metadata namespace `workload`. |
+| `%REQ(X-TENANT-ID)%` | Case-insensitive request header, captured when request headers arrive. |
+| `%FILTER_STATE(key:PLAIN)%` | Filter State object's string serialization at request headers. |
+| `%DYNAMIC_METADATA(namespace:key)%` | Top-level string value at request headers. Other types are omitted. |
+| `%CHAIN%`, `%DIRECTION%`, `%PATH%` | Rule name, request or response, and request path without the query. |
+| `%BYTES_SEEN%`, `%DECODED_BYTES%` | Observed wire bytes and, for decoded gzip requests, decoded bytes. |
+| `%CAPTURE_STATUS%` | Capture outcome, including parse errors, incomplete streams and size clipping. |
+| `%EVENT(llm.field)%` | Value from the LLM protocol parser, projected for this audit. |
 
-Missing values are omitted. A metadata value of another type is also omitted; Envoy 1.40.2 logs a type error when its string accessor encounters such a value. The producer of a Filter State or metadata value must set it before this module runs. The three operators above are the complete expression language: CEL, interpolation, and nested metadata paths are rejected at configuration load. Replace earlier source objects such as `{requestHeader: x-tenant-id}` with `"%REQ(X-TENANT-ID)%"`. For nested metadata, a preceding Envoy filter can expose the selected leaf as a string in Filter State.
-
-Custom fields are written directly to the root of the record. A custom name that matches a built-in field is rejected at configuration load. Move existing `audit.attributes` entries to `audit.format.attributes` and rename any conflicting entries. Attribute values share the direction's final line budget with content. Oversized context entries are omitted and set `attributesTruncated: true`.
-
-For example, a request with a tenant header sent to the sandbox chain can produce the following JSON line.
-
-```json
-{"type":"content","chain":"sandbox-model-calls","requestID":"req-7","direction":"request","path":"/v1/responses","captureStatus":"complete","bytesSeen":29,"llm.protocol":"openai-responses","app.tenant.id":"team-a","gen_ai.input.messages":[{"parts":[{"content":"hello","type":"text"}],"role":"user"}],"gen_ai.operation.name":"chat","gen_ai.request.model":"m"}
-```
-
-Dotted keys are literal JSON property names. Query the model as `."gen_ai.request.model"` in jq. Each enabled direction produces its own line with the same request ID. `captureStatus` describes capture of the selected fields and `bytesSeen` counts observed body bytes in that direction. Update consumers of the earlier record format to read these root fields in place of `status`, `attributes` and `content`.
-
-With `llm.messages`, top-level Anthropic system instructions and OpenAI Responses instructions are recorded in `gen_ai.system_instructions`. System messages within Chat Completions history retain their position in `gen_ai.input.messages`. Recognized images use blob, URI or file parts. A clipped inline image retains its position, modality and available MIME type. Anthropic server tool calls use a `server_tool_call` part. Cache writes use `gen_ai.usage.cache_write.input_tokens`.
-
-### GenAI metadata with tool references
-
-To correlate calls without retaining message text, tool arguments or result bodies, enable the summary on each desired direction.
-
-```yaml
-bodyProcessing:
-  filterChains:
-    - name: tool-references
-      parser: {llm: {}}
-      filters:
-        - audit:
-            maxSize: 4KiB
-            request: {include: [llm.toolCallRefs]}
-            response: {include: [llm.toolCallRefs]}
-```
-
-| Field | Wire source |
+| Direction | Event names (omit the common `llm.` prefix in this table) |
 | --- | --- |
-| `gen_ai.request.stream` | Explicit boolean `stream` in any of the three protocols. |
-| `gen_ai.request.max_tokens` | Chat `max_completion_tokens` (or legacy `max_tokens`), Responses `max_output_tokens`, Anthropic `max_tokens`. |
-| `gen_ai.request.previous_response.id` | Responses `previous_response_id` identifies the preceding generation. `gen_ai.conversation.id` separately identifies the conversation. |
-| `gen_ai.response.id` | Top-level JSON response ID, Chat chunk ID, Responses lifecycle event's response ID or Anthropic `message_start.message.id`. |
-| `gen_ai.response.finish_reasons` | Reported Chat finish reasons in choice-index order or Anthropic stop reason. Available with an empty `include`. Responses reports its native `llm.status` and `llm.incompleteReason`. |
-| `error.type`, `agentio.response.error_code` | Upstream structured error type and string code. If only a code is available, it also supplies `error.type`. The envelope's `captureStatus` describes audit capture. |
-| `agentio.tool.calls` | With `llm.toolCallRefs` in `include`, each entry contains `kind` (`call` or `result`), plus the ID and name when supplied. Available for requests and responses. |
+| Either | `model`, `protocol`, `operation`, `messages`, `toolCallRefs`, `retainedText` |
+| Request | `question`, `toolDefinitions`, `systemInstructions`, `stream`, `maxTokens`, `conversationId`, `previousResponseId` |
+| Response | `answer`, `responseId`, `finishReasons`, `status`, `incompleteReason`, `error`, `errorType`, `errorCode` |
+| Response usage | `usage.inputTokens`, `usage.outputTokens`, `usage.cachedInputTokens`, `usage.cacheCreationInputTokens`, `usage.reasoningTokens`, `usage.totalTokens` |
 
-The summary covers Chat function calls and tool messages (including legacy function results), Responses function and custom tool calls and their outputs, and Anthropic client, server and MCP tool use and corresponding tool results. Chat requests can omit the model when the deployment is selected by URL. JSON and SSE use the same representation. A result can be joined to its call by ID. Summary capture tracks up to 1,024 references and up to the `maxSize` budget for names and IDs per direction. Overflow omits the summary and marks the record truncated. The serialized line budget also applies. Including response `llm.messages` also retains provider error details in `llm.error`. Other selections retain the structured error type and code.
+`llm.question` selects text from the latest user message with visible text, skipping tool results. `llm.answer` collects visible assistant text and refusals, using choice zero for Chat Completions. `llm.messages` preserves structured parts and provider-specific content. Tool references carry call/result IDs and names and can be selected independently of message bodies. `llm.status` is the provider's response status. Use `%CAPTURE_STATUS%` to tell whether the gateway captured the selected evidence.
+
+Each audit has its own retention and final line budget. The encoder reserves space for selected status keys and the final newline. It visits other output names in sorted order, shortens oversized event strings at UTF-8 boundaries and omits values that cannot fit. An otherwise complete record then reports `truncated`. The other audits keep consuming the same parser events.
+
+In `auto` mode the parser matches the paths `/v1/chat/completions`, `/v1/responses` and `/v1/messages`. For a custom path select `openai-chat-completions`, `openai-responses` or `anthropic-messages`. Unknown paths in auto mode report `unknown_protocol`. The response content type selects JSON or SSE.
 
 ### Standalone Envoy configuration
 
-The following filter enables both directions. Omit the `response` member for request-only auditing. `maxSize` is a per-direction limit on the serialized JSON line, including its envelope and newline, in the range 1,024 to 1,048,576 bytes.
+The following filter enables both directions. Omit the `response` member for request-only auditing. `maxSize` is a per-direction limit on the serialized JSON line, including its newline, in the range 1,024 to 1,048,576 bytes.
 
 ```yaml
 name: envoy.filters.http.dynamic_modules
@@ -132,14 +92,13 @@ typed_config:
   filter_name: contentguard
   filter_config:
     "@type": type.googleapis.com/google.protobuf.StringValue
-    value: '{"filterChains":[{"name":"models","parser":{"llm":{}},"filters":[{"audit":{"request":{"include":["llm.messages"],"maxSize":"16KiB"},"response":{}}}]}]}'
+    value: '{"filterChains":[{"name":"models","parser":{"llm":{}},"filters":[{"audit":{"request":{"maxSize":"16KiB"},"response":{},"format":{"json":{"messages":"%EVENT(llm.messages)%","status":"%CAPTURE_STATUS%"}}}}]}]}'
 ```
 
 Each direction accepts the following settings.
 
 | Setting | Behavior |
 | --- | --- |
-| `include` | Selects the content this audit writes for this direction. Defaults to an empty list. |
 | `maxCaptureBytes` | When set, bounds a complete JSON document or a single SSE event including its framing. Exceeding it produces `too_large` and forwarding continues. When omitted, documents use streaming clipping and SSE events have a 64 KiB limit. |
 | `maxContentBytes` | LLM only. Bounds retained LLM messages, question, answer and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the audit drops those fields. Parsing continues for metadata, usage and other audits. |
 | `maxSize` | Bounds the serialized line including its newline. A direction inherits `audit.maxSize`. The built-in limit is `8KiB` per record. Both settings accept `1KiB` through `1MiB`. |
@@ -168,7 +127,7 @@ access_log:
           inline_string: "%FILTER_STATE(agentio.body_processing.audit:PLAIN)%"
 ```
 
-Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared library there. The filter applies to traffic on its configured chain. It reads `x-request-id` for correlation. The log contains the direction, path without the query string, body bytes seen, capture status and retained content.
+Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared library there. The filter applies to traffic on its configured chain. Select `%REQ(X-REQUEST-ID)%` in both directions for correlation.
 
 ## Capture behavior
 
@@ -177,9 +136,11 @@ Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared li
 | LLM JSON requests | Auto mode recognizes the three standard paths listed above. Captures normalized messages, tool definitions, calls and results. Provider-specific blocks remain structured. |
 | LLM JSON and SSE responses | Uses the same protocol selected at request headers. Reconstructs output messages, calls, arguments, finish reasons and reported usage. Responses also carries provider status, error and incomplete reason when available. |
 
-Audits in a matched chain share one LLM parser per direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its own selected fields and enforces its own line limit. For example, a 2 KiB question audit can skip a long earlier turn while a second 8 KiB tool audit records a schema at the end of the same request. Changing their order only changes the order of the output lines. JSON response normalization and SSE framing and reconstruction are also shared.
+Audits in a matched chain share one LLM parser per direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its own selected fields and enforces its own line limit. For example, a 2 KiB question audit can skip a long earlier turn while a second 8 KiB tool audit records a schema at the end of the same request. Changing their order only changes the order of the output lines. The chain also shares JSON response normalization and SSE framing.
 
 The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxItemSize` to control the compaction budget per request item (default `1MiB`, range `1KiB` to `64MiB`). Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests. JSON responses retain their independent, fixed 1 MiB document budget. Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection, clipping and final serialized line limit. When selected messages no longer fit, a record may contain bounded text from message parts under `llm.retainedText`. A truncated record describes the retained projection and cannot reproduce discarded bytes.
+
+During SSE, each complete frame produces borrowed protocol events in the body callback. The parser dispatches text deltas, usage updates and provider-specific changes to filters in order. Usage updates carry the latest normalized counters. A response audit can retain the answer while another records only usage. Responses text deltas are provisional. The audit takes confirmed item snapshots in output order, then replaces them if the terminal event supplies a nonempty `output`. An empty or omitted terminal `output` keeps the confirmed items. The protocol terminator delivers the completed message and metadata projection. HTTP end validates completion and finalizes one record per enabled audit. The Envoy access logger writes those records at stream completion.
 
 SSE framing accepts multiline data, comments, a leading UTF-8 BOM, and LF, CRLF or CR separators across body callbacks. HTTP EOF ends observation. A missing protocol terminator produces `incomplete_stream`. An unsupported delta produces a `partial` record with available metadata. Exceeding the retention budget produces `truncated`. Both cases continue parsing subsequent events for usage and errors. Invalid JSON, invalid UTF-8 framing and invalid protocol transitions have distinct error statuses. Each direction processes up to 64 MiB of SSE input and tracks up to 1,024 choices, blocks or items.
 

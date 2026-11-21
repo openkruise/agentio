@@ -3,22 +3,21 @@
 
 use super::gzip::Gzip;
 use crate::{
-    AuditRecords,
+    FilterOutput,
     config::RequestParserConfig,
-    filters::audit::capture::Capture,
+    filters::{BodyEnd, BodyFilter, BodyResult, Decision},
     parser::{
-        Format,
+        BodyEvent, Format,
         body::HttpCapture,
         json_capture::JsonCapture,
         llm::{Fields, sse, stream},
-        request::{ItemEvent, Request, RequestEvents},
+        request::Request,
     },
 };
-use serde_json::Value;
 
 #[derive(Default)]
 pub struct DirectionStream {
-    groups: Vec<Group>,
+    group: Option<Group>,
     bytes_seen: usize,
     gzip: Option<Gzip>,
     decoded_bytes: Option<usize>,
@@ -85,46 +84,30 @@ impl Input {
 struct Group {
     format: Format,
     input: Input,
-    subscribers: Vec<Capture>,
+    subscribers: Vec<Box<dyn BodyFilter>>,
     event_size: Option<usize>,
 }
 
-struct AuditSubscribers<'a> {
-    audits: &'a mut [Capture],
-    size: usize,
-}
-
-impl RequestEvents for AuditSubscribers<'_> {
-    fn item(&mut self, item: ItemEvent, clipped: bool) {
-        for audit in &mut *self.audits {
-            audit.observe(&item, clipped, self.size);
-        }
-    }
-}
-
 impl Group {
-    fn push(&mut self, bytes: &[u8], size: usize) {
+    fn push(&mut self, bytes: &[u8], size: usize) -> Decision {
+        let mut decision = Decision::Continue;
+        let mut emit = |event: BodyEvent<'_>| {
+            for filter in &mut self.subscribers {
+                decision = decision.merge(filter.on_event(&event, size));
+            }
+        };
         let result = match &mut self.input {
-            Input::Request(reader) => reader.push(
-                bytes,
-                &mut AuditSubscribers {
-                    audits: &mut self.subscribers,
-                    size,
-                },
-            ),
+            Input::Request(reader) => reader.push(bytes, &mut emit),
             Input::Response(reader) => {
                 reader.push(bytes, self.format.protocol().unwrap(), true, Fields::ALL);
                 Ok(())
             }
             Input::Events(framer, stream) => {
-                let mut result = Ok(());
-                let framed = framer.push(bytes, |event| {
-                    if result.is_ok() {
-                        result = stream.event(event)
-                    }
+                let result = framer.push(bytes, |frame| {
+                    stream.event(frame, &mut |event| emit(BodyEvent::LlmResponse(event)))
                 });
                 self.event_size = Some(framer.largest_event);
-                result.and(framed)
+                result
             }
             Input::Other(reader) => {
                 reader.push(bytes, size);
@@ -135,6 +118,7 @@ impl Group {
         if let Err(status) = result {
             self.input = Input::Failed(status)
         }
+        decision
     }
 
     fn finish(
@@ -142,77 +126,89 @@ impl Group {
         wire_bytes: usize,
         decoded: Option<usize>,
         complete: bool,
-        records: &mut AuditRecords,
-    ) {
-        let size = decoded.unwrap_or(wire_bytes);
-        let sources = self.subscribers;
-        let is_request = matches!(self.input, Input::Request(_));
-        let result: Result<(bool, Value), _> = match self.input {
-            Input::Request(reader) => reader.finish().map(|v| (false, v)),
-            Input::Response(reader) => reader.finish(
+        records: &mut FilterOutput,
+    ) -> Decision {
+        let source = match self.input {
+            _ if !complete => BodyResult::Incomplete,
+            Input::Other(reader) => {
+                BodyResult::Http(reader.finish(decoded.unwrap_or(wire_bytes), true))
+            }
+            Input::Request(reader) => BodyResult::Llm(reader.finish().map(|v| (false, v))),
+            Input::Response(reader) => BodyResult::Llm(reader.finish(
                 self.format.protocol().unwrap(),
                 true,
                 Fields::ALL,
                 RESPONSE_LIMIT,
-            ),
-            Input::Events(_, stream) => stream.finish(),
-            Input::Failed(e) => Err(e),
-            Input::Other(reader) => {
-                let [audit]: [Capture; 1] = sources.try_into().unwrap_or_else(|_| unreachable!());
-                audit.finish(wire_bytes, decoded, reader.finish(size, complete), records);
-                return;
-            }
+            )),
+            Input::Events(framer, stream) => BodyResult::Sse {
+                status: stream.finish(),
+                largest_event: framer.largest_event,
+            },
+            Input::Failed(e) => match self.event_size {
+                Some(largest_event) => BodyResult::Sse {
+                    status: Err(e),
+                    largest_event,
+                },
+                None => BodyResult::Llm(Err(e)),
+            },
         };
-        for mut audit in sources {
-            let body = if complete {
-                audit.project(
-                    result.as_ref().map_err(|e| *e),
-                    is_request,
-                    self.event_size,
-                    size,
-                )
-            } else {
-                Err("incomplete")
-            };
-            audit.finish(wire_bytes, decoded, body, records);
-        }
+        let end = BodyEnd {
+            bytes_seen: wire_bytes,
+            decoded_bytes: decoded,
+            result: source,
+        };
+        self.subscribers
+            .into_iter()
+            .fold(Decision::Continue, |decision, filter| {
+                decision.merge(filter.on_end(&end, records))
+            })
     }
 }
 
 impl DirectionStream {
     pub fn new(
         direction: ParserDirection,
+        format: Format,
         media: &str,
         encoding: &str,
-        audits: impl IntoIterator<Item = Capture>,
+        filters: Vec<Box<dyn BodyFilter>>,
     ) -> Self {
+        Self::with_limits(direction, format, media, encoding, filters, 0, None)
+    }
+    pub(crate) fn with_limits(
+        direction: ParserDirection,
+        format: Format,
+        media: &str,
+        encoding: &str,
+        filters: Vec<Box<dyn BodyFilter>>,
+        limit: usize,
+        hard_limit: Option<usize>,
+    ) -> Self {
+        if filters.is_empty() {
+            return Self::default();
+        }
         let media = media.parse::<mime::Mime>().ok();
         let gzip = matches!(direction, ParserDirection::Request(_))
             && encoding.trim().eq_ignore_ascii_case("gzip");
         let encoding = if gzip { "" } else { encoding.trim() };
-        let mut groups = Vec::<Group>::new();
-        for audit in audits {
-            let format = audit.settings.format;
-            if format.protocol().is_some()
-                && let Some(g) = groups.iter_mut().find(|g| g.format == format)
-            {
-                g.subscribers.push(audit);
-                continue;
-            }
-            let input = if let Some(protocol) = format.protocol() {
-                Input::llm(format, protocol, direction, media.as_ref(), encoding)
-            } else {
-                Input::Other(audit.http_capture(media.as_ref(), encoding))
-            };
-            groups.push(Group {
+        let input = match format.protocol() {
+            Some(protocol) => Input::llm(format, protocol, direction, media.as_ref(), encoding),
+            None => Input::Other(HttpCapture::new(
                 format,
-                input,
-                subscribers: vec![audit],
-                event_size: None,
-            });
-        }
+                limit,
+                hard_limit,
+                media.as_ref(),
+                encoding,
+            )),
+        };
+        let group = Group {
+            format,
+            input,
+            subscribers: filters,
+            event_size: None,
+        };
         let mut stream = Self {
-            groups,
+            group: Some(group),
             ..Default::default()
         };
         if gzip && !stream.counts_bytes_only() {
@@ -222,10 +218,10 @@ impl DirectionStream {
         stream
     }
     pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
+        self.group.is_none()
     }
     pub fn counts_bytes_only(&self) -> bool {
-        self.groups.iter().all(|g| match &g.input {
+        self.group.iter().all(|g| match &g.input {
             Input::Failed(_) => true,
             Input::Other(reader) => reader.bytes_only(),
             _ => false,
@@ -240,7 +236,7 @@ impl DirectionStream {
         self.fail("capture_error");
     }
     fn fail(&mut self, e: &'static str) {
-        for g in &mut self.groups {
+        if let Some(g) = &mut self.group {
             match &mut g.input {
                 Input::Failed(_) => {}
                 Input::Other(d) => d.fail(e),
@@ -248,12 +244,13 @@ impl DirectionStream {
             }
         }
     }
-    pub fn push(&mut self, chunk: &[u8]) {
+    pub fn push(&mut self, chunk: &[u8]) -> Decision {
+        let mut decision = Decision::Continue;
         self.count_bytes(chunk.len());
         if let Some(mut gzip) = self.gzip.take() {
             let result = gzip.push(chunk, |plain, size| {
-                for g in &mut self.groups {
-                    g.push(plain, size);
+                if let Some(g) = &mut self.group {
+                    decision = decision.merge(g.push(plain, size));
                 }
                 !self.counts_bytes_only()
             });
@@ -263,95 +260,19 @@ impl DirectionStream {
                 Ok(()) if !self.counts_bytes_only() => self.gzip = Some(gzip),
                 Ok(()) => {}
             }
-        } else if self.decoded_bytes.is_none() {
-            for g in &mut self.groups {
-                g.push(chunk, self.bytes_seen);
-            }
+        } else if self.decoded_bytes.is_none()
+            && let Some(g) = &mut self.group
+        {
+            decision = g.push(chunk, self.bytes_seen);
         }
+        decision
     }
-    pub fn finish(mut self, complete: bool, records: &mut AuditRecords) {
+    pub fn finish(mut self, complete: bool, records: &mut FilterOutput) -> Decision {
         if complete && self.gzip.as_ref().is_some_and(|g| !g.finished()) {
             self.fail("invalid_encoding")
         }
-        for group in self.groups {
+        self.group.map_or(Decision::Continue, |group| {
             group.finish(self.bytes_seen, self.decoded_bytes, complete, records)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::filters::audit::{Direction, capture::AuditContext};
-    use serde_json::json;
-
-    #[test]
-    fn two_audits_share_one_request_parser_and_match_their_standalone_logs() {
-        // Keep the tool definition larger than the other audit's whole log.
-        let body = json!({
-            "messages":[{"content":"x".repeat(48<<10),"role":"user"},
-                        {"content":"latest question","role":"user"}],
-            "tools":[{"type":"function","function":{"name":"get_weather",
-                "parameters":{"description":"d".repeat(3000)}}}]
         })
-        .to_string();
-        let question = json!({"fields":{"question":true},"maxSize":2048});
-        let tools = json!({"fields":{"tools":true},"maxSize":8192});
-        let run = |configs: &[&Value]| {
-            let audits = configs.iter().enumerate().map(|(index, config)| {
-                let mut dir: Direction = serde_json::from_value((*config).clone()).unwrap();
-                dir.format = Format::OpenaiChatCompletions;
-                Capture::start(
-                    "request",
-                    "/v1/chat/completions",
-                    "req",
-                    dir,
-                    AuditContext {
-                        chain: "chat",
-                        filter_index: index,
-                        attributes: &Default::default(),
-                    },
-                )
-            });
-            let mut stream = DirectionStream::new(
-                ParserDirection::Request(Default::default()),
-                "application/json",
-                "",
-                audits,
-            );
-            assert_eq!(stream.groups.len(), 1);
-            assert!(matches!(stream.groups[0].input, Input::Request(_)));
-            assert_eq!(stream.groups[0].subscribers.len(), configs.len());
-            for chunk in body.as_bytes().chunks(13) {
-                stream.push(chunk);
-            }
-            let mut records = AuditRecords::default();
-            stream.finish(true, &mut records);
-            records
-                .0
-                .into_iter()
-                .map(|(_, line)| line)
-                .collect::<Vec<_>>()
-        };
-        let a = run(&[&question]).pop().unwrap();
-        let b = run(&[&tools]).pop().unwrap();
-        assert_eq!(run(&[&question, &tools]), [&a, &b].map(Vec::clone));
-        assert_eq!(run(&[&tools, &question]), [&b, &a].map(Vec::clone));
-        let disabled_fields = json!({"fields":{},"maxSize":1024});
-        assert_eq!(run(&[&disabled_fields, &tools])[1], b);
-        assert!(a.len() < 2048 && (2048..8192).contains(&b.len()));
-        let a: Value = serde_json::from_slice(&a).unwrap();
-        let b: Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(a["llm.question"], "latest question");
-        assert!(a.get("gen_ai.tool.definitions").is_none());
-        assert!(b.get("llm.question").is_none());
-        assert_eq!(b["captureStatus"], "complete");
-        assert_eq!(
-            b["gen_ai.tool.definitions"][0]["parameters"]["description"]
-                .as_str()
-                .unwrap()
-                .len(),
-            3000
-        );
     }
 }

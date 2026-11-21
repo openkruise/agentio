@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Retention, obj, string, unknown};
+use super::{Event, Retention, Trailers, obj, string, unknown};
 use crate::parser::llm::{
     CHAT,
     response::{INVALID, Result, index, usage},
@@ -13,9 +13,7 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub(super) struct Stream {
     model: Option<String>,
-    usage: Option<Value>,
     error: Option<Value>,
-    done: bool,
     choices: BTreeMap<u32, Choice>,
 }
 #[derive(Default)]
@@ -63,19 +61,29 @@ impl Function {
 }
 
 impl Stream {
-    pub(super) fn add(&mut self, v: &Value, done: bool, b: &mut Retention) -> Result<()> {
-        if done && (!self.done || self.error.is_some()) {
-            self.done = true;
-            return Ok(());
-        }
-        if self.done {
-            return Err(INVALID);
+    pub(super) fn add(
+        &mut self,
+        v: &Value,
+        done: bool,
+        b: &mut Retention,
+        emit: &mut impl FnMut(Event<'_>),
+    ) -> Result<Option<Trailers>> {
+        if done {
+            return Ok(Some(Trailers::None));
         }
         b.response_id(&v["id"]);
         if let Some(e) = v.get("error") {
+            emit(Event::Detail {
+                kind: "error",
+                value: e,
+            });
+            emit(Event::Usage(&Value::Null));
             self.error = (!e.is_null()).then(|| e.clone());
-            self.done = true;
-            return Ok(());
+            return Ok(Some(if self.error.is_some() {
+                Trailers::Done
+            } else {
+                Trailers::None
+            }));
         }
         let model = string(&v["model"])?;
         if self
@@ -87,9 +95,13 @@ impl Stream {
         }
         if self.model.as_deref().is_none_or(str::is_empty) {
             self.model = Some(model.into());
+            emit(Event::Detail {
+                kind: "chat.completion.chunk",
+                value: v,
+            });
         }
         if !v["usage"].is_null() {
-            self.usage = Some(usage(CHAT, &v["usage"]));
+            emit(Event::Usage(&usage(CHAT, &v["usage"])));
         }
         for row in v["choices"].as_array().ok_or(INVALID)? {
             let i = index(&row["index"])?;
@@ -107,6 +119,16 @@ impl Stream {
                 &["role", "content", "refusal", "function_call", "tool_calls"],
                 true,
             );
+            if !row["finish_reason"].is_null()
+                || d.as_object().unwrap().iter().any(|(key, value)| {
+                    !value.is_null() && !matches!(key.as_str(), "content" | "refusal")
+                })
+            {
+                emit(Event::Detail {
+                    kind: "choice",
+                    value: row,
+                });
+            }
             if !d["role"].is_null() {
                 let role = string(&d["role"])?;
                 if role.len() > 64 {
@@ -120,9 +142,12 @@ impl Stream {
             for (k, dst) in [("content", &mut c.text), ("refusal", &mut c.refusal)] {
                 if !d[k].is_null() {
                     let part = string(&d[k])?;
-                    if i == 0 {
-                        b.visible(u32::from(k == "refusal"), part);
-                    }
+                    emit(Event::TextDelta {
+                        provisional: false,
+                        output: i,
+                        part: Some(u32::from(k == "refusal")),
+                        text: part,
+                    });
                     b.append(dst, part);
                 }
             }
@@ -183,7 +208,7 @@ impl Stream {
                 c.finish = Some(f.into());
             }
         }
-        Ok(())
+        Ok(None)
     }
     pub(super) fn discard_content(&mut self) {
         for choice in self.choices.values_mut() {
@@ -195,9 +220,6 @@ impl Stream {
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
-        if !self.done {
-            return Err("incomplete_stream");
-        }
         if let Some(error) = self.error {
             return Ok(json!({"format":CHAT,"error":error}));
         }
@@ -205,9 +227,6 @@ impl Stream {
             return Err(INVALID);
         }
         let mut v = json!({"format":CHAT,"model":self.model});
-        if let Some(usage) = self.usage {
-            v["usage"] = usage;
-        }
         let mut reasons = vec![];
         let mut out = vec![];
         for (i, c) in self.choices {

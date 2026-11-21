@@ -5,10 +5,10 @@ use super::{
     Attributes, Direction,
     projection::{Projection, response_view},
 };
-use crate::AuditRecords;
-use crate::parser::body::{Content, Decoded, HttpCapture, ParsedBody};
+use crate::FilterOutput;
+use crate::parser::body::{Content, Decoded, ParsedBody};
 use crate::parser::request::ItemEvent;
-use serde::Serialize;
+
 use serde_json::{Map, Value};
 
 pub struct AuditContext<'a> {
@@ -18,33 +18,27 @@ pub struct AuditContext<'a> {
 }
 
 pub struct Capture {
+    template: std::sync::Arc<super::template::Template>,
+    context: Map<String, Value>,
     filter_index: usize,
     record: Record,
     content_budget: usize,
     line_limit: usize,
     projection: Projection,
+    sse: Option<Box<super::sse::Projection>>,
     pub(crate) settings: Direction,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct Record {
-    #[serde(rename = "type")]
-    kind: &'static str,
     chain: String,
-    #[serde(rename = "requestID")]
     id: String,
     direction: &'static str,
     path: String,
     capture_status: &'static str,
     bytes_seen: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
     decoded_bytes: Option<usize>,
-    #[serde(rename = "llm.protocol", skip_serializing_if = "Option::is_none")]
     protocol: Option<&'static str>,
-    #[serde(flatten)]
     attributes: Map<String, Value>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     attributes_truncated: bool,
 }
 
@@ -53,12 +47,13 @@ fn prefix(s: &str, limit: usize) -> &str {
 }
 
 impl Capture {
-    pub(crate) fn start(
+    pub(super) fn with_template(
         direction: &'static str,
         path: &str,
         id: &str,
         settings: Direction,
         context: AuditContext<'_>,
+        template: std::sync::Arc<super::template::Template>,
     ) -> Self {
         let AuditContext {
             chain,
@@ -68,7 +63,6 @@ impl Capture {
         let limit = settings.max_log_bytes;
         let path = path.split('?').next().unwrap_or(path);
         let mut record = Record {
-            kind: "content",
             chain: chain.to_owned(),
             id: prefix(id, 128).to_owned(),
             direction,
@@ -80,59 +74,55 @@ impl Capture {
             attributes_truncated: attrs.truncated,
             protocol: settings.format.protocol(),
         };
-        // Reserve room for the longest status, byte count and newline. HTTP
-        // header strings can expand when escaped into JSON.
-        let mut envelope = serde_json::to_vec(&record).unwrap().len();
-        if envelope + 128 >= limit {
-            record.path.clear();
-            if serde_json::to_vec(&record).unwrap().len() + 128 >= limit {
-                record.id.clear();
-            }
-            envelope = serde_json::to_vec(&record).unwrap().len();
-        }
-        if !attrs.values.is_empty() {
-            // Reserve room for the truncation flag and the longest
-            // status and byte count before charging each escaped key/value.
-            let mut remaining = limit.saturating_sub(envelope + 112);
-            for (key, value) in &attrs.values {
-                let cost = serde_json::to_vec(key).unwrap().len()
-                    + serde_json::to_vec(value).unwrap().len()
-                    + 2;
-                if cost > remaining {
-                    record.attributes_truncated = true;
-                    continue;
-                }
+        let mut remaining = limit;
+        let mut context = Map::new();
+        for (key, value) in &attrs.values {
+            let cost = serde_json::to_vec(key).unwrap().len()
+                + serde_json::to_vec(value).unwrap().len()
+                + 2;
+            if cost > remaining {
+                record.attributes_truncated = true;
+            } else {
                 remaining -= cost;
-                record.attributes.insert(key.clone(), value.clone());
+                context.insert(key.clone(), value.clone());
             }
-            envelope = serde_json::to_vec(&record).unwrap().len();
         }
-        let room = limit.saturating_sub(envelope + 64);
+        // Keep space for JSON delimiters. The renderer charges escaped keys/values exactly.
+        let room = remaining.saturating_sub(32);
         Self {
+            context,
+            template,
             filter_index,
             record,
             content_budget: room,
             line_limit: limit,
             projection: Projection::default(),
+            sse: None,
             settings,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn start(
+        direction: &'static str,
+        path: &str,
+        id: &str,
+        mut settings: Direction,
+        context: AuditContext<'_>,
+    ) -> Self {
+        settings.fields.usage = true; // The fixture template exposes all usage counters.
+        let template = std::sync::Arc::new(super::template::Template::fixture(
+            &context.attributes.values,
+        ));
+        Self::with_template(direction, path, id, settings, context, template)
+    }
+    #[cfg(test)]
     pub(crate) fn document_room(&self) -> usize {
         self.settings
             .max_capture_bytes
             .unwrap_or(self.content_budget)
     }
 
-    pub(crate) fn http_capture(&self, media: Option<&mime::Mime>, encoding: &str) -> HttpCapture {
-        HttpCapture::new(
-            self.settings.format,
-            self.document_room(),
-            self.settings.max_capture_bytes,
-            media,
-            encoding,
-        )
-    }
     pub(crate) fn observe(&mut self, event: &ItemEvent, clipped: bool, size: usize) {
         if self
             .settings
@@ -152,14 +142,9 @@ impl Capture {
         &mut self,
         source: Result<&(bool, Value), &'static str>,
         request: bool,
-        event_size: Option<usize>,
         size: usize,
     ) -> Decoded {
-        let limit_exceeded = match event_size {
-            Some(n) => n > self.settings.max_capture_bytes.unwrap_or(64 << 10),
-            None => self.settings.max_capture_bytes.is_some_and(|n| size > n),
-        };
-        if limit_exceeded {
+        if self.settings.max_capture_bytes.is_some_and(|n| size > n) {
             return Err("too_large");
         }
         let (clipped, view) = source?;
@@ -168,7 +153,7 @@ impl Capture {
         {
             return Err("invalid_content");
         }
-        let (truncated, value) = if request {
+        let (mut truncated, mut value) = if request {
             std::mem::take(&mut self.projection).finish(view)?
         } else {
             (
@@ -178,12 +163,16 @@ impl Capture {
                 response_view(view, self.settings.fields, self.line_limit),
             )
         };
+        if let Some(limit) = self
+            .settings
+            .max_content_bytes
+            .or(self.settings.max_capture_bytes)
+        {
+            truncated |= bound_content(&mut value, limit);
+        }
         Ok(ParsedBody {
             truncated,
-            content: Content::Llm {
-                value,
-                streamed: event_size.is_some(),
-            },
+            content: Content::Llm(value),
         })
     }
     pub(crate) fn finish(
@@ -191,7 +180,7 @@ impl Capture {
         bytes_seen: usize,
         decoded_bytes: Option<usize>,
         body: Decoded,
-        records: &mut AuditRecords,
+        records: &mut FilterOutput,
     ) {
         self.record.bytes_seen = bytes_seen;
         self.record.decoded_bytes = decoded_bytes;
@@ -205,10 +194,7 @@ impl Capture {
                 content,
             }) => {
                 match content {
-                    Content::Llm {
-                        value: mut v,
-                        streamed: stream,
-                    } => {
+                    Content::Llm(mut v) => {
                         clipped |= v["toolCallsTruncated"] == true;
                         if self.settings.fields.tool_call_refs
                             && let Some(summary) =
@@ -218,15 +204,6 @@ impl Capture {
                                 .attributes
                                 .insert("agentio.tool.calls".into(), summary);
                         }
-                        if let Some(limit) = self
-                            .settings
-                            .max_content_bytes
-                            .or(self.settings.max_capture_bytes)
-                            .or_else(|| stream.then_some(self.content_budget))
-                            && bound_content(&mut v, limit)
-                        {
-                            clipped = true;
-                        }
                         if v["partial"] == true {
                             self.record.capture_status = "partial";
                         }
@@ -234,7 +211,7 @@ impl Capture {
                             &mut v,
                             &mut self.record.attributes,
                             self.record.direction == "response",
-                            self.settings.fields.output_messages,
+                            self.settings.fields.output_messages || self.settings.fields.error,
                         );
                     }
                     Content::Http(value) => {
@@ -248,60 +225,34 @@ impl Capture {
             }
             Err(e) => self.record.capture_status = e,
         }
-        let mut line = serde_json::to_vec(&self.record).expect("record contains only JSON values");
-        if line.len() >= self.line_limit {
-            // Escaping and protocol normalization can enlarge the retained document.
-            // Discard large binary leaves first, then shorten oversized text.
-            self.record.capture_status = "truncated";
-            const BODY_FIELDS: &[&str] = &[
-                "http.body",
-                "llm.question",
-                "llm.answer",
-                "llm.error",
-                "llm.retainedText",
-                "gen_ai.system_instructions",
-                "gen_ai.input.messages",
-                "gen_ai.output.messages",
-                "gen_ai.tool.definitions",
-            ];
-            for &key in BODY_FIELDS {
-                if let Some(v) = self.record.attributes.get_mut(key) {
-                    shrink(v, self.content_budget / 4);
-                }
-            }
-            line.clear();
-            serde_json::to_writer(&mut line, &self.record).unwrap();
-            if line.len() >= self.line_limit {
-                for &key in BODY_FIELDS {
-                    self.record.attributes.remove(key);
-                }
-                line.clear();
-                serde_json::to_writer(&mut line, &self.record).unwrap();
-            }
+        let r = self.record;
+        let mut fields = r.attributes;
+        fields.insert("chain".into(), r.chain.into());
+        fields.insert("direction".into(), r.direction.into());
+        fields.insert("requestID".into(), r.id.into());
+        fields.insert("path".into(), r.path.into());
+        fields.insert("bytesSeen".into(), r.bytes_seen.into());
+        if let Some(n) = r.decoded_bytes {
+            fields.insert("decodedBytes".into(), n.into());
         }
-        if line.len() >= self.line_limit
-            && self
-                .record
-                .attributes
-                .remove("agentio.tool.calls")
-                .is_some()
-        {
-            self.record.attributes_truncated = true;
-            line.clear();
-            serde_json::to_writer(&mut line, &self.record).unwrap();
+        if let Some(protocol) = r.protocol {
+            fields.insert("llm.protocol".into(), protocol.into());
         }
-        if line.len() >= self.line_limit {
-            self.record.attributes.clear();
-            self.record.attributes_truncated = true;
-            line.clear();
-            serde_json::to_writer(&mut line, &self.record).unwrap();
+        if r.attributes_truncated {
+            fields.insert("attributesTruncated".into(), true.into());
         }
-        line
+        let status = if r.attributes_truncated && r.capture_status == "complete" {
+            "truncated"
+        } else {
+            r.capture_status
+        };
+        self.template
+            .render(&fields, &self.context, r.direction, status, self.line_limit)
     }
 }
 
 // The normalized messages and tool definitions share one retention budget.
-fn bound_content(view: &mut Value, limit: usize) -> bool {
+pub(super) fn bound_content(view: &mut Value, limit: usize) -> bool {
     let keys = [
         "systemInstructions",
         "inputMessages",
@@ -365,5 +316,50 @@ pub(super) fn shrink(v: &mut Value, cap: usize) {
             }
         }
         _ => {}
+    }
+}
+
+impl crate::filters::BodyFilter for Capture {
+    fn on_event(
+        &mut self,
+        event: &crate::parser::BodyEvent<'_>,
+        bytes_seen: usize,
+    ) -> crate::filters::Decision {
+        use crate::parser::BodyEvent;
+        match event {
+            BodyEvent::LlmItem { item, clipped } => self.observe(item, *clipped, bytes_seen),
+            BodyEvent::LlmResponse(event) => self.sse.get_or_insert_with(Default::default).observe(
+                event,
+                self.settings,
+                self.content_budget,
+            ),
+            _ => {}
+        }
+        crate::filters::Decision::Continue
+    }
+    fn on_end(
+        mut self: Box<Self>,
+        end: &crate::filters::BodyEnd,
+        output: &mut FilterOutput,
+    ) -> crate::filters::Decision {
+        use crate::filters::BodyResult;
+        let body = match &end.result {
+            BodyResult::Incomplete => Err("incomplete"),
+            BodyResult::Llm(view) => self.project(
+                view.as_ref().map_err(|e| *e),
+                self.record.direction == "request",
+                end.decoded_bytes.unwrap_or(end.bytes_seen),
+            ),
+            BodyResult::Sse { largest_event, .. }
+                if *largest_event > self.settings.max_capture_bytes.unwrap_or(64 << 10) =>
+            {
+                Err("too_large")
+            }
+            BodyResult::Sse { status: Err(e), .. } => Err(*e),
+            BodyResult::Sse { status: Ok(()), .. } => Ok(self.sse.take().unwrap().finish()),
+            BodyResult::Http(result) => result.clone(),
+        };
+        self.finish(end.bytes_seen, end.decoded_bytes, body, output);
+        crate::filters::Decision::Continue
     }
 }

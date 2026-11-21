@@ -9,6 +9,25 @@ pub(crate) mod request;
 
 use serde::Deserialize;
 
+/// Borrowed for one synchronous notification. Model offsets refer to decoded body bytes.
+pub(crate) enum BodyEvent<'a> {
+    LlmResponse(llm::stream::Event<'a>),
+    LlmItem {
+        item: &'a request::ItemEvent,
+        clipped: bool,
+    },
+    // These wire events are part of the parser contract; audit reads the validated final model.
+    #[allow(dead_code)]
+    ModelStart(usize),
+    #[allow(dead_code)]
+    ModelData(&'a [u8]),
+    #[allow(dead_code)]
+    ModelEnd {
+        range: std::ops::Range<usize>,
+        value: Option<&'a str>,
+    },
+}
+
 #[derive(Clone, Copy, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Format {

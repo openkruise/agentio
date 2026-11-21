@@ -4,11 +4,13 @@
 use super::{Format, json_capture::JsonCapture, llm::Fields, multipart::Multipart};
 use serde_json::Value;
 
+#[derive(Clone)]
 pub(crate) enum Content {
     Empty,
     Http(Value),
-    Llm { value: Value, streamed: bool },
+    Llm(Value),
 }
+#[derive(Clone)]
 pub(crate) struct ParsedBody {
     pub truncated: bool,
     pub content: Content,

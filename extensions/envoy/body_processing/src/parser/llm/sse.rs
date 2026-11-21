@@ -40,7 +40,11 @@ impl Framer {
             after_cr: false,
         }
     }
-    pub fn push(&mut self, mut chunk: &[u8], mut emit: impl FnMut(Event<'_>)) -> Result<()> {
+    pub fn push(
+        &mut self,
+        mut chunk: &[u8],
+        mut emit: impl FnMut(Event<'_>) -> Result<()>,
+    ) -> Result<()> {
         self.seen += chunk.len();
         if self.seen > 64 << 20 {
             return Err("too_large");
@@ -78,7 +82,7 @@ impl Framer {
             Ok(())
         }
     }
-    fn end_line(&mut self, emit: &mut impl FnMut(Event<'_>)) -> Result<()> {
+    fn end_line(&mut self, emit: &mut impl FnMut(Event<'_>) -> Result<()>) -> Result<()> {
         let mut line = std::str::from_utf8(&self.line).map_err(|_| "invalid_sse")?;
         if self.first {
             line = line.strip_prefix('\u{feff}').unwrap_or(line);
@@ -118,7 +122,7 @@ impl Framer {
                     kind,
                     value: &v,
                     done,
-                });
+                })?;
             }
             self.data.clear();
             self.name.clear();

@@ -1,6 +1,8 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+mod sse;
+
 use crate::chain::{DirectionStream, ParserDirection};
 use crate::filters::audit::capture::Capture;
 use crate::{
@@ -10,7 +12,32 @@ use crate::{
 };
 use serde_json::{Value, json};
 
-use crate::AuditRecords;
+use crate::FilterOutput;
+
+pub(crate) fn fixture_stream(
+    direction: ParserDirection,
+    media: &str,
+    encoding: &str,
+    captures: impl IntoIterator<Item = crate::filters::audit::capture::Capture>,
+) -> DirectionStream {
+    let captures: Vec<_> = captures.into_iter().collect();
+    let config = captures[0].settings;
+    let room = captures[0].document_room();
+    assert!(captures.iter().all(|c| c.settings.format == config.format));
+    let filters = captures
+        .into_iter()
+        .map(|c| Box::new(c) as Box<dyn crate::filters::BodyFilter>)
+        .collect();
+    DirectionStream::with_limits(
+        direction,
+        config.format,
+        media,
+        encoding,
+        filters,
+        room,
+        config.max_capture_bytes,
+    )
+}
 
 fn parser_direction(response: bool) -> ParserDirection {
     if response {
@@ -21,7 +48,7 @@ fn parser_direction(response: bool) -> ParserDirection {
 }
 
 fn encoded(stream: DirectionStream, complete: bool) -> Vec<u8> {
-    let mut ctx = AuditRecords::default();
+    let mut ctx = FilterOutput::default();
     stream.finish(complete, &mut ctx);
     let [(_, record)] = ctx.0.try_into().unwrap();
     record
@@ -53,7 +80,7 @@ fn configured_record(
         config.format = protocol;
     }
     let limit = config.max_log_bytes;
-    let mut c = DirectionStream::new(
+    let mut c = crate::tests::fixture_stream(
         parser_direction(dir == "response"),
         media,
         "",
@@ -514,7 +541,7 @@ fn explicit_document_decoders_validate_media_encoding_and_limits() {
         let config =
             serde_json::from_value(json!({"format":format,"maxCaptureBytes":4,"maxSize":1024}))
                 .unwrap();
-        let mut capture = DirectionStream::new(
+        let mut capture = crate::tests::fixture_stream(
             ParserDirection::Request(Default::default()),
             media,
             encoding,
@@ -556,7 +583,7 @@ fn audit_attribute_expressions_are_checked_at_load() {
         "%CEL(request.method)%",
     ] {
         let cfg = json!({"filterChains":[{"name":"test","parser":{"llm":{}},
-            "filters":[{"audit":{"format":{"attributes":{"tenant":expression}},"request":{}}}]}]});
+            "filters":[{"audit":{"format":{"json":{"tenant":expression}},"request":{}}}]}]});
         let error = Settings::parse(cfg.to_string().as_bytes()).err().unwrap();
         assert!(
             error.contains("tenant") && error.contains("filters[0].audit"),
@@ -567,7 +594,7 @@ fn audit_attribute_expressions_are_checked_at_load() {
 
 #[test]
 fn rejects_invalid_filter_chains() {
-    let chain = json!({"name":"model","parser":{"llm":{}},"filters":[{"audit":{"request":{}}}]});
+    let chain = json!({"name":"model","parser":{"llm":{}},"filters":[{"audit":{"request":{},"format":{"json":{}}}}]});
     let parse = |chains| Settings::parse(json!({"filterChains":chains}).to_string().as_bytes());
     assert!(parse(json!([chain])).is_ok());
     assert!(
@@ -606,7 +633,7 @@ fn rejects_invalid_filter_chains() {
                 json!([{"deny":{}}]),
                 json!([{"audit":{}}]),
                 json!([{"audit":{"schema":"genai","request":{}}}]),
-                json!([{"audit":{"format":{"attributes":{"x":{"requestHeader":"INVALID"}}},"request":{}}}]),
+                json!([{"audit":{"format":{"json":{"x":{"requestHeader":"INVALID"}}},"request":{}}}]),
                 json!([{"audit":{"request":{"include":["llm.answer"]}}}]),
                 json!([{"audit":{"response":{"include":["llm.question"]}}}]),
                 json!([{"audit":{"request":{"include":["body"]}}}]),
@@ -632,7 +659,7 @@ fn genai_uses_native_conversation_and_obeys_whole_line_limit() {
         .values
         .insert("oversize".into(), "\n".repeat(700).into());
     for conversation in [json!("native"), json!({"id":"native"}), Value::Null] {
-        let mut c = DirectionStream::new(
+        let mut c = crate::tests::fixture_stream(
             ParserDirection::Request(Default::default()),
             "application/json",
             "",
@@ -682,7 +709,7 @@ fn genai_record(
     let mut settings: Direction =
         serde_json::from_value(json!({"maxSize":8192,"fields":fields})).unwrap();
     settings.format = Format::from_path(path);
-    let mut c = DirectionStream::new(
+    let mut c = crate::tests::fixture_stream(
         parser_direction(direction == "response"),
         media,
         "",
@@ -699,7 +726,7 @@ fn genai_record(
         )],
     );
     for chunk in body.as_bytes().chunks(7) {
-        c.push(chunk)
+        c.push(chunk);
     }
     let line = encoded(c, true);
     assert!(line.len() < 8192);
@@ -707,10 +734,10 @@ fn genai_record(
 }
 
 #[test]
-fn capture_fields_are_reserved_and_custom_fields_use_literal_names() {
+fn template_output_aliases_can_use_builtin_names() {
     let config = |name: &str| {
         let cfg = json!({"filterChains":[{"name":"llm","parser":{"llm":{}},"filters":[{"audit":{
-            "request":{}, "format":{"attributes":{(name):"%REQ(X-TENANT)%"}}
+            "request":{}, "format":{"json":{(name):"%REQ(X-TENANT)%"}}
         }}]}]});
         Settings::parse(cfg.to_string().as_bytes())
     };
@@ -725,11 +752,7 @@ fn capture_fields_are_reserved_and_custom_fields_use_literal_names() {
         "gen_ai.usage.cache_write.input_tokens",
         "agentio.tool.calls",
     ] {
-        let error = config(name).err().unwrap();
-        assert!(
-            error.contains(name) && error.contains("conflicts"),
-            "{error}"
-        );
+        assert!(config(name).is_ok(), "{name}");
     }
     assert!(config("app.tenant.id").is_ok());
 }
@@ -1105,7 +1128,7 @@ fn oversized_tool_summary_keeps_independent_response_metadata() {
         json!({"format":"openai-responses","maxSize":1024,"maxCaptureBytes":8192,"fields":{"toolCallRefs":true}}),
     )
     .unwrap();
-    let mut c = DirectionStream::new(
+    let mut c = crate::tests::fixture_stream(
         ParserDirection::Response,
         "application/json",
         "",
@@ -1157,11 +1180,11 @@ fn filters_share_input_and_keep_independent_audit_budgets() {
         })
         .collect();
     let mut stream =
-        DirectionStream::new(ParserDirection::Response, "text/event-stream", "", captures);
+        crate::tests::fixture_stream(ParserDirection::Response, "text/event-stream", "", captures);
     for chunk in input.as_bytes().chunks(7) {
         stream.push(chunk);
     }
-    let mut ctx = AuditRecords::default();
+    let mut ctx = FilterOutput::default();
     stream.finish(true, &mut ctx);
     let records: Vec<Value> = ctx
         .0
@@ -1202,7 +1225,7 @@ fn streaming_answer_survives_another_audits_oversized_tool_arguments() {
             )
         });
     let mut stream =
-        DirectionStream::new(ParserDirection::Response, "text/event-stream", "", captures);
+        crate::tests::fixture_stream(ParserDirection::Response, "text/event-stream", "", captures);
     let delta = json!({"model":"m","choices":[{"index":0,"delta":{
         "tool_calls":[{"index":0,"function":{"arguments":"x".repeat(48<<10)}}]}}]});
     let event = format!("data: {delta}\n\n");
@@ -1210,7 +1233,7 @@ fn streaming_answer_survives_another_audits_oversized_tool_arguments() {
         stream.push(event.as_bytes());
     }
     stream.push(b"data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
-    let mut logs = AuditRecords::default();
+    let mut logs = FilterOutput::default();
     stream.finish(true, &mut logs);
     let logs = logs
         .0
@@ -1228,41 +1251,19 @@ fn mixed_consumers_match_their_standalone_records_in_either_order() {
     let sse = include_str!("../testdata/chat-empty-content.sse");
     let small = r#"{"model":"m","choices":[]}"#;
     let big = json!({"model":"m", "choices":[{"index":0, "message":{"role":"assistant","content":"a".repeat(1600)}}]}).to_string();
-    for (media, body, formats) in [
-        (
-            "text/event-stream",
-            sse,
-            [
-                Format::Http,
-                Format::OpenaiChatCompletions,
-                Format::Metadata,
-            ],
-        ),
-        (
-            "application/json",
-            small,
-            [
-                Format::Metadata,
-                Format::Json,
-                Format::OpenaiChatCompletions,
-            ],
-        ),
-        (
-            "application/json",
-            big.as_str(),
-            [
-                Format::Metadata,
-                Format::Json,
-                Format::OpenaiChatCompletions,
-            ],
-        ),
+    for (media, body) in [
+        ("text/event-stream", sse),
+        ("application/json", small),
+        ("application/json", big.as_str()),
     ] {
         let run = |indices: &[usize]| {
             let stages = indices.iter().map(|&index| {
                 let mut settings: Direction =
                     serde_json::from_value(json!({"maxSize":8192})).unwrap();
-                settings.format = formats[index];
-                if settings.format == Format::Json {
+                settings.format = Format::OpenaiChatCompletions;
+                settings.fields.answer = index == 0;
+                settings.fields.output_messages = index == 1;
+                if index == 2 {
                     settings.max_capture_bytes = Some(64);
                 }
                 Capture::start(
@@ -1277,11 +1278,12 @@ fn mixed_consumers_match_their_standalone_records_in_either_order() {
                     },
                 )
             });
-            let mut stream = DirectionStream::new(ParserDirection::Response, media, "", stages);
+            let mut stream =
+                crate::tests::fixture_stream(ParserDirection::Response, media, "", stages);
             for chunk in body.as_bytes().chunks(7) {
                 stream.push(chunk);
             }
-            let mut ctx = AuditRecords::default();
+            let mut ctx = FilterOutput::default();
             stream.finish(true, &mut ctx);
             ctx.0
         };
@@ -1457,7 +1459,7 @@ mod gzip {
                 },
             )
         });
-        let mut stream = DirectionStream::new(
+        let mut stream = crate::tests::fixture_stream(
             parser_direction(response),
             "application/json",
             encoding,
@@ -1466,7 +1468,7 @@ mod gzip {
         for chunk in chunks {
             stream.push(chunk.as_ref());
         }
-        let mut ctx = AuditRecords::default();
+        let mut ctx = FilterOutput::default();
         stream.finish(complete, &mut ctx);
         ctx.0
             .iter()

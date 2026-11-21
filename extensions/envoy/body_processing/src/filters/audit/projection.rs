@@ -170,7 +170,7 @@ impl Projection {
                 }
                 Err(status) => self.error = Some(status),
             },
-            ItemEvent::System(system) if fields.input_messages => {
+            ItemEvent::System(system) if fields.input_messages || fields.instructions => {
                 self.clipped |= clipped;
                 if encoded_len(system) <= room {
                     self.view["systemInstructions"] = system.clone()
@@ -261,6 +261,7 @@ pub(crate) fn response_view(value: &Value, fields: Fields, limit: usize) -> Valu
         let keep = match k.as_str() {
             "outputMessagesError" => false,
             "answer" => fields.answer,
+            "usage" => fields.usage,
             "truncated" => {
                 fields.output_messages || (fields.answer && value.get("answer").is_none())
             }

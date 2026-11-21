@@ -1,8 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::filters::ConfiguredFilter;
 use crate::{
-    filters::audit::{AttributeSources, Audit, Direction, Directions},
+    filters::audit::{Audit, Direction, Directions},
     parser::Format,
 };
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
@@ -92,7 +93,6 @@ enum FilterConfig {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct AuditConfig {
     max_size: Option<LogSize>,
-    #[serde(default)]
     format: AuditFormat,
     request: Option<DirectionConfig>,
     response: Option<DirectionConfig>,
@@ -101,8 +101,7 @@ struct AuditConfig {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuditFormat {
-    #[serde(default)]
-    attributes: BTreeMap<String, String>,
+    json: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -157,16 +156,13 @@ enum Protocol {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DirectionConfig {
-    #[serde(default)]
-    include: Vec<String>,
     max_size: Option<LogSize>,
     max_capture_bytes: Option<usize>,
     max_content_bytes: Option<usize>,
 }
 
 impl DirectionConfig {
-    fn resolve(self, request: bool, default_limit: usize) -> Result<Direction, String> {
-        let fields = crate::filters::audit::included_fields(&self.include, request)?;
+    fn resolve(self, default_limit: usize) -> Result<Direction, String> {
         let limit = self.max_size.map_or(default_limit, |s| s.0);
         if [self.max_capture_bytes, self.max_content_bytes]
             .into_iter()
@@ -177,7 +173,7 @@ impl DirectionConfig {
         }
         Ok(Direction {
             format: Format::UnknownProtocol,
-            fields,
+            fields: Default::default(),
             max_log_bytes: limit,
             max_capture_bytes: self.max_capture_bytes,
             max_content_bytes: self.max_content_bytes,
@@ -195,8 +191,8 @@ impl Directions {
             return Err("audit requires a request or response direction".into());
         }
         Ok(Self {
-            request: request.map(|v| v.resolve(true, limit)).transpose()?,
-            response: response.map(|v| v.resolve(false, limit)).transpose()?,
+            request: request.map(|v| v.resolve(limit)).transpose()?,
+            response: response.map(|v| v.resolve(limit)).transpose()?,
         })
     }
 }
@@ -205,7 +201,7 @@ pub struct FilterChain {
     pub name: std::sync::Arc<str>,
     matcher: Conditions,
     parser: ParserConfig,
-    pub audits: Vec<Audit>,
+    pub filters: Vec<ConfiguredFilter>,
 }
 
 impl FilterChain {
@@ -350,23 +346,23 @@ impl Settings {
                     "filterChains[{i}].filters requires at least one filter"
                 ));
             }
-            let mut audits = Vec::with_capacity(chain.filters.len());
+            let mut filters = Vec::with_capacity(chain.filters.len());
             for (j, filter) in chain.filters.into_iter().enumerate() {
                 let FilterConfig::Audit(audit) = filter;
                 let audit_limit = audit.max_size.map_or(DEFAULT_MAX_LOG_BYTES, |s| s.0);
                 let location = || format!("filterChains[{i}].filters[{j}].audit");
-                audits.push(Audit {
-                    attributes: AttributeSources::compile(audit.format.attributes)
+                let directions = Directions::resolve(audit.request, audit.response, audit_limit)
+                    .map_err(|e| format!("{}: {e}", location()))?;
+                filters.push(ConfiguredFilter::Audit(
+                    Audit::compile(audit.format.json, directions)
                         .map_err(|e| format!("{}: {e}", location()))?,
-                    directions: Directions::resolve(audit.request, audit.response, audit_limit)
-                        .map_err(|e| format!("{}: {e}", location()))?,
-                });
+                ));
             }
             chains.push(FilterChain {
                 name: chain.name.into(),
                 matcher: c,
                 parser: chain.parser,
-                audits,
+                filters,
             });
         }
         Ok(Self { chains })
@@ -422,11 +418,11 @@ mod tests {
             ("openai-responses", "/invoke", Format::OpenaiResponses),
         ] {
             let cfg = json!({"filterChains":[{"name":"model",
-                "parser":{"llm":{"protocol":protocol}}, "filters":[{"audit":{"response":{}}}]}]});
+                "parser":{"llm":{"protocol":protocol}}, "filters":[{"audit":{"format":{"json":{}},"response":{}}}]}]});
             let settings = Settings::parse(cfg.to_string().as_bytes()).unwrap();
             let chain = &settings.chains[0];
             assert!(chain.format(match_path(path)) == format);
-            let audit = &chain.audits[0];
+            let ConfiguredFilter::Audit(audit) = &chain.filters[0];
             assert!(audit.directions.request.is_none());
             assert_eq!(audit.directions.response.unwrap().max_log_bytes, 8192);
         }
@@ -435,27 +431,26 @@ mod tests {
     #[test]
     fn llm_selectors_are_qualified_and_directional() {
         use serde_json::json;
-        let mut audit = json!({
-            "request": {"include": ["llm.messages", "llm.question", "llm.toolDefinitions", "llm.toolCallRefs"]},
-            "response": {"include": ["llm.messages", "llm.answer", "llm.toolCallRefs"]}
+        let audit = json!({
+            "request": {}, "response": {}, "format":{"json":{
+                "msgs":"%EVENT(llm.messages)%","ask":"%EVENT(llm.question)%","reply":"%EVENT(llm.answer)%",
+                "tools":"%EVENT(llm.toolDefinitions)%","calls":"%EVENT(llm.toolCallRefs)%"
+            }}
         });
         let parse = |audit: &serde_json::Value| {
             let config = json!({"filterChains": [{"name": "models", "parser": {"llm": {}}, "filters": [{"audit": audit}]}]});
             Settings::parse(config.to_string().as_bytes())
         };
         let settings = parse(&audit).unwrap();
-        let resolved = &settings.chains[0].audits[0];
+        let ConfiguredFilter::Audit(resolved) = &settings.chains[0].filters[0];
         let req = resolved.directions.request.unwrap().fields;
         let res = resolved.directions.response.unwrap().fields;
         assert!(req.input_messages && req.question && req.tools && req.tool_call_refs);
         assert!(res.output_messages && res.answer && res.tool_call_refs);
         for invalid in ["answer", "http.answer", "llm.question"] {
-            audit["response"]["include"][1] = json!(invalid);
+            let audit = json!({"response":{}, "format":{"json":{"selected":format!("%EVENT({invalid})%")}}});
             let error = parse(&audit).err().unwrap();
-            assert!(
-                error.contains("response.include[1]") && error.contains(invalid),
-                "{error}"
-            );
+            assert!(error.contains(invalid), "{error}");
         }
     }
 
@@ -473,9 +468,9 @@ mod tests {
             (json!("1Mi"), 1_048_576),
         ] {
             let cfg = json!({"filterChains":[{"name":"test","parser":{"llm":{}},
-                "filters":[{"audit":{"maxSize":size,"request":{},"response":{"maxSize":"3KB"}}}]}]});
+                "filters":[{"audit":{"format":{"json":{}},"maxSize":size,"request":{},"response":{"maxSize":"3KB"}}}]}]});
             let settings = Settings::parse(cfg.to_string().as_bytes()).unwrap();
-            let audit = &settings.chains[0].audits[0];
+            let ConfiguredFilter::Audit(audit) = &settings.chains[0].filters[0];
             let dirs = audit.directions;
             assert_eq!(dirs.request.unwrap().max_log_bytes, bytes);
             assert_eq!(dirs.response.unwrap().max_log_bytes, 3000);
@@ -497,7 +492,7 @@ mod tests {
         use serde_json::json;
         let resolve = |llm| {
             let config = json!({"filterChains":[{"name":"models","parser":{"llm":llm},
-                "filters":[{"audit":{"request":{"maxSize":"2KiB"}}}]}]});
+                "filters":[{"audit":{"format":{"json":{}},"request":{"maxSize":"2KiB"}}}]}]});
             Settings::parse(config.to_string().as_bytes())
                 .map(|s| s.chains[0].request_parser().max_item_size)
         };
@@ -528,13 +523,17 @@ mod tests {
                 "name": "models",
                 "parser": {"llm": {}},
                 "filters": [
-                    {"audit": {"maxSize": "4KiB", "request": {"maxSize": "16KiB"}, "response": {}}},
-                    {"audit": {"request": {}}}
+                    {"audit": {"format":{"json":{}}, "maxSize": "4KiB", "request": {"maxSize": "16KiB"}, "response": {}}},
+                    {"audit": {"format":{"json":{}}, "request": {}}}
                 ]
             }]
         });
         let settings = Settings::parse(config.to_string().as_bytes()).unwrap();
-        let [first, second] = &settings.chains[0].audits[..] else {
+        let [
+            ConfiguredFilter::Audit(first),
+            ConfiguredFilter::Audit(second),
+        ] = &settings.chains[0].filters[..]
+        else {
             panic!("expected two audits")
         };
         assert_eq!(first.directions.request.unwrap().max_log_bytes, 16384);
