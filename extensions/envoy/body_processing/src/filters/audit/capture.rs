@@ -7,7 +7,7 @@ use super::{
 };
 use crate::AuditRecords;
 use crate::parser::body::{Content, Decoded, HttpCapture, ParsedBody};
-use crate::parser::request::Event;
+use crate::parser::request::ItemEvent;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -133,7 +133,7 @@ impl Capture {
             encoding,
         )
     }
-    pub(crate) fn observe(&mut self, event: &Event, clipped: bool, size: usize) {
+    pub(crate) fn observe(&mut self, event: &ItemEvent, clipped: bool, size: usize) {
         if self
             .settings
             .max_capture_bytes

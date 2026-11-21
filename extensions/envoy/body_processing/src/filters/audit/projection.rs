@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::parser::{encoded_len, llm::Fields, request::Event};
+use crate::parser::{encoded_len, llm::Fields, request::ItemEvent};
 use serde_json::{Value, json};
 
 #[derive(Default)]
@@ -54,14 +54,14 @@ impl Definitions {
 impl Projection {
     pub(crate) fn observe(
         &mut self,
-        event: &Event,
+        event: &ItemEvent,
         clipped: bool,
         fields: Fields,
         room: usize,
         log_limit: usize,
     ) {
         match event {
-            Event::BeginMessages => {
+            ItemEvent::BeginMessages => {
                 self.messages_full = false;
                 self.messages_size = 0;
                 self.refs_size = 0;
@@ -76,8 +76,8 @@ impl Projection {
                     self.view["inputMessages"] = json!([]);
                 }
             }
-            Event::NullTools if fields.tools => self.tools.start(Value::Null),
-            Event::BeginTools { legacy } if fields.tools => {
+            ItemEvent::NullTools if fields.tools => self.tools.start(Value::Null),
+            ItemEvent::BeginTools { legacy } if fields.tools => {
                 let group = if *legacy {
                     &mut self.functions
                 } else {
@@ -85,7 +85,7 @@ impl Projection {
                 };
                 group.start(json!([]));
             }
-            Event::Message {
+            ItemEvent::Message {
                 message,
                 question,
                 references,
@@ -137,7 +137,7 @@ impl Projection {
                     }
                 }
             }
-            Event::OmittedMessage(text) => {
+            ItemEvent::OmittedMessage(text) => {
                 self.clipped |= fields.input_messages || fields.question || fields.tool_call_refs;
                 if fields.question
                     && let Some(view) = self.view.as_object_mut()
@@ -157,8 +157,8 @@ impl Projection {
                     }
                 }
             }
-            Event::OmittedTool => self.clipped |= fields.tools,
-            Event::Tool { definition, legacy } if fields.tools => match definition {
+            ItemEvent::OmittedTool => self.clipped |= fields.tools,
+            ItemEvent::Tool { definition, legacy } if fields.tools => match definition {
                 Ok(tool) => {
                     let group = if *legacy {
                         &mut self.functions
@@ -170,7 +170,7 @@ impl Projection {
                 }
                 Err(status) => self.error = Some(status),
             },
-            Event::System(system) if fields.input_messages => {
+            ItemEvent::System(system) if fields.input_messages => {
                 self.clipped |= clipped;
                 if encoded_len(system) <= room {
                     self.view["systemInstructions"] = system.clone()

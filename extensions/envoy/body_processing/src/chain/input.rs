@@ -11,7 +11,7 @@ use crate::{
         body::HttpCapture,
         json_capture::JsonCapture,
         llm::{Fields, sse, stream},
-        request::Request,
+        request::{ItemEvent, Request, RequestEvents},
     },
 };
 use serde_json::Value;
@@ -89,14 +89,29 @@ struct Group {
     event_size: Option<usize>,
 }
 
+struct AuditSubscribers<'a> {
+    audits: &'a mut [Capture],
+    size: usize,
+}
+
+impl RequestEvents for AuditSubscribers<'_> {
+    fn item(&mut self, item: ItemEvent, clipped: bool) {
+        for audit in &mut *self.audits {
+            audit.observe(&item, clipped, self.size);
+        }
+    }
+}
+
 impl Group {
     fn push(&mut self, bytes: &[u8], size: usize) {
         let result = match &mut self.input {
-            Input::Request(reader) => reader.push(bytes, |event, clipped| {
-                for audit in &mut self.subscribers {
-                    audit.observe(&event, clipped, size);
-                }
-            }),
+            Input::Request(reader) => reader.push(
+                bytes,
+                &mut AuditSubscribers {
+                    audits: &mut self.subscribers,
+                    size,
+                },
+            ),
             Input::Response(reader) => {
                 reader.push(bytes, self.format.protocol().unwrap(), true, Fields::ALL);
                 Ok(())
