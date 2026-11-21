@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::chain::DirectionStream;
+use crate::chain::{DirectionStream, ParserDirection};
 use crate::filters::audit::capture::Capture;
 use crate::{
     config::Settings,
@@ -11,6 +11,14 @@ use crate::{
 use serde_json::{Value, json};
 
 use crate::AuditRecords;
+
+fn parser_direction(response: bool) -> ParserDirection {
+    if response {
+        ParserDirection::Response
+    } else {
+        ParserDirection::Request(Default::default())
+    }
+}
 
 fn encoded(stream: DirectionStream, complete: bool) -> Vec<u8> {
     let mut ctx = AuditRecords::default();
@@ -46,7 +54,7 @@ fn configured_record(
     }
     let limit = config.max_log_bytes;
     let mut c = DirectionStream::new(
-        dir == "response",
+        parser_direction(dir == "response"),
         media,
         "",
         vec![Capture::start(
@@ -507,7 +515,7 @@ fn explicit_document_decoders_validate_media_encoding_and_limits() {
             serde_json::from_value(json!({"format":format,"maxCaptureBytes":4,"maxSize":1024}))
                 .unwrap();
         let mut capture = DirectionStream::new(
-            false,
+            ParserDirection::Request(Default::default()),
             media,
             encoding,
             vec![Capture::start(
@@ -625,7 +633,7 @@ fn genai_uses_native_conversation_and_obeys_whole_line_limit() {
         .insert("oversize".into(), "\n".repeat(700).into());
     for conversation in [json!("native"), json!({"id":"native"}), Value::Null] {
         let mut c = DirectionStream::new(
-            false,
+            ParserDirection::Request(Default::default()),
             "application/json",
             "",
             vec![Capture::start(
@@ -675,7 +683,7 @@ fn genai_record(
         serde_json::from_value(json!({"maxSize":8192,"fields":fields})).unwrap();
     settings.format = Format::from_path(path);
     let mut c = DirectionStream::new(
-        direction == "response",
+        parser_direction(direction == "response"),
         media,
         "",
         vec![Capture::start(
@@ -1098,7 +1106,7 @@ fn oversized_tool_summary_keeps_independent_response_metadata() {
     )
     .unwrap();
     let mut c = DirectionStream::new(
-        true,
+        ParserDirection::Response,
         "application/json",
         "",
         vec![Capture::start(
@@ -1148,7 +1156,8 @@ fn filters_share_input_and_keep_independent_audit_budgets() {
             )
         })
         .collect();
-    let mut stream = DirectionStream::new(true, "text/event-stream", "", captures);
+    let mut stream =
+        DirectionStream::new(ParserDirection::Response, "text/event-stream", "", captures);
     for chunk in input.as_bytes().chunks(7) {
         stream.push(chunk);
     }
@@ -1192,7 +1201,8 @@ fn streaming_answer_survives_another_audits_oversized_tool_arguments() {
                 },
             )
         });
-    let mut stream = DirectionStream::new(true, "text/event-stream", "", captures);
+    let mut stream =
+        DirectionStream::new(ParserDirection::Response, "text/event-stream", "", captures);
     let delta = json!({"model":"m","choices":[{"index":0,"delta":{
         "tool_calls":[{"index":0,"function":{"arguments":"x".repeat(48<<10)}}]}}]});
     let event = format!("data: {delta}\n\n");
@@ -1267,7 +1277,7 @@ fn mixed_consumers_match_their_standalone_records_in_either_order() {
                     },
                 )
             });
-            let mut stream = DirectionStream::new(true, media, "", stages);
+            let mut stream = DirectionStream::new(ParserDirection::Response, media, "", stages);
             for chunk in body.as_bytes().chunks(7) {
                 stream.push(chunk);
             }
@@ -1447,7 +1457,12 @@ mod gzip {
                 },
             )
         });
-        let mut stream = DirectionStream::new(response, "application/json", encoding, captures);
+        let mut stream = DirectionStream::new(
+            parser_direction(response),
+            "application/json",
+            encoding,
+            captures,
+        );
         for chunk in chunks {
             stream.push(chunk.as_ref());
         }

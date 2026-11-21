@@ -7,10 +7,8 @@ use super::{
 };
 use serde_json::{Value, json};
 
-// An individual semantic item is bounded independently of the number of audits.
-// Large arrays are delivered item by item. Quoted media inside an oversized
-// item uses the same streaming compaction as other JSON documents.
-pub(crate) const ITEM_LIMIT: usize = 1 << 20;
+// Root keys and metadata keep a separate budget from message and tool items.
+const ROOT_FIELD_LIMIT: usize = 1 << 20;
 
 pub(crate) enum Event {
     BeginMessages,
@@ -53,12 +51,12 @@ struct Fragment {
     started: bool,
 }
 impl Fragment {
-    fn new(message: bool) -> Self {
+    fn new(message: bool, limit: usize) -> Self {
         Self {
             capture: if message {
-                JsonCapture::message_fragment(ITEM_LIMIT)
+                JsonCapture::message_fragment(limit)
             } else {
-                JsonCapture::new(ITEM_LIMIT)
+                JsonCapture::new(limit)
             },
             depth: 0,
             quoted: false,
@@ -129,14 +127,10 @@ impl Fragment {
             .push(&input[..i], "json", false, Fields::default());
         Ok((i, done))
     }
-
-    fn finish(self) -> Result<(bool, Value)> {
-        self.capture
-            .finish("json", false, Fields::default(), ITEM_LIMIT)
-    }
 }
 
 pub(crate) struct Request {
+    max_item_size: usize,
     format: &'static str,
     state: State,
     key: String,
@@ -145,9 +139,10 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    pub(crate) fn new(format: &'static str) -> Self {
+    pub(crate) fn new(format: &'static str, max_item_size: usize) -> Self {
         Self {
             format,
+            max_item_size,
             state: State::Root,
             key: String::new(),
             fragment: None,
@@ -167,7 +162,7 @@ impl Request {
                 if done {
                     let fragment = self.fragment.take().unwrap();
                     let exhausted = fragment.capture.exhausted();
-                    let (clipped, mut value) = fragment.finish()?;
+                    let (clipped, mut value) = fragment.capture.finish_fragment()?;
                     match self.state {
                         State::NonObject => return Err("invalid_content"),
                         State::Key(_) => {
@@ -210,13 +205,13 @@ impl Request {
                 (State::Root, b'{') => State::Key(true),
                 (State::Root, _) => {
                     self.state = State::NonObject;
-                    self.fragment = Some(Fragment::new(false));
+                    self.fragment = Some(Fragment::new(false, ROOT_FIELD_LIMIT));
                     continue;
                 }
 
                 (State::Key(true) | State::AfterValue, b'}') => State::Done,
                 (State::Key(_), b'"') => {
-                    self.fragment = Some(Fragment::new(false));
+                    self.fragment = Some(Fragment::new(false, ROOT_FIELD_LIMIT));
                     continue;
                 }
                 (State::Colon, b':') => State::Value,
@@ -236,7 +231,17 @@ impl Request {
                 (State::Value | State::Item(_), _) if !matches!(ch, b',' | b'}' | b']') => {
                     let message = matches!(self.state, State::Item(_))
                         && matches!(self.key.as_str(), "messages" | "input");
-                    self.fragment = Some(Fragment::new(message));
+                    let item = matches!(self.state, State::Item(_))
+                        || matches!(
+                            (self.format, self.key.as_str()),
+                            (llm::RESPONSES, "instructions" | "input") | (llm::ANTHROPIC, "system")
+                        );
+                    let limit = if item {
+                        self.max_item_size
+                    } else {
+                        ROOT_FIELD_LIMIT
+                    };
+                    self.fragment = Some(Fragment::new(message, limit));
                     continue;
                 }
                 (State::AfterItem, b',') => State::Item(false),
@@ -281,7 +286,7 @@ impl Request {
                     llm::chat_message(&v, self.format)
                 };
                 let question = llm::user_question(&v, self.format);
-                let mut summary = ToolSummary::new(ITEM_LIMIT);
+                let mut summary = ToolSummary::new(self.max_item_size);
                 summary.request_item(self.format, 0, &v);
                 let mut references = Value::Null;
                 summary.publish(&mut references);

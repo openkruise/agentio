@@ -4,13 +4,14 @@
 use super::gzip::Gzip;
 use crate::{
     AuditRecords,
+    config::RequestParserConfig,
     filters::audit::capture::Capture,
     parser::{
         Format,
         body::HttpCapture,
         json_capture::JsonCapture,
         llm::{Fields, sse, stream},
-        request::{ITEM_LIMIT, Request},
+        request::Request,
     },
 };
 use serde_json::Value;
@@ -21,6 +22,14 @@ pub struct DirectionStream {
     bytes_seen: usize,
     gzip: Option<Gzip>,
     decoded_bytes: Option<usize>,
+}
+
+const RESPONSE_LIMIT: usize = 1 << 20;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ParserDirection {
+    Request(RequestParserConfig),
+    Response,
 }
 
 enum Input {
@@ -35,7 +44,7 @@ impl Input {
     fn llm(
         format: Format,
         protocol: &'static str,
-        response: bool,
+        direction: ParserDirection,
         media: Option<&mime::Mime>,
         encoding: &str,
     ) -> Self {
@@ -48,13 +57,16 @@ impl Input {
         if media.type_() == mime::APPLICATION
             && (media.subtype() == mime::JSON || media.suffix() == Some(mime::JSON))
         {
-            return if response {
-                Self::Response(JsonCapture::new(ITEM_LIMIT))
-            } else {
-                Self::Request(Request::new(protocol))
+            return match direction {
+                ParserDirection::Response => Self::Response(JsonCapture::new(RESPONSE_LIMIT)),
+                ParserDirection::Request(config) => {
+                    Self::Request(Request::new(protocol, config.max_item_size))
+                }
             };
         }
-        if !response || media.essence_str() != "text/event-stream" {
+        if matches!(direction, ParserDirection::Request(_))
+            || media.essence_str() != "text/event-stream"
+        {
             return Self::Failed("unsupported_media_type");
         }
         if media
@@ -65,7 +77,7 @@ impl Input {
         }
         Self::Events(
             sse::Framer::new(format, 64 << 20),
-            Box::new(stream::Stream::new(protocol, ITEM_LIMIT)),
+            Box::new(stream::Stream::new(protocol, RESPONSE_LIMIT)),
         )
     }
 }
@@ -126,7 +138,7 @@ impl Group {
                 self.format.protocol().unwrap(),
                 true,
                 Fields::ALL,
-                ITEM_LIMIT,
+                RESPONSE_LIMIT,
             ),
             Input::Events(_, stream) => stream.finish(),
             Input::Failed(e) => Err(e),
@@ -154,13 +166,14 @@ impl Group {
 
 impl DirectionStream {
     pub fn new(
-        response: bool,
+        direction: ParserDirection,
         media: &str,
         encoding: &str,
         audits: impl IntoIterator<Item = Capture>,
     ) -> Self {
         let media = media.parse::<mime::Mime>().ok();
-        let gzip = !response && encoding.trim().eq_ignore_ascii_case("gzip");
+        let gzip = matches!(direction, ParserDirection::Request(_))
+            && encoding.trim().eq_ignore_ascii_case("gzip");
         let encoding = if gzip { "" } else { encoding.trim() };
         let mut groups = Vec::<Group>::new();
         for audit in audits {
@@ -172,7 +185,7 @@ impl DirectionStream {
                 continue;
             }
             let input = if let Some(protocol) = format.protocol() {
-                Input::llm(format, protocol, response, media.as_ref(), encoding)
+                Input::llm(format, protocol, direction, media.as_ref(), encoding)
             } else {
                 Input::Other(audit.http_capture(media.as_ref(), encoding))
             };
@@ -285,7 +298,12 @@ mod tests {
                     },
                 )
             });
-            let mut stream = DirectionStream::new(false, "application/json", "", audits);
+            let mut stream = DirectionStream::new(
+                ParserDirection::Request(Default::default()),
+                "application/json",
+                "",
+                audits,
+            );
             assert_eq!(stream.groups.len(), 1);
             assert!(matches!(stream.groups[0].input, Input::Request(_)));
             assert_eq!(stream.groups[0].subscribers.len(), configs.len());

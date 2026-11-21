@@ -61,12 +61,12 @@ def bootstrap(port, upstream):
              "parser": {"llm": {"protocol": "openai-responses"}},
              "filters": [{"audit": {**messages, "format": {"attributes": attributes}}},
                          {"audit": {"request": {"include": ["llm.question"], "maxSize": "1KiB"}}}]},
-            {"name": "dual", "matcher": {"paths": ["/dual"]},
-             "parser": {"llm": {"protocol": "openai-chat-completions"}},
+            *[{"name": name, "matcher": {"paths": ["/" + name]},
+             "parser": {"llm": {"protocol": "openai-chat-completions", **options}},
              "filters": [
                  {"audit": {"request": {"include": ["llm.question"], "maxSize": "2KiB"}}},
                  {"audit": {"request": {"include": ["llm.toolDefinitions"], "maxSize": "8KiB"}}},
-             ]},
+             ]} for name, options in (("dual", {}), ("dual-small", {"request": {"maxItemSize": "2KiB"}}))],
             {"name": "image", "matcher": {"hosts": ["image.test"], "filterState": [{"key": "test.empty"}]},
              "parser": {"llm": {"protocol": "openai-chat-completions"}},
              "filters": [{"audit": {"maxSize": "2KiB", "request": {"include": ["llm.messages"]}}}]},
@@ -230,10 +230,11 @@ def exercise(port):
         "tools": [{"type": "function", "function": {"name": "get_weather",
                   "parameters": {"type": "object", "description": "d" * 3000}}}],
     }).encode()
-    connection.request("POST", "/dual", dual, {"Content-Type": "application/json"})
-    response = connection.getresponse()
-    assert response.status == 200 and response.read() == dual
-    connection.close()
+    for path in ("/dual", "/dual-small"):
+        connection.request("POST", path, dual, {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == 200 and response.read() == dual
+        connection.close()
     for path, (request, stream) in STREAMS.items():
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         request_body = json.dumps(request).encode()
@@ -252,7 +253,7 @@ def exercise(port):
 
 
 def check_records(lines, json_bytes):
-    dual = []
+    dual = {"dual": [], "dual-small": []}
     extra = []
     qa_records = []
     other_lines = []
@@ -260,8 +261,8 @@ def check_records(lines, json_bytes):
     for line in lines:
         assert line.endswith(b"\n")
         record = json.loads(line)
-        if record["chain"] == "dual":
-            dual.append((record, len(line)))
+        if record["chain"] in dual:
+            dual[record["chain"]].append((record, len(line)))
             continue
         if record["path"] == "/custom":
             custom_directions.append(record["direction"])
@@ -280,13 +281,18 @@ def check_records(lines, json_bytes):
             qa_records.append(record)
         else:
             other_lines.append(line)
-    (question, question_bytes), (tools, tools_bytes) = dual
-    assert question["requestID"] == tools["requestID"] and question["bytesSeen"] == tools["bytesSeen"]
-    assert question["llm.question"] == "latest?" and "gen_ai.tool.definitions" not in question
-    assert "llm.question" not in tools and tools["captureStatus"] == "complete"
-    definition, = tools["gen_ai.tool.definitions"]
-    assert definition["name"] == "get_weather" and len(definition["parameters"]["description"]) == 3000
-    assert question_bytes <= 2048 < tools_bytes <= 8192
+    for name, records in dual.items():
+        (question, question_bytes), (tools, tools_bytes) = records
+        assert question["requestID"] == tools["requestID"] and question["bytesSeen"] == tools["bytesSeen"]
+        assert question["llm.question"] == "latest?" and "gen_ai.tool.definitions" not in question
+        assert "llm.question" not in tools and question_bytes <= 2048 and tools_bytes <= 8192
+        definition, = tools["gen_ai.tool.definitions"]
+        assert definition["name"] == "get_weather"
+        length = len(definition["parameters"]["description"])
+        if name == "dual-small":
+            assert tools["captureStatus"] == "truncated" and 0 < length < 2048
+        else:
+            assert tools["captureStatus"] == "complete" and length == 3000 and tools_bytes > 2048
     assert len(qa_records) == 2 * len(QA)
     for path, (_, _, answer) in QA.items():
         pair = [r for r in qa_records if r["path"] == path]

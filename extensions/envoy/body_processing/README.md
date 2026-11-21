@@ -29,7 +29,7 @@ bodyProcessing:
             response: {include: [llm.answer]}
     - name: custom-responses
       matcher: {hosts: [api.example.com], paths: [/internal/invoke]}
-      parser: {llm: {protocol: openai-responses}}
+      parser: {llm: {protocol: openai-responses, request: {maxItemSize: 2MiB}}}
       filters:
         - audit: {request: {include: [llm.question]}}
 ```
@@ -144,7 +144,7 @@ Each direction accepts the following settings.
 | `maxContentBytes` | LLM only. Bounds retained LLM messages, question, answer and tool definitions. With an explicit capture limit it defaults to that limit. Otherwise SSE retains up to the available log budget and documents use the clipping behavior below. On content-budget overflow the audit drops those fields. Parsing continues for metadata, usage and other audits. |
 | `maxSize` | Bounds the serialized line including its newline. A direction inherits `audit.maxSize`. The built-in limit is `8KiB` per record. Both settings accept `1KiB` through `1MiB`. |
 
-For `maxSize`, use an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. For example, `16KB` allows 16,000 bytes, while `16KiB` allows 16,384 bytes. Bare numbers and `B` denote bytes.
+For `maxSize` and `maxItemSize`, use an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. For example, `16KB` allows 16,000 bytes, while `16KiB` allows 16,384 bytes. Bare numbers and `B` denote bytes.
 
 `maxCaptureBytes` and `maxContentBytes` accept integer byte counts from 1 through 67,108,864.
 
@@ -179,7 +179,7 @@ Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared li
 
 Audits in a matched chain share one LLM parser per direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its own selected fields and enforces its own line limit. For example, a 2 KiB question audit can skip a long earlier turn while a second 8 KiB tool audit records a schema at the end of the same request. Changing their order only changes the order of the output lines. JSON response normalization and SSE framing and reconstruction are also shared.
 
-The parser bounds its working JSON representation independently of any log configuration. It frames request message and tool arrays incrementally, with a 1 MiB compaction budget per item. For JSON responses this budget applies to the document. Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection, clipping and final serialized line limit. When selected messages no longer fit, a record may contain bounded text from message parts under `llm.retainedText`. A truncated record describes the retained projection and cannot reproduce discarded bytes.
+The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxItemSize` to control the compaction budget per request item (default `1MiB`, range `1KiB` to `64MiB`). Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests. JSON responses retain their independent, fixed 1 MiB document budget. Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection, clipping and final serialized line limit. When selected messages no longer fit, a record may contain bounded text from message parts under `llm.retainedText`. A truncated record describes the retained projection and cannot reproduce discarded bytes.
 
 SSE framing accepts multiline data, comments, a leading UTF-8 BOM, and LF, CRLF or CR separators across body callbacks. HTTP EOF ends observation. A missing protocol terminator produces `incomplete_stream`. An unsupported delta produces a `partial` record with available metadata. Exceeding the retention budget produces `truncated`. Both cases continue parsing subsequent events for usage and errors. Invalid JSON, invalid UTF-8 framing and invalid protocol transitions have distinct error statuses. Each direction processes up to 64 MiB of SSE input and tracks up to 1,024 choices, blocks or items.
 

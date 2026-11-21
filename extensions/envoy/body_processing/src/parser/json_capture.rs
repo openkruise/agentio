@@ -483,6 +483,11 @@ impl JsonCapture {
         s.push(chunk);
         self.scanner = Some(Box::new(s));
     }
+    pub(super) fn finish_fragment(self) -> Result<(bool, Value), &'static str> {
+        let limit = self.limit;
+        self.finish("json", false, Fields::default(), limit)
+    }
+
     pub fn finish(
         self,
         format: &str,

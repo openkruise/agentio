@@ -29,20 +29,17 @@ enum SizeValue {
 #[serde(try_from = "SizeValue")]
 struct LogSize(usize);
 
-impl TryFrom<SizeValue> for LogSize {
-    type Error = &'static str;
-
-    fn try_from(value: SizeValue) -> Result<Self, Self::Error> {
-        const RANGE: &str = "maxSize must be between 1 KiB and 1 MiB";
-        let bytes = match value {
-            SizeValue::Bytes(n) => n,
+impl SizeValue {
+    fn bytes(self) -> Result<usize, &'static str> {
+        match self {
+            SizeValue::Bytes(n) => Ok(n),
             SizeValue::Quantity(raw) => {
                 let raw = raw.trim();
                 let end = raw.find(|c: char| !c.is_ascii_digit()).unwrap_or(raw.len());
                 let (digits, unit) = raw.split_at(end);
                 if digits.is_empty() {
                     return Err(
-                        "maxSize requires an unsigned integer, optionally followed by a size unit",
+                        "size requires an unsigned integer, optionally followed by a size unit",
                     );
                 }
                 let scale = match unit.trim_start() {
@@ -51,17 +48,25 @@ impl TryFrom<SizeValue> for LogSize {
                     "MB" => 1_000_000,
                     "Ki" | "KiB" => 1024,
                     "Mi" | "MiB" => 1024 * 1024,
-                    _ => return Err("unknown maxSize unit (use B, KB, KiB, MB or MiB)"),
+                    _ => return Err("unknown size unit (use B, KB, KiB, MB or MiB)"),
                 };
                 digits
                     .parse::<usize>()
                     .ok()
                     .and_then(|n| n.checked_mul(scale))
-                    .ok_or(RANGE)?
+                    .ok_or("byte count overflows usize")
             }
-        };
+        }
+    }
+}
+
+impl TryFrom<SizeValue> for LogSize {
+    type Error = &'static str;
+
+    fn try_from(value: SizeValue) -> Result<Self, Self::Error> {
+        let bytes = value.bytes()?;
         if !(1024..=1024 * 1024).contains(&bytes) {
-            return Err(RANGE);
+            return Err("maxSize must be between 1 KiB and 1 MiB");
         }
         Ok(Self(bytes))
     }
@@ -106,7 +111,37 @@ enum ParserConfig {
     Llm {
         #[serde(default)]
         protocol: Protocol,
+        #[serde(default)]
+        request: RequestParserConfig,
     },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RequestParserConfig {
+    #[serde(deserialize_with = "item_size")]
+    pub max_item_size: usize,
+}
+
+impl Default for RequestParserConfig {
+    fn default() -> Self {
+        Self {
+            max_item_size: 1 << 20,
+        }
+    }
+}
+
+fn item_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    use serde::de::Error;
+    let bytes = SizeValue::deserialize(d)?
+        .bytes()
+        .map_err(D::Error::custom)?;
+    if !(1024..=64 << 20).contains(&bytes) {
+        return Err(D::Error::custom(
+            "maxItemSize must be between 1 KiB and 64 MiB",
+        ));
+    }
+    Ok(bytes)
 }
 
 #[derive(Copy, Clone, Default, Deserialize)]
@@ -174,8 +209,13 @@ pub struct FilterChain {
 }
 
 impl FilterChain {
+    pub fn request_parser(&self) -> RequestParserConfig {
+        let ParserConfig::Llm { request, .. } = self.parser;
+        request
+    }
+
     pub fn format(&self, path: &str) -> Format {
-        let ParserConfig::Llm { protocol } = self.parser;
+        let ParserConfig::Llm { protocol, .. } = self.parser;
         match protocol {
             Protocol::Auto => Format::from_path(path),
             Protocol::OpenaiChatCompletions => Format::OpenaiChatCompletions,
@@ -450,6 +490,35 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<LogSize>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn request_item_size_resolves_independently_of_audit_limits() {
+        use serde_json::json;
+        let resolve = |llm| {
+            let config = json!({"filterChains":[{"name":"models","parser":{"llm":llm},
+                "filters":[{"audit":{"request":{"maxSize":"2KiB"}}}]}]});
+            Settings::parse(config.to_string().as_bytes())
+                .map(|s| s.chains[0].request_parser().max_item_size)
+        };
+        for llm in [json!({}), json!({"request":{}})] {
+            assert_eq!(resolve(llm).unwrap(), 1 << 20);
+        }
+        for (size, bytes) in [
+            (json!(1024), 1024),
+            (json!("2MB"), 2_000_000),
+            (json!("2MiB"), 2 << 20),
+            (json!("64MiB"), 64 << 20),
+        ] {
+            assert_eq!(
+                resolve(json!({"request":{"maxItemSize":size}})).unwrap(),
+                bytes
+            );
+        }
+        for size in [json!(1023), json!("65MiB"), json!("1.5MiB"), json!("4Mb/s")] {
+            assert!(resolve(json!({"request":{"maxItemSize":size}})).is_err());
+        }
+        assert!(resolve(json!({"response":{"maxItemSize":"2MiB"}})).is_err());
     }
 
     #[test]

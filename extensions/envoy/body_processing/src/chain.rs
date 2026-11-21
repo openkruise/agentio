@@ -10,7 +10,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 
 mod gzip;
 mod input;
-pub(crate) use input::DirectionStream;
+pub(crate) use input::{DirectionStream, ParserDirection};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Side {
@@ -71,7 +71,12 @@ impl ActiveChain {
             requests.extend(request);
             self.pending.extend(response);
         }
-        self.request = DirectionStream::new(false, &media, &encoding, requests);
+        self.request = DirectionStream::new(
+            ParserDirection::Request(chain.request_parser()),
+            &media,
+            &encoding,
+            requests,
+        );
     }
 
     pub(crate) fn start_response(&mut self, envoy: &impl EnvoyHttpFilter) {
@@ -80,7 +85,7 @@ impl ActiveChain {
             let media = header(envoy, false, "content-type");
             let encoding = header(envoy, false, "content-encoding");
             self.response = DirectionStream::new(
-                true,
+                ParserDirection::Response,
                 &media,
                 &encoding,
                 contexts.into_iter().map(ResponseAudit::start),
