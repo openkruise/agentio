@@ -556,6 +556,7 @@ func endpointServiceEntryConfig(
 		return b.pack(typed)
 	}
 
+	ecds := bodyProcessingFile(t)
 	for _, l := range listeners {
 		l.ListenerFilters = slices.DeleteFunc(l.ListenerFilters, func(f *listener.ListenerFilter) bool {
 			return proto.Equal(f, inspectionDeadlineFilter)
@@ -589,6 +590,7 @@ func endpointServiceEntryConfig(
 					if err := f.GetTypedConfig().UnmarshalTo(manager); err != nil {
 						t.Fatal(err)
 					}
+					setBodyProcessingSource(manager, ecds)
 
 					if rds := manager.GetRds(); rds != nil {
 						manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
@@ -619,6 +621,7 @@ func endpointServiceEntryConfig(
 		t.Fatal(b.err)
 	}
 	data, err := protojson.Marshal(&bootstrap.Bootstrap{
+		Node: &core.Node{Id: "service-entry", Cluster: "gateway-test"},
 		BootstrapExtensions: []*core.TypedExtensionConfig{
 			typedCoreExtension("envoy.bootstrap.internal_listener", b.pack(&internal.InternalListener{})),
 		},

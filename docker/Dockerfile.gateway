@@ -21,7 +21,14 @@ COPY --from=connection-builder /src/.envoy-sdk/ ./.envoy-sdk/
 COPY extensions/envoy/network-limits/ ./
 RUN bash build.sh --build-only
 
+FROM connection-builder AS body-processing-builder
+WORKDIR /body-processing
+COPY --from=connection-builder /src/.envoy-sdk/ ./.envoy-sdk/
+COPY extensions/envoy/body_processing/ ./
+RUN bash build.sh --build-only
+
 FROM metrics-artifact AS gateway-test-artifacts
+COPY --from=body-processing-builder /body-processing/target/release/libenvoy_agentio_body_processing.so /libenvoy_agentio_body_processing.so
 COPY --from=connection-builder /src/target/release/libenvoy_agentio_connection_policy.so /libenvoy_agentio_connection_policy.so
 COPY --from=network-limits-builder /network-limits/target/release/libenvoy_agentio_network_limits.so /libenvoy_agentio_network_limits.so
 
@@ -45,6 +52,7 @@ COPY --from=builder /out/gateway-agent /usr/local/bin/gateway-agent
 COPY --from=metrics-builder /src/target/release/libagentio_gateway_metrics.so /usr/local/lib/libagentio_gateway_metrics.so
 COPY --from=connection-builder /src/target/release/libenvoy_agentio_connection_policy.so /usr/local/lib/libenvoy_agentio_connection_policy.so
 COPY --from=network-limits-builder /network-limits/target/release/libenvoy_agentio_network_limits.so /usr/local/lib/libenvoy_agentio_network_limits.so
+COPY --from=body-processing-builder /body-processing/target/release/libenvoy_agentio_body_processing.so /usr/local/lib/libenvoy_agentio_body_processing.so
 COPY LICENSE NOTICE /usr/share/doc/agentio-gateway/
 USER 1337:1337
 ENTRYPOINT ["/usr/local/bin/gateway-agent"]

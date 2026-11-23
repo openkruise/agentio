@@ -15,16 +15,61 @@
 package networking
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	configv1 "github.com/openkruise/agentio/api/config/v1"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+// Standalone Envoy fixtures read xDS resources from disk. Give all their HCMs
+// the same generated Body Processing extension, including across LDS updates.
+func bodyProcessingFile(t *testing.T) *corev3.ConfigSource {
+	t.Helper()
+	b := &resourceBuilder{}
+	extension, err := b.bodyProcessingExtension(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := anypb.New(extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := protojson.Marshal(&discoveryv3.DiscoveryResponse{
+		TypeUrl: model.ExtensionConfigurationType, VersionInfo: "1", Resources: []*anypb.Any{resource},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "body-processing.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return &corev3.ConfigSource{
+		ResourceApiVersion: corev3.ApiVersion_V3,
+		ConfigSourceSpecifier: &corev3.ConfigSource_PathConfigSource{
+			PathConfigSource: &corev3.PathConfigSource{Path: path},
+		},
+	}
+}
+
+func setBodyProcessingSource(manager *hcmv3.HttpConnectionManager, source *corev3.ConfigSource) {
+	for _, filter := range manager.HttpFilters {
+		if filter.Name == bodyProcessingName {
+			filter.GetConfigDiscovery().ConfigSource = source
+		}
+	}
+}
 
 func testGateway(config *configv1.EgressGateway) model.Gateway {
 	if config == nil {

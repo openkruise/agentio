@@ -457,6 +457,7 @@ func startTLSEnvoy(t *testing.T, binary string, certificate pki.IssuedCertificat
 		}
 	}
 	manager := findHCM(t, forward)
+	setBodyProcessingSource(manager, bodyProcessingFile(t))
 	manager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{
 		RouteConfig: b.buildForwardRoute(TLSConnectOriginate, config.gateway),
 	}
@@ -525,6 +526,7 @@ func startTLSEnvoy(t *testing.T, binary string, certificate pki.IssuedCertificat
 	outer.HttpFilters = append(outer.HttpFilters, b.connectPolicyFilters()...)
 	outer.HttpFilters = append(outer.HttpFilters, httpFilter("envoy.filters.http.router", b.pack(&router.Router{})))
 	bootstrapConfig := &bootstrap.Bootstrap{
+		Node: &core.Node{Id: "post-tls", Cluster: "gateway-test"},
 		BootstrapExtensions: []*core.TypedExtensionConfig{
 			{Name: "envoy.bootstrap.internal_listener", TypedConfig: b.pack(&internal.InternalListener{})},
 		},

@@ -20,11 +20,12 @@ if "$build_metrics"; then
   agent_mount=(--mount "type=bind,src=$artifacts/gateway-agent,dst=/usr/local/bin/gateway-agent,readonly")
   docker build --platform linux/amd64 -f docker/Dockerfile.gateway --target gateway-test-artifacts \
     --output "type=local,dest=$artifacts" .
-  chmod 755 "$artifacts" "$artifacts/libagentio_gateway_metrics.so" "$artifacts/libenvoy_agentio_connection_policy.so" "$artifacts/libenvoy_agentio_network_limits.so"
+  chmod 755 "$artifacts" "$artifacts"/*.so
   module_mount=(
     --mount "type=bind,src=$artifacts/libagentio_gateway_metrics.so,dst=/usr/local/lib/libagentio_gateway_metrics.so,readonly"
     --mount "type=bind,src=$artifacts/libenvoy_agentio_connection_policy.so,dst=/usr/local/lib/libenvoy_agentio_connection_policy.so,readonly"
     --mount "type=bind,src=$artifacts/libenvoy_agentio_network_limits.so,dst=/usr/local/lib/libenvoy_agentio_network_limits.so,readonly"
+    --mount "type=bind,src=$artifacts/libenvoy_agentio_body_processing.so,dst=/usr/local/lib/libenvoy_agentio_body_processing.so,readonly"
   )
 fi
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$artifacts/gatewayagent.test" ./pkg/gatewayagent

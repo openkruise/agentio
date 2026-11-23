@@ -24,6 +24,12 @@
     "lds_config": {"ads": {}, "resource_api_version": "V3", "initial_fetch_timeout": "0s"},
     "cds_config": {"ads": {}, "resource_api_version": "V3", "initial_fetch_timeout": "0s"},
     "ads_config": {"api_type": "DELTA_GRPC", "transport_api_version": "V3", "set_node_on_first_message_only": true,
+      "config_validators": [{"name": "envoy.config.validators.dynamic_modules", "typed_config": {
+        "@type": "type.googleapis.com/envoy.extensions.config.validators.dynamic_modules.v3.DynamicModuleConfigValidator",
+        "dynamic_module_config": {"name": "envoy_agentio_body_processing", "do_not_close": true,
+          "module": {"local": {"filename": "/usr/local/lib/libenvoy_agentio_body_processing.so"}}},
+        "extension_name": "agentio.body_processing", "type_urls": ["type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig"]
+      }}],
       "grpc_services": [{"envoy_grpc": {"cluster_name": "xds-grpc"}}]}
   },
   "static_resources": {
