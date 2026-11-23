@@ -1,0 +1,66 @@
+{
+  "format": "openai-responses",
+  "model": "gpt-4o",
+  "inputMessages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Compare these documents and image."
+        },
+        {
+          "type": "image",
+          "source": "base64",
+          "mediaType": "image/png",
+          "data": "iVBORw0KGgo=",
+          "detail": "auto"
+        },
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "type": "input_file",
+            "file_data": "data:application/pdf;base64,JVBERi0=",
+            "filename": "report.pdf"
+          }
+        },
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "type": "input_file",
+            "file_url": "data:text/csv;base64,YSxiLGM=",
+            "filename": "data.csv"
+          }
+        },
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "type": "input_file",
+            "file_data": "data:application/octet-stream;base64,dGVzdA==",
+            "filename": "notes.md"
+          }
+        },
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "type": "input_file",
+            "file_data": "data:application/pdf;base64,JVBERi1=",
+            "filename": "report.pdf"
+          }
+        },
+        {
+          "type": "provider_content",
+          "format": "openai-responses",
+          "data": {
+            "type": "input_file",
+            "file_data": "data:text/plain;base64,dGVzdA=="
+          }
+        }
+      ]
+    }
+  ]
+}

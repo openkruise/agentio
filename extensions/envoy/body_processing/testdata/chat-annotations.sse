@@ -1,0 +1,8 @@
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"Check out"}}]}
+
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{"content":" httpbin.org"}}]}
+
+data: {"id":"test","object":"chat.completion.chunk","created":123,"model":"test","choices":[{"index":0,"delta":{"annotations":[{"type":"url_citation","url_citation":{"end_index":21,"start_index":10,"title":"httpbin.org","url":"https://httpbin.org"}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+

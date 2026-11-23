@@ -1,0 +1,10 @@
+data: {"model":"test-model","choices":[{"index":1,"delta":{"content":"alternative"},"finish_reason":"stop"},{"index":0,"delta":{"role":"assistant","content":"你"},"finish_reason":null}]}
+
+data: {"model":"test-model","choices":[{"index":0,"delta":{"content":"好","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"city\":"}},{"index":1,"id":"call_2","type":"function","function":{"name":"clock","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"北京\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: {"model":"test-model","choices":[],"usage":{"total_tokens":8}}
+
+data: [DONE]
+
