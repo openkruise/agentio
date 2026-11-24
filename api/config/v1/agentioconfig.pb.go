@@ -231,6 +231,25 @@ type AgentioConfig struct {
 	// Rules for processing HTTP request and response bodies on native egress gateways.
 	// Body processing is off by default. Set filterChains to [] to keep it enabled
 	// with no active rules.
+	// The gateway runs the first matching chain. Each audit in that chain writes
+	// one JSON record when the HTTP stream ends.
+	//
+	// For calls to /v1/responses on llm.example.com, this example logs the
+	// requested model and the total token count reported in the response.
+	//
+	//	bodyProcessing:
+	//	  filterChains:
+	//	  - name: model-usage
+	//	    matcher:
+	//	      hosts: [llm.example.com]
+	//	      paths: [/v1/responses]
+	//	    parser: {llm: {}}
+	//	    filters:
+	//	    - audit:
+	//	        format:
+	//	          json:
+	//	            model: "%EVENT(llm.request.model)%"
+	//	            tokens: "%EVENT(llm.usage.totalTokens)%"
 	BodyProcessing *_struct.Struct `protobuf:"bytes,10,opt,name=body_processing,json=bodyProcessing,proto3" json:"body_processing,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
