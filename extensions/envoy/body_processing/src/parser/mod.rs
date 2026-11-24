@@ -62,21 +62,12 @@ impl Format {
     }
 }
 
-// Count the JSON bytes charged by EPE's encoding/json, including HTML escaping,
-// without allocating another serialized copy of a retained message.
+// Measure compact JSON without allocating another copy of the retained value.
 pub(crate) fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
     struct Counter(usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0 += bytes.len();
-            self.0 += 5 * bytes
-                .iter()
-                .filter(|b| matches!(b, b'<' | b'>' | b'&'))
-                .count();
-            self.0 += 3 * bytes
-                .windows(3)
-                .filter(|w| matches!(*w, [0xe2, 0x80, 0xa8 | 0xa9]))
-                .count();
             Ok(bytes.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {

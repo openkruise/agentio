@@ -820,6 +820,36 @@ fn anthropic_records_server_tools_and_skips_large_image_data() {
 }
 
 #[test]
+fn late_anthropic_usage_recognizes_fully_escaped_keys() {
+    use std::fmt::Write;
+
+    let key = "cache_creation_input_tokens";
+    let mut escaped = String::new();
+    for byte in key.bytes() {
+        write!(escaped, "\\u{byte:04x}").unwrap();
+    }
+    // Fill the document with structural bytes so late usage is read by the scanner.
+    let padding = "{},".repeat((1 << 20) / 3);
+    for name in [key, escaped.as_str()] {
+        let body = format!(
+            r#"{{"model":"m","padding":[{padding}null],"content":[],"usage":{{"input_tokens":3,"output_tokens":2,"{name}":7}}}}"#
+        );
+        let row = configured_record(
+            "response",
+            "/v1/messages",
+            "application/json",
+            body.as_bytes().chunks(4096),
+            &json!({"fieldBytes":4096,"fields":{}}),
+            true,
+        );
+        assert_eq!(row["captureStatus"], "partial");
+        assert_eq!(row["gen_ai.usage.cache_write.input_tokens"], 7);
+        assert_eq!(row["gen_ai.usage.input_tokens"], 10);
+        assert_eq!(row["agentio.usage.total_tokens"], 12);
+    }
+}
+
+#[test]
 fn summary_only_requests_preserve_call_result_link_and_explicit_parameters() {
     for (path, mut body) in [
         (

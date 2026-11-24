@@ -255,6 +255,32 @@ fn responses_nonempty_terminal_output_replaces_even_an_oversized_item() {
 }
 
 #[test]
+fn responses_terminal_messages_fit_their_compact_json_size() {
+    let text = "<p>&水</p>\u{2028}\u{2029}".repeat(32 * 1024);
+    let output = json!([{"id":"m","type":"message","role":"assistant","content":[
+        {"type":"output_text","text":text}]}]);
+    let size = serde_json::to_vec(&output).unwrap().len();
+    assert_eq!(crate::parser::encoded_len(&output), size);
+    assert!(size < 1 << 20);
+    let event = json!({"type":"response.completed","response":{
+        "id":"r","model":"m","status":"completed","output":output}});
+    let wire = format!("event: response.completed\ndata: {event}\n\n");
+    let row = configured_record(
+        "response",
+        "/v1/responses",
+        "text/event-stream",
+        wire.as_bytes().chunks(16384),
+        &json!({"fieldBytes":1 << 20,"fields":{"outputMessages":true}}),
+        true,
+    );
+    assert_eq!(row["captureStatus"], "complete");
+    assert_eq!(
+        row["gen_ai.output.messages"][0]["parts"][0]["content"],
+        text
+    );
+}
+
+#[test]
 fn interrupted_sse_preserves_framed_text_and_omits_unseen_usage() {
     let chat = concat!(
         "data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"重试\"}}]}\n\n",
@@ -285,9 +311,20 @@ fn interrupted_sse_preserves_framed_text_and_omits_unseen_usage() {
         assert_eq!(r["llm.answer"], text, "{path}");
         if path == "/v1/chat/completions" {
             assert_eq!(r["gen_ai.response.model"], "m");
-            assert!(r.get("gen_ai.usage.total_tokens").is_none());
+            assert!(r.get("agentio.usage.total_tokens").is_none());
         }
     }
+    let framed = format!("{chat}\n\n");
+    let row = configured_record(
+        "response",
+        "/v1/chat/completions",
+        "text/event-stream",
+        framed.as_bytes().chunks(3),
+        &json!({"fieldBytes":1024,"fields":{"answer":true}}),
+        false,
+    );
+    assert_eq!(row["captureStatus"], "incomplete");
+    assert_eq!(row["agentio.usage.total_tokens"], 99);
 }
 
 #[test]

@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ModuleConfig {
+    #[serde(default)]
     filter_chains: Vec<ChainConfig>,
 }
 

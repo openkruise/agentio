@@ -111,7 +111,7 @@ typed_config:
 
 `parser.llm.request.maxItemSize` accepts an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
 
-Adding `bodyProcessing` to the effective AgentioConfig triggers an LDS update that installs one ECDS filter slot and one audit access logger on each native HTTP forwarding chain. Removing the field uninstalls both through LDS. To keep both installed while collecting no records, set `bodyProcessing: {filterChains: []}`.
+Adding `bodyProcessing` to the effective AgentioConfig triggers an LDS update that installs one ECDS filter slot and one audit access logger on each native HTTP forwarding chain. Removing the field uninstalls both through LDS. To keep both installed while collecting no records, set `bodyProcessing: {}` or `bodyProcessing: {filterChains: []}`.
 
 While the field is present, adding, changing or clearing rules updates only ECDS. New HTTP streams pick up the updated rules, including streams on an existing HTTP/2 connection. In-flight streams retain their selected configuration. On first installation the filter can forward traffic with an empty chain list until it receives its rules.
 

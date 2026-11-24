@@ -174,9 +174,21 @@ const KEYS: &[&[u8]] = &[
     b"param",
 ];
 
+// Each ASCII byte of a recognized key can be written as a six-byte JSON Unicode escape.
+const MAX_ENCODED_KEY_BYTES: usize = {
+    let mut longest = 0;
+    let mut keys = KEYS;
+    while let [key, rest @ ..] = keys {
+        if key.len() > longest {
+            longest = key.len();
+        }
+        keys = rest;
+    }
+    longest * 6
+};
+
 fn field_name(raw: &[u8]) -> &'static [u8] {
-    // Enough for the longest recognized key written entirely as Unicode escapes.
-    if raw.len() > 128 {
+    if raw.len() > MAX_ENCODED_KEY_BYTES {
         return b"";
     }
     let decoded;
@@ -402,7 +414,7 @@ impl Scanner {
             self.limit.saturating_sub(self.doc.len() + 2)
         };
         let fallback_room = if self.path.last() == Some(&Key) {
-            128
+            MAX_ENCODED_KEY_BYTES
         } else if self.response_metadata() {
             self.limit
         } else if self.message_format.is_some()

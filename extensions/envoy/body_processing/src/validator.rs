@@ -110,7 +110,9 @@ mod tests {
                 .is_ok()
         );
         for (rules, expected_error) in [
+            ("{}", None),
             (r#"{"filterChains":[]}"#, None),
+            (r#"{"filterChains":null}"#, Some("expected a sequence")),
             (
                 r#"{"filterChains":[{"name":"c","parser":{"llm":{}},"filters":[{"audit":{"format":{"json":{"q":"%EVENT(llm.question)%"}}}}]}]}"#,
                 None,
