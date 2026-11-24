@@ -9,6 +9,7 @@ use crate::{
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 // Wire configuration is resolved once when Envoy loads the filter.
 #[derive(Deserialize)]
@@ -209,6 +210,21 @@ fn host_matches(pattern: &str, host: &str) -> bool {
 }
 
 impl Settings {
+    // The ECDS validator and HTTP config factory receive the same rule bytes.
+    // Reuse the checked template in both hooks. Active streams keep their own Arc.
+    pub(super) fn load(bytes: &[u8]) -> Result<Arc<Self>, String> {
+        static LAST: Mutex<Option<(Vec<u8>, Arc<Settings>)>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if let Some((rules, settings)) = last.as_ref()
+            && rules == bytes
+        {
+            return Ok(Arc::clone(settings));
+        }
+        let settings = Arc::new(Self::parse(bytes)?);
+        *last = Some((bytes.to_vec(), Arc::clone(&settings)));
+        Ok(settings)
+    }
+
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let config: ModuleConfig = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         let count = config.filter_chains.len();

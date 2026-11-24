@@ -21,6 +21,7 @@ harness = false
 required-features = ["bench"]
 
 [dependencies]
+cel-core = "0.5.1"
 envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }

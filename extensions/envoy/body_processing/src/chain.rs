@@ -59,6 +59,7 @@ impl ActiveChain {
             chain: &chain.name,
             path,
             format,
+            cel: Default::default(),
         };
         let mut requests = Vec::new();
         for (index, filter) in chain.filters.iter().enumerate() {

@@ -94,7 +94,7 @@ impl<'a> Command<'a> {
             .and_then(|s| s.strip_suffix('%'))
             .ok_or("expected a single %COMMAND% or %COMMAND(argument)%")?;
         let (name, argument, suffix) = if let Some((name, rest)) = inner.split_once('(') {
-            let (arg, suffix) = rest.split_once(')').ok_or("missing closing parenthesis")?;
+            let (arg, suffix) = rest.rsplit_once(')').ok_or("missing closing parenthesis")?;
             (name, Some(arg), suffix)
         } else {
             let i = inner.find(':').unwrap_or(inner.len());
@@ -188,6 +188,9 @@ impl Audit {
             let source = match (command.name, command.argument) {
                 ("CHAIN", None) => Source::Chain,
                 ("PATH", None) => Source::Path,
+                ("CEL", Some(expr)) => Source::Cel(
+                    super::cel::compile(expr).map_err(|e| format!("field {alias:?}: CEL: {e}"))?,
+                ),
                 ("EVENT", Some("llm.protocol")) => Source::Protocol,
                 ("EVENT", Some("llm.operation")) => Source::Operation,
                 ("EVENT", Some(name)) => {

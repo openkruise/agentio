@@ -135,13 +135,15 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
         - audit:
             format:
               json:
-                stream: "%%REQ(X-TEST-STREAM)%%"
+                stream: "%%CEL(request.headers['x-test-stream'])%%"
                 %s: "%%EVENT(llm.answer)%%"
 `
 	standby, forward := auditResources(t, "bodyProcessing: {}", "standby")
 	v1, _ := auditResources(t, fmt.Sprintf(rules, "oldAnswer"), "v1")
 	v2, _ := auditResources(t, fmt.Sprintf(rules, "newAnswer"), "v2")
 	invalid, _ := auditResources(t, "bodyProcessing: {filterChains: null}", "invalid")
+	invalidCEL, _ := auditResources(t, strings.Replace(fmt.Sprintf(rules, "newAnswer"),
+		"request.headers['x-test-stream']", "response.headers['x-test-stream']", 1), "invalid-cel")
 
 	const first = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"first"}}]}` + "\n\n"
 	const last = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"last"},"finish_reason":"stop"}]}` +
@@ -274,5 +276,6 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
 	close(release)
 	finish(old, "old", "oldAnswer")
 	control.publish(t, invalid, auditExtension+": invalid type: null")
+	control.publish(t, invalidCEL, `field "stream": CEL:`)
 	finish(open("after-nack"), "after-nack", "newAnswer")
 }

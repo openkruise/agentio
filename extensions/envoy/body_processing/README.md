@@ -55,7 +55,8 @@ A template containing only headers, Filter State, dynamic metadata, the path, th
 
 | Operator | Value |
 | --- | --- |
-| `%REQ(X-TENANT-ID)%` | Case-insensitive request header, captured when request headers arrive. |
+| `%REQ(X-TENANT-ID)%`, `%REQ(PRIMARY?FALLBACK)%` | Read a request header by case-insensitive name. The optional fallback is read only when the primary header is absent. |
+| `%CEL(request.headers['session-id'])%` | Evaluate a CEL expression over request headers and format its scalar result as text. |
 | `%FILTER_STATE(key:PLAIN)%` | Filter State object's string serialization at request headers. |
 | `%DYNAMIC_METADATA(namespace:key)%` | Top-level dynamic metadata string, captured at request headers. |
 | `%DYNAMIC_METADATA_NUMBER(namespace:key)%` | Top-level dynamic metadata number, emitted as a JSON number. |
@@ -65,6 +66,16 @@ A template containing only headers, Filter State, dynamic metadata, the path, th
 | `%DECODED_BYTES(request)%`, `%DECODED_BYTES(response)%` | Decoded bytes when decompression ran. This version decompresses gzip requests. |
 | `%CAPTURE_STATUS(request)%`, `%CAPTURE_STATUS(response)%` | Opt in to protocol validation and the capture outcome for that direction. Clipping a selected request header or other request context affects the request status. A transport interruption reports `incomplete`, including when response headers never arrived. |
 | `%EVENT(llm.field)%` | Value from the LLM protocol parser, projected for this audit. |
+
+A single column can record the session ID sent by either Codex or Claude Code. When both headers are present, the primary wins, even if its value is empty. When both are absent, the column is omitted.
+
+```yaml
+format:
+  json:
+    session: "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%"
+```
+
+The audit compiles CEL when ECDS loads the rules. Its only input is `request.headers`, a map with lowercase names and string values. Repeated headers use the first value seen by the filter. A missing key or a null result omits the column. Strings, numbers and booleans produce JSON strings and accept the usual `:N` field limit. Other evaluation errors omit the column and emit the field name and error kind at debug level. Header expressions alone do not start a body parser.
 
 Choose the metadata operator matching the producer's type. Body Processing reads the selected top-level key at request headers and omits missing keys. For a present value of a different type, Envoy 1.40.2 logs a type error and the audit omits that field. The number operator accepts finite values. The number and boolean operators are specific to Body Processing and reject a byte limit.
 

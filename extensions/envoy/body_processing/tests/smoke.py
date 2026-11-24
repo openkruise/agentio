@@ -77,7 +77,9 @@ def bootstrap(port, upstream):
     settings = {
         "filterChains": [
             {"name": "context-only", "matcher": {"paths": ["/context-only"]}, "parser": {"llm": {}},
-             "filters": [audit({"tenant": "%REQ(X-TENANT)%"}), {"audit": {"format": {"json": {"absent": "%REQ(X-ABSENT)%"}}}}]},
+             "filters": [audit({"tenant": "%REQ(X-TENANT)%", "shortSession": "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID):5%",
+                                "session": "%CEL('session-id' in request.headers ? request.headers['session-id'] : request.headers['x-claude-code-session-id'])%"}),
+                         {"audit": {"format": {"json": {"absent": "%CEL(request.headers['x-absent'])%"}}}}]},
             {"name": "chat-choices", "matcher": {"hosts": ["choices.test", "reset.test"]}, "parser": {"llm": {}},
              "filters": [audit({"question": "%EVENT(llm.question)%", "answer": "%EVENT(llm.answer)%",
                                 "input": "%EVENT(llm.request.messages):62%", "requestStatus": "%CAPTURE_STATUS(request)%",
@@ -99,7 +101,9 @@ def bootstrap(port, upstream):
              "filters": [audit({"case": "%REQ(X-LLM-CASE)%", "messages": f"%EVENT(llm.request.messages):{limit}%",
                                 "status": "%CAPTURE_STATUS(request)%"}) for limit in (1024, 8192)]},
             {"name":"qa","matcher":{"hosts":["qa.test"]},"parser":{"llm":{}},
-             "filters":[audit(attributes | question | request_info | response_info | {"llm.answer":"%EVENT(llm.answer)%", "requestCalls":"%EVENT(llm.request.toolCallRefs)%", "responseCalls":"%EVENT(llm.response.toolCallRefs)%"})]},
+             "filters":[audit(attributes | question | request_info | response_info | {
+                 "session": "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%", "llm.answer": "%EVENT(llm.answer)%",
+                 "requestCalls": "%EVENT(llm.request.toolCallRefs)%", "responseCalls": "%EVENT(llm.response.toolCallRefs)%"})]},
             {"name": "sse-audits", "matcher": {"hosts": ["sse.test"]}, "parser": {"llm": {}},
              "filters": [
                  audit({"text": "%EVENT(llm.answer):1024%", "messages": "%EVENT(llm.response.messages):256%"} | response_info),
@@ -182,6 +186,13 @@ def bootstrap(port, upstream):
 
 
 FIXTURES = llm_streaming.FIXTURES
+SESSION_HEADER_CASES = [
+    ({"Session-Id": "codex-session"}, "codex-session"),
+    ({"X-Claude-Code-Session-Id": "claude-session"}, "claude-session"),
+    ({"Session-Id": "primary", "X-Claude-Code-Session-Id": "backup"}, "primary"),
+    ({"Session-Id": "", "X-Claude-Code-Session-Id": "backup"}, ""),
+    ({}, None),
+]
 STREAMS = {
     "/v1/chat/completions": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "chat-empty-content"),
     "/v1/messages": ({"model": "test", "messages": [{"role": "user", "content": "hello"}]}, "anthropic-usage"),
@@ -318,9 +329,10 @@ def exercise(port):
         assert response.status == 200 and response.read() == payload
     connection.close()
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    connection.request("POST", "/context-only", b"opaque", {"Content-Type": "text/plain", "X-Tenant": "alpha"})
-    response = connection.getresponse()
-    assert response.status == 200 and response.read() == b"opaque"
+    for session_headers, _ in SESSION_HEADER_CASES:
+        connection.request("POST", "/context-only", b"opaque", {"Content-Type": "text/plain", "X-Tenant": "alpha", **session_headers})
+        response = connection.getresponse()
+        assert response.status == 200 and response.read() == b"opaque"
     connection.request("POST", llm_streaming.CHAT, json.dumps({"model": "test", "messages": [
         {"role": "user", "content": "天气很好"}], "n": 2}), {"Host": "choices.test", "Content-Type": "application/json"})
     response = connection.getresponse()
@@ -382,8 +394,9 @@ def exercise(port):
         connection.close()
     for path, (request, stream, _) in QA.items():
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        session_header = "X-Claude-Code-Session-Id" if path == llm_streaming.ANTHROPIC else "Session-Id"
         connection.request("POST", path, json.dumps(request), {"Host": "qa.test", "Content-Type": "application/json",
-                                                               "x-tenant": "qa"})
+                                                               "x-tenant": "qa", session_header: "qa-session"})
         response = connection.getresponse()
         assert response.status == 200 and response.read() == (FIXTURES / (stream + ".sse")).read_bytes()
         connection.close()
@@ -446,8 +459,12 @@ def check_records(lines, json_bytes):
             qa_records.append(record)
         else:
             other_lines.append(line)
-    context, empty = context_records
-    assert context == {"chain": "context-only", "path": "/context-only", "requestID": context["requestID"], "tenant": "alpha"} and not empty
+    for row, empty, (_, session) in zip(context_records[::2], context_records[1::2], SESSION_HEADER_CASES, strict=True):
+        expected = {"chain": "context-only", "path": "/context-only", "requestID": row["requestID"], "tenant": "alpha"}
+        if session is not None:
+            expected["session"] = session
+            expected["shortSession"] = session[:5]
+        assert row == expected and empty == {}, (row, empty)
     assert len(choice_records) == 2, choice_records
     complete, = (r for r in choice_records if r["status"] == "complete")
     assert complete["question"] == "天气很好" and complete["answer"] == "primary"
@@ -512,6 +529,7 @@ def check_records(lines, json_bytes):
         row, = [r for r in qa_records if r["path"] == path]
         assert row["requestStatus"] == row["responseStatus"] == "complete" and row["requestID"]
         assert row["llm.question"] == "weather?" and row["llm.answer"] == answer
+        assert row["session"] == "qa-session"
         assert row["requestCalls"] == [{"kind": "result", "id": "c"}]
         assert row["responseCalls"][0]["name"] == "lookup"
         assert "gen_ai.input.messages" not in row and "gen_ai.output.messages" not in row

@@ -212,7 +212,7 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
     if name != "body_processing" {
         return None;
     }
-    let settings = Settings::parse(bytes)
+    let settings = Settings::load(bytes)
         .map_err(|e| envoy_log_error!("invalid body_processing config: {}", e))
         .ok()?;
     let publish_errors = envoy
@@ -220,7 +220,7 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
         .map_err(|e| envoy_log_error!("cannot register body_processing error counter: {:?}", e))
         .ok()?;
     Some(Box::new(Config {
-        settings: Arc::new(settings),
+        settings,
         publish_errors,
     }))
 }

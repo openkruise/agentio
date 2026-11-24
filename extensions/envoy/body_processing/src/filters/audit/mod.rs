@@ -5,6 +5,7 @@
 #[path = "../../../benches/suite/mod.rs"]
 pub(crate) mod benchmarks;
 pub(crate) mod capture;
+pub(crate) mod cel;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod format;
@@ -19,6 +20,7 @@ use crate::parser::{Format, llm::Fields};
 use crate::{chain::Side, parser::BodyError};
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyHttpFilter, abi::envoy_dynamic_module_type_metadata_source as MetadataSource,
+    envoy_log_debug,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -28,7 +30,8 @@ enum Source {
     Path,
     Protocol,
     Operation,
-    RequestHeader(String),
+    RequestHeader(RequestHeader),
+    Cel(cel_core::Program),
     FilterState(String),
     DynamicMetadata {
         namespace: String,
@@ -43,23 +46,48 @@ enum MetadataType {
     Bool,
 }
 
+struct RequestHeader {
+    primary: String,
+    fallback: Option<String>,
+}
+
+impl RequestHeader {
+    fn parse(args: &str) -> Result<Self, &'static str> {
+        let header_name = |name: &str| {
+            let token = name.strip_prefix(':').unwrap_or(name);
+            if token.is_empty()
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+            {
+                return Err(
+                    "expected %REQ(header)% or %REQ(primary?fallback)% with valid HTTP header names",
+                );
+            }
+            Ok(name.to_ascii_lowercase())
+        };
+        let (primary, fallback) = match args.split_once('?') {
+            Some((primary, fallback)) => (primary, Some(header_name(fallback)?)),
+            None => (args, None),
+        };
+        Ok(Self {
+            primary: header_name(primary)?,
+            fallback,
+        })
+    }
+
+    fn get<T>(&self, mut lookup: impl FnMut(&str) -> Option<T>) -> Option<T> {
+        lookup(&self.primary).or_else(|| self.fallback.as_deref().and_then(lookup))
+    }
+}
+
 impl Source {
     fn parse(operator: &str, args: &str, limit: Option<usize>) -> Result<Self, &'static str> {
         let valid_key = |s: &str| {
             !s.is_empty() && !s.contains([':', '(', ')', '%']) && !s.chars().any(char::is_control)
         };
         let kind = match operator {
-            "REQ" => {
-                let name = args.strip_prefix(':').unwrap_or(args);
-                if name.is_empty()
-                    || !name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
-                {
-                    return Err("REQ requires one HTTP header name");
-                }
-                return Ok(Self::RequestHeader(args.to_ascii_lowercase()));
-            }
+            "REQ" => return RequestHeader::parse(args).map(Self::RequestHeader),
             "FILTER_STATE" => {
                 let key = args
                     .strip_suffix(":PLAIN")
@@ -122,7 +150,23 @@ impl Attributes {
                 }
                 return;
             }
-            Source::RequestHeader(key) => envoy.get_request_header_value(key),
+            Source::RequestHeader(header) => {
+                header.get(|name| envoy.get_request_header_value(name))
+            }
+            Source::Cel(program) => {
+                let input = headers.cel.get_or_init(|| {
+                    cel::Headers::from_pairs(
+                        envoy
+                            .get_request_headers()
+                            .iter()
+                            .map(|(k, v)| (k.as_slice(), v.as_slice())),
+                    )
+                });
+                if let Err(kind) = self.capture_cel(alias, limit, program, input) {
+                    envoy_log_debug!("audit CEL field {:?}: {:?}", alias, kind);
+                }
+                return;
+            }
             Source::FilterState(key) => envoy.get_filter_state_typed(key.as_bytes()),
             Source::DynamicMetadata {
                 namespace,
@@ -273,12 +317,13 @@ mod tests {
                     let Source::RequestHeader(header) = source else {
                         unreachable!()
                     };
-                    let value = match header.as_str() {
-                        "x-request-id" => REQUEST_ID,
-                        "x-note" => note,
-                        _ => continue,
-                    };
-                    attrs.insert(alias, value, *limit);
+                    if let Some(value) = header.get(|name| match name {
+                        "x-request-id" => Some(REQUEST_ID),
+                        "x-note" => Some(note),
+                        _ => None,
+                    }) {
+                        attrs.insert(alias, value, *limit);
+                    }
                 }
                 let template = if request {
                     audit.request
@@ -1272,10 +1317,33 @@ mod tests {
     }
 
     #[test]
+    fn request_header_reads_the_fallback_only_when_the_primary_is_absent() {
+        let header = RequestHeader::parse("X-Main?X-Backup").unwrap();
+        for (primary, fallback, expected, reads) in [
+            (Some("main"), Some("backup"), Some("main"), 1),
+            (Some(""), Some("backup"), Some(""), 1),
+            (None, Some("backup"), Some("backup"), 2),
+            (None, None, None, 2),
+        ] {
+            let mut count = 0;
+            let value = header.get(|name| {
+                count += 1;
+                match name {
+                    "x-main" => primary,
+                    "x-backup" => fallback,
+                    _ => panic!("unexpected header {name}"),
+                }
+            });
+            assert_eq!((value, count), (expected, reads));
+        }
+    }
+
+    #[test]
     fn field_limit_syntax_is_validated_at_load() {
         let compile = |expr: &str| Audit::compile(BTreeMap::from([("field".into(), expr.into())]));
         for expr in [
             "%REQ(:authority):1%",
+            "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH):16%",
             "%FILTER_STATE(ns:PLAIN):128%",
             "%DYNAMIC_METADATA(ns:key):16%",
             "%DYNAMIC_METADATA_NUMBER(ns:key)%",

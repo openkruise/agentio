@@ -3,7 +3,7 @@
 
 mod workloads;
 
-use super::{Audit, capture::Capture, template::Template};
+use super::{Attributes, Audit, Source, capture::Capture, cel::Headers, template::Template};
 use crate::{
     FilterOutput,
     chain::{DirectionStream, Side},
@@ -222,7 +222,72 @@ fn benchmark_response_output(c: &mut Criterion, replay: &Replay<'_>, templates: 
     group.finish();
 }
 
+fn benchmark_session_header(c: &mut Criterion) {
+    const ID: &str = "0195bea8-d235-7311-b78b-17e0309ef250";
+    const FALLBACK: &str = "%CEL('session-id' in request.headers ? request.headers['session-id'] : request.headers['x-claude-code-session-id'])%";
+    let mut group = c.benchmark_group("audit_session_header");
+    for (client, key) in [
+        ("codex", "session-id"),
+        ("claude", "x-claude-code-session-id"),
+    ] {
+        let headers = [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":authority", "gateway.test"),
+            (":path", "/v1/messages"),
+            ("user-agent", client),
+            ("accept", "text/event-stream"),
+            ("content-type", "application/json"),
+            ("content-length", "8192"),
+            ("accept-encoding", "gzip"),
+            ("x-request-id", ID),
+            ("x-tenant", "test"),
+            (key, ID),
+        ];
+        for (name, expr) in [
+            ("req", format!("%REQ({key})%")),
+            (
+                "req_fallback",
+                "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%".into(),
+            ),
+            ("cel", format!("%CEL(request.headers['{key}'])%")),
+            ("cel_fallback", FALLBACK.into()),
+        ] {
+            let audit = Audit::compile(BTreeMap::from([("session".into(), expr)])).unwrap();
+            let (source, limit) = &audit.context["session"];
+            let sample = || {
+                let mut attrs = Attributes::default();
+                let headers = black_box(&headers);
+                match source {
+                    Source::RequestHeader(header) => {
+                        let value = header
+                            .get(|name| headers.iter().find(|(k, _)| *k == name).map(|(_, v)| *v))
+                            .unwrap();
+                        attrs.insert("session", value, *limit);
+                    }
+                    Source::Cel(program) => {
+                        let input = Headers::from_pairs(
+                            headers.iter().map(|(k, v)| (k.as_bytes(), v.as_bytes())),
+                        );
+                        attrs
+                            .capture_cel("session", *limit, program, &input)
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let mut output = FilterOutput::default();
+                *output.audit(0) = attrs.values;
+                output.into_json_lines().unwrap()
+            };
+            assert_eq!(sample(), format!("{{\"session\":\"{ID}\"}}\n").as_bytes());
+            group.bench_function(format!("{client}/{name}"), |b| b.iter(sample));
+        }
+    }
+    group.finish();
+}
+
 pub fn body_processing_benchmarks(c: &mut Criterion) {
+    benchmark_session_header(c);
     let chat = Protocol::OpenaiChatCompletions;
     let request = ParserDirection::Request(Default::default());
     let response = ParserDirection::Response;

@@ -558,6 +558,10 @@ fn audit_attribute_expressions_are_checked_at_load() {
         "%REQ(X-A)%%REQ(X-B)%",
         "%REQ()%",
         "%REQ(x bad)%",
+        "%REQ(?X-Backup)%",
+        "%REQ(X-Main?)%",
+        "%REQ(X-Main?bad header)%",
+        "%REQ(X-Main?X-Backup?X-Third)%",
         "%FILTER_STATE(sandbox)%",
         "%FILTER_STATE(:PLAIN)%",
         "%FILTER_STATE(sandbox:TYPED)%",
@@ -567,10 +571,18 @@ fn audit_attribute_expressions_are_checked_at_load() {
         "%DYNAMIC_METADATA_NUMBER(ns:parent:child)%",
         "%DYNAMIC_METADATA_BOOL(:flag)%",
         "%CEL(request.method)%",
+        "%CEL(response.headers['session-id'])%",
+        "%CEL(true ? 'ok' : request.body)%",
+        "%CEL(request.headers['id'].startsWith(123))%",
+        "%CEL(request.headers['id'].unknown())%",
+        "%CEL(request.headers['id')%",
+        "%CEL(request.headers)%",
     ] {
         let cfg = json!({"filterChains":[{"name":"test","parser":{"llm":{}},
             "filters":[{"audit":{"format":{"json":{"tenant":expression}}}}]}]});
-        let error = Settings::parse(cfg.to_string().as_bytes()).err().unwrap();
+        let error = Settings::parse(cfg.to_string().as_bytes())
+            .err()
+            .unwrap_or_else(|| panic!("accepted {expression}"));
         assert!(
             error.contains("tenant") && error.contains("filters[0].audit"),
             "{expression}: {error}"

@@ -58,6 +58,7 @@ pub(crate) struct RequestHeaders<'a> {
     pub chain: &'a str,
     pub path: &'a str,
     pub format: Format,
+    pub cel: std::cell::OnceCell<audit::cel::Headers>,
 }
 pub(crate) struct StreamFilters {
     pub request: Option<Box<dyn BodyFilter>>,
