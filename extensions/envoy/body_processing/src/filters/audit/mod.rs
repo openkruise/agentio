@@ -1,6 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(feature = "bench")]
+#[path = "../../../benches/suite/mod.rs"]
+pub(crate) mod benchmarks;
 pub(crate) mod capture;
 #[cfg(test)]
 pub(crate) mod fixture;

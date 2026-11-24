@@ -177,6 +177,19 @@ cd extensions/envoy/body_processing
 docker build -t envoy-body-processing .
 ```
 
+## Rust benchmarks
+
+After the build has fetched the SDK, run Criterion from this directory. Pass a group name to measure one workload.
+
+```sh
+cargo bench --locked --features bench --bench body_processing
+cargo bench --locked --features bench --bench body_processing -- sse_chat_64x128
+```
+
+Each iteration replays one body in memory. JSON arrives in 16 KiB chunks and SSE arrives one frame at a time. The suite covers plain and escaped text, an inline image followed by text, a JSON response, and streams from all three LLM protocols. Compare the parser alone with one audit at a 128 B or 8 KiB messages field limit, two audits with independent limits, or a usage-only SSE audit. The audit benchmarks include JSON Lines encoding. Separate cases time SSE framing with JSON decoding, message projection, and final JSON encoding.
+
+The harness builds fixtures and compiles templates before timing. It checks the emitted records and verifies that two audits produce the same bytes as running each separately. Envoy callbacks, network I/O and the access log sink are outside the measured path. Criterion writes its estimates under `target/criterion`. On macOS, prefix the command with `RUSTFLAGS='-C link-arg=-Wl,-undefined,dynamic_lookup'` to allow the module's Envoy host symbols to resolve at load time.
+
 ## Streaming audit E2E
 
 On Linux, run `python3 tests/smoke.py envoy-body-processing` after building the image. This starts a fixture upstream and Envoy, sends OpenAI Chat Completions, OpenAI Responses and Anthropic Messages requests, and checks the forwarded bytes and Envoy's stdout audit records.

@@ -7,6 +7,10 @@ mod filters;
 mod parser;
 mod validator;
 
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+pub use filters::audit::benchmarks::body_processing_benchmarks;
+
 use chain::{ActiveChain, Side};
 use config::{Settings, match_path};
 use envoy_proxy_dynamic_modules_rust_sdk::{
