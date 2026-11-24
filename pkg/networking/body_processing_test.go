@@ -143,8 +143,10 @@ func TestBodyProcessingDiscoveryUpdates(t *testing.T) {
 	}
 	var previous map[model.ResourceKey]*anypb.Any
 	for _, step := range []struct {
-		name, config string
-		lds, ecds    bool
+		name   string
+		config string
+		lds    bool
+		ecds   bool
 	}{
 		{name: "omitted", config: "{}"},
 		{name: "first rules", config: bodyProcessingYAML, lds: true, ecds: true},
