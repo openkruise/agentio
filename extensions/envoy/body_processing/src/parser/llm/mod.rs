@@ -101,7 +101,10 @@ pub(super) fn optional_string(v: &Value) -> Result<Option<&str>, BodyError> {
 }
 
 fn message(role: &str, content: Vec<Value>) -> Value {
-    json!({"role": role, "content": content})
+    let mut message = json!({"role": role});
+    // Putting content inside json! would copy every normalized block.
+    message["content"] = Value::Array(content);
+    message
 }
 
 fn text_block(s: &str) -> Value {
