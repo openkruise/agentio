@@ -45,7 +45,7 @@ impl Write for Remaining {
     }
 }
 
-fn json_bytes(value: &Value, limit: usize) -> Option<usize> {
+pub(super) fn json_bytes(value: &Value, limit: usize) -> Option<usize> {
     let mut room = Remaining(limit);
     serde_json::to_writer(&mut room, value).ok()?;
     Some(limit - room.0)

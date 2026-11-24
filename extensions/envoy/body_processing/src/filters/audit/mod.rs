@@ -786,6 +786,7 @@ mod tests {
         let data = "YWFh".repeat(256);
         let body = json!({"messages":[{"role":"user","content":[
             {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{data}"),"detail":"high"}},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}},
             {"type":"text","text":"after image"}]}]});
         let rows = chat_records(
             &body.to_string(),
@@ -798,11 +799,62 @@ mod tests {
         );
         let mut parts = json!([
             {"type":"blob","modality":"image","mime_type":"image/png","detail":"high"},
+            {"type":"blob","modality":"image","mime_type":"image/png","content":"YQ=="},
             {"type":"text","content":"after image"}
         ]);
         assert_eq!(read(&rows[0])["m"][0]["parts"], parts);
         parts[0]["content"] = data.into();
         assert_eq!(read(&rows[1])["m"][0]["parts"], parts);
+    }
+
+    #[test]
+    fn inline_files_share_the_remaining_message_budget_in_input_order() {
+        let data = [
+            "YWFh".repeat(1024),
+            "YmJi".repeat(24),
+            "Y2Nj".repeat(24),
+            "ZGRk".repeat(5),
+            "b2s=".into(),
+        ];
+        let prefix = "data:text/plain;base64,";
+        let mut content: Vec<_> = data
+            .iter()
+            .map(|s| json!({"type":"input_file","file_data":format!("{prefix}{s}")}))
+            .collect();
+        content.push(json!({"type":"input_text","text":"after \"文件\""}));
+        let input = json!({"input":[{"role":"user","content":"previous"},{"role":"user","content":content}]}).to_string();
+        let run = |specs: &[FormatFields]| {
+            protocol_records(
+                Format::OpenaiResponses,
+                "application/json",
+                &input,
+                ParserDirection::Request(Default::default()),
+                specs,
+                "",
+            )
+        };
+        let full: FormatFields = &[
+            ("m", "%EVENT(llm.request.messages):8192%"),
+            ("s", "%CAPTURE_STATUS(request)%"),
+        ];
+        let wide = read(&run(&[full])[0]);
+        assert_eq!(wide["s"], "complete");
+        let mut exact = wide["m"].clone();
+        for index in [0, 2] {
+            exact[1]["parts"][index]["data"]["file_data"] = format!("{prefix}[omitted]").into();
+        }
+        let size = serde_json::to_vec(&exact).unwrap().len();
+        let at = format!("%EVENT(llm.request.messages):{size}%");
+        let under = format!("%EVENT(llm.request.messages):{}%", size - 1);
+        let rows = run(&[
+            &[("m", &at), ("s", "%CAPTURE_STATUS(request)%")],
+            &[("m", &under)],
+            full,
+        ]);
+        assert_eq!(read(&rows[0]), json!({"m":exact,"s":"truncated"}));
+        exact[1]["parts"][3]["data"]["file_data"] = format!("{prefix}[omitted]").into();
+        assert_eq!(read(&rows[1])["m"], exact);
+        assert_eq!(read(&rows[2]), wide);
     }
 
     #[test]

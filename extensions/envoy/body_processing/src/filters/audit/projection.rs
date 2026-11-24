@@ -1,9 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::limit::{array_size_with, bounded_value, string_prefix};
-use crate::parser::{llm::Fields, request::ItemEvent};
-use serde_json::{Value, json};
+use super::limit::{array_size_with, bounded_value, json_bytes, string_prefix};
+use crate::parser::{encoded_len, llm::Fields, request::ItemEvent};
+use serde_json::{Map, Value, json};
 
 #[derive(Default)]
 pub(crate) struct Projection {
@@ -149,14 +149,16 @@ impl Projection {
                     if fields.input_messages && !self.messages_full {
                         let mut logged = item.clone();
                         super::format::message(&mut logged);
-                        let mut size = array_size_with(self.messages_size, &logged, room);
-                        if size.is_none()
-                            && let Some(parts) = logged.get_mut("parts")
-                            && omit_inline_media(&item["content"], parts)
-                        {
-                            self.clipped = true;
-                            size = array_size_with(self.messages_size, &logged, room);
-                        }
+                        let size =
+                            array_size_with(self.messages_size, &logged, room).or_else(|| {
+                                self.clipped = true;
+                                fit_inline_media(
+                                    &item["content"],
+                                    &mut logged,
+                                    self.messages_size,
+                                    room,
+                                )
+                            });
                         if let Some(next) = size {
                             self.messages_size = next;
                             self.view["inputMessages"]
@@ -318,10 +320,81 @@ impl Projection {
     }
 }
 
-// The formatter preserves part order, including inside tool results. Use the
-// parser's attachment locations to shorten only this audit's rendered copy.
-fn omit_inline_media(content: &Value, parts: &mut Value) -> bool {
-    let mut omitted = false;
+// Reserve the text and descriptors of this message before spending the remaining
+// field budget on complete attachments in their original order.
+fn fit_inline_media(
+    content: &Value,
+    message: &mut Value,
+    used: usize,
+    limit: usize,
+) -> Option<usize> {
+    let mut costs = Vec::new();
+    visit_inline_media(content, message.get_mut("parts")?, &mut |media, part| {
+        let full = json_bytes(part, limit);
+        media.set_retained(part, false);
+        let cost = full.map(|bytes| bytes.saturating_sub(encoded_len(part)));
+        if cost == Some(0) {
+            // A short file can be smaller than its omission marker.
+            media.set_retained(part, true);
+        }
+        costs.push(cost);
+    });
+    if costs.is_empty() {
+        return None;
+    }
+    let mut size = array_size_with(used, message, limit)?;
+    if size < limit {
+        let mut costs = costs.into_iter();
+        visit_inline_media(content, &mut message["parts"], &mut |media, part| {
+            if let Some(cost) = costs.next().unwrap()
+                && cost > 0
+                && cost <= limit - size
+            {
+                media.set_retained(part, true);
+                size += cost;
+            }
+        });
+    }
+    Some(size)
+}
+
+enum InlineMedia<'a> {
+    Image(&'a Value),
+    Attachment {
+        data: &'a Value,
+        locations: &'a Map<String, Value>,
+    },
+}
+
+impl InlineMedia<'_> {
+    fn set_retained(&self, part: &mut Value, keep: bool) {
+        match *self {
+            Self::Image(data) => {
+                if keep {
+                    part["content"] = data.clone();
+                } else {
+                    part.as_object_mut().unwrap().remove("content");
+                }
+            }
+            Self::Attachment { data, locations } => {
+                for (path, prefix) in locations {
+                    *part["data"].pointer_mut(path).unwrap() = if keep {
+                        data.pointer(path).unwrap().clone()
+                    } else {
+                        format!("{}[omitted]", prefix.as_str().unwrap()).into()
+                    };
+                }
+            }
+        }
+    }
+}
+
+// Normalization and formatting preserve part order, including nested tool results.
+fn visit_inline_media(
+    content: &Value,
+    parts: &mut Value,
+    visit: &mut impl FnMut(InlineMedia<'_>, &mut Value),
+) {
     for (block, part) in content
         .as_array()
         .into_iter()
@@ -330,22 +403,27 @@ fn omit_inline_media(content: &Value, parts: &mut Value) -> bool {
     {
         match block["type"].as_str() {
             Some("image") if block["source"] == "base64" => {
-                omitted |= part.as_object_mut().unwrap().remove("content").is_some();
+                if let Some(data) = block.get("data") {
+                    visit(InlineMedia::Image(data), part);
+                }
             }
             Some("tool_result") => {
-                omitted |= omit_inline_media(&block["content"], &mut part["response"]);
+                visit_inline_media(&block["content"], &mut part["response"], visit);
             }
             Some("attachment") => {
-                for (path, prefix) in block["inlineData"].as_object().into_iter().flatten() {
-                    let payload = part["data"].pointer_mut(path).unwrap();
-                    *payload = format!("{}[omitted]", prefix.as_str().unwrap()).into();
-                    omitted = true;
+                if let Some(locations) = block["inlineData"].as_object() {
+                    visit(
+                        InlineMedia::Attachment {
+                            data: &block["data"],
+                            locations,
+                        },
+                        part,
+                    );
                 }
             }
             _ => {}
         }
     }
-    omitted
 }
 
 pub(crate) fn response_view(value: &Value, fields: Fields, limit: usize) -> Value {

@@ -225,6 +225,14 @@ JSON_CHOICES = json.dumps({"model": "test", "choices": [
 ]}).encode()
 
 ATTACHMENT_DATA = "YWFh" * 1024
+SMALL_ATTACHMENT_DATA = "c21hbGwgZmlsZQ=="
+
+
+def anthropic_document(data):
+    return {"type": "document", "title": "report",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
+
+
 ATTACHMENTS = {
     "screenshot": (llm_streaming.RESPONSES, lambda s: {
         "type": "computer_screenshot", "detail": "original", "image_url": "data:image/png;base64," + s}),
@@ -236,8 +244,8 @@ ATTACHMENTS = {
         "type": "file", "file": {"filename": "a.pdf", "file_data": s}}),
     "chat-audio": (llm_streaming.CHAT, lambda s: {
         "type": "input_audio", "input_audio": {"format": "wav", "data": s}}),
-    "anthropic-document": (llm_streaming.ANTHROPIC, lambda s: {
-        "type": "document", "title": "report", "source": {"type": "base64", "media_type": "application/pdf", "data": s}}),
+    "anthropic-document": (llm_streaming.ANTHROPIC, anthropic_document),
+    "anthropic-tool-result": (llm_streaming.ANTHROPIC, anthropic_document),
 }
 
 
@@ -283,10 +291,14 @@ def exercise(port):
     for case, (path, make_part) in ATTACHMENTS.items():
         part = make_part(ATTACHMENT_DATA)
         text = {"type": "input_text" if path == llm_streaming.RESPONSES else "text", "text": "after attachment"}
-        messages = [{"role": "user", "content": [part, text]}]
         if case == "screenshot":
             messages = [{"type": "computer_call_output", "call_id": "c1", "output": part},
                         {"role": "user", "content": [text]}]
+        else:
+            parts = [part, make_part(SMALL_ATTACHMENT_DATA), text]
+            if case == "anthropic-tool-result":
+                parts = [{"type": "tool_result", "tool_use_id": "c1", "content": parts}, text]
+            messages = [{"role": "user", "content": parts}]
         prompt_key = "input" if path == llm_streaming.RESPONSES else "messages"
         payload = json.dumps({"model": "test", prompt_key: messages}).encode()
         connection.request("POST", path, payload, {
@@ -447,12 +459,16 @@ def check_records(lines, json_bytes):
         assert small["requestID"] == full["requestID"]
         for row, data, status in [(small, "[omitted]", "truncated"), (full, ATTACHMENT_DATA, "complete")]:
             messages = row["messages"]
-            part = messages[0]["parts"][0]
-            if case == "screenshot":
-                assert part["type"] == "tool_call_response" and part["id"] == "c1"
-                part, = part["response"]
-            assert part == {"type": "provider_content", "format": row["llm.protocol"], "data": make_part(data)}, case
-            assert messages[-1]["parts"][-1] == {"type": "text", "content": "after attachment"}
+            parts = messages[0]["parts"]
+            if case in ("screenshot", "anthropic-tool-result"):
+                assert parts[0]["type"] == "tool_call_response" and parts[0]["id"] == "c1"
+                parts = parts[0]["response"]
+            envelope = {"type": "provider_content", "format": row["llm.protocol"]}
+            assert parts[0] == (envelope | {"data": make_part(data)}), case
+            text = {"type": "text", "content": "after attachment"}
+            if case != "screenshot":
+                assert parts[1:] == [envelope | {"data": make_part(SMALL_ATTACHMENT_DATA)}, text], case
+            assert messages[-1]["parts"][-1] == text, case
             assert row["status"] == status, case
     llm_streaming.check_audits(streaming_lines)
     for path, pair in sse_records.items():
