@@ -105,6 +105,8 @@ agentio:
       secretName: agentio-mitm-ca
       secretNamespace: ""
       signMode: SELF_SIGN
+      # Client-reachable HTTP origin for signed CRLs advertised in new certificates.
+      crlOrigin: ""
     config:
       name: agentio-config
       primaryName: agentio-config-primary

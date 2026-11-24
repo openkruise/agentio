@@ -22,6 +22,11 @@ import (
 )
 
 var (
+	MITMCRLOrigin = env.Register(
+		"AGENTIO_MITM_CRL_ORIGIN",
+		"",
+		"HTTP origin advertised in newly issued MITM certificates. Empty disables CRL publication.",
+	).Get()
 	MITMCASecretName = env.Register(
 		"AGENTIO_MITM_CA_SECRET_NAME",
 		"agentio-mitm-ca",

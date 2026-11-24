@@ -109,6 +109,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_CACHE_MAX_ENTRIES</code> | Integer | <code>10000</code> | Maximum number of on-demand certificates the cache may hold; the entry closest to eviction makes room when full. |
 | <code>AGENTIO_MITM_CA_SECRET_NAME</code> | String | <code>agentio-mitm-ca</code> | Secret holding the CA that signs on-demand domain certificates. SECRET mode reads it; SELF&#95;SIGN mode owns it. |
 | <code>AGENTIO_MITM_CA_SECRET_NAMESPACE</code> | String | empty | Namespace of the MITM CA Secret. Empty uses the control-plane root namespace. |
+| <code>AGENTIO_MITM_CRL_ORIGIN</code> | String | empty | HTTP origin advertised in newly issued MITM certificates. Empty disables CRL publication. |
 | <code>AGENTIO_MITM_LEAF_LIFETIME</code> | Duration | <code>15m0s</code> | Validity of on-demand domain certificates. |
 | <code>AGENTIO_MITM_RENEW_BEFORE</code> | Duration | <code>1m0s</code> | How long before expiry SDS TTL removes an on-demand certificate; new demand re-issues it. |
 | <code>AGENTIO_MITM_RESOURCE_TTL</code> | Duration | <code>15m0s</code> | Maximum SDS residency from certificate signing time; replay never extends this deadline. |
@@ -232,6 +233,33 @@ agentiod:
 ```
 
 The Secret must contain `ca.crt` and `ca.key`. Keep the Secret namespace and the configured egress-gateway identity scope consistent.
+
+### Publish a MITM certificate revocation list
+
+Set `agentiod.mitm.crlOrigin` to an HTTP origin reachable by the clients that validate the certificates. For example, in-cluster clients can use `http://agentiod-crl.agentio-system.svc.cluster.local`. For clients outside the cluster, point a reachable DNS name and HTTP route at the same Service. The chart exposes only the CRL listener on port 80 of `<agentiod-service-name>-crl`. If client egress goes through Envoy, allow a normal HTTP GET to this destination. EPE can apply the existing egress policy.
+
+Both `SELF_SIGN` and `SECRET` support this setting. Newly issued gateway leaves carry one CRL distribution point. The feature does not advertise OCSP. Certificates already cached at gateways acquire the extension on reissuance. Each issuer needs a distinct subject key identifier and permission to sign CRLs. If the MITM signer is an intermediate CA, its parent publishes the revocation status of the intermediate certificate.
+
+Agentiod uses `agentio-mitm-ca-crls` in its system namespace (`--namespace`, the Helm release namespace, default `agentio-system`). Under `binaryData`, each issuer has a key named `<id>.crl`, where `<id>` is the lowercase hexadecimal subject key identifier of the signing CA. The value is a full DER CRL signed by that CA. All replicas download from the same object and serve the committed bytes at `/crl/<id>.crl`.
+
+To bootstrap an issuer, obtain its signed CRL from the CA owner. A CA that has no revocations can publish a signed empty list. For an existing CA, use a current full list with all applicable revocations. If the owner uses OpenSSL with an existing CA configuration and index, it can generate the file with `openssl ca -config ca.cnf -gencrl -crlhours 24` and convert it to DER with `openssl crl -outform DER`. The file needs a CRL number and the issuer's authority key identifier.
+
+For the first issuer in a new installation, apply the signed file using the system namespace and the CA certificate:
+
+```sh
+system_ns=agentio-system
+id=$(openssl x509 -in ca.pem -noout -ext subjectKeyIdentifier |
+  tail -1 | tr -d ' :\r\n' | tr A-F a-f)
+kubectl -n "$system_ns" create configmap agentio-mitm-ca-crls --from-file="$id.crl=issuer.crl"
+```
+
+To add a new issuer or replace one signed file in an existing ConfigMap, update the corresponding `binaryData` key and retain the other issuers' files.
+
+In `SELF_SIGN` mode, Agentiod renews one signed list per issuer with the same revocation entries. The renewed CRL is valid for up to 24 hours after publication, capped by CA expiry. A new leaf expires no later than the current CRL's `NextUpdate`. Renewing the CA certificate with the same signing key keeps the CRL URL. When switching signing keys, publish the new key's CRL before switching the CA Secret, and keep the previous key's CRL until its leaves expire.
+
+In `SECRET` mode, the CA owner supplies signed replacements and chooses their validity, including for retired issuers whose leaves are still valid. An issuer without a valid published CRL cannot issue new leaves carrying that distribution point. The ConfigMap is subject to the Kubernetes 1 MiB size limit.
+
+To turn off CRLs, clear `agentiod.mitm.crlOrigin`. After all Agentiod replicas have rolled out, roll the gateways to replace their cached SDS certificates. Strict revocation checks for certificates carrying the original URL can fail between removing the CRL Service and replacing those certificates.
 
 ## Inspect the effective Pod environment
 

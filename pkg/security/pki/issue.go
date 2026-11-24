@@ -28,17 +28,18 @@ import (
 )
 
 type LeafOptions struct {
-	CommonName         string
-	DNSNames           []string
-	IPAddresses        []net.IP
-	URIs               []*url.URL
-	ExtraExtensions    []pkix.Extension
-	CurrentTime        time.Time
-	Lifetime           time.Duration
-	IssuerExpiryMargin time.Duration
-	MinimumLifetime    time.Duration
-	Client             bool
-	Server             bool
+	CommonName            string
+	DNSNames              []string
+	IPAddresses           []net.IP
+	URIs                  []*url.URL
+	CRLDistributionPoints []string
+	ExtraExtensions       []pkix.Extension
+	CurrentTime           time.Time
+	Lifetime              time.Duration
+	IssuerExpiryMargin    time.Duration
+	MinimumLifetime       time.Duration
+	Client                bool
+	Server                bool
 }
 
 type IssuedCertificate struct {
@@ -116,16 +117,17 @@ func (ca SigningCA) sign(ctx context.Context, publicKey any, privateKeyPEM []byt
 		extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageClientAuth)
 	}
 	template := &x509.Certificate{
-		SerialNumber:    serial,
-		Subject:         pkix.Name{CommonName: options.CommonName},
-		NotBefore:       now.Add(-clockSkew),
-		NotAfter:        notAfter,
-		DNSNames:        append([]string(nil), options.DNSNames...),
-		IPAddresses:     append([]net.IP(nil), options.IPAddresses...),
-		URIs:            append([]*url.URL(nil), options.URIs...),
-		ExtraExtensions: append([]pkix.Extension(nil), options.ExtraExtensions...),
-		KeyUsage:        x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:     extKeyUsage,
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: options.CommonName},
+		NotBefore:             now.Add(-ClockSkew),
+		NotAfter:              notAfter,
+		DNSNames:              append([]string(nil), options.DNSNames...),
+		IPAddresses:           append([]net.IP(nil), options.IPAddresses...),
+		URIs:                  append([]*url.URL(nil), options.URIs...),
+		CRLDistributionPoints: options.CRLDistributionPoints,
+		ExtraExtensions:       append([]pkix.Extension(nil), options.ExtraExtensions...),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           extKeyUsage,
 	}
 	if _, ok := publicKey.(*rsa.PublicKey); ok {
 		template.KeyUsage |= x509.KeyUsageKeyEncipherment

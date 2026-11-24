@@ -31,4 +31,21 @@ spec:
 {{- if .Values.agentio.enabled }}
 
 {{ include "agentio.agentiod.service" . }}
+{{- if .Values.agentio.agentiod.mitm.crlOrigin }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentio.agentiod.fullname" . | trunc 59 | trimSuffix "-" }}-crl
+  namespace: {{ (include "agentio.namespace" .) }}
+  labels:
+    {{- include "agentio.agentiod.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "agentio.agentiod.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http-crl
+      port: 80
+      targetPort: http-crl
+{{- end }}
 {{- end }}

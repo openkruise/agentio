@@ -140,6 +140,7 @@ type controlPlane struct {
 	authenticator        attestation.Authenticator
 	authenticationSynced func() bool
 	authority            *ca.Authority
+	crlHandler           http.Handler
 	compiler             *compiler.Compiler
 	validationRefs       *validation.ReferenceChecker
 	started              time.Time
@@ -465,7 +466,16 @@ func (p *controlPlane) serve(
 		return err
 	}
 
-	errorsChannel := make(chan error, 4)
+	errorsChannel := make(chan error, 5)
+	if p.crlHandler != nil {
+		crlServer := &http.Server{Addr: ":15018", Handler: p.crlHandler, ReadHeaderTimeout: 5 * time.Second}
+		defer shutdownHTTP(crlServer, 5*time.Second)
+		go func() {
+			if err := crlServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errorsChannel <- fmt.Errorf("serve MITM CRLs: %w", err)
+			}
+		}()
+	}
 	// Start the process-wide Kubernetes client only after every source and
 	// controller has had a chance to register its shared informers. Registry is
 	// one consumer of this client; it does not own the client lifecycle.
@@ -547,25 +557,28 @@ func (p *controlPlane) startDiscovery(
 
 func (p *controlPlane) newDomainSigner(ctx context.Context) (mitm.DomainSignerSource, error) {
 	if p.composition.domainSigner != nil {
+		if features.MITMCRLOrigin != "" {
+			return mitm.DomainSignerSource{}, fmt.Errorf("MITM CRL publication requires the built-in domain signer")
+		}
 		return *p.composition.domainSigner, nil
-	}
-	mitmSecretNamespace := strings.TrimSpace(features.MITMCASecretNamespace)
-	if mitmSecretNamespace == "" {
-		mitmSecretNamespace = p.options.RootNamespace
 	}
 	builtInSigner, err := mitm.NewMITMSigner(ctx, p.kubeClient, mitm.MITMSignerOptions{
 		Mode:                  mitm.MITMSignMode(features.MITMSignMode),
-		Namespace:             mitmSecretNamespace,
+		Namespace:             p.options.RootNamespace,
+		SecretNamespace:       strings.TrimSpace(features.MITMCASecretNamespace),
 		SecretName:            features.MITMCASecretName,
 		RootLifetime:          features.MITMRootLifetime,
 		RootRenewBefore:       features.MITMRootRenewBefore,
 		RotationCheckInterval: features.MITMRotationCheckInterval,
 		LeafExpiryMargin:      features.MITMRenewBefore,
+		CRLOrigin:             features.MITMCRLOrigin,
+		ConfigMaps:            p.registry.ConfigMaps,
 		KrtOptions:            p.krtBuilder,
 	})
 	if err != nil {
 		return mitm.DomainSignerSource{}, err
 	}
+	p.crlHandler = builtInSigner.CRLHandler()
 	return mitm.DomainSignerSource{
 		Signer:      builtInSigner,
 		State:       builtInSigner.State(),
