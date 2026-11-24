@@ -96,7 +96,8 @@ func TestBodyProcessingGatewayConfig(t *testing.T) {
 		return &core.TypedExtensionConfig{}
 	})
 	ext := extensions[bodyProcessingName]
-	if ext.GetName() != bodyProcessingName || !proto.Equal(unpackBodyRules(t, ext.TypedConfig), settings.BodyProcessing) {
+	if ext.GetName() != bodyProcessingName ||
+		!proto.Equal(unpackBodyRules(t, ext.TypedConfig), settings.BodyProcessing) {
 		t.Fatalf("unexpected body processing ECDS resource: %v", ext)
 	}
 	listeners := messagesOf(t, resources, model.ListenerType, func() *listener.Listener { return &listener.Listener{} })
