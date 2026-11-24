@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod capture;
-pub(crate) mod format;
+#[cfg(test)]
+pub(crate) mod fixture;
+mod format;
 mod limit;
 pub(crate) mod projection;
 mod sse;
@@ -301,6 +303,52 @@ mod tests {
     }
     fn read(line: &[u8]) -> Value {
         serde_json::from_slice(line).unwrap()
+    }
+
+    #[test]
+    fn event_aliases_read_typed_values_with_independent_limits() {
+        let fields: FormatFields = &[
+            ("id", "%EVENT(llm.responseId)%"),
+            ("gen_ai.response.id", "%EVENT(llm.responseId)%"),
+            ("prefix", "%EVENT(llm.responseId):4%"),
+            ("messages", "%EVENT(llm.response.messages)%"),
+            ("also_messages", "%EVENT(llm.response.messages)%"),
+            ("tokens", "%EVENT(llm.usage.inputTokens)%"),
+            ("cached", "%EVENT(llm.usage.cachedInputTokens)%"),
+        ];
+        let body = json!({
+            "id": "resp_42", "model": "test-model", "status": "completed",
+            "output": [{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],
+            "usage": {"input_tokens": 0}
+        });
+        let terminal = json!({"type":"response.completed","response":body});
+        for (media, wire) in [
+            ("application/json", body.to_string()),
+            (
+                "text/event-stream",
+                format!("event: response.completed\ndata: {terminal}\n\n"),
+            ),
+        ] {
+            let rows = protocol_records(
+                Format::OpenaiResponses,
+                media,
+                &wire,
+                ParserDirection::Response,
+                &[fields],
+                "",
+            );
+            let row = read(&rows[0]);
+            assert_eq!(row["id"], "resp_42");
+            assert_eq!(row["gen_ai.response.id"], "resp_42");
+            assert_eq!(row["prefix"], "resp");
+            assert_eq!(
+                row["messages"][0]["parts"][0],
+                json!({"type":"text","content":"hello"})
+            );
+            assert_eq!(row["also_messages"], row["messages"]);
+            assert_eq!(row["tokens"], 0);
+            assert!(row.get("cached").is_none());
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@
 
 use super::{
     projection::{Projection, response_text, response_view},
-    template::{BodyFields, Template},
+    template::Template,
 };
 use crate::{
     FilterOutput,
@@ -101,7 +101,6 @@ impl Capture {
         settings.fields.usage = true;
         settings.fields.instructions |= settings.fields.input_messages;
         settings.fields.retained_text |= settings.fields.input_messages;
-        let template = Arc::new(Template::fixture(settings.fields, settings.field_bytes));
         let mut attrs = Attributes::default();
         for (alias, value) in &context.attributes.values {
             attrs.insert(alias, value.as_str().unwrap(), settings.field_bytes);
@@ -128,6 +127,11 @@ impl Capture {
             "response" => Side::Response,
             _ => unreachable!(),
         };
+        let template = Arc::new(Template::fixture(
+            side,
+            settings.fields,
+            settings.field_bytes,
+        ));
         let mut capture = Self::new(side, context.filter_index, template, attrs.truncated);
         capture.format = settings.format;
         capture.fixture_fields = attrs.values;
@@ -163,34 +167,6 @@ impl Capture {
     }
 }
 
-impl BodyFields {
-    fn publish(&self, body: ParsedBody, response: bool, output: &mut Map<String, Value>) -> bool {
-        let mut clipped = body.truncated;
-        let mut attrs = Map::new();
-        match body.content {
-            Content::Llm(view) => {
-                clipped |= view.tool_refs.truncated;
-                super::format::project(
-                    view,
-                    &mut attrs,
-                    response,
-                    self.fields.output_messages || self.fields.error,
-                );
-            }
-            Content::Http(v) => {
-                attrs.insert("http.body".into(), v);
-            }
-            Content::Empty => {}
-        }
-        for col in &self.columns {
-            if let Some(value) = attrs.get(col.key) {
-                clipped |= col.project(value, output);
-            }
-        }
-        clipped
-    }
-}
-
 impl BodyFilter for Capture {
     fn interest(&self) -> BodyInterest {
         BodyInterest {
@@ -215,7 +191,7 @@ impl BodyFilter for Capture {
                 }
                 BodyEvent::LlmResponse(event) => {
                     if let Some(body) = state.sse.observe(event, group.fields, group.limit) {
-                        self.clipped |= group.publish(body, true, &mut self.body);
+                        self.clipped |= group.publish(body, &mut self.body);
                     }
                 }
                 _ => {}
@@ -237,7 +213,7 @@ impl BodyFilter for Capture {
                         let body = state
                             .sse
                             .interrupted(view, *visible, group.fields, group.limit);
-                        group.publish(body, true, &mut self.body);
+                        group.publish(body, &mut self.body);
                     }
                 }
                 error = Some(*reason);
@@ -284,7 +260,6 @@ impl BodyFilter for Capture {
                                     truncated,
                                     content: Content::Llm(v),
                                 },
-                                !request,
                                 &mut self.body,
                             )
                         }
@@ -297,11 +272,7 @@ impl BodyFilter for Capture {
             }
             BodyResult::Http(Ok(body)) => {
                 for group in &self.template.body {
-                    self.clipped |= group.publish(
-                        body.clone(),
-                        matches!(self.direction, Side::Response),
-                        &mut self.body,
-                    );
+                    self.clipped |= group.publish(body.clone(), &mut self.body);
                 }
             }
         }

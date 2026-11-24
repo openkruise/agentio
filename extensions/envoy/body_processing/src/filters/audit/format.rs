@@ -1,35 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::parser::llm::LlmView;
+use crate::parser::body::Content;
 use serde_json::{Map, Value, json};
-
-pub(super) const METADATA: &[(&str, &str)] = &[
-    ("responseId", "gen_ai.response.id"),
-    ("previousResponseId", "gen_ai.request.previous_response.id"),
-    ("requestStream", "gen_ai.request.stream"),
-    ("maxTokens", "gen_ai.request.max_tokens"),
-    ("finishReasons", "gen_ai.response.finish_reasons"),
-    ("conversationId", "gen_ai.conversation.id"),
-    ("question", "llm.question"),
-    ("answer", "llm.answer"),
-    ("status", "llm.status"),
-    ("incompleteReason", "llm.incompleteReason"),
-    ("truncated", "llm.truncated"),
-    ("retainedText", "llm.retainedText"),
-];
-
-pub(super) const USAGE: &[(&str, &str)] = &[
-    ("inputTokens", "gen_ai.usage.input_tokens"),
-    ("outputTokens", "gen_ai.usage.output_tokens"),
-    ("cachedInputTokens", "gen_ai.usage.cache_read.input_tokens"),
-    (
-        "cacheCreationInputTokens",
-        "gen_ai.usage.cache_write.input_tokens",
-    ),
-    ("reasoningTokens", "gen_ai.usage.reasoning.output_tokens"),
-    ("totalTokens", "agentio.usage.total_tokens"),
-];
+use std::borrow::Cow;
 
 fn project_image(block: &mut Map<String, Value>) {
     let (kind, from, to) = match block.remove("source").as_ref().and_then(Value::as_str) {
@@ -102,86 +76,127 @@ pub(super) fn message(value: &mut Value) {
     }
 }
 
-// Project the normalized document onto literal keys in the JSON log record.
-pub(crate) fn project(
-    mut view: LlmView,
-    attrs: &mut Map<String, Value>,
-    response: bool,
-    include_errors: bool,
-) {
-    if view.partial {
-        attrs.insert("llm.partial".into(), true.into());
+pub(super) fn messages(value: &mut Value) {
+    for item in value.as_array_mut().into_iter().flatten() {
+        message(item);
     }
-    if view.tool_refs.truncated {
-        attrs.insert("llm.toolCallsTruncated".into(), true.into());
-    }
-    if !view.tool_refs.entries.is_empty() {
-        attrs.insert("agentio.tool.calls".into(), json!(view.tool_refs.entries));
-    }
-    let Some(doc) = view.document.as_object_mut() else {
-        return;
-    };
-    for &(key, attr) in METADATA {
-        if let Some(value) = doc.remove(key) {
-            attrs.insert(attr.into(), value);
-        }
-    }
-    if let Some(error) = doc.get("error") {
-        if let Some(code) = error["code"].as_str() {
-            attrs.insert("agentio.response.error_code".into(), code.into());
-        }
-        if let Some(kind) = error["type"]
-            .as_str()
-            .filter(|s| *s != "error")
-            .or_else(|| error["code"].as_str())
-        {
-            attrs.insert("error.type".into(), kind.into());
-        }
-    }
-    if include_errors && let Some(error) = doc.remove("error") {
-        attrs.insert("llm.error".into(), error);
-    }
-    if let Some(mut instructions) = doc.remove("systemInstructions") {
-        project_parts(&mut instructions);
-        attrs.insert("gen_ai.system_instructions".into(), instructions);
-    }
-    attrs.insert("gen_ai.operation.name".into(), "chat".into());
-    for (key, field) in [
-        (
-            "model",
-            if response {
-                "gen_ai.response.model"
-            } else {
-                "gen_ai.request.model"
-            },
-        ),
-        ("inputMessages", "gen_ai.input.messages"),
-        ("outputMessages", "gen_ai.output.messages"),
-        ("tools", "gen_ai.tool.definitions"),
-    ] {
-        if let Some(mut v) = doc.remove(key) {
-            if key.ends_with("Messages") {
-                for item in v.as_array_mut().into_iter().flatten() {
-                    message(item);
+}
+
+/// The value source of a compiled EVENT column. Names in the log come from the template.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Field {
+    Question,
+    Tools,
+    InputMessages,
+    OutputMessages,
+    Answer,
+    FinishReasons,
+    Usage(&'static str),
+    ToolRefs,
+    Instructions,
+    Error,
+    ErrorType,
+    ErrorCode,
+    RetainedText,
+    Model,
+    ResponseId,
+    PreviousResponseId,
+    Stream,
+    MaxTokens,
+    ConversationId,
+    Status,
+    IncompleteReason,
+    #[cfg(test)]
+    HttpBody,
+    #[cfg(test)]
+    Partial,
+    #[cfg(test)]
+    ToolRefsTruncated,
+    #[cfg(test)]
+    Truncated,
+    #[cfg(test)]
+    Operation,
+}
+
+impl Field {
+    /// A budget group reads each field once. Structured values can be formatted in place
+    /// on the group's owned view before their size is measured.
+    pub(super) fn value(self, content: &mut Content) -> Option<Cow<'_, Value>> {
+        let view = match content {
+            Content::Llm(view) => view,
+            Content::Http(_body) => {
+                #[cfg(test)]
+                if self == Self::HttpBody {
+                    return Some(Cow::Borrowed(_body));
                 }
-            } else if key == "tools" {
-                for tool in v
+                return None;
+            }
+            Content::Empty => return None,
+        };
+        let doc = &mut view.document;
+        let value = match self {
+            Self::Model => doc.get("model")?,
+            Self::ResponseId => doc.get("responseId")?,
+            Self::PreviousResponseId => doc.get("previousResponseId")?,
+            Self::Stream => doc.get("requestStream")?,
+            Self::MaxTokens => doc.get("maxTokens")?,
+            Self::ConversationId => doc.get("conversationId")?,
+            Self::Status => doc.get("status")?,
+            Self::IncompleteReason => doc.get("incompleteReason")?,
+            Self::Question => doc.get("question")?,
+            Self::Answer => doc.get("answer")?,
+            Self::FinishReasons => doc.get("finishReasons")?,
+            Self::RetainedText => doc.get("retainedText")?,
+            Self::Usage(key) => doc.get("usage")?.get(key)?,
+            Self::Error => doc.get("error")?,
+            Self::ErrorCode => doc.get("error")?.get("code").filter(|v| v.is_string())?,
+            Self::ErrorType => {
+                let error = doc.get("error")?;
+                error
+                    .get("type")
+                    .filter(|v| v.as_str().is_some_and(|s| s != "error"))
+                    .or_else(|| error.get("code").filter(|v| v.is_string()))?
+            }
+            // Request capture already formatted these before applying its retention limit.
+            Self::InputMessages => doc.get("inputMessages")?,
+            Self::Instructions => doc.get("systemInstructions")?,
+            Self::OutputMessages => {
+                let output = doc.get_mut("outputMessages")?;
+                messages(output);
+                output
+            }
+            Self::Tools => {
+                let tools = doc.get_mut("tools")?;
+                for tool in tools
                     .as_array_mut()
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_object_mut)
                 {
-                    tool.entry("type").or_insert("function".into());
+                    tool.entry("type").or_insert_with(|| "function".into());
                 }
+                tools
             }
-            attrs.insert(field.into(), v);
-        }
-    }
-    if let Some(Value::Object(mut usage)) = doc.remove("usage") {
-        for &(key, field) in USAGE {
-            if let Some(value) = usage.remove(key) {
-                attrs.insert(field.into(), value);
+            Self::ToolRefs => {
+                return (!view.tool_refs.entries.is_empty())
+                    .then(|| Cow::Owned(json!(&view.tool_refs.entries)));
             }
-        }
+            #[cfg(test)]
+            Self::HttpBody => return None,
+            #[cfg(test)]
+            Self::Partial => return view.partial.then_some(Cow::Borrowed(&Value::Bool(true))),
+            #[cfg(test)]
+            Self::ToolRefsTruncated => {
+                return view
+                    .tool_refs
+                    .truncated
+                    .then_some(Cow::Borrowed(&Value::Bool(true)));
+            }
+            #[cfg(test)]
+            Self::Truncated => doc.get("truncated")?,
+            #[cfg(test)]
+            Self::Operation => return doc.is_object().then(|| Cow::Owned("chat".into())),
+        };
+        Some(Cow::Borrowed(value))
     }
 }
