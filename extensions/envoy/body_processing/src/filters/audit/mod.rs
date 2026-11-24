@@ -8,9 +8,9 @@ pub(crate) mod projection;
 mod sse;
 mod template;
 
-use crate::chain::Side;
 #[cfg(test)]
 use crate::parser::{Format, llm::Fields};
+use crate::{chain::Side, parser::BodyError};
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyHttpFilter, abi::envoy_dynamic_module_type_metadata_source as MetadataSource,
 };
@@ -186,9 +186,7 @@ impl Audit {
         let row = output.audit(index);
         row.append(&mut attrs.values);
         if let Some(response) = &self.response {
-            for key in &response.status {
-                row.insert(key.clone(), "incomplete".into());
-            }
+            capture::CaptureStatus::Failed(BodyError::Incomplete).write(row, &response.status);
         }
         let start =
             |side, template: &std::sync::Arc<template::Template>| -> Box<dyn super::BodyFilter> {
@@ -754,6 +752,47 @@ mod tests {
     }
 
     #[test]
+    fn tool_reference_prefix_and_status_are_local_to_each_audit() {
+        let calls = json!([
+            {"index":0,"id":"c1","type":"function","function":{"name":"one","arguments":"{}"}},
+            {"index":1,"id":"c2","type":"function","function":{"name":"two","arguments":"{}"}}
+        ]);
+        let message = json!({"role":"assistant","tool_calls":calls});
+        let doc = json!({"model":"m","choices":[{"index":0,"message":message,"finish_reason":"tool_calls"}]});
+        let delta = json!({"model":"m","choices":[{"index":0,"delta":message,"finish_reason":"tool_calls"}]});
+        let first = json!({"id":"c1","kind":"call","name":"one"});
+        let second = json!({"id":"c2","kind":"call","name":"two"});
+        let prefix = json!([first]);
+        let limit = serde_json::to_vec(&prefix).unwrap().len();
+        let sized = format!("%EVENT(llm.response.toolCallRefs):{limit}%");
+        let status = ("status", "%CAPTURE_STATUS(response)%");
+        for (media, wire) in [
+            ("application/json", doc.to_string()),
+            (
+                "text/event-stream",
+                format!("data: {delta}\n\ndata: [DONE]\n\n"),
+            ),
+        ] {
+            let rows = protocol_records(
+                Format::OpenaiChatCompletions,
+                media,
+                &wire,
+                ParserDirection::Response,
+                &[
+                    &[("refs", &sized), status],
+                    &[("refs", "%EVENT(llm.response.toolCallRefs)%"), status],
+                ],
+                "",
+            );
+            assert_eq!(read(&rows[0]), json!({"refs":prefix,"status":"truncated"}));
+            assert_eq!(
+                read(&rows[1]),
+                json!({"refs":[first, second],"status":"complete"})
+            );
+        }
+    }
+
+    #[test]
     fn request_tool_limit_counts_normalized_json_and_preserves_the_prefix() {
         let desc = "<>&".repeat(40);
         let body = json!({"model":"m","messages": [], "tools": [
@@ -883,6 +922,47 @@ mod tests {
         assert_eq!(parts[1]["content"], "after file");
         assert_eq!(parts[2]["arguments"], args);
         assert_eq!(row["status"], "truncated");
+    }
+
+    #[test]
+    fn response_status_tracks_finish_reason_loss_only_when_selected() {
+        use crate::{
+            filters::{BodyEnd, BodyResult},
+            parser::json_capture::CaptureLoss,
+        };
+        let end = BodyEnd {
+            bytes_seen: 0,
+            decoded_bytes: None,
+            result: BodyResult::Llm(Ok((
+                CaptureLoss {
+                    finish_reasons: true,
+                    ..Default::default()
+                },
+                json!({"model":"m","finishReasons":["stop"]}).into(),
+            ))),
+        };
+        for (alias, field, expected) in [
+            (
+                "why",
+                "llm.finishReasons",
+                json!({"why":["stop"],"s":"truncated"}),
+            ),
+            (
+                "gen_ai.response.finish_reasons",
+                "llm.response.model",
+                json!({"gen_ai.response.finish_reasons":"m","s":"complete"}),
+            ),
+        ] {
+            let audit = Audit::compile(BTreeMap::from([
+                ("s".into(), "%CAPTURE_STATUS(response)%".into()),
+                (alias.into(), format!("%EVENT({field})%")),
+            ]))
+            .unwrap();
+            let mut output = FilterOutput::default();
+            let capture = capture::Capture::new(Side::Response, 0, audit.response.unwrap(), false);
+            Box::new(capture).on_end(&end, &mut output);
+            assert_eq!(json!(output.0[&0]), expected);
+        }
     }
 
     #[test]

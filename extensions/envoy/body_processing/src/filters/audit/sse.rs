@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::projection::{TextPreview, response_text, response_view};
-use crate::parser::llm::Fields;
 use crate::parser::{
     body::{Content, ParsedBody},
     llm::{
-        answer_parts,
+        Fields, LlmView, answer_parts,
         stream::{AnswerStatus, Event, Output},
     },
 };
@@ -94,14 +93,14 @@ impl Answer {
 impl Projection {
     pub(super) fn interrupted(
         &mut self,
-        view: &Value,
+        view: &LlmView,
         visible: bool,
         fields: Fields,
         limit: usize,
     ) -> ParsedBody {
-        let mut value = response_view(view, fields, limit);
+        let mut result = response_view(view, fields, limit);
         if let Some(usage) = self.usage.take() {
-            value["usage"] = usage;
+            result.document["usage"] = usage;
         }
         let mut answer = std::mem::take(&mut self.answer);
         if let Some(pending) = self.pending.take() {
@@ -121,7 +120,7 @@ impl Projection {
                 for part in answer.parts.values() {
                     text.push(part, limit);
                 }
-                text.publish(&mut value);
+                text.publish(&mut result.document);
             }
             if fields.answer && visible {
                 let mut parts = answer
@@ -130,13 +129,14 @@ impl Projection {
                     .filter(|((output, _), _)| output.answer_candidate)
                     .peekable();
                 if parts.peek().is_some() {
-                    value["answer"] = parts.map(|(_, text)| text).collect::<String>().into();
+                    result.document["answer"] =
+                        parts.map(|(_, text)| text).collect::<String>().into();
                 }
             }
         }
         ParsedBody {
             truncated: false,
-            content: Content::Llm(value),
+            content: Content::Llm(result),
         }
     }
 
@@ -190,9 +190,9 @@ impl Projection {
                 answer,
             } => {
                 self.pending = None;
-                let mut value = response_view(view, fields, limit);
+                let mut result = response_view(view, fields, limit);
                 if let Some(usage) = self.usage.take() {
-                    value["usage"] = usage;
+                    result.document["usage"] = usage;
                 }
                 let saved = std::mem::take(&mut self.answer);
                 let mut clipped = truncated && fields.output_messages;
@@ -205,9 +205,9 @@ impl Projection {
                         text.clipped |= saved.clipped_from().is_some();
                         text
                     } else {
-                        response_text(view, limit)
+                        response_text(&view.document, limit)
                     };
-                    clipped |= text.publish(&mut value);
+                    clipped |= text.publish(&mut result.document);
                 }
                 let answer = match (fields.answer, answer) {
                     (true, AnswerStatus::Visible) => Some(saved),
@@ -218,7 +218,7 @@ impl Projection {
                     clipped |= answer
                         .clipped_from()
                         .is_some_and(|(output, _)| output.answer_candidate);
-                    value["answer"] = answer
+                    result.document["answer"] = answer
                         .parts
                         .into_iter()
                         .filter(|((output, _), _)| output.answer_candidate)
@@ -227,11 +227,11 @@ impl Projection {
                         .into();
                 }
                 if clipped {
-                    value["truncated"] = true.into();
+                    result.document["truncated"] = true.into();
                 }
                 return Some(ParsedBody {
                     truncated: clipped,
-                    content: Content::Llm(value),
+                    content: Content::Llm(result),
                 });
             }
             _ => {}
@@ -261,7 +261,7 @@ mod tests {
     fn interrupted_responses_keep_a_prefix_across_open_and_sealed_items() {
         use super::{Content, Fields, Projection};
         use serde_json::json;
-        let view = json!({"format": RESPONSES});
+        let view = json!({"format": RESPONSES}).into();
         let first = Output::new(RESPONSES, 0);
         let second = Output::new(RESPONSES, 1);
         let fields = Fields {
@@ -280,10 +280,10 @@ mod tests {
             } else {
                 projection.answer.append((second, 0), "!", 4);
             }
-            let Content::Llm(value) = projection.interrupted(&view, true, fields, 4).content else {
+            let Content::Llm(view) = projection.interrupted(&view, true, fields, 4).content else {
                 unreachable!()
             };
-            assert_eq!(value["answer"], if seal_first { "A" } else { "ab" });
+            assert_eq!(view.document["answer"], if seal_first { "A" } else { "ab" });
         }
     }
 }

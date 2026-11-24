@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Event, Output, Retention, Trailers, string};
+use crate::parser::BodyError;
 use crate::parser::llm::{
     RESPONSES,
-    response::{INVALID, Result, index, metadata},
+    response::{Result, index, metadata},
     responses_item,
 };
 use serde_json::{Value, json};
@@ -31,7 +32,7 @@ impl Stream {
         emit: &mut impl FnMut(Event<'_>),
     ) -> Result<Option<Trailers>> {
         if done {
-            return Err("invalid_json");
+            return Err(BodyError::InvalidJson);
         }
         let mut terminal = false;
         match kind {
@@ -51,7 +52,7 @@ impl Stream {
                 let model = string(&doc["model"])?;
                 let status = string(&doc["status"])?;
                 if kind != "response.created" && kind.strip_prefix("response.") != Some(status) {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let mut m = metadata(RESPONSES, doc)?;
                 if let Some(usage) = m.as_object_mut().unwrap().remove("usage") {
@@ -59,7 +60,7 @@ impl Stream {
                 }
                 if let Some(old) = self.view.as_ref() {
                     if old["model"].as_str().is_some_and(|s| s != model) {
-                        return Err(INVALID);
+                        return Err(BodyError::InvalidContent);
                     }
                     for (key, wire) in [
                         ("error", "error"),
@@ -76,9 +77,9 @@ impl Stream {
                 terminal = matches!(status, "completed" | "failed" | "incomplete")
                     && kind != "response.created";
                 if terminal && !doc["output"].is_null() {
-                    let out = doc["output"].as_array().ok_or(INVALID)?;
+                    let out = doc["output"].as_array().ok_or(BodyError::InvalidContent)?;
                     if out.len() > 1024 {
-                        return Err("too_large");
+                        return Err(BodyError::TooLarge);
                     }
                     if !out.is_empty() {
                         b.tools.document(RESPONSES, doc, true);
@@ -108,7 +109,7 @@ impl Stream {
                 let item = &v["item"];
                 let id = string(&item["id"])?;
                 if id.len() > 1024 {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let closed = kind.ends_with(".done");
                 if self
@@ -116,7 +117,7 @@ impl Stream {
                     .get(&i)
                     .is_some_and(|old| old.id != id || old.closed || !closed)
                 {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 if !self.items.contains_key(&i) {
                     b.item()?;
@@ -155,9 +156,9 @@ impl Stream {
             | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done" => {
                 let output = index(&v["output_index"])?;
-                let item = self.items.get(&output).ok_or(INVALID)?;
+                let item = self.items.get(&output).ok_or(BodyError::InvalidContent)?;
                 if item.closed || string(&v["item_id"])? != item.id {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 match kind {
                     "response.output_text.delta" | "response.refusal.delta" => {
@@ -189,14 +190,14 @@ impl Stream {
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
-        let mut view = self.view.ok_or(INVALID)?;
+        let mut view = self.view.ok_or(BodyError::InvalidContent)?;
         let mut messages = vec![];
         if let Some(output) = self.terminal {
             messages = output;
         } else if view.get("error").is_none() {
             for (i, (index, item)) in self.items.into_iter().enumerate() {
                 if index as usize != i || !item.closed {
-                    return Err("incomplete_stream");
+                    return Err(BodyError::IncompleteStream);
                 }
                 if let Some(m) = item.message {
                     messages.push(m);

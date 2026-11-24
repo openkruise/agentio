@@ -1,6 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::parser::BodyError;
 use flate2::{Decompress, FlushDecompress, Status};
 
 // Bound work on the audit copy independently of a filter's retention budget.
@@ -27,7 +28,7 @@ impl Gzip {
         &mut self,
         mut input: &[u8],
         mut emit: impl FnMut(&[u8], usize) -> bool,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), BodyError> {
         let mut output = [0u8; 16 * 1024];
         if input.is_empty() {
             return Ok(());
@@ -44,7 +45,7 @@ impl Gzip {
             let status = self
                 .inflate
                 .decompress(input, &mut output[..capacity], FlushDecompress::None)
-                .map_err(|_| "invalid_encoding")?;
+                .map_err(|_| BodyError::InvalidEncoding)?;
             let consumed = (self.inflate.total_in() - before_in) as usize;
             let produced = (self.inflate.total_out() - before_out) as usize;
             let accepted = produced.min(remaining);
@@ -53,7 +54,7 @@ impl Gzip {
                 return Ok(());
             }
             if produced > remaining {
-                return Err("too_large");
+                return Err(BodyError::TooLarge);
             }
             self.member_finished = status == Status::StreamEnd;
             input = &input[consumed..];
@@ -63,7 +64,7 @@ impl Gzip {
                 return Ok(());
             }
             if consumed == 0 && produced == 0 && !self.member_finished {
-                return Err("invalid_encoding");
+                return Err(BodyError::InvalidEncoding);
             }
         }
     }

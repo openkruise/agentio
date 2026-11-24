@@ -1,8 +1,8 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::response::{INVALID, Result};
-use crate::parser::Format;
+use super::response::Result;
+use crate::parser::{BodyError, Format};
 use serde_json::Value;
 
 // Reuse ordinary frame buffers across deltas. Release outliers after dispatch.
@@ -44,7 +44,7 @@ impl Framer {
     ) -> Result<()> {
         self.seen += chunk.len();
         if self.seen > 64 << 20 {
-            return Err("too_large");
+            return Err(BodyError::TooLarge);
         }
         while !chunk.is_empty() {
             if self.after_cr {
@@ -66,7 +66,7 @@ impl Framer {
         Ok(())
     }
     fn end_line(&mut self, emit: &mut impl FnMut(Event<'_>) -> Result<()>) -> Result<()> {
-        let mut line = std::str::from_utf8(&self.line).map_err(|_| "invalid_sse")?;
+        let mut line = std::str::from_utf8(&self.line).map_err(|_| BodyError::InvalidSse)?;
         if self.first {
             line = line.strip_prefix('\u{feff}').unwrap_or(line);
             self.first = false;
@@ -79,22 +79,23 @@ impl Framer {
                 let v = if done {
                     Value::Null
                 } else {
-                    let value: Value = serde_json::from_str(raw).map_err(|_| "invalid_json")?;
+                    let value: Value =
+                        serde_json::from_str(raw).map_err(|_| BodyError::InvalidJson)?;
                     if !value.is_object() {
-                        return Err("invalid_json");
+                        return Err(BodyError::InvalidJson);
                     }
                     value
                 };
                 let kind = match self.format {
                     Format::OpenaiChatCompletions => "",
-                    Format::AnthropicMessages if done => return Err("invalid_json"),
+                    Format::AnthropicMessages if done => return Err(BodyError::InvalidJson),
                     Format::OpenaiResponses if done => "",
                     Format::AnthropicMessages | Format::OpenaiResponses => {
-                        let kind = v["type"].as_str().ok_or(INVALID)?;
+                        let kind = v["type"].as_str().ok_or(BodyError::InvalidContent)?;
                         let default_event = self.format == Format::OpenaiResponses
                             && (self.name.is_empty() || self.name == "message");
                         if !default_event && kind != self.name {
-                            return Err(INVALID);
+                            return Err(BodyError::InvalidContent);
                         }
                         kind
                     }

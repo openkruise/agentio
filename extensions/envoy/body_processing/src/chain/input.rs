@@ -7,7 +7,7 @@ use crate::{
     config::RequestParserConfig,
     filters::{BodyEnd, BodyFilter, BodyInterest, BodyResult, Decision},
     parser::{
-        BodyEvent, Format,
+        BodyError, BodyEvent, Format,
         body::HttpCapture,
         json_capture::JsonCapture,
         llm::{Fields, sse, stream},
@@ -38,7 +38,7 @@ enum Input {
     Response(JsonCapture),
     Events(sse::Framer, Box<stream::Stream>),
     Other(HttpCapture),
-    Failed(&'static str),
+    Failed(BodyError),
 }
 
 impl Input {
@@ -50,10 +50,10 @@ impl Input {
         encoding: &str,
     ) -> Self {
         if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
-            return Self::Failed("unsupported_encoding");
+            return Self::Failed(BodyError::UnsupportedEncoding);
         }
         let Some(media) = media else {
-            return Self::Failed("unsupported_media_type");
+            return Self::Failed(BodyError::UnsupportedMediaType);
         };
         if media.type_() == mime::APPLICATION
             && (media.subtype() == mime::JSON || media.suffix() == Some(mime::JSON))
@@ -68,13 +68,13 @@ impl Input {
         if matches!(direction, ParserDirection::Request(_))
             || media.essence_str() != "text/event-stream"
         {
-            return Self::Failed("unsupported_media_type");
+            return Self::Failed(BodyError::UnsupportedMediaType);
         }
         if media
             .get_param("charset")
             .is_some_and(|v| !v.as_str().is_empty() && !v.as_str().eq_ignore_ascii_case("utf-8"))
         {
-            return Self::Failed("unsupported_encoding");
+            return Self::Failed(BodyError::UnsupportedEncoding);
         }
         Self::Events(
             sse::Framer::new(format),
@@ -131,14 +131,14 @@ impl Group {
                 (true, None) => BodyResult::Sse,
                 (_, partial) => BodyResult::InterruptedSse {
                     reason: if complete {
-                        "incomplete_stream"
+                        BodyError::IncompleteStream
                     } else {
-                        "incomplete"
+                        BodyError::Incomplete
                     },
                     partial,
                 },
             },
-            _ if !complete => BodyResult::Failed("incomplete"),
+            _ if !complete => BodyResult::Failed(BodyError::Incomplete),
             Input::Count => BodyResult::Counts,
             Input::Other(reader) => {
                 BodyResult::Http(reader.finish(decoded.unwrap_or(wire_bytes), true))
@@ -245,9 +245,9 @@ impl DirectionStream {
     pub fn missing_buffer(&mut self, size: usize) {
         self.count_bytes(size);
         self.gzip = None;
-        self.fail("capture_error");
+        self.fail(BodyError::CaptureError);
     }
-    fn fail(&mut self, e: &'static str) {
+    fn fail(&mut self, e: BodyError) {
         self.count_inflated = false;
         if let Some(g) = &mut self.group {
             match &mut g.input {
@@ -282,7 +282,7 @@ impl DirectionStream {
     }
     pub fn finish(mut self, complete: bool, records: &mut FilterOutput) -> Decision {
         if complete && self.gzip.as_ref().is_some_and(|g| !g.finished()) {
-            self.fail("invalid_encoding")
+            self.fail(BodyError::InvalidEncoding)
         }
         self.group.map_or(Decision::Continue, |group| {
             group.finish(self.bytes_seen, self.decoded_bytes, complete, records)

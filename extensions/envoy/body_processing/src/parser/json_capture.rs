@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::llm::tool_summary::ToolSummary;
-use crate::parser::llm::{self, Fields};
+use crate::parser::BodyError;
+use crate::parser::llm::{self, Fields, LlmView};
 use serde_json::{Value, json};
 
 use memchr::memchr2;
@@ -732,16 +733,15 @@ impl Scanner {
         }
     }
 
-    fn finish(mut self, log_limit: usize, loss: &mut CaptureLoss) -> Result<Value, &'static str> {
+    fn finish(mut self, log_limit: usize, loss: &mut CaptureLoss) -> Result<LlmView, BodyError> {
         let format = self.format;
         if self.quoted || self.too_deep || !self.path.is_empty() {
-            return Err("invalid_json");
+            return Err(BodyError::InvalidJson);
         }
         if self.exhausted {
             let mut view = serde_json::json!({"format":format});
             if self.response {
                 view = llm::response::metadata(format, &self.metadata)?;
-                view["partial"] = true.into();
                 if let Some(id) = self.metadata.get_mut("id").filter(|v| v.is_string()) {
                     view["responseId"] = id.take();
                 }
@@ -777,9 +777,13 @@ impl Scanner {
             if !self.shape.tool_output(self.message_format) && !self.text.is_empty() {
                 view["retainedText"] = self.text.into();
             }
-            return Ok(view);
+            return Ok(LlmView {
+                document: view,
+                partial: self.response,
+                ..Default::default()
+            });
         }
-        let doc: Value = serde_json::from_slice(&self.doc).map_err(|_| "invalid_json")?;
+        let doc: Value = serde_json::from_slice(&self.doc).map_err(|_| BodyError::InvalidJson)?;
         let cuts: Vec<_> = self
             .shortened_text
             .iter()
@@ -790,10 +794,10 @@ impl Scanner {
                 loss.question_prefix_bytes =
                     Some(llm::question_prefix(&doc, protocol, &cuts).map_or(0, |s| s.len()));
             }
-            return Ok(doc);
+            return Ok(doc.into());
         }
         if format == "json" {
-            return Ok(doc);
+            return Ok(doc.into());
         }
         project_document(format, &doc, self.response, self.fields, log_limit, &cuts)
     }
@@ -862,9 +866,10 @@ impl JsonCapture {
         s.push(chunk);
         self.scanner = Some(Box::new(s));
     }
-    pub(super) fn finish_fragment(self) -> Result<(CaptureLoss, Value), &'static str> {
+    pub(super) fn finish_fragment(self) -> Result<(CaptureLoss, Value), BodyError> {
         let limit = self.limit;
         self.finish("json", false, Fields::default(), limit)
+            .map(|(loss, view)| (loss, view.document))
     }
 
     pub fn finish(
@@ -873,7 +878,7 @@ impl JsonCapture {
         response: bool,
         fields: Fields,
         log_limit: usize,
-    ) -> Result<(CaptureLoss, Value), &'static str> {
+    ) -> Result<(CaptureLoss, LlmView), BodyError> {
         let mut loss = self.loss();
         if let Some(s) = self.scanner {
             let view = s.finish(log_limit, &mut loss)?;
@@ -890,10 +895,10 @@ fn parse(
     response: bool,
     fields: Fields,
     log_limit: usize,
-) -> Result<Value, &'static str> {
-    let doc = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
+) -> Result<LlmView, BodyError> {
+    let doc: Value = serde_json::from_slice(body).map_err(|_| BodyError::InvalidJson)?;
     if format == "json" {
-        return Ok(doc);
+        return Ok(doc.into());
     }
     project_document(format, &doc, response, fields, log_limit, &[])
 }
@@ -905,25 +910,27 @@ fn project_document(
     fields: Fields,
     log_limit: usize,
     cuts: &[&Value],
-) -> Result<Value, &'static str> {
+) -> Result<LlmView, BodyError> {
     let mut view = match llm::document(format, doc, response, fields) {
-        Ok(view) => view,
+        Ok(value) => LlmView::from(value),
         Err(status) if response => {
             // A malformed optional message must not discard valid metadata for
             // an audit which only asks for usage or tool references.
-            let mut metadata = llm::document(format, doc, true, Fields::default())?;
-            metadata["outputMessagesError"] = status.into();
-            metadata
+            LlmView {
+                document: llm::document(format, doc, true, Fields::default())?,
+                output_messages_error: Some(status),
+                ..Default::default()
+            }
         }
         Err(status) => return Err(status),
     };
-    if response && view["outputMessages"].is_array() {
-        view["answer"] = llm::answer_prefix(doc, format, cuts).into();
+    if response && view.document["outputMessages"].is_array() {
+        view.document["answer"] = llm::answer_prefix(doc, format, cuts).into();
     }
     if format != "json" && fields.tool_call_refs {
         let mut calls = ToolSummary::new(log_limit);
         calls.document(format, doc, response);
-        calls.publish(&mut view);
+        view.tool_refs = calls.finish();
     }
     Ok(view)
 }

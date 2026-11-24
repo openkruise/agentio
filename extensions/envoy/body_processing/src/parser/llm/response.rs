@@ -1,22 +1,22 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::parser::BodyError;
 use crate::parser::llm::{ANTHROPIC, CHAT, RESPONSES, blocks, chat_message, responses_item};
 use serde_json::{Value, json};
 
-pub(crate) const INVALID: &str = "invalid_content";
-pub(crate) type Result<T> = std::result::Result<T, &'static str>;
+pub(crate) type Result<T> = std::result::Result<T, BodyError>;
 
 pub(crate) fn index(v: &Value) -> Result<u32> {
     v.as_f64()
         .filter(|n| (0.0..=i32::MAX as f64).contains(n) && n.fract() == 0.0)
         .map(|n| n as u32)
-        .ok_or(INVALID)
+        .ok_or(BodyError::InvalidContent)
 }
 
 fn opt_string(view: &mut Value, to: &str, from: &Value) -> Result<()> {
     if !from.is_null() {
-        view[to] = from.as_str().ok_or(INVALID)?.into();
+        view[to] = from.as_str().ok_or(BodyError::InvalidContent)?.into();
     }
     Ok(())
 }
@@ -110,7 +110,7 @@ pub(crate) fn usage(format: &str, raw: &Value) -> Value {
 
 pub(crate) fn metadata(format: &str, doc: &Value) -> Result<Value> {
     if !doc.is_object() {
-        return Err(INVALID);
+        return Err(BodyError::InvalidContent);
     }
     let mut view = json!({"format":format});
     if let Some(error) = doc.get("error")
@@ -123,13 +123,15 @@ pub(crate) fn metadata(format: &str, doc: &Value) -> Result<Value> {
     }
     opt_string(&mut view, "model", &doc["model"])?;
     if view.get("model").is_none() && view.get("error").is_none() {
-        return Err(INVALID);
+        return Err(BodyError::InvalidContent);
     }
     if doc["usage"].is_object() {
         view["usage"] = usage(format, &doc["usage"]);
     }
     if format == ANTHROPIC && !doc["stop_reason"].is_null() {
-        doc["stop_reason"].as_str().ok_or(INVALID)?;
+        doc["stop_reason"]
+            .as_str()
+            .ok_or(BodyError::InvalidContent)?;
     }
     if format == RESPONSES {
         opt_string(&mut view, "status", &doc["status"])?;
@@ -151,16 +153,18 @@ pub(crate) fn normalize(format: &str, doc: &Value, output: bool) -> Result<Value
         CHAT => "choices",
         ANTHROPIC => "content",
         RESPONSES => "output",
-        _ => return Err(INVALID),
+        _ => return Err(BodyError::InvalidContent),
     };
-    doc[collection].as_array().ok_or(INVALID)?;
+    doc[collection]
+        .as_array()
+        .ok_or(BodyError::InvalidContent)?;
     if !output {
         return Ok(view);
     }
     let mut messages = vec![];
     match format {
         CHAT => {
-            for choice in doc["choices"].as_array().ok_or(INVALID)? {
+            for choice in doc["choices"].as_array().ok_or(BodyError::InvalidContent)? {
                 let mut m = chat_message(&choice["message"], format)?;
                 m["index"] = index(&choice["index"])?.into();
                 opt_string(&mut m, "finishReason", &choice["finish_reason"])?;
@@ -169,20 +173,25 @@ pub(crate) fn normalize(format: &str, doc: &Value, output: bool) -> Result<Value
             messages.sort_by_key(|m| m["index"].as_u64());
         }
         ANTHROPIC => {
-            doc["content"].as_array().ok_or(INVALID)?;
+            doc["content"].as_array().ok_or(BodyError::InvalidContent)?;
             let mut m =
                 json!({"index":0,"role":"assistant","content":blocks(&doc["content"],format)});
             opt_string(&mut m, "finishReason", &doc["stop_reason"])?;
             messages.push(m);
         }
         RESPONSES => {
-            for (i, item) in doc["output"].as_array().ok_or(INVALID)?.iter().enumerate() {
+            for (i, item) in doc["output"]
+                .as_array()
+                .ok_or(BodyError::InvalidContent)?
+                .iter()
+                .enumerate()
+            {
                 let mut m = responses_item(item)?;
                 m["index"] = i.into();
                 messages.push(m);
             }
         }
-        _ => return Err(INVALID),
+        _ => return Err(BodyError::InvalidContent),
     }
     view["outputMessages"] = messages.into();
     Ok(view)

@@ -6,9 +6,15 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-#[derive(Serialize)]
-struct Reference {
-    kind: &'static str,
+#[derive(Clone, Default)]
+pub(crate) struct ToolReferences {
+    pub entries: Vec<ToolReference>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ToolReference {
+    kind: ToolKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,7 +25,7 @@ struct Reference {
 // Track positions so parallel calls keep their protocol order across callbacks.
 pub(crate) struct ToolSummary {
     limit: usize,
-    entries: BTreeMap<(usize, usize), Reference>,
+    entries: BTreeMap<(usize, usize), ToolReference>,
     bytes: usize,
     truncated: bool,
 }
@@ -37,7 +43,7 @@ impl ToolSummary {
     fn record(
         &mut self,
         position: (usize, usize),
-        kind: &'static str,
+        kind: ToolKind,
         id: &Value,
         name: &Value,
         delta: bool,
@@ -66,7 +72,7 @@ impl ToolSummary {
             self.truncated = true;
             return;
         }
-        let entry = self.entries.entry(position).or_insert(Reference {
+        let entry = self.entries.entry(position).or_insert(ToolReference {
             kind,
             id: None,
             name: None,
@@ -86,14 +92,14 @@ impl ToolSummary {
     }
 
     pub(crate) fn chat_delta(&mut self, choice: usize, slot: usize, id: &Value, name: &Value) {
-        self.record((choice, slot), "call", id, name, true);
+        self.record((choice, slot), ToolKind::Call, id, name, true);
     }
 
     fn chat(&mut self, index: usize, message: &Value) {
         if matches!(message["role"].as_str(), Some("tool" | "function")) {
             self.record(
                 (index, 0),
-                "result",
+                ToolKind::Result,
                 &message["tool_call_id"],
                 &message["name"],
                 false,
@@ -108,7 +114,7 @@ impl ToolSummary {
         {
             self.record(
                 (index, i),
-                "call",
+                ToolKind::Call,
                 &call["id"],
                 &call[if call["type"] == "custom" {
                     "custom"
@@ -121,7 +127,7 @@ impl ToolSummary {
         if message["function_call"].is_object() {
             self.record(
                 (index, usize::MAX),
-                "call",
+                ToolKind::Call,
                 &Value::Null,
                 &message["function_call"]["name"],
                 false,
@@ -131,12 +137,16 @@ impl ToolSummary {
 
     pub(crate) fn anthropic(&mut self, position: (usize, usize), block: &Value) {
         match block["type"].as_str().and_then(anthropic_tool) {
-            Some(ToolKind::Call) => {
-                self.record(position, "call", &block["id"], &block["name"], false)
-            }
+            Some(ToolKind::Call) => self.record(
+                position,
+                ToolKind::Call,
+                &block["id"],
+                &block["name"],
+                false,
+            ),
             Some(ToolKind::Result) => self.record(
                 position,
-                "result",
+                ToolKind::Result,
                 &block["tool_use_id"],
                 &Value::Null,
                 false,
@@ -147,12 +157,20 @@ impl ToolSummary {
 
     pub(crate) fn responses(&mut self, index: usize, item: &Value) {
         match item["type"].as_str().and_then(responses_tool) {
-            Some(ToolKind::Call) => {
-                self.record((index, 0), "call", &item["call_id"], &item["name"], false)
-            }
-            Some(ToolKind::Result) => {
-                self.record((index, 0), "result", &item["call_id"], &Value::Null, false)
-            }
+            Some(ToolKind::Call) => self.record(
+                (index, 0),
+                ToolKind::Call,
+                &item["call_id"],
+                &item["name"],
+                false,
+            ),
+            Some(ToolKind::Result) => self.record(
+                (index, 0),
+                ToolKind::Result,
+                &item["call_id"],
+                &Value::Null,
+                false,
+            ),
             _ => (),
         }
     }
@@ -196,12 +214,10 @@ impl ToolSummary {
         }
     }
 
-    pub(crate) fn publish(self, view: &mut Value) {
-        if self.truncated {
-            view["toolCallsTruncated"] = true.into();
-        } else if !self.entries.is_empty() {
-            view["toolCalls"] =
-                serde_json::to_value(self.entries.into_values().collect::<Vec<_>>()).unwrap();
+    pub(crate) fn finish(self) -> ToolReferences {
+        ToolReferences {
+            entries: self.entries.into_values().collect(),
+            truncated: self.truncated,
         }
     }
 }

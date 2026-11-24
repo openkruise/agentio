@@ -1,6 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::parser::llm::LlmView;
 use serde_json::{Map, Value, json};
 
 pub(super) const METADATA: &[(&str, &str)] = &[
@@ -14,9 +15,7 @@ pub(super) const METADATA: &[(&str, &str)] = &[
     ("answer", "llm.answer"),
     ("status", "llm.status"),
     ("incompleteReason", "llm.incompleteReason"),
-    ("partial", "llm.partial"),
     ("truncated", "llm.truncated"),
-    ("toolCallsTruncated", "llm.toolCallsTruncated"),
     ("retainedText", "llm.retainedText"),
 ];
 
@@ -105,12 +104,21 @@ pub(super) fn message(value: &mut Value) {
 
 // Project the normalized document onto literal keys in the JSON log record.
 pub(crate) fn project(
-    view: &mut Value,
+    mut view: LlmView,
     attrs: &mut Map<String, Value>,
     response: bool,
     include_errors: bool,
 ) {
-    let Some(doc) = view.as_object_mut() else {
+    if view.partial {
+        attrs.insert("llm.partial".into(), true.into());
+    }
+    if view.tool_refs.truncated {
+        attrs.insert("llm.toolCallsTruncated".into(), true.into());
+    }
+    if !view.tool_refs.entries.is_empty() {
+        attrs.insert("agentio.tool.calls".into(), json!(view.tool_refs.entries));
+    }
+    let Some(doc) = view.document.as_object_mut() else {
         return;
     };
     for &(key, attr) in METADATA {

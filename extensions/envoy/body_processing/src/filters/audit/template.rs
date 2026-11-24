@@ -15,6 +15,7 @@ enum Field {
     Tools,
     Messages,
     Answer,
+    FinishReasons,
     Usage,
     ToolRefs,
     Instructions,
@@ -50,7 +51,11 @@ impl Field {
             "llm.answer" => (Response, Self::Answer, "llm.answer"),
             "llm.error" => (Response, Self::Error, "llm.error"),
             "llm.responseId" => (Response, Self::Metadata, "gen_ai.response.id"),
-            "llm.finishReasons" => (Response, Self::Metadata, "gen_ai.response.finish_reasons"),
+            "llm.finishReasons" => (
+                Response,
+                Self::FinishReasons,
+                "gen_ai.response.finish_reasons",
+            ),
             "llm.status" => (Response, Self::Metadata, "llm.status"),
             "llm.incompleteReason" => (Response, Self::Metadata, "llm.incompleteReason"),
             "llm.errorType" => (Response, Self::Metadata, "error.type"),
@@ -71,7 +76,8 @@ impl Field {
         })
     }
 
-    fn retain(self, side: Side, fields: &mut Fields) {
+    fn retain(self, side: Side, group: &mut BodyFields) {
+        let fields = &mut group.fields;
         match self {
             Self::Question => fields.question = true,
             Self::Tools => fields.tools = true,
@@ -83,6 +89,7 @@ impl Field {
             Self::Instructions => fields.instructions = true,
             Self::Error => fields.error = true,
             Self::Answer => fields.answer = true,
+            Self::FinishReasons => group.finish_reasons = true,
             Self::Usage => fields.usage = true,
             Self::ToolRefs => fields.tool_call_refs = true,
             Self::Metadata | Self::Scalar => {}
@@ -157,6 +164,7 @@ impl Column {
 pub(super) struct BodyFields {
     pub limit: usize,
     pub fields: Fields,
+    pub finish_reasons: bool,
     pub columns: Vec<Column>,
 }
 
@@ -181,13 +189,14 @@ impl Template {
                 self.body.push(BodyFields {
                     limit,
                     fields: Fields::default(),
+                    finish_reasons: false,
                     columns: Vec::new(),
                 });
                 self.body.len() - 1
             }
         };
         let group = &mut self.body[index];
-        field.retain(side, &mut group.fields);
+        field.retain(side, group);
         group.columns.push(column);
     }
 
@@ -202,6 +211,8 @@ impl Template {
             "http.body",
             "llm.error",
             "agentio.tool.calls",
+            "llm.partial",
+            "llm.toolCallsTruncated",
             "error.type",
             "agentio.response.error_code",
             "gen_ai.operation.name",
@@ -215,6 +226,7 @@ impl Template {
         Self {
             body: vec![BodyFields {
                 fields,
+                finish_reasons: true,
                 limit,
                 columns: body_keys
                     .into_iter()

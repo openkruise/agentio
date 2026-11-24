@@ -46,7 +46,9 @@ func bodyProcessingFile(t *testing.T) *corev3.ConfigSource {
 		t.Fatal(err)
 	}
 	data, err := protojson.Marshal(&discoveryv3.DiscoveryResponse{
-		TypeUrl: model.ExtensionConfigurationType, VersionInfo: "1", Resources: []*anypb.Any{resource},
+		TypeUrl:     model.ExtensionConfigurationType,
+		VersionInfo: "1",
+		Resources:   []*anypb.Any{resource},
 	})
 	if err != nil {
 		t.Fatal(err)

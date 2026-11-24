@@ -316,7 +316,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 			filters[0] != "envoy.filters.http.dynamic_modules" {
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
-		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter)+1 != slices.Index(filters, "agentio.egress_authorization") {
+		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter)+1 !=
+			slices.Index(filters, "agentio.egress_authorization") {
 			t.Fatal("proxy TLS identity must precede authorization")
 		}
 	}

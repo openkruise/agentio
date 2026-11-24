@@ -6,8 +6,9 @@ mod chat;
 mod responses;
 
 use super::sse;
-use crate::parser::llm::response::{INVALID, Result};
-use crate::parser::llm::{ANTHROPIC, CHAT, RESPONSES};
+use crate::parser::BodyError;
+use crate::parser::llm::response::Result;
+use crate::parser::llm::{ANTHROPIC, CHAT, LlmView, RESPONSES};
 use serde_json::Value;
 
 /// An output keeps its wire index even when it is an alternative to the scalar answer.
@@ -49,7 +50,7 @@ pub(crate) enum Event<'a> {
         value: &'a Value,
     },
     Completed {
-        view: &'a Value,
+        view: &'a LlmView,
         truncated: bool,
         answer: AnswerStatus,
     },
@@ -105,7 +106,7 @@ impl Retention {
     fn item(&mut self) -> Result<()> {
         self.items += 1;
         if self.items > 1024 {
-            Err("too_large")
+            Err(BodyError::TooLarge)
         } else {
             Ok(())
         }
@@ -160,7 +161,7 @@ impl Stream {
             return match self.trailers {
                 Trailers::Done if frame.done => Ok(()),
                 Trailers::Ping if frame.kind == "ping" => Ok(()),
-                _ => Err(INVALID),
+                _ => Err(BodyError::InvalidContent),
             };
         };
         let retaining = budget.retaining();
@@ -181,10 +182,6 @@ impl Stream {
             if let Some(id) = budget.response_id {
                 view["responseId"] = id.into();
             }
-            budget.tools.publish(&mut view);
-            if budget.partial {
-                view["partial"] = true.into();
-            }
             let answer = if budget.partial || view.get("error").is_some() {
                 AnswerStatus::Unavailable
             } else if budget.chat_assistant {
@@ -193,7 +190,12 @@ impl Stream {
                 AnswerStatus::Empty
             };
             emit(Event::Completed {
-                view: &view,
+                view: &LlmView {
+                    document: view,
+                    tool_refs: budget.tools.finish(),
+                    partial: budget.partial,
+                    ..Default::default()
+                },
                 truncated: budget.truncated,
                 answer,
             });
@@ -208,7 +210,7 @@ impl Stream {
     }
 
     /// Metadata observed before a stream ended without its protocol terminator.
-    pub fn into_partial(self) -> Option<(Value, bool)> {
+    pub fn into_partial(self) -> Option<(LlmView, bool)> {
         let (provider, retention) = self.active?;
         let mut view = match provider {
             Provider::Responses(s) => s
@@ -220,9 +222,15 @@ impl Stream {
         if let Some(id) = retention.response_id {
             view["responseId"] = id.into();
         }
-        retention.tools.publish(&mut view);
         let visible = retention.chat_assistant && !retention.partial && view.get("error").is_none();
-        Some((view, visible))
+        Some((
+            LlmView {
+                document: view,
+                tool_refs: retention.tools.finish(),
+                ..Default::default()
+            },
+            visible,
+        ))
     }
 }
 
@@ -247,10 +255,10 @@ fn observed_view(
 }
 
 fn string(v: &Value) -> Result<&str> {
-    v.as_str().ok_or(INVALID)
+    v.as_str().ok_or(BodyError::InvalidContent)
 }
 fn obj(v: &Value) -> Result<&serde_json::Map<String, Value>> {
-    v.as_object().ok_or(INVALID)
+    v.as_object().ok_or(BodyError::InvalidContent)
 }
 fn unknown(v: &Value, keys: &[&str], ignore_null: bool) -> bool {
     v.as_object().is_some_and(|m| {

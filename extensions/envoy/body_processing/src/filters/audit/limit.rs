@@ -1,6 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Write};
 
@@ -45,14 +46,14 @@ impl Write for Remaining {
     }
 }
 
-pub(super) fn json_bytes(value: &Value, limit: usize) -> Option<usize> {
+pub(super) fn json_bytes(value: &impl Serialize, limit: usize) -> Option<usize> {
     let mut room = Remaining(limit);
     serde_json::to_writer(&mut room, value).ok()?;
     Some(limit - room.0)
 }
 
 /// Serialized length of the array after one more complete item; zero means no items yet.
-pub(super) fn array_size_with(used: usize, item: &Value, limit: usize) -> Option<usize> {
+pub(super) fn array_size_with(used: usize, item: &impl Serialize, limit: usize) -> Option<usize> {
     let overhead = if used == 0 { 2 } else { used + 1 };
     Some(overhead + json_bytes(item, limit.checked_sub(overhead)?)?)
 }

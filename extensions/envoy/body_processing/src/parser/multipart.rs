@@ -1,6 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::parser::BodyError;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use memchr::memmem;
 use serde_json::{Value, json};
@@ -116,7 +117,7 @@ impl Multipart {
         }
     }
 
-    pub fn push(&mut self, data: &[u8]) -> Result<(), &'static str> {
+    pub fn push(&mut self, data: &[u8]) -> Result<(), BodyError> {
         // Bound temporary scratch even if Envoy delivers a single very large slice.
         for chunk in data.chunks(8192) {
             if matches!(self.state, State::End) {
@@ -133,27 +134,28 @@ impl Multipart {
                             break;
                         }
                         if !buf.starts_with(initial) {
-                            return Err("invalid_multipart");
+                            return Err(BodyError::InvalidMultipart);
                         }
                         pos += initial.len();
                         match &self.pending[pos..pos + 2] {
                             b"--" => self.state = State::End,
                             b"\r\n" => self.state = State::Headers,
-                            _ => return Err("invalid_multipart"),
+                            _ => return Err(BodyError::InvalidMultipart),
                         }
                         pos += 2;
                     }
                     State::Headers => {
                         let Some(n) = memmem::find(buf, b"\r\n\r\n") else {
                             if buf.len() > HEADER_LIMIT + 3 {
-                                return Err("multipart_headers_too_large");
+                                return Err(BodyError::MultipartHeadersTooLarge);
                             }
                             break;
                         };
                         if n > HEADER_LIMIT {
-                            return Err("multipart_headers_too_large");
+                            return Err(BodyError::MultipartHeadersTooLarge);
                         }
-                        self.part = Some(Part::from_headers(&buf[..n]).ok_or("invalid_multipart")?);
+                        self.part =
+                            Some(Part::from_headers(&buf[..n]).ok_or(BodyError::InvalidMultipart)?);
                         pos += n + 4;
                         self.state = State::Data;
                     }
@@ -195,9 +197,9 @@ impl Multipart {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<(bool, Value), &'static str> {
+    pub fn finish(self) -> Result<(bool, Value), BodyError> {
         if !matches!(self.state, State::End) {
-            return Err("invalid_multipart");
+            return Err(BodyError::InvalidMultipart);
         }
         Ok((self.clipped, json!({"parts":self.fields})))
     }

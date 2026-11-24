@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    BodyEvent,
+    BodyError, BodyEvent,
     json_capture::{CaptureLoss, JsonCapture},
-    llm::{self, Fields, response::Result, tool_summary::ToolSummary},
+    llm::{self, Fields, LlmView, ToolReferences, response::Result, tool_summary::ToolSummary},
 };
 use serde_json::{Value, json};
 
@@ -22,7 +22,7 @@ pub(crate) enum ItemEvent {
         question: Option<String>,
         question_clipped: bool,
         text_clipped: bool,
-        references: Value,
+        references: ToolReferences,
     },
     Tool {
         definition: Result<Value>,
@@ -127,11 +127,11 @@ impl Fragment {
                     b'{' | b'[' => {
                         self.depth += 1;
                         if self.depth > 128 {
-                            return Err("invalid_json");
+                            return Err(BodyError::InvalidJson);
                         }
                     }
                     b'}' | b']' => {
-                        self.depth = self.depth.checked_sub(1).ok_or("invalid_json")?;
+                        self.depth = self.depth.checked_sub(1).ok_or(BodyError::InvalidJson)?;
                         if self.depth == 0 {
                             i += 1;
                             done = true;
@@ -200,10 +200,10 @@ impl Request {
                     self.partial |= loss.exhausted;
                     let clipped = loss.document;
                     match self.state {
-                        State::NonObject => return Err("invalid_content"),
+                        State::NonObject => return Err(BodyError::InvalidContent),
                         State::Key(_) => {
                             let Value::String(key) = value else {
-                                return Err("invalid_json");
+                                return Err(BodyError::InvalidJson);
                             };
                             self.key = key;
                             self.state = State::Colon;
@@ -314,7 +314,7 @@ impl Request {
                 }
                 (State::AfterItem, b',') => State::Item(false),
                 (State::AfterValue, b',') => State::Key(false),
-                _ => return Err("invalid_json"),
+                _ => return Err(BodyError::InvalidJson),
             };
             input = &input[1..];
         }
@@ -366,14 +366,16 @@ impl Request {
                 if let (Some(text), Some(n)) = (&mut question, loss.question_prefix_bytes) {
                     text.truncate(n);
                 }
-                let mut references = Value::Null;
-                if loss.references {
-                    references = json!({"toolCallsTruncated":true});
+                let references = if loss.references {
+                    ToolReferences {
+                        truncated: true,
+                        ..Default::default()
+                    }
                 } else {
                     let mut summary = ToolSummary::new(self.max_item_size);
                     summary.request_item(self.format, 0, &v);
-                    summary.publish(&mut references);
-                }
+                    summary.finish()
+                };
                 emit_item(
                     events,
                     ItemEvent::Message {
@@ -406,7 +408,7 @@ impl Request {
                         question: (!text.is_empty()).then(|| text.to_owned()),
                         question_clipped: clipped,
                         text_clipped: clipped,
-                        references: Value::Null,
+                        references: ToolReferences::default(),
                     },
                     clipped,
                 );
@@ -425,7 +427,7 @@ impl Request {
             "tools" if !value.is_null() => emit_item(
                 events,
                 ItemEvent::Tool {
-                    definition: Err("invalid_content"),
+                    definition: Err(BodyError::InvalidContent),
                     legacy: false,
                 },
                 false,
@@ -448,15 +450,15 @@ impl Request {
         }
         Ok(())
     }
-    pub(crate) fn finish(self) -> Result<Value> {
+    pub(crate) fn finish(self) -> Result<LlmView> {
         if !matches!(self.state, State::Done) {
-            return Err("invalid_json");
+            return Err(BodyError::InvalidJson);
         }
-        let mut view = llm::document(self.format, &self.metadata, false, Fields::default())?;
-        if self.partial {
-            view["partial"] = true.into();
-        }
-        Ok(view)
+        Ok(LlmView {
+            document: llm::document(self.format, &self.metadata, false, Fields::default())?,
+            partial: self.partial,
+            ..Default::default()
+        })
     }
 }
 

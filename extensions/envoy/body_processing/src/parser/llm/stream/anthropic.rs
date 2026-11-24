@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Event, Output, Retention, Trailers, obj, string};
+use crate::parser::BodyError;
 use crate::parser::llm::{
     ANTHROPIC, ToolKind, anthropic_tool, blocks,
-    response::{INVALID, Result, anthropic_totals, index, usage_counts},
+    response::{Result, anthropic_totals, index, usage_counts},
 };
 use serde_json::{Value, json};
 
@@ -43,21 +44,21 @@ impl Stream {
             "message_start" => {
                 let m = &v["message"];
                 if self.model.is_some() || !m["content"].as_array().is_some_and(Vec::is_empty) {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 b.response_id(&m["id"]);
                 self.model = Some(string(&m["model"])?.into());
                 self.merge_usage(&m["usage"], emit);
             }
-            _ if self.model.is_none() => return Err(INVALID),
+            _ if self.model.is_none() => return Err(BodyError::InvalidContent),
             "content_block_start" => {
                 if index(&v["index"])? as usize != self.blocks.len() {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let source = &v["content_block"];
                 let kind = string(&source["type"])?;
                 if kind.len() > 128 {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 b.item()?;
                 if kind == "text"
@@ -85,15 +86,18 @@ impl Stream {
             }
             "content_block_delta" | "content_block_stop" => {
                 let i = index(&v["index"])?;
-                let block = self.blocks.get_mut(i as usize).ok_or(INVALID)?;
+                let block = self
+                    .blocks
+                    .get_mut(i as usize)
+                    .ok_or(BodyError::InvalidContent)?;
                 if block.closed {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 if kind == "content_block_stop" {
                     block.closed = true;
                     if !block.input.is_empty() && b.retaining() {
-                        let input: Value =
-                            serde_json::from_str(&block.input).map_err(|_| INVALID)?;
+                        let input: Value = serde_json::from_str(&block.input)
+                            .map_err(|_| BodyError::InvalidContent)?;
                         obj(&input)?;
                         block.source["input"] = input;
                     }
@@ -114,7 +118,7 @@ impl Stream {
                 let delta = &v["delta"];
                 obj(delta)?;
                 if self.blocks.iter().any(|s| !s.closed) {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 if let Some(s) = delta.get("stop_reason") {
                     self.stop = if s.is_null() {
@@ -122,7 +126,7 @@ impl Stream {
                     } else {
                         let reason = string(s)?;
                         if reason.len() > 256 {
-                            return Err(INVALID);
+                            return Err(BodyError::InvalidContent);
                         }
                         Some(reason.into())
                     };
@@ -170,11 +174,12 @@ impl Stream {
         if self.error.is_some() {
             return Ok(self.observed());
         }
-        let reason = self.stop.ok_or("incomplete_stream")?;
+        let reason = self.stop.ok_or(BodyError::IncompleteStream)?;
         if self.blocks.iter().any(|b| !b.closed) {
-            return Err("incomplete_stream");
+            return Err(BodyError::IncompleteStream);
         }
-        let mut view = json!({"format":ANTHROPIC,"model":self.model.ok_or("incomplete_stream")?});
+        let mut view =
+            json!({"format":ANTHROPIC,"model":self.model.ok_or(BodyError::IncompleteStream)?});
         view["finishReasons"] = json!([reason]);
         if keep {
             let raw = Value::Array(self.blocks.into_iter().map(|b| b.source).collect());
@@ -192,7 +197,7 @@ impl Block {
             Some("signature_delta") => ("thinking", "signature"),
             Some("input_json_delta") => {
                 if anthropic_tool(&self.kind) != Some(ToolKind::Call) {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let part = string(&delta["partial_json"])?;
                 b.append(&mut self.input, part);
@@ -200,7 +205,7 @@ impl Block {
             }
             Some("citations_delta") => {
                 if self.kind != "text" {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let citation = &delta["citation"];
                 obj(citation)?;
@@ -210,7 +215,7 @@ impl Block {
                     }
                     self.source["citations"]
                         .as_array_mut()
-                        .ok_or(INVALID)?
+                        .ok_or(BodyError::InvalidContent)?
                         .push(citation.clone());
                 }
                 return Ok(());
@@ -221,7 +226,7 @@ impl Block {
             }
         };
         if self.kind != expected {
-            return Err(INVALID);
+            return Err(BodyError::InvalidContent);
         }
         let part = string(&delta[field])?;
         if b.take(part.len()) {
@@ -231,7 +236,7 @@ impl Block {
             if let Value::String(text) = &mut self.source[field] {
                 text.push_str(part);
             } else {
-                return Err(INVALID);
+                return Err(BodyError::InvalidContent);
             }
         }
         Ok(())

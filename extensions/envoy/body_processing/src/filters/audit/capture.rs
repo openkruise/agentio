@@ -10,10 +10,11 @@ use crate::{
     chain::Side,
     filters::{BodyEnd, BodyFilter, BodyInterest, BodyResult, Decision},
     parser::{
-        BodyEvent,
+        BodyError, BodyEvent,
         body::{Content, ParsedBody},
     },
 };
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
@@ -31,6 +32,24 @@ pub(crate) struct AuditContext<'a> {
 struct BodyCapture {
     request: Projection,
     sse: super::sse::Projection,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CaptureStatus {
+    Complete,
+    Partial,
+    Truncated,
+    #[serde(untagged)]
+    Failed(BodyError),
+}
+
+impl CaptureStatus {
+    pub(super) fn write(self, row: &mut Map<String, Value>, aliases: &[String]) {
+        for alias in aliases {
+            row.insert(alias.clone(), serde_json::json!(self));
+        }
+    }
 }
 
 pub(crate) struct Capture {
@@ -119,7 +138,7 @@ impl Capture {
         self.template.body[0].limit
     }
 
-    fn finish(mut self, end: &BodyEnd, error: Option<&'static str>, output: &mut FilterOutput) {
+    fn finish(mut self, end: &BodyEnd, error: Option<BodyError>, output: &mut FilterOutput) {
         let row = output.audit(self.filter_index);
         #[cfg(test)]
         row.append(&mut self.fixture_fields);
@@ -134,16 +153,13 @@ impl Capture {
                 row.insert(name.clone(), n.into());
             }
         }
-        let status = error.unwrap_or(if self.clipped {
-            "truncated"
-        } else if self.partial {
-            "partial"
-        } else {
-            "complete"
-        });
-        for key in &self.template.status {
-            row.insert(key.clone(), status.into());
-        }
+        let status = match error {
+            Some(reason) => CaptureStatus::Failed(reason),
+            None if self.clipped => CaptureStatus::Truncated,
+            None if self.partial => CaptureStatus::Partial,
+            None => CaptureStatus::Complete,
+        };
+        status.write(row, &self.template.status);
     }
 }
 
@@ -152,15 +168,10 @@ impl BodyFields {
         let mut clipped = body.truncated;
         let mut attrs = Map::new();
         match body.content {
-            Content::Llm(mut value) => {
-                clipped |= value["toolCallsTruncated"] == true;
-                if self.fields.tool_call_refs
-                    && let Some(summary) = value.as_object_mut().and_then(|v| v.remove("toolCalls"))
-                {
-                    attrs.insert("agentio.tool.calls".into(), summary);
-                }
+            Content::Llm(view) => {
+                clipped |= view.tool_refs.truncated;
                 super::format::project(
-                    &mut value,
+                    view,
                     &mut attrs,
                     response,
                     self.fields.output_messages || self.fields.error,
@@ -193,7 +204,7 @@ impl BodyFilter for Capture {
             view, ..
         }) = event
         {
-            self.partial = view["partial"] == true;
+            self.partial = view.partial;
         }
         for (group, state) in self.template.body.iter().zip(&mut self.views) {
             match event {
@@ -232,15 +243,15 @@ impl BodyFilter for Capture {
                 error = Some(*reason);
             }
             BodyResult::Llm(Ok((loss, view))) => {
-                self.partial = view["partial"] == true;
+                self.partial = view.partial;
                 let request = matches!(self.direction, Side::Request);
                 for (group, state) in self.template.body.iter().zip(&mut self.views) {
                     if (group.fields.output_messages
                         || group.fields.answer
                         || group.fields.retained_text)
-                        && view["outputMessagesError"].is_string()
+                        && let Some(reason) = view.output_messages_error
                     {
-                        error = Some("invalid_content");
+                        error = Some(reason);
                         break;
                     }
                     let result = if request {
@@ -250,17 +261,14 @@ impl BodyFilter for Capture {
                         let mut clipped = group.fields.output_messages && loss.document
                             || group.fields.answer && (loss.answer || loss.exhausted)
                             || group.fields.error && loss.exhausted && loss.error
-                            || loss.finish_reasons
-                                && group
-                                    .columns
-                                    .iter()
-                                    .any(|c| c.key == "gen_ai.response.finish_reasons");
+                            || group.finish_reasons && loss.finish_reasons;
                         if group.fields.tool_call_refs && (loss.references || loss.exhausted) {
-                            result.as_object_mut().unwrap().remove("toolCalls");
-                            result["toolCallsTruncated"] = true.into();
+                            result.tool_refs.entries.clear();
+                            result.tool_refs.truncated = true;
                         }
                         if group.fields.retained_text {
-                            clipped |= response_text(view, group.limit).publish(&mut result);
+                            clipped |= response_text(&view.document, group.limit)
+                                .publish(&mut result.document);
                             clipped |= if loss.exhausted {
                                 loss.preview
                             } else {

@@ -7,7 +7,26 @@ pub(crate) mod llm;
 mod multipart;
 pub(crate) mod request;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BodyError {
+    CaptureError,
+    Incomplete,
+    IncompleteStream,
+    InvalidContent,
+    InvalidEncoding,
+    InvalidJson,
+    InvalidMultipart,
+    InvalidSse,
+    InvalidText,
+    MultipartHeadersTooLarge,
+    TooLarge,
+    UnknownProtocol,
+    UnsupportedEncoding,
+    UnsupportedMediaType,
+}
 
 /// Borrowed for one synchronous notification. Model offsets refer to decoded body bytes.
 pub(crate) enum BodyEvent<'a> {

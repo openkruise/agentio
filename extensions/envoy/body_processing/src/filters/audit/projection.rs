@@ -2,21 +2,48 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::limit::{array_size_with, bounded_value, json_bytes, string_prefix};
-use crate::parser::{encoded_len, llm::Fields, request::ItemEvent};
+use crate::parser::{
+    BodyError, encoded_len,
+    llm::{Fields, LlmView, ToolReferences},
+    request::ItemEvent,
+};
 use serde_json::{Map, Value, json};
 
 #[derive(Default)]
 pub(crate) struct Projection {
     view: Value,
-    error: Option<&'static str>,
+    error: Option<BodyError>,
     messages_size: usize,
     tools: Definitions,
     functions: Definitions,
-    refs_size: usize,
+    references: ToolProjection,
     text: TextPreview,
     messages_full: bool,
     clipped: bool,
     question_clipped: bool,
+}
+
+#[derive(Default)]
+struct ToolProjection {
+    refs: ToolReferences,
+    bytes: usize,
+}
+
+impl ToolProjection {
+    fn observe(&mut self, refs: &ToolReferences, limit: usize) {
+        if self.refs.truncated {
+            return;
+        }
+        for entry in &refs.entries {
+            let Some(next) = array_size_with(self.bytes, entry, limit) else {
+                self.refs.truncated = true;
+                return;
+            };
+            self.bytes = next;
+            self.refs.entries.push(entry.clone());
+        }
+        self.refs.truncated = refs.truncated;
+    }
 }
 
 #[derive(Default)]
@@ -94,12 +121,10 @@ impl Projection {
                 self.messages_full = false;
                 self.question_clipped = false;
                 self.messages_size = 0;
-                self.refs_size = 0;
+                self.references = ToolProjection::default();
                 self.text = TextPreview::default();
                 if let Some(v) = self.view.as_object_mut() {
-                    for key in ["question", "toolCalls", "toolCallsTruncated"] {
-                        v.remove(key);
-                    }
+                    v.remove("question");
                 }
                 if fields.input_messages {
                     self.view["inputMessages"] = json!([]);
@@ -125,13 +150,13 @@ impl Projection {
                     self.question(question.as_deref(), *question_clipped, room);
                 }
                 if fields.tool_call_refs {
-                    self.references(references, room);
+                    self.references.observe(references, room);
                 }
                 if fields.input_messages || fields.retained_text {
                     let item = match message {
                         Ok(item) => item,
                         Err(e) => {
-                            self.error = Some(e);
+                            self.error = Some(*e);
                             return;
                         }
                     };
@@ -186,7 +211,7 @@ impl Projection {
                     );
                 }
                 if fields.tool_call_refs && *references_clipped {
-                    self.view["toolCallsTruncated"] = true.into();
+                    self.references.refs.truncated = true;
                 }
                 if fields.input_messages {
                     self.close_messages();
@@ -222,7 +247,7 @@ impl Projection {
                     group.push(tool, room);
                     self.clipped |= clipped || group.full;
                 }
-                Err(status) => self.error = Some(status),
+                Err(reason) => self.error = Some(*reason),
             },
             ItemEvent::System(system) if fields.instructions => {
                 let mut parts = system.clone();
@@ -266,33 +291,11 @@ impl Projection {
         }
     }
 
-    fn references(&mut self, refs: &Value, limit: usize) {
-        if self.view["toolCallsTruncated"] == true {
-            return;
-        }
-        for entry in refs["toolCalls"].as_array().into_iter().flatten() {
-            let Some(next) = array_size_with(self.refs_size, entry, limit) else {
-                self.view["toolCallsTruncated"] = true.into();
-                return;
-            };
-            self.refs_size = next;
-            if self.view["toolCalls"].is_null() {
-                self.view["toolCalls"] = json!([]);
-            }
-            self.view["toolCalls"]
-                .as_array_mut()
-                .unwrap()
-                .push(entry.clone());
-        }
-        if refs["toolCallsTruncated"] == true {
-            self.view["toolCallsTruncated"] = true.into();
-        }
-    }
-    pub(crate) fn finish(self, metadata: &Value) -> Result<(bool, Value), &'static str> {
+    pub(crate) fn finish(self, metadata: &LlmView) -> Result<(bool, LlmView), BodyError> {
         if let Some(e) = self.error {
             return Err(e);
         }
-        let mut result = metadata.clone();
+        let mut result = metadata.document.clone();
         if let Value::Object(fields) = self.view {
             result.as_object_mut().unwrap().extend(fields);
         }
@@ -315,7 +318,12 @@ impl Projection {
         let text_clipped = self.text.publish(&mut result);
         Ok((
             self.clipped || self.question_clipped || text_clipped,
-            result,
+            LlmView {
+                document: result,
+                tool_refs: self.references.refs,
+                partial: metadata.partial,
+                ..Default::default()
+            },
         ))
     }
 }
@@ -426,36 +434,31 @@ fn visit_inline_media(
     }
 }
 
-pub(crate) fn response_view(value: &Value, fields: Fields, limit: usize) -> Value {
+pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> LlmView {
+    let value = &source.document;
     let mut view = serde_json::Map::new();
     for (k, v) in value.as_object().unwrap() {
         let keep = match k.as_str() {
-            "outputMessagesError" => false,
             "answer" => fields.answer,
             "usage" => fields.usage,
-            "truncated" => {
-                fields.output_messages || (fields.answer && value.get("answer").is_none())
-            }
             "outputMessages" => fields.output_messages,
-            "toolCalls" | "toolCallsTruncated" => fields.tool_call_refs,
             "retainedText" => false,
             _ => true,
         };
         if keep {
-            if k == "toolCalls" {
-                let (value, clipped) = bounded_value(v, limit);
-                if let Some(value) = value {
-                    view.insert(k.clone(), value);
-                }
-                if clipped {
-                    view.insert("toolCallsTruncated".into(), true.into());
-                }
-            } else {
-                view.insert(k.clone(), v.clone());
-            }
+            view.insert(k.clone(), v.clone());
         }
     }
-    Value::Object(view)
+    let mut references = ToolProjection::default();
+    if fields.tool_call_refs {
+        references.observe(&source.tool_refs, limit);
+    }
+    LlmView {
+        document: Value::Object(view),
+        tool_refs: references.refs,
+        partial: source.partial,
+        ..Default::default()
+    }
 }
 
 pub(super) fn response_text(value: &Value, limit: usize) -> TextPreview {

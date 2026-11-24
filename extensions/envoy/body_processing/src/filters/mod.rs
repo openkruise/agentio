@@ -5,10 +5,11 @@ pub(crate) mod audit;
 
 use crate::{
     FilterOutput,
-    parser::{BodyEvent, Format, body::Decoded},
+    parser::{
+        BodyError, BodyEvent, Format, body::Decoded, json_capture::CaptureLoss, llm::LlmView,
+    },
 };
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
-use serde_json::Value;
 
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(not(test), must_use)]
@@ -27,12 +28,12 @@ impl Decision {
 
 pub(crate) enum BodyResult {
     Counts,
-    Failed(&'static str),
-    Llm(Result<(crate::parser::json_capture::CaptureLoss, Value), &'static str>),
+    Failed(BodyError),
+    Llm(Result<(CaptureLoss, LlmView), BodyError>),
     Sse,
     InterruptedSse {
-        reason: &'static str,
-        partial: Option<(Value, bool)>,
+        reason: BodyError,
+        partial: Option<(LlmView, bool)>,
     },
     Http(Decoded),
 }

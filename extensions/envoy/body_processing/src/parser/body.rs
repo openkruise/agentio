@@ -1,14 +1,19 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Format, json_capture::JsonCapture, llm::Fields, multipart::Multipart};
+use super::{
+    BodyError, Format,
+    json_capture::JsonCapture,
+    llm::{Fields, LlmView},
+    multipart::Multipart,
+};
 use serde_json::Value;
 
 #[derive(Clone)]
 pub(crate) enum Content {
     Empty,
     Http(Value),
-    Llm(Value),
+    Llm(LlmView),
 }
 #[derive(Clone)]
 pub(crate) struct ParsedBody {
@@ -16,14 +21,14 @@ pub(crate) struct ParsedBody {
     pub content: Content,
 }
 
-pub(crate) type Decoded = Result<ParsedBody, &'static str>;
+pub(crate) type Decoded = Result<ParsedBody, BodyError>;
 
 enum Body {
     Metadata,
     Json(JsonCapture),
     Multipart(Multipart),
     Text(Vec<u8>),
-    Unavailable(&'static str),
+    Unavailable(BodyError),
 }
 
 pub(crate) struct HttpCapture {
@@ -46,9 +51,9 @@ impl HttpCapture {
         let body = if format == Format::Metadata {
             Body::Metadata
         } else if format == Format::UnknownProtocol {
-            Body::Unavailable("unknown_protocol")
+            Body::Unavailable(BodyError::UnknownProtocol)
         } else if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
-            Body::Unavailable("unsupported_encoding")
+            Body::Unavailable(BodyError::UnsupportedEncoding)
         } else if let Some(m) = media {
             let essence = m.essence_str();
             if format != Format::Text
@@ -59,22 +64,25 @@ impl HttpCapture {
             } else if http && essence == "multipart/form-data" {
                 m.get_param("boundary")
                     .and_then(|b| Multipart::new(b.as_str(), limit))
-                    .map_or(Body::Unavailable("invalid_multipart"), Body::Multipart)
+                    .map_or(
+                        Body::Unavailable(BodyError::InvalidMultipart),
+                        Body::Multipart,
+                    )
             } else if (http && m.type_() == mime::TEXT)
                 || (format == Format::Text && essence == "text/plain")
             {
                 if m.get_param("charset").is_some_and(|v| {
                     !v.as_str().is_empty() && !v.as_str().eq_ignore_ascii_case("utf-8")
                 }) {
-                    Body::Unavailable("unsupported_encoding")
+                    Body::Unavailable(BodyError::UnsupportedEncoding)
                 } else {
                     Body::Text(vec![])
                 }
             } else {
-                Body::Unavailable("unsupported_media_type")
+                Body::Unavailable(BodyError::UnsupportedMediaType)
             }
         } else {
-            Body::Unavailable("unsupported_media_type")
+            Body::Unavailable(BodyError::UnsupportedMediaType)
         };
         Self {
             body,
@@ -87,7 +95,7 @@ impl HttpCapture {
     pub(crate) fn bytes_only(&self) -> bool {
         matches!(self.body, Body::Unavailable(_) | Body::Metadata)
     }
-    pub(crate) fn fail(&mut self, error: &'static str) {
+    pub(crate) fn fail(&mut self, error: BodyError) {
         self.body = Body::Unavailable(error);
     }
 
@@ -95,7 +103,7 @@ impl HttpCapture {
         if matches!(self.body, Body::Json(_) | Body::Text(_))
             && self.hard_limit.is_some_and(|limit| bytes_seen > limit)
         {
-            self.fail("too_large");
+            self.fail(BodyError::TooLarge);
         }
         match &mut self.body {
             Body::Text(buf) => {
@@ -118,8 +126,8 @@ impl HttpCapture {
             Body::Json(..) | Body::Multipart(_) | Body::Text(_)
         );
         let (clipped, value) = match self.body {
-            _ if !complete => Err("incomplete"),
-            Body::Unavailable("unsupported_media_type")
+            _ if !complete => Err(BodyError::Incomplete),
+            Body::Unavailable(BodyError::UnsupportedMediaType)
                 if bytes_seen == 0 && self.format == Format::Http =>
             {
                 Ok((false, Value::Null))
@@ -127,7 +135,7 @@ impl HttpCapture {
             Body::Metadata => Ok((false, Value::Null)),
             Body::Unavailable(e) => Err(e),
             Body::Json(c) => c
-                .finish("json", false, Fields::default(), self.limit)
+                .finish_fragment()
                 .map(|(loss, value)| (loss.document, value)),
             Body::Multipart(c) => c.finish(),
             Body::Text(buf) => {
@@ -138,7 +146,7 @@ impl HttpCapture {
                         true,
                         Value::from(std::str::from_utf8(&buf[..e.valid_up_to()]).unwrap()),
                     )),
-                    Err(_) => Err("invalid_text"),
+                    Err(_) => Err(BodyError::InvalidText),
                 }
             }
         }?;

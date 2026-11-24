@@ -7,15 +7,34 @@ pub(crate) mod response;
 pub(crate) mod sse;
 pub(crate) mod stream;
 pub(super) mod tool_summary;
+pub(crate) use tool_summary::ToolReferences;
 
-use serde::Deserialize;
+use crate::parser::BodyError;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const CHAT: &str = "openai-chat-completions";
 pub const RESPONSES: &str = "openai-responses";
 pub const ANTHROPIC: &str = "anthropic-messages";
-const INVALID: &str = "invalid_content";
-type Parsed = Result<Value, &'static str>;
+type Parsed = Result<Value, BodyError>;
+
+/// Normalized protocol fields and the parser's observations about their completeness.
+#[derive(Clone, Default)]
+pub(crate) struct LlmView {
+    pub document: Value,
+    pub tool_refs: ToolReferences,
+    pub partial: bool,
+    pub output_messages_error: Option<BodyError>,
+}
+
+impl From<Value> for LlmView {
+    fn from(document: Value) -> Self {
+        Self {
+            document,
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -65,11 +84,11 @@ impl Fields {
     };
 }
 
-pub(super) fn optional_string(v: &Value) -> Result<Option<&str>, &'static str> {
+pub(super) fn optional_string(v: &Value) -> Result<Option<&str>, BodyError> {
     if v.is_null() {
         Ok(None)
     } else {
-        v.as_str().map(Some).ok_or(INVALID)
+        v.as_str().map(Some).ok_or(BodyError::InvalidContent)
     }
 }
 
@@ -104,7 +123,8 @@ fn tool_result(id: &Value, content: Vec<Value>, error: bool) -> Value {
     json!({"type":"tool_result","toolCallId":id,"content":content,"isError":error})
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum ToolKind {
     Call,
     Result,
@@ -185,7 +205,7 @@ pub(crate) fn blocks(v: &Value, format: &str) -> Vec<Value> {
 }
 
 pub(crate) fn chat_message(v: &Value, format: &str) -> Parsed {
-    let role = v["role"].as_str().ok_or(INVALID)?;
+    let role = v["role"].as_str().ok_or(BodyError::InvalidContent)?;
     let mut content = blocks(&v["content"], format);
     if format == CHAT {
         optional_string(&v["tool_call_id"])?;
@@ -199,7 +219,7 @@ pub(crate) fn chat_message(v: &Value, format: &str) -> Parsed {
         if let Some(calls) = v["tool_calls"].as_array() {
             for call in calls {
                 if !call.is_object() {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 let f = &call["function"];
                 if f.is_object() {
@@ -241,21 +261,21 @@ fn responses_text_key(part: &Value) -> Option<&'static str> {
     }
 }
 
-fn responses_blocks(v: &Value) -> Result<Vec<Value>, &'static str> {
+fn responses_blocks(v: &Value) -> Result<Vec<Value>, BodyError> {
     if let Some(s) = v.as_str() {
         return Ok(plain(s));
     }
     v.as_array()
-        .ok_or(INVALID)?
+        .ok_or(BodyError::InvalidContent)?
         .iter()
         .map(|item| {
             if !item.is_object() {
-                return Err(INVALID);
+                return Err(BodyError::InvalidContent);
             }
             if let Some(key) = responses_text_key(item) {
                 optional_string(&item["text"])?;
                 optional_string(&item["refusal"])?;
-                let text = item[key].as_str().ok_or(INVALID)?;
+                let text = item[key].as_str().ok_or(BodyError::InvalidContent)?;
                 let mut b = item.clone();
                 b.as_object_mut().unwrap().remove(key);
                 b["type"] = if item["type"] == "refusal" {
@@ -276,7 +296,7 @@ fn responses_blocks(v: &Value) -> Result<Vec<Value>, &'static str> {
 pub(crate) fn responses_item(item: &Value) -> Parsed {
     let kind = optional_string(&item["type"])?;
     if !item.is_object() {
-        return Err(INVALID);
+        return Err(BodyError::InvalidContent);
     }
     let tool = kind.and_then(responses_tool);
     if tool.is_none() && !matches!(kind, None | Some("message")) {
@@ -293,7 +313,7 @@ pub(crate) fn responses_item(item: &Value) -> Parsed {
             let custom = kind == Some("custom_tool_call");
             let input_key = if custom { "input" } else { "arguments" };
             for key in ["call_id", "name", input_key] {
-                item[key].as_str().ok_or(INVALID)?;
+                item[key].as_str().ok_or(BodyError::InvalidContent)?;
             }
             let mut call = if custom {
                 json!({"type":"tool_call","id":item["call_id"],"name":item["name"],"arguments":item[input_key]})
@@ -306,7 +326,7 @@ pub(crate) fn responses_item(item: &Value) -> Parsed {
             message("assistant", vec![call])
         }
         Some(ToolKind::Result) => {
-            item["call_id"].as_str().ok_or(INVALID)?;
+            item["call_id"].as_str().ok_or(BodyError::InvalidContent)?;
             message(
                 "tool",
                 vec![tool_result(
@@ -321,7 +341,7 @@ pub(crate) fn responses_item(item: &Value) -> Parsed {
             )
         }
         _ => message(
-            item["role"].as_str().ok_or(INVALID)?,
+            item["role"].as_str().ok_or(BodyError::InvalidContent)?,
             responses_blocks(&item["content"])?,
         ),
     })
@@ -332,7 +352,7 @@ fn tools(v: &Value, format: &str) -> Parsed {
         return Ok(Value::Null);
     }
     let mut definitions = Vec::new();
-    for item in v.as_array().ok_or(INVALID)? {
+    for item in v.as_array().ok_or(BodyError::InvalidContent)? {
         definitions.push(tool_definition(item, format)?);
     }
     Ok(Value::Array(definitions))
@@ -503,7 +523,7 @@ pub(crate) fn answer_parts(message: &Value) -> impl Iterator<Item = &str> {
 
 fn llm(v: &Value, format: &str, fields: Fields) -> Parsed {
     if !v.is_object() {
-        return Err(INVALID);
+        return Err(BodyError::InvalidContent);
     }
     let mut view = json!({"format":format});
     optional_string(&v["model"])?;
@@ -529,17 +549,17 @@ fn llm(v: &Value, format: &str, fields: Fields) -> Parsed {
                 }
             }
             Value::Null => (),
-            _ => return Err(INVALID),
+            _ => return Err(BodyError::InvalidContent),
         }
     } else {
         if format == ANTHROPIC {
-            v["model"].as_str().ok_or(INVALID)?;
+            v["model"].as_str().ok_or(BodyError::InvalidContent)?;
             optional_string(&v["stop_reason"])?;
         }
         if format == ANTHROPIC && fields.input_messages && !v["system"].is_null() {
             view["systemInstructions"] = blocks(&v["system"], format).into();
         }
-        let values = v["messages"].as_array().ok_or(INVALID)?;
+        let values = v["messages"].as_array().ok_or(BodyError::InvalidContent)?;
         if fields.input_messages {
             for m in values {
                 messages.push(chat_message(m, format)?);
@@ -573,7 +593,7 @@ fn llm(v: &Value, format: &str, fields: Fields) -> Parsed {
         }
         definitions
             .as_array_mut()
-            .ok_or(INVALID)?
+            .ok_or(BodyError::InvalidContent)?
             .extend(legacy.iter().cloned());
     }
     Ok(view)

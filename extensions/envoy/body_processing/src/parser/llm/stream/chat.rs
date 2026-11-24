@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{Event, Output, Retention, Trailers, obj, string, unknown};
+use crate::parser::BodyError;
 use crate::parser::llm::{
     CHAT,
-    response::{INVALID, Result, index, usage},
+    response::{Result, index, usage},
     tool_call,
 };
 use serde_json::{Value, json};
@@ -86,7 +87,7 @@ impl Stream {
             .as_ref()
             .is_some_and(|m| !m.is_empty() && m != model)
         {
-            return Err(INVALID);
+            return Err(BodyError::InvalidContent);
         }
         if self.model.as_deref().is_none_or(str::is_empty) {
             self.model = Some(model.into());
@@ -98,7 +99,7 @@ impl Stream {
         if !v["usage"].is_null() {
             emit(Event::Usage(&usage(CHAT, &v["usage"])));
         }
-        for row in v["choices"].as_array().ok_or(INVALID)? {
+        for row in v["choices"].as_array().ok_or(BodyError::InvalidContent)? {
             let i = index(&row["index"])?;
             let output = Output::new(CHAT, i);
             if !self.choices.contains_key(&i) {
@@ -106,7 +107,7 @@ impl Stream {
             }
             let c = self.choices.entry(i).or_default();
             if c.finish.is_some() {
-                return Err(INVALID);
+                return Err(BodyError::InvalidContent);
             }
             let d = &row["delta"];
             obj(d)?;
@@ -128,7 +129,7 @@ impl Stream {
             if !d["role"].is_null() {
                 let role = string(&d["role"])?;
                 if role.len() > 64 {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 c.role = Some(role.into());
                 if output.answer_candidate {
@@ -148,7 +149,10 @@ impl Stream {
                 }
             }
             if !d["tool_calls"].is_null() {
-                for t in d["tool_calls"].as_array().ok_or(INVALID)? {
+                for t in d["tool_calls"]
+                    .as_array()
+                    .ok_or(BodyError::InvalidContent)?
+                {
                     let idx = index(&t["index"])?;
                     b.partial |= unknown(t, &["id", "index", "type", "function"], true)
                         || (!t["type"].is_null() && t["type"] != "function");
@@ -173,7 +177,7 @@ impl Stream {
                         if !t[k].is_null() {
                             let s = string(&t[k])?;
                             if dst.as_ref().is_some_and(|old| old != s) {
-                                return Err(INVALID);
+                                return Err(BodyError::InvalidContent);
                             }
                             if dst.is_none() && b.take(crate::parser::encoded_len(s)) {
                                 *dst = Some(s.into());
@@ -199,7 +203,7 @@ impl Stream {
             if !row["finish_reason"].is_null() {
                 let f = string(&row["finish_reason"])?;
                 if f.len() > 256 {
-                    return Err(INVALID);
+                    return Err(BodyError::InvalidContent);
                 }
                 c.finish = Some(f.into());
             }
@@ -225,13 +229,13 @@ impl Stream {
             return Ok(self.observed());
         }
         if self.choices.is_empty() || self.model.as_deref().is_none_or(str::is_empty) {
-            return Err(INVALID);
+            return Err(BodyError::InvalidContent);
         }
         let mut v = json!({"format":CHAT,"model":self.model});
         let mut reasons = vec![];
         let mut out = vec![];
         for (i, c) in self.choices {
-            let reason = c.finish.ok_or("incomplete_stream")?;
+            let reason = c.finish.ok_or(BodyError::IncompleteStream)?;
             reasons.push(reason.clone());
             if !keep {
                 continue;

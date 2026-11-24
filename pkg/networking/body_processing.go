@@ -39,7 +39,8 @@ const (
 func (b *resourceBuilder) bodyProcessingModule(rules string) *anypb.Any {
 	return b.pack(&dynamicfilter.DynamicModuleFilter{
 		DynamicModuleConfig: &dynamicmodule.DynamicModuleConfig{
-			Name: "envoy_agentio_body_processing", DoNotClose: true,
+			Name:       "envoy_agentio_body_processing",
+			DoNotClose: true,
 			Module: &core.AsyncDataSource{Specifier: &core.AsyncDataSource_Local{Local: &core.DataSource{
 				Specifier: &core.DataSource_Filename{Filename: "/usr/local/lib/libenvoy_agentio_body_processing.so"},
 			}}},
@@ -86,7 +87,9 @@ func (b *resourceBuilder) bodyProcessingLogger() *access.AccessLog {
 			FilterSpecifier: &access.AccessLogFilter_ExtensionFilter{ExtensionFilter: predicate},
 		},
 		ConfigType: &access.AccessLog_TypedConfig{TypedConfig: b.pack(&stream.StdoutAccessLog{
-			AccessLogFormat: &stream.StdoutAccessLog_LogFormat{LogFormat: formatString("%FILTER_STATE(" + auditStateKey + ":PLAIN)%")},
+			AccessLogFormat: &stream.StdoutAccessLog_LogFormat{
+				LogFormat: formatString("%FILTER_STATE(" + auditStateKey + ":PLAIN)%"),
+			},
 		})},
 	}
 }

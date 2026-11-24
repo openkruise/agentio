@@ -245,10 +245,17 @@ fn integer_ids_survive_audit_serialization() {
 
 // EPE fixture inputs are compared with this parser's normalized blocks after audit formatting.
 fn assert_fixture(record: &Value, expected: &Value, response: bool) {
-    let mut content = expected.clone();
     let mut attributes = serde_json::Map::new();
-    crate::filters::audit::format::project(&mut content, &mut attributes, response, true);
+    crate::filters::audit::format::project(
+        expected.clone().into(),
+        &mut attributes,
+        response,
+        true,
+    );
     assert_eq!(record["llm.protocol"], expected["format"]);
+    if let Some(partial) = expected.get("partial") {
+        assert_eq!(&record["llm.partial"], partial);
+    }
     for (key, value) in attributes {
         assert_eq!(record[&key], value, "{key}");
     }
