@@ -12,6 +12,7 @@ use crate::{
     parser::{
         BodyError, BodyEvent,
         body::{Content, ParsedBody},
+        llm,
     },
 };
 use serde::Serialize;
@@ -146,7 +147,12 @@ impl Capture {
         let row = output.audit(self.filter_index);
         #[cfg(test)]
         row.append(&mut self.fixture_fields);
-        if error.is_none() || matches!(end.result, BodyResult::InterruptedSse { .. }) {
+        if error.is_none()
+            || matches!(
+                end.result,
+                BodyResult::Llm(llm::Outcome::InterruptedSse { .. })
+            )
+        {
             row.append(&mut self.body);
         }
         for name in &self.template.wire_bytes {
@@ -176,20 +182,18 @@ impl BodyFilter for Capture {
     }
 
     fn on_event(&mut self, event: &BodyEvent<'_>, _: usize) -> Decision {
-        if let BodyEvent::LlmResponse(crate::parser::llm::stream::Event::Completed {
-            view, ..
-        }) = event
-        {
+        let BodyEvent::Llm(event) = event;
+        if let llm::Event::Response(llm::stream::Event::Completed { view, .. }) = event {
             self.partial = view.partial;
         }
         for (group, state) in self.template.body.iter().zip(&mut self.views) {
             match event {
-                BodyEvent::LlmItem { item, clipped } => {
+                llm::Event::RequestItem { item, clipped } => {
                     state
                         .request
                         .observe(item, *clipped, group.fields, group.limit)
                 }
-                BodyEvent::LlmResponse(event) => {
+                llm::Event::Response(event) => {
                     if let Some(body) = state.sse.observe(event, group.fields, group.limit) {
                         self.clipped |= group.publish(body, &mut self.body);
                     }
@@ -203,11 +207,9 @@ impl BodyFilter for Capture {
     fn on_end(mut self: Box<Self>, end: &BodyEnd, output: &mut FilterOutput) -> Decision {
         let mut error = None;
         match &end.result {
-            BodyResult::Failed(e) | BodyResult::Llm(Err(e)) | BodyResult::Http(Err(e)) => {
-                error = Some(*e)
-            }
-            BodyResult::Counts | BodyResult::Sse => {}
-            BodyResult::InterruptedSse { reason, partial } => {
+            BodyResult::Failed(e) => error = Some(*e),
+            BodyResult::Counts | BodyResult::Llm(llm::Outcome::Sse) => {}
+            BodyResult::Llm(llm::Outcome::InterruptedSse { reason, partial }) => {
                 if let Some((view, visible)) = partial {
                     for (group, state) in self.template.body.iter().zip(&mut self.views) {
                         let body = state
@@ -218,7 +220,7 @@ impl BodyFilter for Capture {
                 }
                 error = Some(*reason);
             }
-            BodyResult::Llm(Ok((loss, view))) => {
+            BodyResult::Llm(llm::Outcome::Document { loss, view }) => {
                 self.partial = view.partial;
                 let request = matches!(self.direction, Side::Request);
                 for (group, state) in self.template.body.iter().zip(&mut self.views) {
@@ -233,8 +235,10 @@ impl BodyFilter for Capture {
                     let result = if request {
                         std::mem::take(&mut state.request).finish(view)
                     } else {
-                        let mut result = response_view(view, group.fields, group.limit);
-                        let mut clipped = group.fields.output_messages && loss.document
+                        let (mut result, messages_clipped) =
+                            response_view(view, group.fields, group.limit);
+                        let mut clipped = messages_clipped
+                            || group.fields.output_messages && loss.document
                             || group.fields.answer && (loss.answer || loss.exhausted)
                             || group.fields.error && loss.exhausted && loss.error
                             || group.finish_reasons && loss.finish_reasons;
@@ -270,7 +274,7 @@ impl BodyFilter for Capture {
                     }
                 }
             }
-            BodyResult::Http(Ok(body)) => {
+            BodyResult::Http(body) => {
                 for group in &self.template.body {
                     self.clipped |= group.publish(body.clone(), &mut self.body);
                 }

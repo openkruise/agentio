@@ -13,6 +13,7 @@ use crate::{
 use serde_json::{Value, json};
 
 use crate::FilterOutput;
+use crate::parser::llm::{Protocol, ProtocolSelection};
 
 pub(crate) fn fixture_stream(
     direction: ParserDirection,
@@ -66,7 +67,7 @@ fn configured_record(
     end: bool,
 ) -> Value {
     let mut config: Direction = serde_json::from_value(settings.clone()).unwrap();
-    let protocol = Format::from_path(path);
+    let protocol = ProtocolSelection::Auto.resolve(path);
     if settings.get("format").is_none() && protocol != Format::UnknownProtocol {
         config.format = protocol;
     }
@@ -692,7 +693,7 @@ fn genai_record(
 ) -> Value {
     let mut settings: Direction =
         serde_json::from_value(json!({"fieldBytes":8192,"fields":fields})).unwrap();
-    settings.format = Format::from_path(path);
+    settings.format = ProtocolSelection::Auto.resolve(path);
     let mut c = crate::tests::fixture_stream(
         parser_direction(direction == "response"),
         media,
@@ -1269,7 +1270,7 @@ fn mixed_consumers_match_their_standalone_records_in_either_order() {
             let stages = indices.iter().enumerate().map(|(position, &index)| {
                 let mut settings: Direction =
                     serde_json::from_value(json!({"fieldBytes":8192})).unwrap();
-                settings.format = Format::OpenaiChatCompletions;
+                settings.format = Format::Llm(Protocol::OpenaiChatCompletions);
                 settings.fields.answer = index == 0;
                 settings.fields.output_messages = index == 1;
                 if index == 2 {
@@ -1371,7 +1372,13 @@ fn text_starting_with_data_is_text_and_unselected_body_does_not_clip_metadata() 
                     .unwrap()
                     .starts_with("data: CSV ")
             );
-            assert!(r.get("gen_ai.input.messages").is_none());
+            let messages = &r["gen_ai.input.messages"];
+            assert_eq!(serde_json::to_vec(messages).unwrap().len(), 1024);
+            let prefix = messages[0]["parts"][0]["content"].as_str().unwrap();
+            assert!(
+                prefix.starts_with("data: CSV ")
+                    && r["llm.question"].as_str().unwrap().starts_with(prefix)
+            );
         } else {
             assert!(r.get("gen_ai.input.messages").is_none());
         }

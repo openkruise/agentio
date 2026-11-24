@@ -6,6 +6,7 @@ pub(crate) mod capture;
 pub(crate) mod fixture;
 mod format;
 mod limit;
+mod messages;
 pub(crate) mod projection;
 mod sse;
 mod template;
@@ -208,6 +209,7 @@ impl Audit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::llm::Protocol;
     use crate::{
         FilterOutput,
         chain::{DirectionStream, ParserDirection},
@@ -230,7 +232,7 @@ mod tests {
             "text/event-stream"
         };
         protocol_records(
-            Format::OpenaiChatCompletions,
+            Format::Llm(Protocol::OpenaiChatCompletions),
             media,
             body,
             side,
@@ -330,7 +332,7 @@ mod tests {
             ),
         ] {
             let rows = protocol_records(
-                Format::OpenaiResponses,
+                Format::Llm(Protocol::OpenaiResponses),
                 media,
                 &wire,
                 ParserDirection::Response,
@@ -420,18 +422,158 @@ mod tests {
             ];
             let full: FormatFields = &[("only", full), ("s", status)];
             let records = protocol_records(
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 "application/json",
                 &body.to_string(),
                 side,
                 &[fields, full],
                 "",
             );
+            let mut row = read(&records[0]);
+            let messages = row.as_object_mut().unwrap().remove("messages").unwrap();
+            assert_eq!(serde_json::to_vec(&messages).unwrap().len(), 128);
+            let prefix = messages[0]["parts"][0]["content"].as_str().unwrap();
+            assert!(!prefix.is_empty() && text.starts_with(prefix));
             assert_eq!(
-                read(&records[0]),
+                row,
                 json!({"small":["x".repeat(124)],"large":[text],"s":"truncated"})
             );
             assert_eq!(read(&records[1]), json!({"only":[text],"s":"complete"}));
+        }
+    }
+
+    #[test]
+    fn request_messages_keep_a_bounded_text_part_after_an_inline_image() {
+        let prefix = "今天\"\\\n";
+        let text = format!("{prefix}🧪{}", "后文".repeat(80));
+        let image = "A".repeat(4096);
+        let body = json!({"messages":[
+            {"role":"user","content":"first"},
+            {"role":"assistant","content":[
+                {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{image}"),"detail":"high"}},
+                {"type":"text","text":text},
+                {"type":"text","text":"last"}
+            ]}
+        ]}).to_string();
+        let expected = json!([
+            {"role":"user","parts":[{"type":"text","content":"first"}]},
+            {"role":"assistant","parts":[
+                {"type":"blob","modality":"image","mime_type":"image/png","detail":"high"},
+                {"type":"text","content":prefix}
+            ]}
+        ]);
+        // Two spare bytes cannot hold the next four-byte character.
+        let limit = serde_json::to_vec(&expected).unwrap().len() + 2;
+        let short = format!("%EVENT(llm.request.messages):{limit}%");
+        let status = ("s", "%CAPTURE_STATUS(request)%");
+        let specs: &[FormatFields] = &[
+            &[("m", &short), status],
+            &[("m", "%EVENT(llm.request.messages):8192%"), status],
+            &[("m", "%EVENT(llm.request.messages):2%"), status],
+        ];
+        let logs = chat_records(
+            &body,
+            ParserDirection::Request(Default::default()),
+            specs,
+            "",
+        );
+        assert_eq!(read(&logs[0]), json!({"m":expected,"s":"truncated"}));
+        let full = read(&logs[1]);
+        assert_eq!(full["m"][1]["parts"][0]["content"], image);
+        assert_eq!(full["m"][1]["parts"][1]["content"], text);
+        assert_eq!(full["m"][1]["parts"][2]["content"], "last");
+        assert_eq!(full["s"], "complete");
+        assert_eq!(read(&logs[2]), json!({"s":"truncated"}));
+    }
+
+    #[test]
+    fn response_messages_keep_the_same_refusal_prefix_in_json_and_sse() {
+        let prefix = "本次\n\"";
+        let refusal = format!("{prefix}🧪{}", "不能执行".repeat(64));
+        let reply = json!({"role":"assistant","content":"先说明","refusal":refusal});
+        let usage = json!({"total_tokens":8});
+        let document = json!({"model":"m","choices":[{"index":0,"message":reply,"finish_reason":"stop"}],"usage":usage});
+        let delta = json!({"model":"m","choices":[{"index":0,"delta":reply}]});
+        let stop = json!({"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]});
+        let count = json!({"model":"m","choices":[],"usage":usage});
+        let wire = format!("data: {delta}\n\ndata: {stop}\n\ndata: {count}\n\ndata: [DONE]\n\n");
+        let expected = json!([{"index":0,"role":"assistant","finish_reason":"stop","parts":[
+            {"type":"text","content":"先说明"},{"type":"refusal","text":prefix}
+        ]}]);
+        let limit = serde_json::to_vec(&expected).unwrap().len();
+        let short = format!("%EVENT(llm.response.messages):{limit}%");
+        let status = ("s", "%CAPTURE_STATUS(response)%");
+        let tokens = ("tokens", "%EVENT(llm.usage.totalTokens)%");
+        let specs: &[FormatFields] = &[
+            &[("m", &short), status, tokens],
+            &[("m", "%EVENT(llm.response.messages):8192%"), status, tokens],
+        ];
+        let mut full = expected.clone();
+        full[0]["parts"][1]["text"] = refusal.into();
+        for (media, body) in [
+            ("application/json", document.to_string()),
+            ("text/event-stream", wire),
+        ] {
+            let rows = protocol_records(
+                Format::Llm(Protocol::OpenaiChatCompletions),
+                media,
+                &body,
+                ParserDirection::Response,
+                specs,
+                "",
+            );
+            assert_eq!(
+                read(&rows[0]),
+                json!({"m":expected,"s":"truncated","tokens":8})
+            );
+            assert_eq!(read(&rows[1]), json!({"m":full,"s":"complete","tokens":8}));
+        }
+    }
+
+    #[test]
+    fn exceeding_the_sse_parser_budget_keeps_text_without_inventing_messages() {
+        let delta =
+            json!({"model":"m","choices":[{"index":0,"delta":{"content":"x".repeat(16 * 1024)}}]});
+        let mut wire = format!("data: {delta}\n\n").repeat(128);
+        wire.push_str(concat!(
+            "data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"model\":\"m\",\"choices\":[],\"usage\":{\"total_tokens\":8}}\n\ndata: [DONE]\n\n",
+        ));
+        let fields: FormatFields = &[
+            ("m", "%EVENT(llm.response.messages):8192%"),
+            ("answer", "%EVENT(llm.answer):8%"),
+            ("tokens", "%EVENT(llm.usage.totalTokens)%"),
+            ("s", "%CAPTURE_STATUS(response)%"),
+        ];
+        let rows = chat_records(&wire, ParserDirection::Response, &[fields], "");
+        assert_eq!(
+            read(&rows[0]),
+            json!({"answer":"xxxxxxxx","tokens":8,"s":"truncated"})
+        );
+    }
+
+    #[test]
+    fn oversized_tool_and_provider_parts_keep_only_preceding_complete_parts() {
+        use super::messages::Messages;
+        let text = "private".repeat(200);
+        for atomic in [
+            json!({"type":"tool_call","id":"c","name":"pay","arguments":{"amount":1000,"note":text}}),
+            json!({"type":"tool_result","toolCallId":"c","content":[{"type":"text","text":text}],"isError":false}),
+            json!({"type":"provider_content","format":"openai-responses","data":{"text":text}}),
+        ] {
+            let mut message = json!({"role":"assistant","content":[{"type":"text","text":"before"},atomic,{"type":"text","text":"after"}]});
+            let (result, clipped) =
+                Messages::project(std::slice::from_ref(&message), 128, Side::Response);
+            assert!(clipped);
+            assert_eq!(
+                result.unwrap(),
+                json!([{"role":"assistant","parts":[{"type":"text","content":"before"}]}])
+            );
+            message["content"].as_array_mut().unwrap().remove(0);
+            assert_eq!(
+                Messages::project(&[message], 128, Side::Response),
+                (None, true)
+            );
         }
     }
 
@@ -448,15 +590,15 @@ mod tests {
         ];
         for (format, body) in [
             (
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 json!({"messages":[first,{"role":"tool","tool_call_id":"c","content":blocks}]}),
             ),
             (
-                Format::OpenaiResponses,
+                Format::Llm(Protocol::OpenaiResponses),
                 json!({"input":[first,{"type":"function_call_output","call_id":"c","output":blocks}]}),
             ),
             (
-                Format::AnthropicMessages,
+                Format::Llm(Protocol::AnthropicMessages),
                 json!({"model":"m","max_tokens":32,"messages":[first,{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":blocks}]}]}),
             ),
         ] {
@@ -478,7 +620,7 @@ mod tests {
         ];
         let body = json!({"model":"m","max_tokens":32,"messages":[first],"system":blocks});
         let rows = protocol_records(
-            Format::AnthropicMessages,
+            Format::Llm(Protocol::AnthropicMessages),
             "application/json",
             &body.to_string(),
             side,
@@ -516,7 +658,7 @@ mod tests {
                 r#"{{"choices":[{choice}],"model":"test-model","id":"chat-1","usage":{{"total_tokens":8}}}}"#
             );
             let rows = protocol_records(
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 "application/json",
                 &body,
                 ParserDirection::Response,
@@ -555,19 +697,19 @@ mod tests {
         let expected = json!({"r":[{"id":"c","kind":"call","name":"lookup"}],"s":"complete"});
         for (format, body, fields, want) in [
             (
-                Format::AnthropicMessages,
+                Format::Llm(Protocol::AnthropicMessages),
                 json!({"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"lookup","input":{"name":"z".repeat(4096)}}]}]}),
                 refs,
                 expected.clone(),
             ),
             (
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 json!({"messages":[{"role":"user","content":blocks},call]}),
                 refs,
                 expected,
             ),
             (
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 json!({"messages":[{"role":"user","content":"question"},call,{"role":"tool","tool_call_id":"c","content":blocks}]}),
                 text,
                 json!({"t":["question"],"s":"complete"}),
@@ -588,7 +730,7 @@ mod tests {
                     )[0],
                 );
                 let mut expected = want.clone();
-                if limit == 1024 && matches!(format, Format::OpenaiChatCompletions) {
+                if limit == 1024 && matches!(format, Format::Llm(Protocol::OpenaiChatCompletions)) {
                     expected["s"] = "partial".into();
                 }
                 assert_eq!(row, expected);
@@ -610,7 +752,7 @@ mod tests {
         let doc = json!({"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"first"}},{"index":1,"message":{"role":"assistant","content":"x".repeat(2<<20)}}]});
         let row = read(
             &protocol_records(
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 "application/json",
                 &doc.to_string(),
                 ParserDirection::Response,
@@ -645,7 +787,7 @@ mod tests {
                 "logprobs":vec![json!({"token":"a","logprob":-0.125,"bytes":[97],"top_logprobs":[]});entries]});
             let row = read(
                 &protocol_records(
-                    Format::OpenaiResponses,
+                    Format::Llm(Protocol::OpenaiResponses),
                     "application/json",
                     &body.to_string(),
                     ParserDirection::Response,
@@ -822,7 +964,7 @@ mod tests {
             ),
         ] {
             let rows = protocol_records(
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 media,
                 &wire,
                 ParserDirection::Response,
@@ -912,7 +1054,7 @@ mod tests {
         let input = json!({"input":[{"role":"user","content":"previous"},{"role":"user","content":content}]}).to_string();
         let run = |specs: &[FormatFields]| {
             protocol_records(
-                Format::OpenaiResponses,
+                Format::Llm(Protocol::OpenaiResponses),
                 "application/json",
                 &input,
                 ParserDirection::Request(Default::default()),
@@ -976,18 +1118,18 @@ mod tests {
     fn response_status_tracks_finish_reason_loss_only_when_selected() {
         use crate::{
             filters::{BodyEnd, BodyResult},
-            parser::json_capture::CaptureLoss,
+            parser::llm::{CaptureLoss, Outcome},
         };
         let end = BodyEnd {
             bytes_seen: 0,
             decoded_bytes: None,
-            result: BodyResult::Llm(Ok((
-                CaptureLoss {
+            result: BodyResult::Llm(Outcome::Document {
+                loss: CaptureLoss {
                     finish_reasons: true,
                     ..Default::default()
                 },
-                json!({"model":"m","finishReasons":["stop"]}).into(),
-            ))),
+                view: json!({"model":"m","finishReasons":["stop"]}).into(),
+            }),
         };
         for (alias, field, expected) in [
             (
@@ -1102,7 +1244,7 @@ mod tests {
             let capture = Box::new(capture::Capture::new(Side::Request, 0, template, false));
             let mut stream = DirectionStream::new(
                 side,
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 "application/octet-stream",
                 "gzip",
                 vec![capture],
@@ -1197,7 +1339,7 @@ mod tests {
         ]);
         let body = json!({"input":[{"content":parts,"role":"user"}]}).to_string();
         let result = protocol_records(
-            Format::OpenaiResponses,
+            Format::Llm(Protocol::OpenaiResponses),
             "application/json",
             &body,
             side,
@@ -1219,9 +1361,9 @@ mod tests {
         let anthropic = json!({"model":"m","content":parts,"stop_reason":"end_turn"});
         let responses = json!({"model":"m","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"start "},{"type":"output_text","text":long},{"type":"refusal","refusal":"END"}]}]});
         for (format, doc) in [
-            (Format::OpenaiChatCompletions, chat),
-            (Format::AnthropicMessages, anthropic),
-            (Format::OpenaiResponses, responses),
+            (Format::Llm(Protocol::OpenaiChatCompletions), chat),
+            (Format::Llm(Protocol::AnthropicMessages), anthropic),
+            (Format::Llm(Protocol::OpenaiResponses), responses),
         ] {
             let row = read(
                 &protocol_records(
@@ -1319,7 +1461,7 @@ mod tests {
                 .collect();
             let mut stream = DirectionStream::new(
                 ParserDirection::Request(Default::default()),
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
                 "application/octet-stream",
                 "gzip",
                 filters,
@@ -1344,7 +1486,7 @@ mod tests {
                 "type":"computer_screenshot","detail":"original","image_url":format!("data:image/png;base64,{}", "YWFh".repeat(1024))}},
             {"role":"user","content":[{"type":"input_text","text":"after screenshot"}]}]});
         let rows = protocol_records(
-            Format::OpenaiResponses,
+            Format::Llm(Protocol::OpenaiResponses),
             "application/json",
             &input.to_string(),
             ParserDirection::Request(crate::config::RequestParserConfig {
@@ -1387,7 +1529,7 @@ mod tests {
             let doc = json!({"input":[{"role":"user","content":[{"type":"input_file",(key):data},{"type":"input_text","text":"explain"}]},{"type":"computer_call_output","call_id":"c","output":{"type":"computer_screenshot","file_id":"f"}}]});
             let row = read(
                 &protocol_records(
-                    Format::OpenaiResponses,
+                    Format::Llm(Protocol::OpenaiResponses),
                     "application/json",
                     &doc.to_string(),
                     side,
@@ -1445,12 +1587,20 @@ mod tests {
         );
         assert_ne!(with_null, chat);
         assert_eq!(
-            row(Format::OpenaiChatCompletions, &with_null),
-            row(Format::OpenaiChatCompletions, chat)
+            row(Format::Llm(Protocol::OpenaiChatCompletions), &with_null),
+            row(Format::Llm(Protocol::OpenaiChatCompletions), chat)
         );
         for (format, wire, end) in [
-            (Format::OpenaiChatCompletions, chat, "data: [DONE]"),
-            (Format::AnthropicMessages, claude, "event: message_stop"),
+            (
+                Format::Llm(Protocol::OpenaiChatCompletions),
+                chat,
+                "data: [DONE]",
+            ),
+            (
+                Format::Llm(Protocol::AnthropicMessages),
+                claude,
+                "event: message_stop",
+            ),
         ] {
             let mut expected = row(format, wire);
             assert!(expected["reason"].is_array());
@@ -1462,7 +1612,7 @@ mod tests {
             "{start}event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"overloaded_error\",\"message\":\"busy\"}}}}\n\n"
         );
         assert_eq!(
-            row(Format::AnthropicMessages, &wire),
+            row(Format::Llm(Protocol::AnthropicMessages), &wire),
             json!({"s":"complete","model":"test-claude","tokens":6,"error":"overloaded_error"})
         );
     }

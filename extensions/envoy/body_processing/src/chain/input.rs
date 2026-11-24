@@ -4,15 +4,8 @@
 use super::gzip::Gzip;
 use crate::{
     FilterOutput,
-    config::RequestParserConfig,
     filters::{BodyEnd, BodyFilter, BodyInterest, BodyResult, Decision},
-    parser::{
-        BodyError, BodyEvent, Format,
-        body::HttpCapture,
-        json_capture::JsonCapture,
-        llm::{Fields, sse, stream},
-        request::Request,
-    },
+    parser::{BodyError, BodyEvent, Format, ParserDirection, http::HttpCapture, llm},
 };
 
 #[derive(Default)]
@@ -24,67 +17,14 @@ pub struct DirectionStream {
     decoded_bytes: Option<usize>,
 }
 
-const RESPONSE_LIMIT: usize = 1 << 20;
-
-#[derive(Clone, Copy)]
-pub(crate) enum ParserDirection {
-    Request(RequestParserConfig),
-    Response,
-}
-
 enum Input {
     Count,
-    Request(Request),
-    Response(JsonCapture),
-    Events(sse::Framer, Box<stream::Stream>),
-    Other(HttpCapture),
+    Llm(llm::Parser),
+    Http(HttpCapture),
     Failed(BodyError),
 }
 
-impl Input {
-    fn llm(
-        format: Format,
-        protocol: &'static str,
-        direction: ParserDirection,
-        media: Option<&mime::Mime>,
-        encoding: &str,
-    ) -> Self {
-        if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
-            return Self::Failed(BodyError::UnsupportedEncoding);
-        }
-        let Some(media) = media else {
-            return Self::Failed(BodyError::UnsupportedMediaType);
-        };
-        if media.type_() == mime::APPLICATION
-            && (media.subtype() == mime::JSON || media.suffix() == Some(mime::JSON))
-        {
-            return match direction {
-                ParserDirection::Response => Self::Response(JsonCapture::new(RESPONSE_LIMIT)),
-                ParserDirection::Request(config) => {
-                    Self::Request(Request::new(protocol, config.max_item_size))
-                }
-            };
-        }
-        if matches!(direction, ParserDirection::Request(_))
-            || media.essence_str() != "text/event-stream"
-        {
-            return Self::Failed(BodyError::UnsupportedMediaType);
-        }
-        if media
-            .get_param("charset")
-            .is_some_and(|v| !v.as_str().is_empty() && !v.as_str().eq_ignore_ascii_case("utf-8"))
-        {
-            return Self::Failed(BodyError::UnsupportedEncoding);
-        }
-        Self::Events(
-            sse::Framer::new(format),
-            Box::new(stream::Stream::new(protocol, RESPONSE_LIMIT)),
-        )
-    }
-}
-
 struct Group {
-    format: Format,
     input: Input,
     subscribers: Vec<Box<dyn BodyFilter>>,
 }
@@ -98,15 +38,8 @@ impl Group {
             }
         };
         let result = match &mut self.input {
-            Input::Request(reader) => reader.push(bytes, &mut emit),
-            Input::Response(reader) => {
-                reader.push(bytes, self.format.protocol().unwrap(), true, Fields::ALL);
-                Ok(())
-            }
-            Input::Events(framer, stream) => framer.push(bytes, |frame| {
-                stream.event(frame, &mut |event| emit(BodyEvent::LlmResponse(event)))
-            }),
-            Input::Other(reader) => {
+            Input::Llm(parser) => parser.push(bytes, &mut |event| emit(BodyEvent::Llm(event))),
+            Input::Http(reader) => {
                 reader.push(bytes, size);
                 Ok(())
             }
@@ -125,38 +58,19 @@ impl Group {
         complete: bool,
         records: &mut FilterOutput,
     ) -> Decision {
-        let source = match self.input {
-            Input::Failed(e) => BodyResult::Failed(e),
-            Input::Events(_, stream) => match (complete, stream.into_partial()) {
-                (true, None) => BodyResult::Sse,
-                (_, partial) => BodyResult::InterruptedSse {
-                    reason: if complete {
-                        BodyError::IncompleteStream
-                    } else {
-                        BodyError::Incomplete
-                    },
-                    partial,
-                },
-            },
-            _ if !complete => BodyResult::Failed(BodyError::Incomplete),
-            Input::Count => BodyResult::Counts,
-            Input::Other(reader) => {
-                BodyResult::Http(reader.finish(decoded.unwrap_or(wire_bytes), true))
-            }
-            Input::Request(reader) => {
-                BodyResult::Llm(reader.finish().map(|v| (Default::default(), v)))
-            }
-            Input::Response(reader) => BodyResult::Llm(reader.finish(
-                self.format.protocol().unwrap(),
-                true,
-                Fields::ALL,
-                RESPONSE_LIMIT,
-            )),
+        let result = match self.input {
+            Input::Failed(error) => Err(error),
+            Input::Llm(parser) => parser.finish(complete).map(BodyResult::Llm),
+            _ if !complete => Err(BodyError::Incomplete),
+            Input::Count => Ok(BodyResult::Counts),
+            Input::Http(reader) => reader
+                .finish(decoded.unwrap_or(wire_bytes), true)
+                .map(BodyResult::Http),
         };
         let end = BodyEnd {
             bytes_seen: wire_bytes,
             decoded_bytes: decoded,
-            result: source,
+            result: result.unwrap_or_else(BodyResult::Failed),
         };
         self.subscribers
             .into_iter()
@@ -199,9 +113,12 @@ impl DirectionStream {
         let encoding = if gzip { "" } else { encoding.trim() };
         let input = if interest.events {
             let media = media.parse::<mime::Mime>().ok();
-            match format.protocol() {
-                Some(protocol) => Input::llm(format, protocol, direction, media.as_ref(), encoding),
-                None => Input::Other(HttpCapture::new(
+            match format {
+                Format::Llm(protocol) => {
+                    llm::Parser::new(protocol, direction, media.as_ref(), encoding)
+                        .map_or_else(Input::Failed, Input::Llm)
+                }
+                _ => Input::Http(HttpCapture::new(
                     format,
                     limit,
                     hard_limit,
@@ -213,7 +130,6 @@ impl DirectionStream {
             Input::Count
         };
         let group = Group {
-            format,
             input,
             subscribers: filters,
         };
@@ -235,7 +151,7 @@ impl DirectionStream {
         !self.count_inflated
             && self.group.iter().all(|g| match &g.input {
                 Input::Count | Input::Failed(_) => true,
-                Input::Other(reader) => reader.bytes_only(),
+                Input::Http(reader) => reader.bytes_only(),
                 _ => false,
             })
     }
@@ -252,7 +168,7 @@ impl DirectionStream {
         if let Some(g) = &mut self.group {
             match &mut g.input {
                 Input::Failed(_) => {}
-                Input::Other(d) => d.fail(e),
+                Input::Http(d) => d.fail(e),
                 _ => g.input = Input::Failed(e),
             }
         }

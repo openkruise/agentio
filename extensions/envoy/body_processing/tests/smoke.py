@@ -80,6 +80,7 @@ def bootstrap(port, upstream):
              "filters": [audit({"tenant": "%REQ(X-TENANT)%"}), {"audit": {"format": {"json": {"absent": "%REQ(X-ABSENT)%"}}}}]},
             {"name": "chat-choices", "matcher": {"hosts": ["choices.test", "reset.test"]}, "parser": {"llm": {}},
              "filters": [audit({"question": "%EVENT(llm.question)%", "answer": "%EVENT(llm.answer)%",
+                                "input": "%EVENT(llm.request.messages):62%", "requestStatus": "%CAPTURE_STATUS(request)%",
                                 "preview": "%EVENT(llm.response.retainedText)%",
                                 "tokens": "%EVENT(llm.usage.totalTokens)%", "status": "%CAPTURE_STATUS(response)%"})]},
             {"name": "custom", "matcher": {"hosts": ["*.llm.test"], "paths": ["/custom"],
@@ -101,7 +102,7 @@ def bootstrap(port, upstream):
              "filters":[audit(attributes | question | request_info | response_info | {"llm.answer":"%EVENT(llm.answer)%", "requestCalls":"%EVENT(llm.request.toolCallRefs)%", "responseCalls":"%EVENT(llm.response.toolCallRefs)%"})]},
             {"name": "sse-audits", "matcher": {"hosts": ["sse.test"]}, "parser": {"llm": {}},
              "filters": [
-                 audit({"text": "%EVENT(llm.answer):1024%"} | response_info),
+                 audit({"text": "%EVENT(llm.answer):1024%", "messages": "%EVENT(llm.response.messages):256%"} | response_info),
                  audit({"tokens": "%EVENT(llm.usage.totalTokens)%"} | response_info),
              ]},
             {"name": "streaming", "matcher": {"hosts": [llm_streaming.HOST + "."], "paths": list(STREAMS)},
@@ -321,7 +322,7 @@ def exercise(port):
     response = connection.getresponse()
     assert response.status == 200 and response.read() == b"opaque"
     connection.request("POST", llm_streaming.CHAT, json.dumps({"model": "test", "messages": [
-        {"role": "user", "content": "two answers?"}], "n": 2}), {"Host": "choices.test", "Content-Type": "application/json"})
+        {"role": "user", "content": "天气很好"}], "n": 2}), {"Host": "choices.test", "Content-Type": "application/json"})
     response = connection.getresponse()
     assert response.status == 200 and response.read() == JSON_CHOICES
     connection.request("POST", "/v1/chat/completions", json.dumps({"messages": [{"role": "user", "content": "retry?"}]}),
@@ -449,10 +450,14 @@ def check_records(lines, json_bytes):
     assert context == {"chain": "context-only", "path": "/context-only", "requestID": context["requestID"], "tenant": "alpha"} and not empty
     assert len(choice_records) == 2, choice_records
     complete, = (r for r in choice_records if r["status"] == "complete")
-    assert complete["question"] == "two answers?" and complete["answer"] == "primary"
+    assert complete["question"] == "天气很好" and complete["answer"] == "primary"
+    assert complete["input"] == [{"role": "user", "parts": [{"type": "text", "content": "天气"}]}]
+    assert complete["requestStatus"] == "truncated"
     assert complete["preview"] == ["primary", "alternate"], complete
     reset, = (r for r in choice_records if r["status"] == "incomplete")
     assert reset["question"] == "retry?" and reset["answer"] == "retry" and reset["preview"] == ["retry", "alternate"]
+    assert reset["input"] == [{"role": "user", "parts": [{"type": "text", "content": "retry?"}]}]
+    assert reset["requestStatus"] == "complete"
     assert "tokens" not in reset, reset
     for case, (_, make_part) in ATTACHMENTS.items():
         small, full = attachments[case]
@@ -479,6 +484,15 @@ def check_records(lines, json_bytes):
         size = len(json.dumps(prefix, ensure_ascii=False).encode()) - 2
         next_size = len(json.dumps(LONG_TEXT[:len(prefix) + 1], ensure_ascii=False).encode()) - 2
         assert size <= 1024 < next_size
+        message, = answer["messages"]
+        part, = message["parts"]
+        text = part["content"]
+        assert message["role"] == "assistant" and message["index"] == 0
+        assert part["type"] == "text" and text and LONG_TEXT.startswith(text), path
+        size = len(json.dumps(answer["messages"], ensure_ascii=False, separators=(",", ":")).encode())
+        next_char_bytes = len(json.dumps(LONG_TEXT[len(text)], ensure_ascii=False).encode()) - 2
+        assert size <= 256 < size + next_char_bytes
+        assert "messages" not in usage
         assert "tokens" not in answer and "text" not in usage
         assert usage["responseStatus"] == "complete" and usage["tokens"] == (12 if path == "/v1/messages" else 8)
     for name, records in dual.items():

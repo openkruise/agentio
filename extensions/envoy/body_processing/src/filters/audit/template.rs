@@ -4,7 +4,7 @@
 use super::{
     Audit, Source,
     format::Field,
-    limit::{DEFAULT_FIELD_BYTES, MAX_FIELD_BYTES, bounded_value},
+    limit::{DEFAULT_FIELD_BYTES, MAX_FIELD_BYTES},
 };
 use crate::{
     chain::Side,
@@ -134,12 +134,7 @@ impl BodyFields {
         let mut clipped = body.truncated
             || matches!(&body.content, Content::Llm(view) if view.tool_refs.truncated);
         for (field, aliases) in &self.columns {
-            let Some(source) = field.value(&mut body.content) else {
-                continue;
-            };
-            let (value, shortened) = bounded_value(&source, self.limit);
-            clipped |= shortened;
-            if let Some(value) = value {
+            if let Some(value) = field.value(&mut body.content, self.limit, &mut clipped) {
                 for alias in &aliases[1..] {
                     output.insert(alias.clone(), value.clone());
                 }

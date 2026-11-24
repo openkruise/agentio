@@ -64,7 +64,7 @@ struct Probe {
 
 impl BodyFilter for Probe {
     fn on_event(&mut self, event: &BodyEvent<'_>, _: usize) -> Decision {
-        let BodyEvent::LlmResponse(event) = event else {
+        let BodyEvent::Llm(crate::parser::llm::Event::Response(event)) = event else {
             panic!("unexpected request event")
         };
         let value = match event {
@@ -82,7 +82,10 @@ impl BodyFilter for Probe {
     }
 
     fn on_end(self: Box<Self>, end: &BodyEnd, _: &mut FilterOutput) -> Decision {
-        assert!(matches!(end.result, BodyResult::Sse));
+        assert!(matches!(
+            end.result,
+            BodyResult::Llm(crate::parser::llm::Outcome::Sse)
+        ));
         self.seen.borrow_mut().push((self.index, json!("end")));
         Decision::Continue
     }
@@ -92,15 +95,15 @@ impl BodyFilter for Probe {
 fn complete_frames_deliver_semantic_events_to_both_filters_before_http_end() {
     for (format, body) in [
         (
-            Format::OpenaiChatCompletions,
+            Format::Llm(Protocol::OpenaiChatCompletions),
             include_str!("../../testdata/openai.sse"),
         ),
         (
-            Format::OpenaiResponses,
+            Format::Llm(Protocol::OpenaiResponses),
             include_str!("../../testdata/responses.sse"),
         ),
         (
-            Format::AnthropicMessages,
+            Format::Llm(Protocol::AnthropicMessages),
             include_str!("../../testdata/anthropic.sse"),
         ),
     ] {
@@ -181,7 +184,7 @@ fn chat_emits_alternatives_with_their_answer_membership() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let mut stream = DirectionStream::new(
         ParserDirection::Response,
-        Format::OpenaiChatCompletions,
+        Format::Llm(Protocol::OpenaiChatCompletions),
         "text/event-stream",
         "",
         vec![Box::new(Probe {

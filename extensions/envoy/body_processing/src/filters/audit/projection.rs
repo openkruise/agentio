@@ -1,24 +1,27 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::limit::{array_size_with, bounded_value, json_bytes, string_prefix};
-use crate::parser::{
-    BodyError, encoded_len,
-    llm::{Fields, LlmView, ToolReferences},
-    request::ItemEvent,
+use super::{
+    limit::{array_size_with, bounded_value, string_prefix},
+    messages::{Messages, format_parts},
 };
-use serde_json::{Map, Value, json};
+use crate::chain::Side;
+use crate::parser::{
+    BodyError,
+    llm::ItemEvent,
+    llm::{Fields, LlmView, ToolReferences},
+};
+use serde_json::{Value, json};
 
 #[derive(Default)]
 pub(crate) struct Projection {
     view: Value,
     error: Option<BodyError>,
-    messages_size: usize,
+    messages: Option<Messages>,
     tools: Definitions,
     functions: Definitions,
     references: ToolProjection,
     text: TextPreview,
-    messages_full: bool,
     clipped: bool,
     question_clipped: bool,
 }
@@ -118,16 +121,14 @@ impl Projection {
     ) {
         match event {
             ItemEvent::BeginMessages => {
-                self.messages_full = false;
                 self.question_clipped = false;
-                self.messages_size = 0;
                 self.references = ToolProjection::default();
                 self.text = TextPreview::default();
                 if let Some(v) = self.view.as_object_mut() {
                     v.remove("question");
                 }
                 if fields.input_messages {
-                    self.view["inputMessages"] = json!([]);
+                    self.messages = Some(Messages::new(room));
                 }
             }
             ItemEvent::NullTools if fields.tools => self.tools.start(Value::Null),
@@ -171,28 +172,8 @@ impl Projection {
                         }
                     }
                     self.clipped |= fields.input_messages && clipped;
-                    if fields.input_messages && !self.messages_full {
-                        let mut logged = item.clone();
-                        super::format::message(&mut logged);
-                        let size =
-                            array_size_with(self.messages_size, &logged, room).or_else(|| {
-                                self.clipped = true;
-                                fit_inline_media(
-                                    &item["content"],
-                                    &mut logged,
-                                    self.messages_size,
-                                    room,
-                                )
-                            });
-                        if let Some(next) = size {
-                            self.messages_size = next;
-                            self.view["inputMessages"]
-                                .as_array_mut()
-                                .unwrap()
-                                .push(logged);
-                        } else {
-                            self.close_messages();
-                        }
+                    if let Some(messages) = &mut self.messages {
+                        messages.push(item, Side::Request);
                     }
                 }
             }
@@ -213,8 +194,8 @@ impl Projection {
                 if fields.tool_call_refs && *references_clipped {
                     self.references.refs.truncated = true;
                 }
-                if fields.input_messages {
-                    self.close_messages();
+                if let Some(messages) = &mut self.messages {
+                    messages.omit();
                 }
                 if fields.retained_text {
                     for s in text
@@ -250,8 +231,7 @@ impl Projection {
                 Err(reason) => self.error = Some(*reason),
             },
             ItemEvent::System(system) if fields.instructions => {
-                let mut parts = system.clone();
-                super::format::project_parts(&mut parts);
+                let parts = format_parts(system);
                 let (value, shortened) = bounded_value(&parts, room);
                 self.clipped |= clipped || shortened;
                 if let Some(value) = value {
@@ -270,14 +250,6 @@ impl Projection {
         }
     }
 
-    fn close_messages(&mut self) {
-        self.messages_full = true;
-        self.clipped = true;
-        if self.messages_size == 0 {
-            self.view.as_object_mut().unwrap().remove("inputMessages");
-        }
-    }
-
     fn question(&mut self, question: Option<&str>, clipped: bool, room: usize) {
         if let Some(text) = question {
             let prefix = string_prefix(text, room);
@@ -291,13 +263,20 @@ impl Projection {
         }
     }
 
-    pub(crate) fn finish(self, metadata: &LlmView) -> Result<(bool, LlmView), BodyError> {
+    pub(crate) fn finish(mut self, metadata: &LlmView) -> Result<(bool, LlmView), BodyError> {
         if let Some(e) = self.error {
             return Err(e);
         }
         let mut result = metadata.document.clone();
         if let Value::Object(fields) = self.view {
             result.as_object_mut().unwrap().extend(fields);
+        }
+        if let Some(messages) = self.messages {
+            let (value, clipped) = messages.finish();
+            self.clipped |= clipped;
+            if let Some(value) = value {
+                result["inputMessages"] = value;
+            }
         }
         // Chat treats legacy functions as additional definitions after tools,
         // regardless of their order on the wire.
@@ -328,137 +307,44 @@ impl Projection {
     }
 }
 
-// Reserve the text and descriptors of this message before spending the remaining
-// field budget on complete attachments in their original order.
-fn fit_inline_media(
-    content: &Value,
-    message: &mut Value,
-    used: usize,
-    limit: usize,
-) -> Option<usize> {
-    let mut costs = Vec::new();
-    visit_inline_media(content, message.get_mut("parts")?, &mut |media, part| {
-        let full = json_bytes(part, limit);
-        media.set_retained(part, false);
-        let cost = full.map(|bytes| bytes.saturating_sub(encoded_len(part)));
-        if cost == Some(0) {
-            // A short file can be smaller than its omission marker.
-            media.set_retained(part, true);
-        }
-        costs.push(cost);
-    });
-    if costs.is_empty() {
-        return None;
-    }
-    let mut size = array_size_with(used, message, limit)?;
-    if size < limit {
-        let mut costs = costs.into_iter();
-        visit_inline_media(content, &mut message["parts"], &mut |media, part| {
-            if let Some(cost) = costs.next().unwrap()
-                && cost > 0
-                && cost <= limit - size
-            {
-                media.set_retained(part, true);
-                size += cost;
-            }
-        });
-    }
-    Some(size)
-}
-
-enum InlineMedia<'a> {
-    Image(&'a Value),
-    Attachment {
-        data: &'a Value,
-        locations: &'a Map<String, Value>,
-    },
-}
-
-impl InlineMedia<'_> {
-    fn set_retained(&self, part: &mut Value, keep: bool) {
-        match *self {
-            Self::Image(data) => {
-                if keep {
-                    part["content"] = data.clone();
-                } else {
-                    part.as_object_mut().unwrap().remove("content");
-                }
-            }
-            Self::Attachment { data, locations } => {
-                for (path, prefix) in locations {
-                    *part["data"].pointer_mut(path).unwrap() = if keep {
-                        data.pointer(path).unwrap().clone()
-                    } else {
-                        format!("{}[omitted]", prefix.as_str().unwrap()).into()
-                    };
-                }
-            }
-        }
-    }
-}
-
-// Normalization and formatting preserve part order, including nested tool results.
-fn visit_inline_media(
-    content: &Value,
-    parts: &mut Value,
-    visit: &mut impl FnMut(InlineMedia<'_>, &mut Value),
-) {
-    for (block, part) in content
-        .as_array()
-        .into_iter()
-        .flatten()
-        .zip(parts.as_array_mut().into_iter().flatten())
-    {
-        match block["type"].as_str() {
-            Some("image") if block["source"] == "base64" => {
-                if let Some(data) = block.get("data") {
-                    visit(InlineMedia::Image(data), part);
-                }
-            }
-            Some("tool_result") => {
-                visit_inline_media(&block["content"], &mut part["response"], visit);
-            }
-            Some("attachment") => {
-                if let Some(locations) = block["inlineData"].as_object() {
-                    visit(
-                        InlineMedia::Attachment {
-                            data: &block["data"],
-                            locations,
-                        },
-                        part,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> LlmView {
+pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> (LlmView, bool) {
     let value = &source.document;
+    let mut messages_clipped = false;
     let mut view = serde_json::Map::new();
     for (k, v) in value.as_object().unwrap() {
         let keep = match k.as_str() {
             "answer" => fields.answer,
             "usage" => fields.usage,
-            "outputMessages" => fields.output_messages,
-            "retainedText" => false,
+            "outputMessages" | "retainedText" => false,
             _ => true,
         };
         if keep {
             view.insert(k.clone(), v.clone());
         }
     }
+    if fields.output_messages
+        && let Some(items) = value.get("outputMessages")
+    {
+        let (messages, clipped) =
+            Messages::project(items.as_array().unwrap(), limit, Side::Response);
+        messages_clipped = clipped;
+        if let Some(messages) = messages {
+            view.insert("outputMessages".into(), messages);
+        }
+    }
     let mut references = ToolProjection::default();
     if fields.tool_call_refs {
         references.observe(&source.tool_refs, limit);
     }
-    LlmView {
-        document: Value::Object(view),
-        tool_refs: references.refs,
-        partial: source.partial,
-        ..Default::default()
-    }
+    (
+        LlmView {
+            document: Value::Object(view),
+            tool_refs: references.refs,
+            partial: source.partial,
+            ..Default::default()
+        },
+        messages_clipped,
+    )
 }
 
 pub(super) fn response_text(value: &Value, limit: usize) -> TextPreview {

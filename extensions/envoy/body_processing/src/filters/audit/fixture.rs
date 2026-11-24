@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    format::{self, Field},
+    format::Field,
+    messages::{Messages, format_parts},
     template::{BodyFields, Template},
 };
 use crate::{
@@ -92,11 +93,15 @@ impl Template {
 pub(crate) fn expected_fields(document: &Value, side: Side) -> Map<String, Value> {
     let mut row = Map::new();
     let mut document = document.clone();
-    if let Some(input) = document.get_mut("inputMessages") {
-        format::messages(input);
+    for key in ["inputMessages", "outputMessages"] {
+        if let Some(value) = document.get_mut(key) {
+            *value = Messages::project(value.as_array().unwrap(), usize::MAX, side)
+                .0
+                .unwrap();
+        }
     }
     if let Some(parts) = document.get_mut("systemInstructions") {
-        format::project_parts(parts);
+        *parts = format_parts(parts);
     }
     let body = ParsedBody {
         truncated: false,

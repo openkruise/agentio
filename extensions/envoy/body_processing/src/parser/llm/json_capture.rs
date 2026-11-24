@@ -1,12 +1,13 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::llm::tool_summary::ToolSummary;
-use crate::parser::BodyError;
+use super::tool_summary::ToolSummary;
 use crate::parser::llm::{self, Fields, LlmView};
+use crate::parser::{
+    BodyError,
+    json::{Buffer, Scan, close_prefix, string_end},
+};
 use serde_json::{Value, json};
-
-use memchr::memchr2;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CaptureLoss {
@@ -225,26 +226,6 @@ fn media_key(token: &[u8]) -> bool {
         token,
         b"url" | b"data" | b"image_url" | b"file_data" | b"bytes" | b"image" | b"b64_json"
     )
-}
-
-// Return a prefix ending on a complete UTF-8 character and JSON escape.
-// Decoding only runs when clipping a string, never for each body chunk.
-fn close_prefix(token: &[u8]) -> Vec<u8> {
-    let mut candidate = Vec::with_capacity(token.len() + 2);
-    candidate.push(b'"');
-    candidate.extend_from_slice(token);
-    candidate.push(b'"');
-    for _ in 0..=12 {
-        if serde_json::from_slice::<String>(&candidate).is_ok() {
-            return candidate;
-        }
-        if candidate.len() <= 2 {
-            break;
-        }
-        candidate.pop();
-        *candidate.last_mut().unwrap() = b'"';
-    }
-    b"\"\"".to_vec()
 }
 
 impl Scanner {
@@ -574,28 +555,18 @@ impl Scanner {
         self.token.clear();
         self.overflow = false;
     }
+}
 
-    pub fn push(&mut self, mut chunk: &[u8]) {
+impl Scan for Scanner {
+    fn push(&mut self, mut chunk: &[u8]) {
         while !chunk.is_empty() && !self.too_deep {
             if self.quoted {
-                if self.escaped {
-                    self.append_token(&chunk[..1]);
-                    self.escaped = false;
-                    chunk = &chunk[1..];
-                    continue;
-                }
-                let n = memchr2(b'"', b'\\', chunk).unwrap_or(chunk.len());
+                let end = string_end(chunk, &mut self.escaped);
+                let n = end.unwrap_or(chunk.len());
                 self.append_token(&chunk[..n]);
-                chunk = &chunk[n..];
-                if let Some((&ch, rest)) = chunk.split_first() {
-                    if ch == b'"' {
-                        self.close_string();
-                    } else {
-                        self.append_token(&chunk[..1]);
-                        self.escaped = true;
-                    }
-                    chunk = rest;
-                }
+                let Some(end) = end else { break };
+                self.close_string();
+                chunk = &chunk[end + 1..];
             } else {
                 let ch = chunk[0];
                 chunk = &chunk[1..];
@@ -732,7 +703,9 @@ impl Scanner {
             }
         }
     }
+}
 
+impl Scanner {
     fn finish(mut self, log_limit: usize, loss: &mut CaptureLoss) -> Result<LlmView, BodyError> {
         let format = self.format;
         if self.quoted || self.too_deep || !self.path.is_empty() {
@@ -807,8 +780,7 @@ impl Scanner {
 // is crossed, replay only the bounded prefix into the scanner and continue.
 pub struct JsonCapture {
     limit: usize,
-    prefix: Vec<u8>,
-    scanner: Option<Box<Scanner>>,
+    input: Buffer<Scanner>,
     message_format: Option<&'static str>,
 }
 
@@ -816,8 +788,7 @@ impl JsonCapture {
     pub fn new(limit: usize) -> Self {
         Self {
             limit,
-            prefix: vec![],
-            scanner: None,
+            input: Buffer::Raw(Vec::new()),
             message_format: None,
         }
     }
@@ -829,17 +800,16 @@ impl JsonCapture {
     }
 
     pub(super) fn has_user_text(&self, format: &str) -> bool {
-        self.scanner.as_ref().is_some_and(|s| {
+        matches!(&self.input, Buffer::Scanning(s) if
             s.shape.user
                 && s.shape.visible_text
-                && (format != llm::RESPONSES || !s.shape.non_message)
-        })
+                && (format != llm::RESPONSES || !s.shape.non_message))
     }
 
     fn loss(&self) -> CaptureLoss {
-        self.scanner
-            .as_ref()
-            .map_or_else(CaptureLoss::default, |s| CaptureLoss {
+        match &self.input {
+            Buffer::Raw(_) => CaptureLoss::default(),
+            Buffer::Scanning(s) => CaptureLoss {
                 document: s.exhausted || s.loss.document,
                 references: self.message_format.map_or(s.loss.references, |format| {
                     (s.loss.references || s.exhausted) && s.shape.has_tools(format)
@@ -848,23 +818,16 @@ impl JsonCapture {
                 text: s.loss.text && !s.shape.tool_output(self.message_format),
                 exhausted: s.exhausted,
                 ..s.loss
-            })
+            },
+        }
     }
 
     pub fn push(&mut self, chunk: &[u8], format: &'static str, response: bool, fields: Fields) {
-        if let Some(s) = &mut self.scanner {
-            s.push(chunk);
-            return;
-        }
-        if chunk.len() <= self.limit - self.prefix.len() {
-            self.prefix.extend_from_slice(chunk);
-            return;
-        }
-        let mut s = Scanner::new(self.limit, format, response, fields);
-        s.message_format = self.message_format;
-        s.push(&std::mem::take(&mut self.prefix));
-        s.push(chunk);
-        self.scanner = Some(Box::new(s));
+        self.input.push(chunk, self.limit, || {
+            let mut scanner = Scanner::new(self.limit, format, response, fields);
+            scanner.message_format = self.message_format;
+            scanner
+        });
     }
     pub(super) fn finish_fragment(self) -> Result<(CaptureLoss, Value), BodyError> {
         let limit = self.limit;
@@ -880,12 +843,11 @@ impl JsonCapture {
         log_limit: usize,
     ) -> Result<(CaptureLoss, LlmView), BodyError> {
         let mut loss = self.loss();
-        if let Some(s) = self.scanner {
-            let view = s.finish(log_limit, &mut loss)?;
-            Ok((loss, view))
-        } else {
-            parse(format, &self.prefix, response, fields, log_limit).map(|v| (loss, v))
-        }
+        let view = match self.input {
+            Buffer::Raw(prefix) => parse(format, &prefix, response, fields, log_limit)?,
+            Buffer::Scanning(scanner) => scanner.finish(log_limit, &mut loss)?,
+        };
+        Ok((loss, view))
     }
 }
 
@@ -933,4 +895,37 @@ fn project_document(
         view.tool_refs = calls.finish();
     }
     Ok(view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::json;
+
+    #[test]
+    fn only_llm_messages_treat_inline_data_as_media() {
+        let data = "A".repeat(4096);
+        let message = json!({"role":"user","content":[
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":data}},
+            {"type":"text","text":"之后的 \"问题\""}
+        ]});
+        let bytes = serde_json::to_vec(&message).unwrap();
+        for chunk in [1, 7, bytes.len()] {
+            let mut plain = json::JsonCapture::new(1024);
+            let mut llm = JsonCapture::message_fragment(1024, llm::ANTHROPIC);
+            for part in bytes.chunks(chunk) {
+                plain.push(part);
+                llm.push(part, "json", false, Fields::default());
+            }
+            let (clipped, plain) = plain.finish().unwrap();
+            let (loss, llm) = llm.finish_fragment().unwrap();
+            assert!(clipped && loss.document);
+            let path = "/content/0/source/data";
+            let kept = plain.pointer(path).unwrap().as_str().unwrap();
+            assert!(!kept.is_empty() && kept.len() < data.len() && data.starts_with(kept));
+            assert_eq!(llm.pointer(path).unwrap(), "[omitted]");
+            assert_eq!(plain["content"][1], message["content"][1]);
+            assert_eq!(llm["content"][1], message["content"][1]);
+        }
+    }
 }

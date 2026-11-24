@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    BodyError, BodyEvent,
+    Event, Fields, LlmView, ToolReferences,
     json_capture::{CaptureLoss, JsonCapture},
-    llm::{self, Fields, LlmView, ToolReferences, response::Result, tool_summary::ToolSummary},
+    response::Result,
+    tool_summary::ToolSummary,
 };
+use crate::parser::{BodyError, json::string_end, llm};
 use serde_json::{Value, json};
 
 // Root keys and metadata keep a separate budget from message and tool items.
@@ -42,8 +44,8 @@ pub(crate) enum ItemEvent {
     },
 }
 
-fn emit_item(emit: &mut impl FnMut(BodyEvent<'_>), item: ItemEvent, clipped: bool) {
-    emit(BodyEvent::LlmItem {
+fn emit_item(emit: &mut impl FnMut(Event<'_>), item: ItemEvent, clipped: bool) {
+    emit(Event::RequestItem {
         item: &item,
         clipped,
     });
@@ -92,25 +94,15 @@ impl Fragment {
         let mut done = false;
         while i < input.len() {
             if self.quoted {
-                if self.escaped {
-                    self.escaped = false;
-                    i += 1;
-                    continue;
-                }
-                i += memchr::memchr2(b'"', b'\\', &input[i..]).unwrap_or(input.len() - i);
-                if i == input.len() {
+                let Some(end) = string_end(&input[i..], &mut self.escaped) else {
+                    i = input.len();
                     break;
-                }
-                let ch = input[i];
-                i += 1;
-                if ch == b'\\' {
-                    self.escaped = true;
-                } else {
-                    self.quoted = false;
-                    if self.depth == 0 {
-                        done = true;
-                        break;
-                    }
+                };
+                i += end + 1;
+                self.quoted = false;
+                if self.depth == 0 {
+                    done = true;
+                    break;
                 }
             } else {
                 let ch = input[i];
@@ -177,7 +169,7 @@ impl Request {
     pub(crate) fn push(
         &mut self,
         mut input: &[u8],
-        events: &mut impl FnMut(BodyEvent<'_>),
+        events: &mut impl FnMut(Event<'_>),
     ) -> Result<()> {
         self.bytes_seen += input.len();
         while !input.is_empty() {
@@ -189,7 +181,7 @@ impl Request {
                     let from = usize::from(offset < start);
                     let to = n - usize::from(done);
                     if from < to {
-                        events(BodyEvent::ModelData(&input[from..to]));
+                        events(Event::ModelData(&input[from..to]));
                     }
                 }
                 input = &input[n..];
@@ -232,7 +224,7 @@ impl Request {
                         State::Model { start } => {
                             let end = offset + n - 1;
                             let decoded = if clipped { None } else { value.as_str() };
-                            events(BodyEvent::ModelEnd {
+                            events(Event::ModelEnd {
                                 range: start..end,
                                 value: decoded,
                             });
@@ -278,7 +270,7 @@ impl Request {
                 (State::Colon, b':') => State::Value,
                 (State::Value, b'"') if self.key == "model" => {
                     let start = offset + 1;
-                    events(BodyEvent::ModelStart(start));
+                    events(Event::ModelStart(start));
                     self.state = State::Model { start };
                     self.fragment = Some(Fragment::new(None, ROOT_FIELD_LIMIT));
                     continue;
@@ -336,7 +328,7 @@ impl Request {
         v: Value,
         loss: CaptureLoss,
         has_question: bool,
-        events: &mut impl FnMut(BodyEvent<'_>),
+        events: &mut impl FnMut(Event<'_>),
     ) {
         let clipped = loss.document;
         match self.key.as_str() {
@@ -395,7 +387,7 @@ impl Request {
         &mut self,
         value: Value,
         clipped: bool,
-        events: &mut impl FnMut(BodyEvent<'_>),
+        events: &mut impl FnMut(Event<'_>),
     ) -> Result<()> {
         match self.key.as_str() {
             "input" if self.format == llm::RESPONSES && value.is_string() => {
@@ -502,7 +494,7 @@ mod tests {
             for chunk in body.as_bytes().chunks(7) {
                 parser
                     .push(chunk, &mut |event| {
-                        if let BodyEvent::LlmItem {
+                        if let Event::RequestItem {
                             item: ItemEvent::Message { message, .. },
                             ..
                         } = event
@@ -532,12 +524,12 @@ mod tests {
     struct Models(Vec<Model>);
 
     impl Models {
-        fn observe(&mut self, event: BodyEvent<'_>) {
+        fn observe(&mut self, event: Event<'_>) {
             match event {
-                BodyEvent::LlmItem { .. } | BodyEvent::LlmResponse(_) => (),
-                BodyEvent::ModelStart(start) => self.model_start(start),
-                BodyEvent::ModelData(bytes) => self.model_data(bytes),
-                BodyEvent::ModelEnd { range, value } => self.model_end(range, value),
+                Event::RequestItem { .. } | Event::Response(_) => (),
+                Event::ModelStart(start) => self.model_start(start),
+                Event::ModelData(bytes) => self.model_data(bytes),
+                Event::ModelEnd { range, value } => self.model_end(range, value),
             }
         }
 

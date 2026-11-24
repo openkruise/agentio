@@ -1,8 +1,9 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::Protocol;
 use super::response::Result;
-use crate::parser::{BodyError, Format};
+use crate::parser::BodyError;
 use serde_json::Value;
 
 // Reuse ordinary frame buffers across deltas. Release outliers after dispatch.
@@ -16,7 +17,7 @@ pub(crate) struct Event<'a> {
 }
 
 pub struct Framer {
-    format: Format,
+    format: Protocol,
     seen: usize,
     line: Vec<u8>,
     data: String,
@@ -26,7 +27,7 @@ pub struct Framer {
 }
 
 impl Framer {
-    pub fn new(format: Format) -> Self {
+    pub fn new(format: Protocol) -> Self {
         Self {
             format,
             seen: 0,
@@ -87,19 +88,18 @@ impl Framer {
                     value
                 };
                 let kind = match self.format {
-                    Format::OpenaiChatCompletions => "",
-                    Format::AnthropicMessages if done => return Err(BodyError::InvalidJson),
-                    Format::OpenaiResponses if done => "",
-                    Format::AnthropicMessages | Format::OpenaiResponses => {
+                    Protocol::OpenaiChatCompletions => "",
+                    Protocol::AnthropicMessages if done => return Err(BodyError::InvalidJson),
+                    Protocol::OpenaiResponses if done => "",
+                    Protocol::AnthropicMessages | Protocol::OpenaiResponses => {
                         let kind = v["type"].as_str().ok_or(BodyError::InvalidContent)?;
-                        let default_event = self.format == Format::OpenaiResponses
+                        let default_event = self.format == Protocol::OpenaiResponses
                             && (self.name.is_empty() || self.name == "message");
                         if !default_event && kind != self.name {
                             return Err(BodyError::InvalidContent);
                         }
                         kind
                     }
-                    _ => unreachable!("LLM SSE parser requires an LLM protocol"),
                 };
                 emit(Event {
                     kind,
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn dispatch_releases_large_frame_buffers_and_accepts_the_next_frame() {
-        let mut framer = Framer::new(Format::OpenaiChatCompletions);
+        let mut framer = Framer::new(Protocol::OpenaiChatCompletions);
         let body = format!("data: {{\"text\":\"{}\"}}\n\n", "x".repeat(4 << 20));
         let mut sizes = Vec::new();
         let mut emit = |e: Event<'_>| {

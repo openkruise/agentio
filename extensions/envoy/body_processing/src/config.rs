@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::filters::ConfiguredFilter;
-use crate::{filters::audit::Audit, parser::Format};
+use crate::{
+    filters::audit::Audit,
+    parser::{Format, llm::ProtocolSelection},
+};
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -86,7 +89,7 @@ struct AuditFormat {
 enum ParserConfig {
     Llm {
         #[serde(default)]
-        protocol: Protocol,
+        protocol: ProtocolSelection,
         #[serde(default)]
         request: RequestParserConfig,
     },
@@ -120,16 +123,6 @@ fn item_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> 
     Ok(bytes)
 }
 
-#[derive(Copy, Clone, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum Protocol {
-    #[default]
-    Auto,
-    OpenaiChatCompletions,
-    OpenaiResponses,
-    AnthropicMessages,
-}
-
 pub struct FilterChain {
     pub name: std::sync::Arc<str>,
     matcher: Conditions,
@@ -145,12 +138,7 @@ impl FilterChain {
 
     pub fn format(&self, path: &str) -> Format {
         let ParserConfig::Llm { protocol, .. } = self.parser;
-        match protocol {
-            Protocol::Auto => Format::from_path(path),
-            Protocol::OpenaiChatCompletions => Format::OpenaiChatCompletions,
-            Protocol::OpenaiResponses => Format::OpenaiResponses,
-            Protocol::AnthropicMessages => Format::AnthropicMessages,
-        }
+        protocol.resolve(path)
     }
 }
 
@@ -346,20 +334,33 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::llm::Protocol;
 
     #[test]
     fn selected_protocol_owns_both_directions() {
         use serde_json::json;
         for (protocol, path, format) in [
-            ("auto", "/v1/messages/?v=1", Format::AnthropicMessages),
+            (
+                "auto",
+                "/v1/messages/?v=1",
+                Format::Llm(Protocol::AnthropicMessages),
+            ),
             (
                 "auto",
                 "/v1/chat/completions",
-                Format::OpenaiChatCompletions,
+                Format::Llm(Protocol::OpenaiChatCompletions),
             ),
-            ("auto", "/v1/responses", Format::OpenaiResponses),
+            (
+                "auto",
+                "/v1/responses",
+                Format::Llm(Protocol::OpenaiResponses),
+            ),
             ("auto", "/internal/messages", Format::UnknownProtocol),
-            ("openai-responses", "/invoke", Format::OpenaiResponses),
+            (
+                "openai-responses",
+                "/invoke",
+                Format::Llm(Protocol::OpenaiResponses),
+            ),
         ] {
             let cfg = json!({"filterChains":[{"name":"model",
                 "parser":{"llm":{"protocol":protocol}}, "filters":[{"audit":{"format":{"json":{}}}}]}]});

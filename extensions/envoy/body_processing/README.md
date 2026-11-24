@@ -83,10 +83,19 @@ Choose the metadata operator matching the producer's type. Body Processing reads
 Append `:N` before the closing `%` to limit a variable-size field. For example, `%EVENT(llm.answer):768%` keeps up to 768 bytes of the answer and `%REQ(X-TENANT-ID):128%` keeps up to 128 bytes of the header. The default for each field is 8,192 bytes. An explicit `N` is a decimal byte count from 1 to 1,048,576. The length suffix follows Envoy’s [formatter syntax](https://www.envoyproxy.io/docs/envoy/v1.40.2/configuration/advanced/substitution_formatter#config-access-log-format-req).
 
 - Strings retain the longest UTF-8 prefix that fits after compact JSON escaping. The surrounding quotes are excluded. A newline costs two bytes and `你` costs three.
-- Arrays retain a prefix of complete projected elements, counting brackets, commas and contents. An oversized object or an array whose first element cannot fit is omitted. For an oversized request message the audit reserves space for text and attachment metadata, then retains complete inline payloads in message order. If one payload does not fit, later, smaller ones can still be recorded. For a text preview of an oversized message select `llm.question` or `llm.answer`.
+- `llm.request.messages` and `llm.response.messages` count the complete encoded array, including roles, content blocks and JSON punctuation. They keep complete messages in order. For the first message that exceeds the limit, they keep its metadata, preceding complete blocks and the longest fitting prefix of a text or refusal block. If none of its blocks fit, that message is omitted. Tool calls, tool results and provider-specific blocks are atomic. In requests, inline media payloads can be omitted to reserve room for following text and metadata.
+- Other arrays keep a prefix of complete elements. Oversized objects and arrays whose first element cannot fit are omitted.
 - Numbers and booleans retain their JSON types. The numeric operators (including `llm.maxTokens` and usage), `llm.stream`, the byte counters and `%CAPTURE_STATUS(...)%` have fixed representations and reject a length suffix. On an otherwise complete record, a clipped selection yields `truncated` when capture status is selected.
 
 Aliases have independent limits, even if they read the same event. A long answer cannot displace the model, token count or headers. Two selected 8 KiB strings can produce a line larger than 16 KiB once the keys and JSON punctuation are included. The selected fields, their limits and the JSON envelope determine the maximum output size.
+
+For example, a user message containing `天气很好` with `%EVENT(llm.request.messages):62%` and `%CAPTURE_STATUS(request)%` produces the following record. The message array uses 56 bytes for structure and six bytes for the two retained characters.
+
+```json
+{"messages":[{"parts":[{"content":"天气","type":"text"}],"role":"user"}],"status":"truncated"}
+```
+
+If the parser exhausts its own budget and only has a text preview, `messages` is unavailable. Select `llm.answer` or the direction's `retainedText` to log the available text.
 
 The template is compiled when ECDS loads the rule. Each operator retains its typed JSON value until encoding. Envoy also parses commands into providers and supports typed values in `json_format`. Its request header formatter limits the raw value. This module counts JSON escaping so a field limit describes the bytes written for that value. [Envoy format API](https://www.envoyproxy.io/docs/envoy/v1.40.2/api-v3/config/core/v3/substitution_format_string.proto#config-core-v3-substitutionformatstring) · [Command parsing](https://github.com/envoyproxy/envoy/blob/v1.40.2/source/common/formatter/substitution_formatter.cc#L244-L278) · [Header formatting](https://github.com/envoyproxy/envoy/blob/v1.40.2/source/common/formatter/http_specific_formatter.cc#L66-L94)
 

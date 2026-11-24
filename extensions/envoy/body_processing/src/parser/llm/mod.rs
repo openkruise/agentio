@@ -3,10 +3,18 @@
 
 pub(super) mod attachment;
 mod image;
+mod input;
+mod json_capture;
+mod protocol;
+mod request;
 pub(crate) mod response;
 pub(crate) mod sse;
 pub(crate) mod stream;
 pub(super) mod tool_summary;
+pub(crate) use input::{Event, Outcome, Parser};
+pub(crate) use json_capture::CaptureLoss;
+pub(crate) use protocol::{Protocol, ProtocolSelection};
+pub(crate) use request::ItemEvent;
 pub(crate) use tool_summary::ToolReferences;
 
 use crate::parser::BodyError;

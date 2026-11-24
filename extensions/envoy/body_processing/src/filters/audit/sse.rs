@@ -98,7 +98,7 @@ impl Projection {
         fields: Fields,
         limit: usize,
     ) -> ParsedBody {
-        let mut result = response_view(view, fields, limit);
+        let (mut result, _) = response_view(view, fields, limit);
         if let Some(usage) = self.usage.take() {
             result.document["usage"] = usage;
         }
@@ -190,12 +190,12 @@ impl Projection {
                 answer,
             } => {
                 self.pending = None;
-                let mut result = response_view(view, fields, limit);
+                let (mut result, messages_clipped) = response_view(view, fields, limit);
                 if let Some(usage) = self.usage.take() {
                     result.document["usage"] = usage;
                 }
                 let saved = std::mem::take(&mut self.answer);
-                let mut clipped = truncated && fields.output_messages;
+                let mut clipped = messages_clipped || truncated && fields.output_messages;
                 if fields.retained_text {
                     let text = if truncated && matches!(answer, AnswerStatus::Visible) {
                         let mut text = TextPreview::default();

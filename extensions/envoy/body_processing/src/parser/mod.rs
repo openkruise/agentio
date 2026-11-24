@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod body;
-pub(crate) mod json_capture;
+pub(crate) mod http;
+mod json;
 pub(crate) mod llm;
 mod multipart;
-pub(crate) mod request;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,23 +28,15 @@ pub(crate) enum BodyError {
     UnsupportedMediaType,
 }
 
-/// Borrowed for one synchronous notification. Model offsets refer to decoded body bytes.
+/// Events are borrowed for one synchronous notification to filters.
 pub(crate) enum BodyEvent<'a> {
-    LlmResponse(llm::stream::Event<'a>),
-    LlmItem {
-        item: &'a request::ItemEvent,
-        clipped: bool,
-    },
-    // These wire events are part of the parser contract; audit reads the validated final model.
-    #[allow(dead_code)]
-    ModelStart(usize),
-    #[allow(dead_code)]
-    ModelData(&'a [u8]),
-    #[allow(dead_code)]
-    ModelEnd {
-        range: std::ops::Range<usize>,
-        value: Option<&'a str>,
-    },
+    Llm(llm::Event<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ParserDirection {
+    Request(crate::config::RequestParserConfig),
+    Response,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq)]
@@ -56,27 +48,15 @@ pub(crate) enum Format {
     Metadata,
     Text,
     Json,
-    OpenaiChatCompletions,
-    OpenaiResponses,
-    AnthropicMessages,
+    #[serde(untagged)]
+    Llm(llm::Protocol),
 }
 
 impl Format {
     pub(crate) fn protocol(self) -> Option<&'static str> {
         match self {
-            Self::OpenaiChatCompletions => Some(llm::CHAT),
-            Self::OpenaiResponses => Some(llm::RESPONSES),
-            Self::AnthropicMessages => Some(llm::ANTHROPIC),
+            Self::Llm(protocol) => Some(protocol.as_str()),
             _ => None,
-        }
-    }
-
-    pub(crate) fn from_path(path: &str) -> Self {
-        match path {
-            "/v1/chat/completions" => Self::OpenaiChatCompletions,
-            "/v1/responses" => Self::OpenaiResponses,
-            "/v1/messages" => Self::AnthropicMessages,
-            _ => Self::UnknownProtocol,
         }
     }
 }

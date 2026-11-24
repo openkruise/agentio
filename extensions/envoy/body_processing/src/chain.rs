@@ -11,7 +11,8 @@ use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 
 mod gzip;
 mod input;
-pub(crate) use input::{DirectionStream, ParserDirection};
+pub(crate) use crate::parser::ParserDirection;
+pub(crate) use input::DirectionStream;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Side {

@@ -5,9 +5,7 @@ pub(crate) mod audit;
 
 use crate::{
     FilterOutput,
-    parser::{
-        BodyError, BodyEvent, Format, body::Decoded, json_capture::CaptureLoss, llm::LlmView,
-    },
+    parser::{BodyError, BodyEvent, Format, body::ParsedBody, llm},
 };
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 
@@ -29,13 +27,8 @@ impl Decision {
 pub(crate) enum BodyResult {
     Counts,
     Failed(BodyError),
-    Llm(Result<(CaptureLoss, LlmView), BodyError>),
-    Sse,
-    InterruptedSse {
-        reason: BodyError,
-        partial: Option<(LlmView, bool)>,
-    },
-    Http(Decoded),
+    Llm(llm::Outcome),
+    Http(ParsedBody),
 }
 
 pub(crate) struct BodyEnd {
