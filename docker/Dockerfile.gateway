@@ -25,7 +25,7 @@ FROM metrics-artifact AS gateway-test-artifacts
 COPY --from=connection-builder /src/target/release/libenvoy_agentio_connection_policy.so /libenvoy_agentio_connection_policy.so
 COPY --from=network-limits-builder /network-limits/target/release/libenvoy_agentio_network_limits.so /libenvoy_agentio_network_limits.so
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
