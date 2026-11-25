@@ -64,6 +64,18 @@ func newCompiledSandboxes(
 	}, options("compiled-sandboxes")...)
 }
 
+// CompileSandboxPayload compiles one external lookup through the same rules as the discovery graph.
+func CompileSandboxPayload(sandbox model.Sandbox) (*sandboxv1.Sandbox, error) {
+	if err := sandbox.Validate(); err != nil {
+		return nil, err
+	}
+	result, err := compileSandbox(sandbox)
+	if err != nil {
+		return nil, err
+	}
+	return result.Payload, nil
+}
+
 func compileSandbox(sandbox model.Sandbox) (*compiledSandbox, error) {
 	result := &compiledSandbox{
 		Payload:        &sandboxv1.Sandbox{Uid: sandbox.UID},

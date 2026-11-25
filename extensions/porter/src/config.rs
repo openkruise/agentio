@@ -27,6 +27,13 @@ pub struct Config {
     pub logging: telemetry::Config,
     pub enable_sni_traffic_policy: bool,
     pub sandbox_mode: bool,
+    pub sandbox_rpc: bool,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum SandboxSource {
+    Xds,
+    Rpc,
 }
 
 #[derive(Parser, Debug)]
@@ -45,6 +52,8 @@ struct Args {
     metrics_port: u16,
     #[arg(long)]
     xds_address: String,
+    #[arg(long, value_enum, default_value = "xds")]
+    sandbox_source: SandboxSource,
     #[arg(long, default_value = "")]
     xds_node_id: String,
     #[arg(long, default_value = "")]
@@ -112,6 +121,10 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         .transpose()
         .context("invalid AGENTIO_SANDBOX_MODE: expected true or false")?
         .unwrap_or(false);
+    let sandbox_rpc = matches!(args.sandbox_source, SandboxSource::Rpc);
+    if sandbox_rpc && !sandbox_mode {
+        bail!("--sandbox-source=rpc requires AGENTIO_SANDBOX_MODE=true");
+    }
     let logging = telemetry::Config::new(
         read_env("AGENTIO_LOG_LEVEL")?.as_deref().unwrap_or("info"),
         read_env("AGENTIO_LOG_FORMAT")?.as_deref().unwrap_or("text"),
@@ -161,6 +174,7 @@ fn construct(args: Args, read_env: impl Fn(&str) -> Result<Option<String>>) -> R
         logging,
         enable_sni_traffic_policy,
         sandbox_mode,
+        sandbox_rpc,
     })
 }
 

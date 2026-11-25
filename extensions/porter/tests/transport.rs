@@ -12,6 +12,10 @@ use agentio_porter::{
                 AggregatedDiscoveryService, AggregatedDiscoveryServiceServer,
             },
         },
+        agentio::sandbox::{
+            GetSandboxRequest, GetSandboxResponse,
+            sandbox_query_service_server::{SandboxQueryService, SandboxQueryServiceServer},
+        },
         istio::workload::Workload,
     },
 };
@@ -37,6 +41,30 @@ struct Ads {
     disconnect: broadcast::Sender<Option<Status>>,
     handshake: Option<watch::Receiver<bool>>,
     delayed_rejections: Option<(mpsc::UnboundedSender<tokio::time::Instant>, Duration)>,
+}
+
+struct Query;
+
+#[tonic::async_trait]
+impl SandboxQueryService for Query {
+    async fn get_sandbox(
+        &self,
+        req: Request<GetSandboxRequest>,
+    ) -> Result<Response<GetSandboxResponse>, Status> {
+        if req
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            != Some("Bearer token")
+            || req.get_ref().node_id != "agentio-porter~test"
+        {
+            return Err(Status::unauthenticated("bad query credential"));
+        }
+        Ok(Response::new(GetSandboxResponse {
+            sandbox: None,
+            cache_ttl: Some(Default::default()),
+        }))
+    }
 }
 
 #[tonic::async_trait]
@@ -208,6 +236,7 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
                 handshake: None,
                 delayed_rejections: None,
             }))
+            .add_service(SandboxQueryServiceServer::new(Query))
             .serve_with_incoming_shutdown(
                 TcpListenerStream::new(listener),
                 server_stop.cancelled_owned(),
@@ -231,7 +260,7 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
             metadata: None,
         },
     };
-    let client = tokio::spawn(c.clone().run(transport, stop.clone()));
+    let client = tokio::spawn(c.clone().run(transport.clone(), stop.clone()));
     let expiry = tokio::spawn(c.clone().expire(stop.clone()));
     ready(&mut health, true).await;
     for _ in ResourceKind::ALL {
@@ -311,7 +340,23 @@ async fn tls_auth_initial_handshake_eviction_and_token_reload() {
         .await
         .unwrap();
     assert!(c.metrics.reconnects.get() > retries);
+    let querying = Client::new_with_query(
+        CacheConfig::default(),
+        Metrics::new(),
+        true,
+        Some(transport.clone()),
+    );
+    let mixed_client = tokio::spawn(querying.clone().run(transport, stop.clone()));
+    ready(&mut querying.readiness(), true).await;
+    assert_eq!(
+        querying
+            .demand(ResourceKind::Sandbox, "absent", None)
+            .await
+            .unwrap_err(),
+        DemandError::NotFound
+    );
     stop.cancel();
+    mixed_client.await.unwrap();
     client.await.unwrap();
     expiry.await.unwrap();
     server.await.unwrap().unwrap();

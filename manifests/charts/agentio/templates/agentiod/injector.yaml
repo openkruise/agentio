@@ -31,6 +31,9 @@ data:
     global:
       porter:
         image: {{ include "gateway.porterImage" . | quote }}
+        {{- if eq .Values.sandbox.policySource "rpc" }}
+        sandboxSource: rpc
+        {{- end }}
         cache:
 {{ .Values.egressGateway.porter.cache | toYaml | indent 10 }}
         resources:

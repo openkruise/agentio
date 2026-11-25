@@ -51,6 +51,8 @@ var ErrNotFound = errors.New("xDS resource removed or unavailable")
 // Watch with Wildcard=false starts with no resources; Demand adds named watches.
 // Validate is called before publishing the entire response. It must not mutate value.
 type Watch struct {
+	// Query supplies named resources through unary lookups instead of the ADS stream.
+	Query    Query
 	TypeURL  string
 	Wildcard bool
 	Validate func(value *anypb.Any) error
@@ -111,6 +113,7 @@ func (s Snapshot) Usable(typ string) bool {
 }
 
 type typeState struct {
+	queried           map[string]*queryPublication
 	watch             Watch
 	names             map[string]*subscription
 	pending           map[string]struct{}
@@ -154,7 +157,7 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Client, error) {
 	}
 	for _, w := range cfg.Watches {
 		if w.TypeURL == "" || c.types[w.TypeURL] != nil || w.ReconnectGrace < 0 ||
-			(w.Wildcard && w.ReconnectGrace != 0) {
+			(w.Wildcard && (w.ReconnectGrace != 0 || w.Query != nil)) {
 			return nil, fmt.Errorf("invalid or duplicate watch %q", w.TypeURL)
 		}
 		c.types[w.TypeURL] = &typeState{
@@ -166,6 +169,10 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Client, error) {
 			aliases:         map[string]string{},
 			resourceAliases: map[string][]string{},
 			resources:       map[string]*Resource{},
+		}
+		if w.Query != nil {
+			c.types[w.TypeURL].synced = true
+			c.types[w.TypeURL].queried = make(map[string]*queryPublication)
 		}
 	}
 	if cfg.MetricsRegisterer != nil {
@@ -261,6 +268,9 @@ func (c *Client) reset() {
 	defer c.mu.Unlock()
 	c.connected = false
 	for _, st := range c.types {
+		if st.watch.Query != nil {
+			continue
+		}
 		if st.watch.ReconnectGrace > 0 {
 			c.expireGraceLocked(st)
 			if st.synced {
@@ -425,7 +435,7 @@ func (c *Client) apply(r *discovery.DeltaDiscoveryResponse) error {
 	// Watches are immutable. The receive loop serializes apply and reset;
 	// validation and decoding need not block concurrent demands or releases.
 	st := c.types[r.TypeUrl]
-	if st == nil {
+	if st == nil || st.watch.Query != nil {
 		return fmt.Errorf("unregistered response type %q", r.TypeUrl)
 	}
 	if err := validateResponse(r, st.watch); err != nil {

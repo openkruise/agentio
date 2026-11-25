@@ -33,6 +33,7 @@ import (
 	securityapi "istio.io/api/security/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 
+	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/pkg/clienttrust"
 	"github.com/openkruise/agentio/pkg/compiler"
 	resolverdns "github.com/openkruise/agentio/pkg/dns/controller"
@@ -451,6 +452,10 @@ func (p *controlPlane) serve(
 	)
 	discoveryv3.RegisterAggregatedDiscoveryServiceServer(grpcServer, discoveryServer)
 	securityapi.RegisterIstioCertificateServiceServer(grpcServer, p.authority)
+	if features.SandboxMode {
+		query := discoveryServer.SandboxQuery(p.composition.sandboxLookup, sandboxSources, p.options.SandboxQueryTTL)
+		sandboxv1.RegisterSandboxQueryServiceServer(grpcServer, query)
+	}
 
 	discoveryListener, err := net.Listen("tcp", p.options.DiscoveryAddress)
 	if err != nil {

@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 // Options contains the process wiring exposed as command-line flags.
 // Restart-only behavior configured by environment variables lives in
 // pkg/features and is read directly by its consumers.
 type Options struct {
+	SandboxQueryTTL   time.Duration
 	DiscoveryAddress  string
 	MonitoringAddress string
 	ClusterID         string
@@ -37,6 +39,7 @@ type Options struct {
 // DefaultOptions returns the process-wiring defaults exposed by cmd/agentiod.
 func DefaultOptions() Options {
 	return Options{
+		SandboxQueryTTL:   10 * time.Second,
 		DiscoveryAddress:  ":15012",
 		MonitoringAddress: ":15014",
 		ClusterID:         "Kubernetes",
@@ -47,6 +50,9 @@ func DefaultOptions() Options {
 }
 
 func (o Options) Validate() error {
+	if o.SandboxQueryTTL < 0 {
+		return fmt.Errorf("sandbox query TTL must not be negative")
+	}
 	_, port, err := net.SplitHostPort(o.DiscoveryAddress)
 	if err != nil {
 		return fmt.Errorf("parse discovery address: %w", err)

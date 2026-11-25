@@ -4,6 +4,10 @@ sandbox:
   # Enable Kruise Sandbox discovery and the sidecar Sandbox Manager together.
   # Requires the Kruise Sandbox CRD; not supported with profile=ambient.
   enabled: false
+  # Transport for per-Sandbox policy on Porter and managed EPE.
+  policySource: xds
+  # Freshness of positive and missing RPC results, measured from the read.
+  queryTTL: 10s
 
 global:
   hub: docker.io/openkruise

@@ -15,9 +15,15 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"maps"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	"github.com/openkruise/agentio/pkg/compiler"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/registry"
@@ -31,6 +37,7 @@ import (
 type Option func(*composition)
 
 type composition struct {
+	sandboxLookup                xds.SandboxLookup
 	sourceCollectionTransforms   []SourceCollectionsTransform
 	authenticators               []attestation.Authenticator
 	scopeFuncs                   xds.ScopeFuncs
@@ -70,6 +77,24 @@ func WithTrafficPolicySource(c krt.Collection[model.TrafficPolicy]) Option {
 		sources.TrafficPolicies = c
 		return sources, nil
 	})
+}
+
+// WithSandboxLookup reads and compiles one Sandbox for each authenticated RPC.
+// lookup receives its canonical UID or workload namespace/name. Return nil, nil for absence.
+func WithSandboxLookup(lookup func(context.Context, model.ClientScope, string) (*model.Sandbox, error)) Option {
+	return func(cmp *composition) {
+		cmp.sandboxLookup = func(ctx context.Context, scope model.ClientScope, name string) (*sandboxv1.Sandbox, error) {
+			row, err := lookup(ctx, scope, name)
+			if err != nil || row == nil {
+				return nil, err
+			}
+			payload, err := compiler.CompileSandboxPayload(*row)
+			if err != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "compile Sandbox %q: %v", name, err)
+			}
+			return payload, nil
+		}
+	}
 }
 
 func WithAuthenticator(a attestation.Authenticator) Option {

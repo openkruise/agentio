@@ -68,6 +68,12 @@ func parseFlags(args []string) (server.Options, envdoc.Flags, error) {
 	printEnv := envdoc.Flags{}
 
 	flags := flag.NewFlagSet("agentiod", flag.ContinueOnError)
+	flags.DurationVar(
+		&options.SandboxQueryTTL,
+		"sandbox-query-ttl",
+		options.SandboxQueryTTL,
+		"Gateway cache lifetime for Sandbox queries, including missing bindings; zero disables caching",
+	)
 	flags.StringVar(&options.DiscoveryAddress, "discovery-address", options.DiscoveryAddress,
 		"TLS xDS listen address")
 	flags.StringVar(&options.MonitoringAddress, "monitoring-address", options.MonitoringAddress,

@@ -469,6 +469,17 @@ async fn pending_ack_is_bounded_and_receive_progress_independent() {
 
 #[tokio::test]
 async fn matches_wire_contract_corpus() {
+    check_wire_contract_corpus(None).await;
+}
+
+#[tokio::test]
+async fn query_matches_sandbox_wire_contract_corpus() {
+    let fixture = super::query_tests::QueryFixture::new().await;
+    check_wire_contract_corpus(Some(&fixture)).await;
+    assert!(fixture.calls() > 0);
+}
+
+async fn check_wire_contract_corpus(query: Option<&super::query_tests::QueryFixture>) {
     #[derive(serde::Deserialize)]
     struct Fixture {
         name: String,
@@ -480,10 +491,27 @@ async fn matches_wire_contract_corpus() {
     let fixtures: Vec<Fixture> =
         serde_json::from_str(include_str!("../../tests/fixtures.json")).unwrap();
     for f in fixtures {
-        let c = client(100, Duration::from_secs(60));
+        if query.is_some() && !f.name.contains("sandbox") {
+            continue;
+        }
+        let c = query.map_or_else(|| client(100, Duration::from_secs(60)), |q| q.client());
+        if let Some(q) = query {
+            q.clear();
+        }
         for (key, value) in f.resources {
             let (kind, name) = key.split_once('|').unwrap();
             let kind = ResourceKind::from_type_url(kind).unwrap();
+            let body =
+                prost_types::Any::decode(STANDARD.decode(value).unwrap().as_slice()).unwrap();
+            if kind == ResourceKind::Sandbox
+                && let Some(q) = query
+            {
+                q.put(
+                    name,
+                    crate::wire::agentio::sandbox::Sandbox::decode(body.value.as_slice()).unwrap(),
+                );
+                continue;
+            }
             let mut lease = c.acquire(kind, name).unwrap();
             c.apply(
                 kind,
@@ -491,10 +519,7 @@ async fn matches_wire_contract_corpus() {
                     type_url: kind.type_url().into(),
                     resources: vec![ads::Resource {
                         name: name.into(),
-                        resource: Some(
-                            prost_types::Any::decode(STANDARD.decode(value).unwrap().as_slice())
-                                .unwrap(),
-                        ),
+                        resource: Some(body),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -509,7 +534,11 @@ async fn matches_wire_contract_corpus() {
             gateway: crate::processor::Gateway::AgentioEgress,
             client: c.clone(),
             cluster_id: "Kubernetes".into(),
-            timeout: Duration::from_millis(100),
+            timeout: if query.is_some() {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_millis(100)
+            },
             enable_sni_traffic_policy: true,
         };
         let request =

@@ -24,6 +24,7 @@ proto_files=(
   api/security/v1/trafficpolicy.proto
   api/security/v1/securityprofile.proto
   api/sandbox/v1/sandbox.proto
+  api/sandbox/v1/query.proto
   api/extensions/v1/extensions.proto
   api/extensions/v1/egresspolicy.proto
   api/extensions/v1/snipolicy.proto
@@ -38,6 +39,7 @@ cd "$repo_root"
 # Pin the complete generator toolchain; never use protoc/plugins from PATH.
 protoc_version="36.0"
 protoc_gen_go_version="v1.36.11"
+protoc_gen_go_grpc_version="v1.5.1"
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64)
     protoc_platform="linux-x86_64"
@@ -77,6 +79,8 @@ unzip -q "$archive" -d "$temporary_dir/protoc"
 
 GOBIN="$temporary_dir/bin" go install "google.golang.org/protobuf/cmd/protoc-gen-go@${protoc_gen_go_version}"
 
+GOBIN="$temporary_dir/bin" go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@${protoc_gen_go_grpc_version}"
+
 istio_api="$(go mod download -json istio.io/api | sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')"
 if [[ -z "$istio_api" ]]; then
   echo "failed to locate the istio.io/api module" >&2
@@ -92,6 +96,8 @@ fi
   -I"$istio_api/common-protos" \
   -I"$temporary_dir/protoc/include" \
   --plugin="protoc-gen-go=$temporary_dir/bin/protoc-gen-go" \
+  --plugin="protoc-gen-go-grpc=$temporary_dir/bin/protoc-gen-go-grpc" \
+  --go-grpc_out=paths=source_relative:. \
   --go_out=. \
   --go_opt=paths=source_relative \
   "${proto_files[@]}"

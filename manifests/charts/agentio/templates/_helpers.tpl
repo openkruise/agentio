@@ -40,6 +40,14 @@
 {{- if and .Values.egressGateway.enabled (ne (include "gateway.serviceAccountName" .) (include "gateway.fullname" .)) -}}
 {{- fail "egressGateway.serviceAccount.name must match the gateway name; set egressGateway.fullnameOverride to rename the gateway and its identity together" -}}
 {{- end -}}
+{{- if eq .Values.sandbox.policySource "rpc" -}}
+{{- if not .Values.sandbox.enabled -}}
+{{- fail "sandbox.policySource=rpc requires sandbox.enabled=true" -}}
+{{- end -}}
+{{- if and (eq .Values.epe.mode "managed") (ne .Values.epe.securityProfileSource "xds") -}}
+{{- fail "sandbox.policySource=rpc requires epe.securityProfileSource=xds for managed EPE" -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq .Values.profile "ambient") .Values.sandbox.enabled -}}
 {{- fail "sandbox.enabled is not supported with profile=ambient; use profile=sidecar" -}}
 {{- end -}}

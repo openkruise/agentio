@@ -15,22 +15,33 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/metrics"
 	xdsstore "github.com/openkruise/agentio/extensions/epe/pkg/store/xds"
+	"github.com/openkruise/agentio/pkg/features"
+	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
 
 var (
+	sandboxSource = flag.String(
+		"sandbox-source",
+		"xds",
+		"Sandbox binding and inline policy transport: xds or rpc",
+	)
 	securityProfileSource = flag.String(
 		"security-profile-source",
 		"kubernetes",
@@ -102,15 +113,33 @@ func newEgressXDS(
 	if err != nil {
 		return nil, nil, err
 	}
+	if *sandboxSource != "xds" && *sandboxSource != "rpc" {
+		return nil, nil, fmt.Errorf("unknown --sandbox-source %q", *sandboxSource)
+	}
+	if *sandboxSource == "rpc" && (!features.SandboxMode || *securityProfileSource != "xds") {
+		return nil, nil, fmt.Errorf(
+			"--sandbox-source=rpc requires AGENTIO_SANDBOX_MODE=true and --security-profile-source=xds",
+		)
+	}
 	conn, err := xdsclient.Dial(*xdsAddress, *xdsRootPath, *xdsTokenPath)
 	if err != nil {
 		return nil, nil, err
 	}
+	node := &core.Node{Id: id, Metadata: metadata}
+	watches := epeWatches(*securityProfileSource, regs, source)
+	if *sandboxSource == "rpc" {
+		query := sandboxQuery(sandboxv1.NewSandboxQueryServiceClient(conn), node)
+		for i := range watches {
+			if watches[i].TypeURL == model.SandboxType {
+				watches[i].Query = query
+			}
+		}
+	}
 	c, err := xdsclient.New(
 		conn,
 		xdsclient.Config{
-			Node:              &core.Node{Id: id, Metadata: metadata},
-			Watches:           epeWatches(*securityProfileSource, regs, source),
+			Node:              node,
+			Watches:           watches,
 			MetricsRegisterer: metrics.Registry,
 		},
 	)
@@ -129,4 +158,29 @@ func epeWatches(mode string, regs []filter.Registration, source *xdsstore.Profil
 		watches = append(watches, source.Watches(regs)...)
 	}
 	return watches
+}
+
+func sandboxQuery(client sandboxv1.SandboxQueryServiceClient, node *core.Node) xdsclient.Query {
+	return func(ctx context.Context, name string) (string, *anypb.Any, time.Duration, error) {
+		result, err := client.GetSandbox(ctx, &sandboxv1.GetSandboxRequest{
+			Name:         name,
+			NodeId:       node.Id,
+			NodeMetadata: node.Metadata,
+		}, grpc.MaxCallRecvMsgSize(math.MaxInt32))
+		if err != nil {
+			return "", nil, 0, err
+		}
+		if err := result.CacheTtl.CheckValid(); err != nil || result.CacheTtl.AsDuration() < 0 {
+			return "", nil, 0, fmt.Errorf("invalid Sandbox cache TTL %v", result.CacheTtl)
+		}
+		ttl := result.CacheTtl.AsDuration()
+		if result.Sandbox == nil {
+			return "", nil, ttl, nil
+		}
+		if result.Sandbox.Uid == "" {
+			return "", nil, 0, fmt.Errorf("empty Sandbox UID in query response")
+		}
+		body, err := anypb.New(result.Sandbox)
+		return result.Sandbox.Uid, body, ttl, err
+	}
 }

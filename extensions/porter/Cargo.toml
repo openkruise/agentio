@@ -12,6 +12,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
 humantime = "2"
 lru = "0.16"
+moka = { version = "0.12", features = ["future"] }
 percent-encoding = "2"
 prost = "0.14"
 prost-types = "0.14"

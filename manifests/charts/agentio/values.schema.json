@@ -37,6 +37,12 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "policySource": {
+          "enum": ["xds", "rpc"]
+        },
+        "queryTTL": {
+          "type": "string"
         }
       }
     },

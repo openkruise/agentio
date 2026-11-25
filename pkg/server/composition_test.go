@@ -22,7 +22,12 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+
+	securityv1 "github.com/openkruise/agentio/api/security/v1"
 	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/registry"
@@ -30,6 +35,39 @@ import (
 	"github.com/openkruise/agentio/pkg/security/mitm"
 	"github.com/openkruise/agentio/pkg/xds"
 )
+
+func TestWithSandboxLookupCompilesCurrentRow(t *testing.T) {
+	row := &model.Sandbox{
+		UID:      "vm:one",
+		Name:     "tenant-rule",
+		Attester: &model.Attester{WorkloadUID: "vm-host"},
+		Policies: &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{}},
+	}
+	read := func(_ context.Context, scope model.ClientScope, key string) (*model.Sandbox, error) {
+		if key != "vm:one" || scope.Class != model.ClientEPE {
+			t.Fatal(key, scope)
+		}
+		return row, nil
+	}
+	lookup := applyOptions([]Option{WithSandboxLookup(read)}).sandboxLookup
+	scope := model.ClientScope{Class: model.ClientEPE}
+	got, err := lookup(t.Context(), scope, "vm:one")
+	if err != nil || got.GetAttester().GetWorkloadUid() != "vm-host" || len(got.Extensions) != 1 {
+		t.Fatal(got, err)
+	}
+	profile := &securityv1.SecurityProfile{}
+	if err := got.Extensions[0].UnmarshalTo(profile); err != nil || profile.Name != "tenant-rule" {
+		t.Fatal(profile, err)
+	}
+	row.Policies.InputError = "invalid rule in database"
+	if _, err := lookup(t.Context(), scope, "vm:one"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal(err)
+	}
+	row = nil
+	if got, err := lookup(t.Context(), scope, "vm:one"); got != nil || err != nil {
+		t.Fatal(got, err)
+	}
+}
 
 func TestWithTrafficPolicySourceReplacesCollection(t *testing.T) {
 	stop := make(chan struct{})

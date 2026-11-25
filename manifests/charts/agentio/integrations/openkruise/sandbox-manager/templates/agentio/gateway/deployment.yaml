@@ -135,6 +135,9 @@ spec:
             - --cluster-id={{ .Values.agentio.global.clusterId }}
             - --grpc-port=9002
             - --grpc-health-port=9003
+            {{- if eq .Values.agentio.sandbox.policySource "rpc" }}
+            - --sandbox-source=rpc
+            {{- end }}
             - --xds-cache-idle-ttl={{ .Values.agentio.egressGateway.porter.cache.idleTTL }}
             - --xds-cache-max-entries={{ .Values.agentio.egressGateway.porter.cache.maxEntries }}
           env:
