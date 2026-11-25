@@ -51,12 +51,21 @@ At request headers the module selects the first matching chain and fixes the pro
 
 An audit requires a flat `format.json` map. Each key names one output field. Each value is a string literal or one formatter operator. Use `%%` for a literal percent sign. A literal is written verbatim as a JSON string. Operators that return booleans, numbers, arrays or objects retain those types. Dots in output names are literal. Missing values are omitted. A template whose fields are all missing emits `{}`. Each audit in the matched chain writes its own line, in declaration order.
 
-A template containing only literals, headers, Filter State, dynamic metadata, the path, the chain name or the selected LLM protocol/operation collects all its values at request headers. Envoy writes the resulting line at stream completion. A request with only a question selected needs only the request parser. An answer or usage selection needs the response parser. When an audit selects fields from both bodies, they appear in the same line. For example, a question followed by two SSE answer deltas and a final usage report can produce `{"question":"retry?","answer":"retry once","tokens":14}`.
+Request headers, Filter State, dynamic metadata, the path, the chain name and the selected LLM protocol/operation are sampled at request headers. Response headers and StreamInfo fields are read at stream completion. Environment variables are captured when the configuration loads. These fields can be selected without body parsing. A question selection needs the request parser. An answer or usage selection needs the response parser. When an audit selects fields from both bodies, they appear in the same line. For example, a question followed by two SSE answer deltas and a final usage report can produce `{"question":"retry?","answer":"retry once","tokens":14}`.
 
 | Operator | Value |
 | --- | --- |
 | `%REQ(X-TENANT-ID)%`, `%REQ(PRIMARY?FALLBACK)%` | Read a request header by case-insensitive name. The optional fallback is read only when the primary header is absent. |
+| `%RESP(header)%`, `%RESP(PRIMARY?FALLBACK)%` | Read a response header at stream completion. |
+| `%START_TIME%` | Request start time in UTC, such as `2026-11-25T03:22:51.123Z`. Custom strftime formats are accepted, including `%START_TIME(%Y/%m/%dT%H:%M:%S%z)%`, `%START_TIME(%s)%` and fractional seconds with `%f`, `%3f`, `%6f` or `%9f`. The JSON value is a string. |
+| `%DURATION%` | Total request duration through stream completion, as a JSON number of milliseconds. |
+| `%REQUEST_DURATION%` | Milliseconds from request start to the last downstream request byte received. |
+| `%RESPONSE_DURATION%` | Milliseconds from request start to the first upstream response byte received. |
 | `%RESPONSE_CODE%` | Final HTTP status as a JSON number, if Envoy received or generated a response. |
+| `%RESPONSE_FLAGS%` | Envoy's comma-separated short response flags, or `-` when no flags are set. |
+| `%RESPONSE_CODE_DETAILS%` | Envoy's reason for the final HTTP response code. |
+| `%TRACE_ID%`, `%SPAN_ID%` | Trace and span IDs from Envoy's active downstream span, when tracing supplies them. |
+| `%ENVIRONMENT(name)%` | Gateway process environment variable, sampled at configuration load. An unset variable emits `-`. |
 | `%FILTER_STATE(key:PLAIN)%` | Filter State object's string serialization at request headers. |
 | `%DYNAMIC_METADATA(namespace:key)%` | Top-level dynamic metadata string, captured at request headers. |
 | `%DYNAMIC_METADATA_NUMBER(namespace:key)%` | Top-level dynamic metadata number, emitted as a JSON number. |
@@ -66,6 +75,28 @@ A template containing only literals, headers, Filter State, dynamic metadata, th
 | `%DECODED_BYTES(request)%`, `%DECODED_BYTES(response)%` | Decoded bytes when decompression ran. This version decompresses gzip requests. |
 | `%CAPTURE_STATUS(request)%`, `%CAPTURE_STATUS(response)%` | Opt in to protocol validation and the capture outcome for that direction. Clipping a selected request header or other request context affects the request status. A transport interruption reports `incomplete`, including when response headers never arrived. |
 | `%EVENT(llm.field)%` | Value from the LLM protocol parser, projected for this audit. |
+
+`REQ` and `RESP` accept the same optional fallback and `:N` limit. String StreamInfo fields accept a `:N` limit. Durations and other numeric fields reject a limit. Unavailable fields are omitted. Duration measurements use Envoy's nanosecond timing data converted to integer milliseconds, and remain unavailable until Envoy records the corresponding event. `RESPONSE_DURATION` measures the upstream first byte, including headers.
+
+`RESPONSE_CODE_DETAILS` replaces whitespace with underscores, following the native formatter.
+
+For an audit with gateway timing and model correlation:
+
+```yaml
+format:
+  json:
+    timestamp: "%START_TIME%"
+    duration_ms: "%DURATION%"
+    request_duration_ms: "%REQUEST_DURATION%"
+    response_duration_ms: "%RESPONSE_DURATION%"
+    http.response.status_code: "%RESPONSE_CODE%"
+    upstream_request_id: "%RESP(REQUEST-ID?X-REQUEST-ID)%"
+    trace_id: "%TRACE_ID%"
+    span_id: "%SPAN_ID%"
+    cluster.id: "%ENVIRONMENT(CLUSTER_ID)%"
+    gen_ai.input.messages: "%EVENT(llm.request.messages)%"
+    gen_ai.output.messages: "%EVENT(llm.response.messages)%"
+```
 
 A single column can record the session ID sent by either Codex or Claude Code. When both headers are present, the primary wins, even if its value is empty. When both are absent, the column is omitted.
 

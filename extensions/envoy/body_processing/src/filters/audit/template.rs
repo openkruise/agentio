@@ -8,6 +8,7 @@ use super::{
         DEFAULT_BODY_FIELD_BYTES, DEFAULT_CONTEXT_FIELD_BYTES, MAX_BODY_FIELD_BYTES,
         MAX_CONTEXT_FIELD_BYTES,
     },
+    stream_info::{Completion, Field as StreamField},
 };
 use crate::{
     chain::Side,
@@ -190,7 +191,7 @@ impl Audit {
     pub(crate) fn compile(expressions: BTreeMap<String, String>) -> Result<Self, String> {
         let mut request = None;
         let mut response = None;
-        let mut response_codes = Vec::new();
+        let mut completion = BTreeMap::new();
         let mut literals = Map::new();
         let mut context = BTreeMap::new();
         for (alias, expression) in expressions {
@@ -203,18 +204,26 @@ impl Audit {
             }
             let command =
                 Command::parse(&expression).map_err(|e| format!("field {alias:?}: {e}"))?;
+            if let Some(field) = StreamField::parse(command.name, command.argument)
+                .map_err(|e| format!("field {alias:?}: {e}"))?
+            {
+                if field.numeric() && command.limit.is_some() {
+                    return Err(format!(
+                        "field {alias:?}: {} does not take a byte limit",
+                        command.name
+                    ));
+                }
+                let limit = command.field_limit(
+                    &alias,
+                    DEFAULT_CONTEXT_FIELD_BYTES,
+                    MAX_CONTEXT_FIELD_BYTES,
+                )?;
+                completion.insert(alias, (field, limit));
+                continue;
+            }
             let source = match (command.name, command.argument) {
                 ("CHAIN", None) => Source::Chain,
                 ("PATH", None) => Source::Path,
-                ("RESPONSE_CODE", None) => {
-                    if command.limit.is_some() {
-                        return Err(format!(
-                            "field {alias:?}: RESPONSE_CODE does not take a byte limit"
-                        ));
-                    }
-                    response_codes.push(alias);
-                    continue;
-                }
                 ("EVENT", Some("llm.protocol")) => Source::Protocol,
                 ("EVENT", Some("llm.operation")) => Source::Operation,
                 ("EVENT", Some(name)) => {
@@ -282,7 +291,7 @@ impl Audit {
         Ok(Self {
             request: request.map(Arc::new),
             response: response.map(Arc::new),
-            response_codes: response_codes.into(),
+            completion: Arc::new(Completion { fields: completion }),
             literals,
             context,
         })

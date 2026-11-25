@@ -12,6 +12,7 @@ mod limit;
 mod messages;
 pub(crate) mod projection;
 mod sse;
+pub(crate) mod stream_info;
 mod template;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ enum Source {
     Protocol,
     Operation,
     RequestHeader(RequestHeader),
+    Environment(String),
     FilterState(String),
     DynamicMetadata {
         namespace: String,
@@ -85,6 +87,15 @@ impl Source {
         };
         let kind = match operator {
             "REQ" => return RequestHeader::parse(args).map(Self::RequestHeader),
+            "ENVIRONMENT" => {
+                if args.is_empty() || args.contains(['=', '\0']) {
+                    return Err("expected %ENVIRONMENT(name)%");
+                }
+                let value = std::env::var_os(args)
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "-".into());
+                return Ok(Self::Environment(value));
+            }
             "FILTER_STATE" => {
                 let key = args
                     .strip_suffix(":PLAIN")
@@ -150,6 +161,10 @@ impl Attributes {
             Source::RequestHeader(header) => {
                 header.get(|name| envoy.get_request_header_value(name))
             }
+            Source::Environment(value) => {
+                self.insert(alias, value, limit);
+                return;
+            }
             Source::FilterState(key) => envoy.get_filter_state_typed(key.as_bytes()),
             Source::DynamicMetadata {
                 namespace,
@@ -198,7 +213,7 @@ pub(crate) struct Direction {
 pub struct Audit {
     request: Option<std::sync::Arc<template::Template>>,
     response: Option<std::sync::Arc<template::Template>>,
-    response_codes: std::sync::Arc<[String]>,
+    completion: std::sync::Arc<stream_info::Completion>,
     literals: Map<String, Value>,
     // Header, Filter State and Dynamic Metadata values are sampled at request headers.
     context: BTreeMap<String, (Source, usize)>,
@@ -218,10 +233,8 @@ impl Audit {
         }
         // Create the record at request headers, including when all values are missing
         // or the stream ends before response headers.
-        if !self.response_codes.is_empty() {
-            output
-                .response_codes
-                .push((index, self.response_codes.clone()));
+        if !self.completion.fields.is_empty() {
+            output.completion.push((index, self.completion.clone()));
         }
         let row = output.audit(index);
         row.clone_from(&self.literals);

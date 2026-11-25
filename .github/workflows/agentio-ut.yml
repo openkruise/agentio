@@ -136,6 +136,7 @@ jobs:
           cargo clippy --release --locked --all-targets -- -D warnings
           docker build -t envoy-body-processing:test .
           python3 tests/smoke.py envoy-body-processing:test
+          python3 tests/access_log.py envoy-body-processing:test
 
   network-limits-runtime:
     runs-on: ubuntu-latest

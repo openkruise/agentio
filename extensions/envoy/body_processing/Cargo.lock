@@ -7,6 +7,7 @@ name = "agentio-envoy-body-processing"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "criterion",
  "envoy-proxy-dynamic-modules-rust-sdk",
  "flate2",
@@ -108,6 +109,15 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+
+[[package]]
+name = "chrono"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "ciborium"

@@ -16,7 +16,6 @@ use config::{Settings, match_path};
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyCounterId, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
     abi::{
-        envoy_dynamic_module_type_attribute_id as AttributeId,
         envoy_dynamic_module_type_on_http_filter_request_body_status as ReqBody,
         envoy_dynamic_module_type_on_http_filter_request_headers_status as ReqHeaders,
         envoy_dynamic_module_type_on_http_filter_request_trailers_status as ReqTrailers,
@@ -47,7 +46,7 @@ const AUDIT_STATE_KEY: &[u8] = b"agentio.body_processing.audit";
 #[derive(Default)]
 struct FilterOutput {
     records: BTreeMap<usize, Map<String, Value>>,
-    response_codes: Vec<(usize, Arc<[String]>)>,
+    completion: Vec<(usize, Arc<filters::audit::stream_info::Completion>)>,
 }
 
 impl FilterOutput {
@@ -179,15 +178,8 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
             Decision::Continue => (),
         }
         let mut audit = self.audit.take();
-        if !audit.response_codes.is_empty()
-            && let Some(code) = envoy.get_attribute_int(AttributeId::ResponseCode)
-        {
-            for (index, aliases) in &audit.response_codes {
-                let row = audit.records.get_mut(index).unwrap();
-                for alias in aliases.iter() {
-                    row.insert(alias.clone(), code.into());
-                }
-            }
+        for (index, fields) in &audit.completion {
+            fields.capture(envoy, audit.records.get_mut(index).unwrap());
         }
         if let Some(lines) = audit.into_json_lines()
             && !envoy.set_filter_state_bytes(AUDIT_STATE_KEY, &lines)
