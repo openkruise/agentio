@@ -7,7 +7,7 @@ use super::{
     response::Result,
     tool_summary::ToolSummary,
 };
-use crate::parser::{BodyError, json::string_end, llm};
+use crate::parser::{BodyError, llm};
 use serde_json::{Value, json};
 
 // Root keys and metadata keep a separate budget from message and tool items.
@@ -67,11 +67,9 @@ enum State {
 
 struct Fragment {
     capture: JsonCapture,
-    depth: usize,
-    quoted: bool,
-    escaped: bool,
-    started: bool,
+    boundary: super::json_boundary::ValueBoundary,
 }
+
 impl Fragment {
     fn new(message_format: Option<&'static str>, limit: usize) -> Self {
         Self {
@@ -80,64 +78,15 @@ impl Fragment {
             } else {
                 JsonCapture::new(limit)
             },
-            depth: 0,
-            quoted: false,
-            escaped: false,
-            started: false,
+            boundary: Default::default(),
         }
     }
 
-    // Return the number of bytes in this fragment, leaving its separator for
-    // the object/array grammar. The actual JSON value is decoded once.
     fn feed(&mut self, input: &[u8]) -> Result<(usize, bool)> {
-        let mut i = 0;
-        let mut done = false;
-        while i < input.len() {
-            if self.quoted {
-                let Some(end) = string_end(&input[i..], &mut self.escaped) else {
-                    i = input.len();
-                    break;
-                };
-                i += end + 1;
-                self.quoted = false;
-                if self.depth == 0 {
-                    done = true;
-                    break;
-                }
-            } else {
-                let ch = input[i];
-                if self.started
-                    && self.depth == 0
-                    && (ch.is_ascii_whitespace() || matches!(ch, b',' | b']' | b'}'))
-                {
-                    done = true;
-                    break;
-                }
-                self.started = true;
-                match ch {
-                    b'"' => self.quoted = true,
-                    b'{' | b'[' => {
-                        self.depth += 1;
-                        if self.depth > 128 {
-                            return Err(BodyError::InvalidJson);
-                        }
-                    }
-                    b'}' | b']' => {
-                        self.depth = self.depth.checked_sub(1).ok_or(BodyError::InvalidJson)?;
-                        if self.depth == 0 {
-                            i += 1;
-                            done = true;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-        }
+        let (n, done) = self.boundary.feed(input)?;
         self.capture
-            .push(&input[..i], "json", false, Fields::default());
-        Ok((i, done))
+            .push(&input[..n], "json", false, Fields::default());
+        Ok((n, done))
     }
 }
 

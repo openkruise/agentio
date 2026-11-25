@@ -36,7 +36,7 @@ pub(crate) enum BodyEvent<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum ParserDirection {
     Request(crate::config::RequestParserConfig),
-    Response,
+    Response(crate::config::ResponseParserConfig),
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq)]

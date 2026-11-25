@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    CaptureLoss, Fields, ItemEvent, LlmView, Protocol, json_capture::JsonCapture, request::Request,
-    sse, stream,
+    CaptureLoss, ItemEvent, LlmView, Protocol, json_response::Document, request::Request, sse,
+    stream,
 };
 use crate::parser::{BodyError, ParserDirection};
-
-const RESPONSE_LIMIT: usize = 1 << 20;
 
 /// Borrowed for one callback. Model offsets refer to decoded request body bytes.
 pub(crate) enum Event<'a> {
@@ -42,10 +40,7 @@ pub(crate) enum Outcome {
 
 pub(crate) enum Parser {
     Request(Request),
-    Response {
-        protocol: Protocol,
-        json: JsonCapture,
-    },
+    Response(Box<Document>),
     Sse(sse::Framer, Box<stream::Stream>),
 }
 
@@ -67,15 +62,16 @@ impl Parser {
                 ParserDirection::Request(config) => {
                     Self::Request(Request::new(protocol.as_str(), config.max_item_size))
                 }
-                ParserDirection::Response => Self::Response {
-                    protocol,
-                    json: JsonCapture::new(RESPONSE_LIMIT),
-                },
+                ParserDirection::Response(config) => Self::Response(Box::new(Document::new(
+                    protocol.as_str(),
+                    config.max_content_size,
+                ))),
             });
         }
-        if matches!(direction, ParserDirection::Request(_))
-            || media.essence_str() != "text/event-stream"
-        {
+        let ParserDirection::Response(config) = direction else {
+            return Err(BodyError::UnsupportedMediaType);
+        };
+        if media.essence_str() != "text/event-stream" {
             return Err(BodyError::UnsupportedMediaType);
         }
         if media
@@ -86,7 +82,10 @@ impl Parser {
         }
         Ok(Self::Sse(
             sse::Framer::new(protocol),
-            Box::new(stream::Stream::new(protocol.as_str(), RESPONSE_LIMIT)),
+            Box::new(stream::Stream::new(
+                protocol.as_str(),
+                config.max_content_size,
+            )),
         ))
     }
 
@@ -97,10 +96,7 @@ impl Parser {
     ) -> Result<(), BodyError> {
         match self {
             Self::Request(reader) => reader.push(bytes, emit),
-            Self::Response { protocol, json } => {
-                json.push(bytes, protocol.as_str(), true, Fields::ALL);
-                Ok(())
-            }
+            Self::Response(json) => json.push(bytes, &mut |event| emit(Event::Response(event))),
             Self::Sse(framer, stream) => framer.push(bytes, |frame| {
                 stream.event(frame, &mut |event| emit(Event::Response(event)))
             }),
@@ -125,9 +121,8 @@ impl Parser {
                 loss: CaptureLoss::default(),
                 view: reader.finish()?,
             }),
-            Self::Response { protocol, json } => {
-                let (loss, view) =
-                    json.finish(protocol.as_str(), true, Fields::ALL, RESPONSE_LIMIT)?;
+            Self::Response(json) => {
+                let (loss, view) = json.finish()?;
                 Ok(Outcome::Document { loss, view })
             }
         }

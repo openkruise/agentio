@@ -76,15 +76,18 @@ def bootstrap(port, upstream):
     }
     settings = {
         "filterChains": [
-            {"name": "context-only", "matcher": {"paths": ["/context-only"]}, "parser": {"llm": {}},
-             "filters": [audit({"tenant": "%REQ(X-TENANT)%", "shortSession": "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID):5%",
-                                "session": "%CEL('session-id' in request.headers ? request.headers['session-id'] : request.headers['x-claude-code-session-id'])%"}),
-                         {"audit": {"format": {"json": {"absent": "%CEL(request.headers['x-absent'])%"}}}}]},
+            {"name": "context-only", "matcher": {"paths": ["/context-only", "/context-error"]}, "parser": {"llm": {}},
+             "filters": [audit({"tenant": "%REQ(X-TENANT)%", "code": "%RESPONSE_CODE%", "shortSession": "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID):5%",
+                                "session": "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%",
+                                "provider": "ollama", "empty": "", "label": "进度 100%%\n已完成",
+                                "escaped": "%%REQ(X-TENANT)%%"}),
+                         {"audit": {"format": {"json": {"absent": "%REQ(X-ABSENT)%"}}}}]},
             {"name": "chat-choices", "matcher": {"hosts": ["choices.test", "reset.test"]}, "parser": {"llm": {}},
              "filters": [audit({"question": "%EVENT(llm.question)%", "answer": "%EVENT(llm.answer)%",
                                 "input": "%EVENT(llm.request.messages):62%", "requestStatus": "%CAPTURE_STATUS(request)%",
                                 "preview": "%EVENT(llm.response.retainedText)%",
-                                "tokens": "%EVENT(llm.usage.totalTokens)%", "status": "%CAPTURE_STATUS(response)%"})]},
+                                "tokens": "%EVENT(llm.usage.totalTokens)%", "status": "%CAPTURE_STATUS(response)%",
+                                "code": "%RESPONSE_CODE%"})]},
             {"name": "custom", "matcher": {"hosts": ["*.llm.test"], "paths": ["/custom"],
                        "filterState": [{"key": "test.tenant", "values": ["green", "blue"]}]},
              "parser": {"llm": {"protocol": "openai-responses"}},
@@ -94,6 +97,10 @@ def bootstrap(port, upstream):
                "parser":{"llm":{"protocol":"openai-chat-completions", **options}},
                "filters":[audit(question | request_info),audit(tools | request_info)]}
               for name, options in (("dual",{}),("dual-small",{"request":{"maxItemSize":"2KiB"}}))],
+            *[{"name": host, "matcher": {"hosts": [host]}, "parser": {"llm": llm},
+               "filters": [audit({"case": "%REQ(X-LLM-CASE)%",
+                                  "output": "%EVENT(llm.response.messages):4194304%"} | response_info)]}
+              for host, llm in BUDGET_HOSTS.items()],
             {"name":"image","matcher":{"hosts":["image.test"],"filterState":[{"key":"test.empty"}]},
              "parser":{"llm":{"protocol":"openai-chat-completions"}},
              "filters":[audit({"input":"%EVENT(llm.request.messages):2048%"} | request_info)]},
@@ -261,6 +268,18 @@ ATTACHMENTS = {
 }
 
 
+BUDGET_HOSTS = {"budget-default.test": {}, "budget-raised.test": {"response": {"maxContentSize": "2MiB"}}}
+BUDGET_TEXT = "x" * ((1 << 20) + 16384)
+BUDGET_RESPONSE = {"id": "resp_budget", "model": "test", "status": "completed",
+                   "output": [{"id": "msg_budget", "type": "message", "role": "assistant",
+                               "content": [{"type": "output_text", "text": BUDGET_TEXT}]}]}
+BUDGET_WIRE = {
+    "application/json": json.dumps(BUDGET_RESPONSE).encode(),
+    "text/event-stream": ("event: response.completed\ndata: " +
+                          json.dumps({"type": "response.completed", "response": BUDGET_RESPONSE}) + "\n\n").encode(),
+}
+
+
 class Echo(llm_streaming.StreamHandler):
     def do_POST(self):
         if self.headers["Host"].partition(":")[0].removesuffix(".").lower() == llm_streaming.HOST:
@@ -268,7 +287,7 @@ class Echo(llm_streaming.StreamHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         if self.path.startswith("/gzip/"):
             assert self.headers.get("Content-Encoding") == "gzip"
-        self.send_response(200)
+        self.send_response(429 if self.path == "/context-error" else 200)
         if self.headers["Host"] == "reset.test":
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(RESET_PREFIX) + 100))
@@ -278,7 +297,11 @@ class Echo(llm_streaming.StreamHandler):
             assert RESET_RECEIVED.wait(timeout=10)
             self.close_connection = True
             return
-        if self.headers["Host"] == "choices.test":
+        if self.headers["Host"] in BUDGET_HOSTS:
+            media = self.headers["X-LLM-Case"]
+            body = BUDGET_WIRE[media]
+            self.send_header("Content-Type", media)
+        elif self.headers["Host"] == "choices.test":
             body = JSON_CHOICES
             self.send_header("Content-Type", "application/json")
         elif self.path in STREAMS and self.headers["Host"] != "attachments.test":
@@ -329,10 +352,11 @@ def exercise(port):
         assert response.status == 200 and response.read() == payload
     connection.close()
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    for session_headers, _ in SESSION_HEADER_CASES:
-        connection.request("POST", "/context-only", b"opaque", {"Content-Type": "text/plain", "X-Tenant": "alpha", **session_headers})
+    for session_headers, session in SESSION_HEADER_CASES:
+        path = "/context-error" if session is None else "/context-only"
+        connection.request("POST", path, b"opaque", {"Content-Type": "text/plain", "X-Tenant": "alpha", **session_headers})
         response = connection.getresponse()
-        assert response.status == 200 and response.read() == b"opaque"
+        assert response.status == (429 if session is None else 200) and response.read() == b"opaque"
     connection.request("POST", llm_streaming.CHAT, json.dumps({"model": "test", "messages": [
         {"role": "user", "content": "天气很好"}], "n": 2}), {"Host": "choices.test", "Content-Type": "application/json"})
     response = connection.getresponse()
@@ -405,6 +429,13 @@ def exercise(port):
         response = connection.getresponse()
         assert response.status == 200 and response.read() == dual_sse(path)
         connection.close()
+    for host in BUDGET_HOSTS:
+        for media, expected in BUDGET_WIRE.items():
+            connection.request("POST", llm_streaming.RESPONSES, b'{"input":"budget test"}',
+                               {"Host": host, "Content-Type": "application/json", "X-LLM-Case": media})
+            response = connection.getresponse()
+            assert response.status == 200 and response.read() == expected
+    connection.close()
     return len(body)
 
 
@@ -418,6 +449,7 @@ def check_records(lines, json_bytes):
     custom_records = []
     context_records = []
     choice_records = []
+    budget_records = {}
     attachments = {case: [] for case in ATTACHMENTS}
     for line in lines:
         assert line.endswith(b"\n")
@@ -427,6 +459,11 @@ def check_records(lines, json_bytes):
             continue
         if record["chain"] == "chat-choices":
             choice_records.append(record)
+            continue
+        if record["chain"] in BUDGET_HOSTS:
+            key = (record["chain"], record["case"])
+            assert key not in budget_records
+            budget_records[key] = record
             continue
         if record["chain"] == "attachments":
             attachments[record["case"]].append(record)
@@ -460,11 +497,21 @@ def check_records(lines, json_bytes):
         else:
             other_lines.append(line)
     for row, empty, (_, session) in zip(context_records[::2], context_records[1::2], SESSION_HEADER_CASES, strict=True):
-        expected = {"chain": "context-only", "path": "/context-only", "requestID": row["requestID"], "tenant": "alpha"}
+        expected = {"chain": "context-only", "path": "/context-error" if session is None else "/context-only",
+                    "code": 429 if session is None else 200, "requestID": row["requestID"], "tenant": "alpha",
+                    "provider": "ollama", "empty": "", "label": "进度 100%\n已完成", "escaped": "%REQ(X-TENANT)%"}
         if session is not None:
             expected["session"] = session
             expected["shortSession"] = session[:5]
         assert row == expected and empty == {}, (row, empty)
+    assert len(budget_records) == len(BUDGET_HOSTS) * len(BUDGET_WIRE)
+    for media, wire in BUDGET_WIRE.items():
+        clipped = budget_records["budget-default.test", media]
+        full = budget_records["budget-raised.test", media]
+        assert clipped["responseBytes"] == full["responseBytes"] == len(wire)
+        assert clipped["responseStatus"] == "truncated"
+        assert full["responseStatus"] == "complete"
+        assert full["output"][0]["parts"][0]["content"] == BUDGET_TEXT
     assert len(choice_records) == 2, choice_records
     complete, = (r for r in choice_records if r["status"] == "complete")
     assert complete["question"] == "天气很好" and complete["answer"] == "primary"
@@ -475,7 +522,7 @@ def check_records(lines, json_bytes):
     assert reset["question"] == "retry?" and reset["answer"] == "retry" and reset["preview"] == ["retry", "alternate"]
     assert reset["input"] == [{"role": "user", "parts": [{"type": "text", "content": "retry?"}]}]
     assert reset["requestStatus"] == "complete"
-    assert "tokens" not in reset, reset
+    assert reset["code"] == 200 and "tokens" not in reset, reset
     for case, (_, make_part) in ATTACHMENTS.items():
         small, full = attachments[case]
         assert small["requestID"] == full["requestID"]

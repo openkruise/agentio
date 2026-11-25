@@ -5,8 +5,10 @@ use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Write};
 
-pub(super) const DEFAULT_FIELD_BYTES: usize = 8 * 1024;
-pub(super) const MAX_FIELD_BYTES: usize = 1 << 20;
+pub(super) const DEFAULT_BODY_FIELD_BYTES: usize = 1 << 20;
+pub(super) const MAX_BODY_FIELD_BYTES: usize = 4 << 20;
+pub(super) const DEFAULT_CONTEXT_FIELD_BYTES: usize = 8 << 10;
+pub(super) const MAX_CONTEXT_FIELD_BYTES: usize = 1 << 20;
 
 /// Longest UTF-8 prefix whose contents fit in a compact serde_json string.
 /// Delimiters are outside the string's field budget.

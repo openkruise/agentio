@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Event, Output, Retention, Trailers, obj, string, unknown};
+use super::{Event, OpenContent, Output, Retention, Trailers, obj, string, unknown};
 use crate::parser::BodyError;
 use crate::parser::llm::{
     CHAT,
@@ -19,6 +19,10 @@ pub(super) struct Stream {
 }
 #[derive(Default)]
 struct Choice {
+    work: OpenContent,
+    text_clipped: bool,
+    tool_cut: Option<u32>,
+    legacy_clipped: bool,
     role: Option<String>,
     text: String,
     refusal: String,
@@ -39,13 +43,13 @@ struct Function {
 }
 
 impl Function {
-    fn add(&mut self, v: &Value, b: &mut Retention) -> Result<()> {
+    fn add(&mut self, v: &Value, b: &mut Retention, work: &mut OpenContent) -> Result<()> {
         obj(v)?;
         b.partial |= unknown(v, &["name", "arguments"], false);
         for (key, dst) in [("name", &mut self.name), ("arguments", &mut self.arguments)] {
             if let Some(raw) = v.get(key).filter(|value| !value.is_null()) {
                 let part = string(raw)?;
-                if b.take(part.len()) {
+                if work.take(b, part.len()) {
                     dst.get_or_insert_default().push_str(part);
                 }
             }
@@ -145,7 +149,9 @@ impl Stream {
                         part: Some(u32::from(k == "refusal")),
                         text: part,
                     });
-                    b.append(dst, part);
+                    let prefix = c.work.prefix(b, part);
+                    dst.push_str(prefix);
+                    c.text_clipped |= k == "content" && prefix.len() < part.len();
                 }
             }
             if !d["tool_calls"].is_null() {
@@ -163,9 +169,10 @@ impl Stream {
                     }
                     b.tools
                         .chat_delta(i as usize, idx as usize, &t["id"], &t["function"]["name"]);
-                    if !b.retaining() {
+                    if c.work.clipped || b.partial {
+                        c.tool_cut = Some(c.tool_cut.map_or(idx, |cut| cut.min(idx)));
                         if let Some(f) = t.get("function").filter(|v| !v.is_null()) {
-                            Function::default().add(f, b)?;
+                            Function::default().add(f, b, &mut c.work)?;
                         }
                         continue;
                     }
@@ -179,13 +186,19 @@ impl Stream {
                             if dst.as_ref().is_some_and(|old| old != s) {
                                 return Err(BodyError::InvalidContent);
                             }
-                            if dst.is_none() && b.take(crate::parser::encoded_len(s)) {
+                            if dst.is_none() && c.work.take(b, crate::parser::encoded_len(s)) {
                                 *dst = Some(s.into());
                             }
                         }
                     }
                     if let Some(f) = t.get("function").filter(|v| !v.is_null()) {
-                        target.function.get_or_insert_default().add(f, b)?;
+                        target
+                            .function
+                            .get_or_insert_default()
+                            .add(f, b, &mut c.work)?;
+                    }
+                    if c.work.clipped {
+                        c.tool_cut = Some(c.tool_cut.map_or(idx, |cut| cut.min(idx)));
                     }
                 }
             }
@@ -198,27 +211,30 @@ impl Stream {
                 );
                 c.legacy
                     .get_or_insert_default()
-                    .add(&d["function_call"], b)?;
+                    .add(&d["function_call"], b, &mut c.work)?;
+                c.legacy_clipped |= c.work.clipped;
             }
             if !row["finish_reason"].is_null() {
                 let f = string(&row["finish_reason"])?;
                 if f.len() > 256 {
                     return Err(BodyError::InvalidContent);
                 }
+                let mut sealed = std::mem::take(c);
+                sealed.work.release(b);
+                let clipped = sealed.work.clipped;
+                let m = sealed.message(i, f);
+                emit(Event::OutputItem {
+                    output,
+                    part: None,
+                    value: (!clipped || m["content"].as_array().is_some_and(|v| !v.is_empty()))
+                        .then_some(&m),
+                    clipped,
+                });
                 c.finish = Some(f.into());
             }
         }
         Ok(None)
     }
-    pub(super) fn discard_content(&mut self) {
-        for choice in self.choices.values_mut() {
-            choice.text = String::new();
-            choice.refusal = String::new();
-            choice.tools.clear();
-            choice.legacy = None;
-        }
-    }
-
     pub(super) fn observed(self) -> Value {
         let reasons = self.choices.into_values().filter_map(|c| c.finish);
         super::observed_view(CHAT, self.model, self.error, reasons)
@@ -233,45 +249,56 @@ impl Stream {
         }
         let mut v = json!({"format":CHAT,"model":self.model});
         let mut reasons = vec![];
-        let mut out = vec![];
-        for (i, c) in self.choices {
-            let reason = c.finish.ok_or(BodyError::IncompleteStream)?;
-            reasons.push(reason.clone());
-            if !keep {
-                continue;
-            }
-            let mut blocks = vec![];
-            if !c.text.is_empty() {
-                blocks.push(json!({"type":"text","text":c.text}));
-            }
-            for t in c.tools.into_values() {
-                if let Some(f) = t.function {
-                    blocks.push(f.block(t.id));
-                } else {
-                    let mut raw = json!({});
-                    if let Some(id) = t.id {
-                        raw["id"] = id.into();
-                    }
-                    if let Some(kind) = t.kind {
-                        raw["type"] = kind.into();
-                    }
-                    blocks.push(json!({"type":"provider_content","format":CHAT,"data":raw}));
-                }
-            }
-            if let Some(f) = c.legacy {
-                blocks.push(f.block(None));
-            }
-            if !c.refusal.is_empty() {
-                blocks.push(json!({"type":"refusal","text":c.refusal}));
-            }
-            out.push(json!({"index":i,"role":c.role.as_deref().unwrap_or("assistant"),"content":blocks,"finishReason":reason}));
+        for c in self.choices.into_values() {
+            reasons.push(c.finish.ok_or(BodyError::IncompleteStream)?);
         }
         if !reasons.is_empty() {
             v["finishReasons"] = reasons.into();
         }
         if keep {
-            v["outputMessages"] = out.into();
+            v["outputMessages"] = json!([]);
         }
         Ok(v)
+    }
+}
+
+impl Choice {
+    fn message(self, index: u32, reason: &str) -> Value {
+        let mut blocks = vec![];
+        if !self.text.is_empty() {
+            blocks.push(json!({"type":"text","text":self.text}));
+        }
+        for (idx, t) in self.tools {
+            if self.text_clipped || self.tool_cut.is_some_and(|cut| idx >= cut) {
+                break;
+            }
+            if let Some(f) = t.function {
+                blocks.push(f.block(t.id));
+            } else {
+                let mut raw = json!({});
+                if let Some(id) = t.id {
+                    raw["id"] = id.into();
+                }
+                if let Some(kind) = t.kind {
+                    raw["type"] = kind.into();
+                }
+                blocks.push(json!({"type":"provider_content","format":CHAT,"data":raw}));
+            }
+        }
+        if !self.text_clipped
+            && self.tool_cut.is_none()
+            && !self.legacy_clipped
+            && let Some(f) = self.legacy
+        {
+            blocks.push(f.block(None));
+        }
+        if !self.text_clipped
+            && self.tool_cut.is_none()
+            && !self.legacy_clipped
+            && !self.refusal.is_empty()
+        {
+            blocks.push(json!({"type":"refusal","text":self.refusal}));
+        }
+        json!({"index":index,"role":self.role.as_deref().unwrap_or("assistant"),"content":blocks,"finishReason":reason})
     }
 }

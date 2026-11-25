@@ -4,7 +4,8 @@
 use super::{Event, Output, Retention, Trailers, string};
 use crate::parser::BodyError;
 use crate::parser::llm::{
-    RESPONSES,
+    RESPONSES, answer_parts,
+    json_response::{ItemCapture, emit_item},
     response::{Result, index, metadata},
     responses_item,
 };
@@ -15,12 +16,11 @@ use std::collections::BTreeMap;
 pub(super) struct Stream {
     pub(super) view: Option<Value>,
     items: BTreeMap<u32, Item>,
-    terminal: Option<Vec<Value>>,
+    authoritative: bool,
 }
 struct Item {
     id: String,
     closed: bool,
-    message: Option<Value>,
 }
 impl Stream {
     pub(super) fn add(
@@ -88,19 +88,10 @@ impl Stream {
                         b.truncated = false;
                         b.partial = false;
                         emit(Event::ReplaceOutput);
-                        let keep = b.take(crate::parser::encoded_len(out));
-                        let mut messages = Vec::new();
                         for (index, item) in out.iter().enumerate() {
-                            let message = responses_item(item)?;
-                            emit(Event::OutputItem {
-                                output: Output::new(RESPONSES, index as u32),
-                                message: &message,
-                            });
-                            if keep {
-                                messages.push(message);
-                            }
+                            sealed(index as u32, item, b, emit)?;
                         }
-                        self.terminal = Some(messages);
+                        self.authoritative = true;
                     }
                 }
             }
@@ -122,23 +113,15 @@ impl Stream {
                 if !self.items.contains_key(&i) {
                     b.item()?;
                 }
-                let message = if closed {
-                    let message = responses_item(item)?;
-                    emit(Event::OutputItem {
-                        output: Output::new(RESPONSES, i),
-                        message: &message,
-                    });
-                    b.take(crate::parser::encoded_len(item)).then_some(message)
-                } else {
-                    None
-                };
+                if closed {
+                    sealed(i, item, b, emit)?;
+                }
                 b.tools.responses(i as usize, item);
                 self.items.insert(
                     i,
                     Item {
                         id: id.into(),
                         closed,
-                        message,
                     },
                 );
             }
@@ -182,34 +165,49 @@ impl Stream {
         Ok(terminal.then_some(Trailers::Done))
     }
 
-    pub(super) fn discard_content(&mut self) {
-        self.terminal = None;
-        for item in self.items.values_mut() {
-            item.message = None;
-        }
-    }
-
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
         let mut view = self.view.ok_or(BodyError::InvalidContent)?;
-        let mut messages = vec![];
-        if let Some(output) = self.terminal {
-            messages = output;
-        } else if view.get("error").is_none() {
+        if !self.authoritative && view.get("error").is_none() {
             for (i, (index, item)) in self.items.into_iter().enumerate() {
                 if index as usize != i || !item.closed {
                     return Err(BodyError::IncompleteStream);
                 }
-                if let Some(m) = item.message {
-                    messages.push(m);
-                }
             }
         }
         if keep {
-            for (i, m) in messages.iter_mut().enumerate() {
-                m["index"] = i.into();
-            }
-            view["outputMessages"] = messages.into();
+            view["outputMessages"] = json!([]);
         }
         Ok(view)
     }
+}
+
+fn sealed(i: u32, item: &Value, b: &mut Retention, emit: &mut impl FnMut(Event<'_>)) -> Result<()> {
+    let output = Output::new(RESPONSES, i);
+    if crate::parser::encoded_len(item) > b.limit {
+        let mut capture = ItemCapture::new(RESPONSES, b.limit);
+        serde_json::to_writer(&mut capture, item).unwrap();
+        let (loss, mut view) = capture.finish()?;
+        if let Some(reason) = view.output_messages_error {
+            return Err(reason);
+        }
+        emit_item(RESPONSES, i, &mut view, loss, emit);
+    } else {
+        let mut message = responses_item(item)?;
+        message["index"] = i.into();
+        for (part, text) in answer_parts(&message).enumerate() {
+            emit(Event::TextDelta {
+                output,
+                part: Some(part as u32),
+                text,
+                provisional: false,
+            });
+        }
+        emit(Event::OutputItem {
+            output,
+            part: None,
+            value: Some(&message),
+            clipped: false,
+        });
+    }
+    Ok(())
 }

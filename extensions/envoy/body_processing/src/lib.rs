@@ -16,6 +16,7 @@ use config::{Settings, match_path};
 use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyCounterId, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
     abi::{
+        envoy_dynamic_module_type_attribute_id as AttributeId,
         envoy_dynamic_module_type_on_http_filter_request_body_status as ReqBody,
         envoy_dynamic_module_type_on_http_filter_request_headers_status as ReqHeaders,
         envoy_dynamic_module_type_on_http_filter_request_trailers_status as ReqTrailers,
@@ -44,19 +45,22 @@ struct Filter {
 const AUDIT_STATE_KEY: &[u8] = b"agentio.body_processing.audit";
 
 #[derive(Default)]
-struct FilterOutput(BTreeMap<usize, Map<String, Value>>);
+struct FilterOutput {
+    records: BTreeMap<usize, Map<String, Value>>,
+    response_codes: Vec<(usize, Arc<[String]>)>,
+}
 
 impl FilterOutput {
     fn audit(&mut self, filter_index: usize) -> &mut Map<String, Value> {
-        self.0.entry(filter_index).or_default()
+        self.records.entry(filter_index).or_default()
     }
 
     fn into_json_lines(self) -> Option<Vec<u8>> {
-        if self.0.is_empty() {
+        if self.records.is_empty() {
             return None;
         }
         let mut lines = Vec::new();
-        for record in self.0.into_values() {
+        for record in self.records.into_values() {
             serde_json::to_writer(&mut lines, &record).unwrap();
             lines.push(b'\n');
         }
@@ -174,7 +178,18 @@ impl<H: EnvoyHttpFilter> HttpFilter<H> for Filter {
         match self.finish(Side::Response, false) {
             Decision::Continue => (),
         }
-        if let Some(lines) = self.audit.take().into_json_lines()
+        let mut audit = self.audit.take();
+        if !audit.response_codes.is_empty()
+            && let Some(code) = envoy.get_attribute_int(AttributeId::ResponseCode)
+        {
+            for (index, aliases) in &audit.response_codes {
+                let row = audit.records.get_mut(index).unwrap();
+                for alias in aliases.iter() {
+                    row.insert(alias.clone(), code.into());
+                }
+            }
+        }
+        if let Some(lines) = audit.into_json_lines()
             && !envoy.set_filter_state_bytes(AUDIT_STATE_KEY, &lines)
         {
             let _ = envoy.increment_counter(self.config.publish_errors, 1);
@@ -212,7 +227,7 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
     if name != "body_processing" {
         return None;
     }
-    let settings = Settings::load(bytes)
+    let settings = Settings::parse(bytes)
         .map_err(|e| envoy_log_error!("invalid body_processing config: {}", e))
         .ok()?;
     let publish_errors = envoy
@@ -220,7 +235,7 @@ fn new_config<C: EnvoyHttpFilterConfig, H: EnvoyHttpFilter>(
         .map_err(|e| envoy_log_error!("cannot register body_processing error counter: {:?}", e))
         .ok()?;
     Some(Box::new(Config {
-        settings,
+        settings: Arc::new(settings),
         publish_errors,
     }))
 }

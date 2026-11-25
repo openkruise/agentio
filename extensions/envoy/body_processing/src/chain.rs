@@ -3,7 +3,7 @@
 
 use crate::{
     FilterOutput,
-    config::FilterChain,
+    config::{FilterChain, ResponseParserConfig},
     filters::{BodyFilter, RequestHeaders},
     parser::Format,
 };
@@ -26,6 +26,7 @@ pub(crate) struct ActiveChain {
     response: DirectionStream,
     pending: Vec<Box<dyn BodyFilter>>,
     format: Format,
+    response_parser: ResponseParserConfig,
 }
 
 fn header(envoy: &impl EnvoyHttpFilter, request: bool, key: &str) -> String {
@@ -55,11 +56,11 @@ impl ActiveChain {
         output: &mut FilterOutput,
     ) {
         self.format = format;
+        self.response_parser = chain.response_parser();
         let headers = RequestHeaders {
             chain: &chain.name,
             path,
             format,
-            cel: Default::default(),
         };
         let mut requests = Vec::new();
         for (index, filter) in chain.filters.iter().enumerate() {
@@ -93,7 +94,7 @@ impl ActiveChain {
             let media = header(envoy, false, "content-type");
             let encoding = header(envoy, false, "content-encoding");
             self.response = DirectionStream::new(
-                ParserDirection::Response,
+                ParserDirection::Response(self.response_parser),
                 self.format,
                 &media,
                 &encoding,

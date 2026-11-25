@@ -33,6 +33,7 @@ impl Messages {
         self.clipped = true;
     }
 
+    #[cfg(test)]
     pub(super) fn project(items: &[Value], limit: usize, side: Side) -> (Option<Value>, bool) {
         let mut messages = Self::new(limit);
         for item in items {
@@ -105,6 +106,180 @@ impl Messages {
         let value = (!self.closed || !self.items.is_empty()).then(|| self.items.into());
         (value, self.clipped)
     }
+}
+
+/// Sealed outputs may arrive out of order. Keep their formatted, bounded prefix
+/// in protocol order. An Anthropic output is one message assembled from blocks.
+#[derive(Default)]
+pub(super) struct ResponseMessages {
+    entries: BTreeMap<u32, (Value, usize)>,
+    used: usize, // entry bytes plus one separator per entry
+    cut: Option<u32>,
+    blocks: bool,
+}
+
+impl ResponseMessages {
+    pub(super) fn cut(&mut self, index: u32) {
+        self.cut = Some(self.cut.map_or(index, |old| old.min(index)));
+        while self
+            .entries
+            .last_key_value()
+            .is_some_and(|(&key, _)| key > index)
+        {
+            let (_, (_, size)) = self.entries.pop_last().unwrap();
+            self.used -= size + 1;
+        }
+    }
+
+    pub(super) fn message(&mut self, index: u32, message: &Value, limit: usize) {
+        self.insert(index, limit, |room| {
+            let mut one = Messages::new(room + 2);
+            one.push(message, Side::Response);
+            (one.items.pop(), one.clipped)
+        });
+    }
+
+    pub(super) fn block(&mut self, index: u32, block: &Value, limit: usize) {
+        self.blocks = true;
+        self.insert(index, limit, |room| {
+            match Part::new(block, false).fit(room) {
+                Some((part, _, clipped)) => (Some(part), clipped),
+                None => (None, true),
+            }
+        });
+    }
+
+    fn insert(
+        &mut self,
+        index: u32,
+        limit: usize,
+        fit: impl FnOnce(usize) -> (Option<Value>, bool),
+    ) {
+        if self.cut.is_some_and(|cut| index > cut) {
+            return;
+        }
+        let later = if self
+            .entries
+            .last_key_value()
+            .is_some_and(|(&last, _)| last >= index)
+        {
+            let later = self.entries.split_off(&index);
+            self.used -= later.values().map(|(_, size)| size + 1).sum::<usize>();
+            later
+        } else {
+            BTreeMap::new()
+        };
+        let room = limit.saturating_sub(self.used + 2);
+        let (value, clipped) = fit(room);
+        if let Some(value) = value {
+            let size = encoded_len(&value);
+            self.entries.insert(index, (value, size));
+            self.used += size + 1;
+        }
+        if clipped {
+            self.cut = Some(index);
+            return;
+        }
+        for (key, (mut value, size)) in later {
+            if key == index {
+                continue;
+            }
+            let room = limit.saturating_sub(self.used + 2);
+            if size <= room {
+                self.entries.insert(key, (value, size));
+                self.used += size + 1;
+            } else {
+                let retained = if self.blocks {
+                    trim_part(&mut value, room)
+                } else {
+                    trim_message(&mut value, room)
+                };
+                if retained {
+                    let size = encoded_len(&value);
+                    self.entries.insert(key, (value, size));
+                    self.used += size + 1;
+                }
+                self.cut = Some(key);
+                break;
+            }
+        }
+    }
+
+    pub(super) fn finish(
+        self,
+        anthropic: bool,
+        reason: Option<&Value>,
+        limit: usize,
+    ) -> (Option<Value>, bool) {
+        let mut clipped = self.cut.is_some();
+        let entries: Vec<_> = self.entries.into_values().map(|(v, _)| v).collect();
+        if !anthropic {
+            let value = (limit >= 2 && (!clipped || !entries.is_empty())).then(|| entries.into());
+            return (value, clipped || limit < 2);
+        }
+        if entries.is_empty() && clipped {
+            return (None, true);
+        }
+        let mut message = serde_json::json!({"role":"assistant","index":0,"parts":entries});
+        if let Some(reason) = reason {
+            message["finish_reason"] = reason.clone();
+        }
+        let room = limit.saturating_sub(2);
+        if json_bytes(&message, room).is_none() {
+            if !trim_message(&mut message, room) {
+                return (None, true);
+            }
+            clipped = true;
+        }
+        (Some(Value::Array(vec![message])), clipped)
+    }
+}
+
+// Trim an already formatted suffix displaced by an earlier index or by the
+// finish reason on an Anthropic message. Opaque parts stay atomic.
+fn trim_part(part: &mut Value, room: usize) -> bool {
+    let key = match part["type"].as_str() {
+        Some("text") => "content",
+        Some("refusal") => "text",
+        _ => return false,
+    };
+    let text = part[key].take();
+    let Some(text) = text.as_str() else {
+        return false;
+    };
+    part[key] = "".into();
+    let Some(overhead) = json_bytes(part, room) else {
+        return false;
+    };
+    let prefix = string_prefix(text, room - overhead);
+    if prefix.is_empty() {
+        return false;
+    }
+    part[key] = prefix.into();
+    true
+}
+
+fn trim_message(message: &mut Value, room: usize) -> bool {
+    let parts = message["parts"].as_array_mut().unwrap();
+    let full = std::mem::take(parts);
+    let Some(mut used) = json_bytes(message, room) else {
+        return false;
+    };
+    let parts = message["parts"].as_array_mut().unwrap();
+    let empty = full.is_empty();
+    for mut part in full {
+        let available = room.saturating_sub(used + usize::from(!parts.is_empty()));
+        if let Some(size) = json_bytes(&part, available) {
+            used += size + usize::from(!parts.is_empty());
+            parts.push(part);
+        } else {
+            if trim_part(&mut part, available) {
+                parts.push(part);
+            }
+            break;
+        }
+    }
+    empty || !parts.is_empty()
 }
 
 /// A borrowed view of one normalized content block in its audit JSON shape.

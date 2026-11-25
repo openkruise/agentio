@@ -37,10 +37,17 @@ pub(crate) enum Event<'a> {
         provisional: bool,
     },
     Usage(&'a Value),
-    // Responses seals each output item and may replace the entire output at completion.
+    // A sealed message, or a single block of the Anthropic assistant message.
+    // A missing value represents a gap where no structured prefix could be retained.
     OutputItem {
         output: Output,
-        message: &'a Value,
+        part: Option<u32>,
+        value: Option<&'a Value>,
+        clipped: bool,
+    },
+    TextGap {
+        output: Output,
+        part: u32,
     },
     ReplaceOutput,
     // Provider-specific lifecycle and content changes, including tool argument deltas.
@@ -88,21 +95,6 @@ impl Retention {
             self.response_id = Some(id.into());
         }
     }
-    fn retaining(&self) -> bool {
-        !self.partial && !self.truncated
-    }
-
-    fn take(&mut self, n: usize) -> bool {
-        if !self.retaining() {
-            return false;
-        }
-        if n > self.room {
-            self.truncated = true;
-            return false;
-        }
-        self.room -= n;
-        true
-    }
     fn item(&mut self) -> Result<()> {
         self.items += 1;
         if self.items > 1024 {
@@ -111,10 +103,44 @@ impl Retention {
             Ok(())
         }
     }
-    fn append(&mut self, dst: &mut String, s: &str) {
-        if self.take(s.len()) {
-            dst.push_str(s);
+}
+
+// A choice or content block holds a share of the stream budget until it is sealed.
+#[derive(Default)]
+struct OpenContent {
+    bytes: usize,
+    clipped: bool,
+}
+
+impl OpenContent {
+    fn take(&mut self, b: &mut Retention, bytes: usize) -> bool {
+        if self.clipped || b.partial {
+            return false;
         }
+        if bytes > b.room {
+            self.clipped = true;
+            b.truncated = true;
+            return false;
+        }
+        self.bytes += bytes;
+        b.room -= bytes;
+        true
+    }
+
+    fn prefix<'a>(&mut self, b: &mut Retention, text: &'a str) -> &'a str {
+        let n = text.floor_char_boundary(text.len().min(b.room));
+        if !self.take(b, n) {
+            return "";
+        }
+        if n < text.len() {
+            self.clipped = true;
+            b.truncated = true;
+        }
+        &text[..n]
+    }
+
+    fn release(&mut self, b: &mut Retention) {
+        b.room += std::mem::take(&mut self.bytes);
     }
 }
 
@@ -164,7 +190,6 @@ impl Stream {
                 _ => Err(BodyError::InvalidContent),
             };
         };
-        let retaining = budget.retaining();
         let terminal = match provider {
             Provider::Chat(s) => s.add(frame.value, frame.done, budget, emit)?,
             Provider::Anthropic(s) => s.add(frame.kind, frame.value, budget, emit)?,
@@ -173,7 +198,7 @@ impl Stream {
         if let Some(trailers) = terminal {
             self.trailers = trailers;
             let (provider, budget) = self.active.take().unwrap();
-            let keep = budget.retaining();
+            let keep = !budget.partial;
             let mut view = match provider {
                 Provider::Chat(s) => s.finish(keep)?,
                 Provider::Anthropic(s) => s.finish(keep)?,
@@ -199,12 +224,6 @@ impl Stream {
                 truncated: budget.truncated,
                 answer,
             });
-        } else if retaining && !budget.retaining() {
-            match provider {
-                Provider::Chat(s) => s.discard_content(),
-                Provider::Anthropic(s) => s.discard_content(),
-                Provider::Responses(s) => s.discard_content(),
-            }
         }
         Ok(())
     }
@@ -265,4 +284,86 @@ fn unknown(v: &Value, keys: &[&str], ignore_null: bool) -> bool {
         m.iter()
             .any(|(k, v)| !(keys.contains(&k.as_str()) || ignore_null && v.is_null()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn open_sse_items_share_room_and_sealed_items_release_it() {
+        for protocol in [CHAT, ANTHROPIC] {
+            let mut stream = Stream::new(protocol, 1024);
+            let mut sealed = Vec::new();
+            let mut push = |kind: &str, frame: Value| {
+                stream
+                    .event(
+                        sse::Event {
+                            kind,
+                            value: &frame,
+                            done: false,
+                        },
+                        &mut |event| {
+                            if let Event::OutputItem {
+                                output,
+                                part,
+                                value: Some(item),
+                                clipped,
+                            } = event
+                            {
+                                let value = if part.is_some() {
+                                    &item["text"]
+                                } else {
+                                    &item["content"][0]["text"]
+                                };
+                                sealed.push((
+                                    part.unwrap_or(output.index),
+                                    value.as_str().unwrap().len(),
+                                    clipped,
+                                ));
+                            }
+                        },
+                    )
+                    .unwrap();
+            };
+            if protocol == ANTHROPIC {
+                push(
+                    "message_start",
+                    json!({"message":{"model":"m","content":[]}}),
+                );
+            }
+            let value = "x".repeat(700);
+            for (index, close) in [
+                (0, false),
+                (1, false),
+                (1, true),
+                (0, true),
+                (2, false),
+                (2, true),
+            ] {
+                match (protocol, close) {
+                    (CHAT, false) => push(
+                        "",
+                        json!({"model":"m","choices":[{"index":index,"delta":{"content":value}}]}),
+                    ),
+                    (CHAT, true) => push(
+                        "",
+                        json!({"model":"m","choices":[{"index":index,"delta":{},"finish_reason":"stop"}]}),
+                    ),
+                    (_, false) => push(
+                        "content_block_start",
+                        json!({"index":index,"content_block":{"type":"text","text":value}}),
+                    ),
+                    (_, true) => push("content_block_stop", json!({"index":index})),
+                }
+            }
+            assert_eq!(sealed.len(), 3);
+            assert_eq!(sealed[0].0, 1);
+            assert!((1..=324).contains(&sealed[0].1));
+            assert!(sealed[0].2);
+            assert_eq!(sealed[1], (0, 700, false));
+            assert_eq!(sealed[2], (2, 700, false));
+        }
+    }
 }

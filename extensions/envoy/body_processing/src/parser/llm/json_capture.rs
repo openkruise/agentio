@@ -19,6 +19,7 @@ pub(crate) struct CaptureLoss {
     pub answer: bool,
     pub error: bool,
     pub finish_reasons: bool,
+    pub choice_index: Option<u32>,
     pub question_prefix_bytes: Option<usize>,
 }
 
@@ -662,6 +663,8 @@ impl Scan for Scanner {
                                 && self.path == [Field(b"choices"), Element]
                             {
                                 let choice = std::mem::take(&mut self.choice);
+                                self.loss.choice_index =
+                                    choice.index.and_then(|i| u32::try_from(i).ok());
                                 self.loss.answer |= choice.text_clipped
                                     && choice
                                         .index
@@ -830,22 +833,20 @@ impl JsonCapture {
         });
     }
     pub(super) fn finish_fragment(self) -> Result<(CaptureLoss, Value), BodyError> {
-        let limit = self.limit;
-        self.finish("json", false, Fields::default(), limit)
+        self.finish("json", false, Fields::default())
             .map(|(loss, view)| (loss, view.document))
     }
 
-    pub fn finish(
+    pub(super) fn finish(
         self,
         format: &str,
         response: bool,
         fields: Fields,
-        log_limit: usize,
     ) -> Result<(CaptureLoss, LlmView), BodyError> {
         let mut loss = self.loss();
         let view = match self.input {
-            Buffer::Raw(prefix) => parse(format, &prefix, response, fields, log_limit)?,
-            Buffer::Scanning(scanner) => scanner.finish(log_limit, &mut loss)?,
+            Buffer::Raw(prefix) => parse(format, &prefix, response, fields, self.limit)?,
+            Buffer::Scanning(scanner) => scanner.finish(self.limit, &mut loss)?,
         };
         Ok((loss, view))
     }

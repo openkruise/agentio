@@ -1,10 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    projection::{Projection, response_text, response_view},
-    template::Template,
-};
+use super::{projection::Projection, template::Template};
 use crate::{
     FilterOutput,
     chain::Side,
@@ -235,27 +232,33 @@ impl BodyFilter for Capture {
                     let result = if request {
                         std::mem::take(&mut state.request).finish(view)
                     } else {
-                        let (mut result, messages_clipped) =
-                            response_view(view, group.fields, group.limit);
-                        let mut clipped = messages_clipped
-                            || group.fields.output_messages && loss.document
-                            || group.fields.answer && (loss.answer || loss.exhausted)
-                            || group.fields.error && loss.exhausted && loss.error
-                            || group.finish_reasons && loss.finish_reasons;
-                        if group.fields.tool_call_refs && (loss.references || loss.exhausted) {
+                        let status = if view.document.get("outputMessages").is_some() {
+                            llm::stream::AnswerStatus::Visible
+                        } else {
+                            llm::stream::AnswerStatus::Unavailable
+                        };
+                        let event = llm::stream::Event::Completed {
+                            view,
+                            truncated: loss.document,
+                            answer: status,
+                        };
+                        let body = state
+                            .sse
+                            .observe(&event, group.fields, group.limit)
+                            .unwrap();
+                        let Content::Llm(mut result) = body.content else {
+                            unreachable!()
+                        };
+                        if group.fields.tool_call_refs && loss.references {
                             result.tool_refs.entries.clear();
                             result.tool_refs.truncated = true;
                         }
-                        if group.fields.retained_text {
-                            clipped |= response_text(&view.document, group.limit)
-                                .publish(&mut result.document);
-                            clipped |= if loss.exhausted {
-                                loss.preview
-                            } else {
-                                loss.text
-                            };
-                        }
-                        Ok((clipped, result))
+                        Ok((
+                            body.truncated
+                                || group.fields.error && loss.error
+                                || group.finish_reasons && loss.finish_reasons,
+                            result,
+                        ))
                     };
                     match result {
                         Ok((truncated, v)) => {

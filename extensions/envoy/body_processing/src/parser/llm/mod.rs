@@ -4,7 +4,9 @@
 pub(super) mod attachment;
 mod image;
 mod input;
+mod json_boundary;
 mod json_capture;
+mod json_response;
 mod protocol;
 mod request;
 pub(crate) mod response;

@@ -9,7 +9,8 @@ use crate::{
 use envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, Mutex};
+
+const DEFAULT_PARSER_BYTES: usize = 1 << 20;
 
 // Wire configuration is resolved once when Envoy loads the filter.
 #[derive(Deserialize)]
@@ -93,6 +94,8 @@ enum ParserConfig {
         protocol: ProtocolSelection,
         #[serde(default)]
         request: RequestParserConfig,
+        #[serde(default)]
+        response: ResponseParserConfig,
     },
 }
 
@@ -106,20 +109,43 @@ pub(crate) struct RequestParserConfig {
 impl Default for RequestParserConfig {
     fn default() -> Self {
         Self {
-            max_item_size: 1 << 20,
+            max_item_size: DEFAULT_PARSER_BYTES,
         }
     }
 }
 
 fn item_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    parser_size(d, "maxItemSize")
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ResponseParserConfig {
+    #[serde(deserialize_with = "content_size")]
+    pub max_content_size: usize,
+}
+
+impl Default for ResponseParserConfig {
+    fn default() -> Self {
+        Self {
+            max_content_size: DEFAULT_PARSER_BYTES,
+        }
+    }
+}
+
+fn content_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    parser_size(d, "maxContentSize")
+}
+
+fn parser_size<'de, D: serde::Deserializer<'de>>(d: D, field: &str) -> Result<usize, D::Error> {
     use serde::de::Error;
     let bytes = SizeValue::deserialize(d)?
         .bytes()
         .map_err(D::Error::custom)?;
-    if !(1024..=64 << 20).contains(&bytes) {
-        return Err(D::Error::custom(
-            "maxItemSize must be between 1 KiB and 64 MiB",
-        ));
+    if !(1024..=(64 << 20)).contains(&bytes) {
+        return Err(D::Error::custom(format!(
+            "{field} must be between 1 KiB and 64 MiB"
+        )));
     }
     Ok(bytes)
 }
@@ -135,6 +161,11 @@ impl FilterChain {
     pub fn request_parser(&self) -> RequestParserConfig {
         let ParserConfig::Llm { request, .. } = self.parser;
         request
+    }
+
+    pub fn response_parser(&self) -> ResponseParserConfig {
+        let ParserConfig::Llm { response, .. } = self.parser;
+        response
     }
 
     pub fn format(&self, path: &str) -> Format {
@@ -210,21 +241,6 @@ fn host_matches(pattern: &str, host: &str) -> bool {
 }
 
 impl Settings {
-    // The ECDS validator and HTTP config factory receive the same rule bytes.
-    // Reuse the checked template in both hooks. Active streams keep their own Arc.
-    pub(super) fn load(bytes: &[u8]) -> Result<Arc<Self>, String> {
-        static LAST: Mutex<Option<(Vec<u8>, Arc<Settings>)>> = Mutex::new(None);
-        let mut last = LAST.lock().unwrap();
-        if let Some((rules, settings)) = last.as_ref()
-            && rules == bytes
-        {
-            return Ok(Arc::clone(settings));
-        }
-        let settings = Arc::new(Self::parse(bytes)?);
-        *last = Some((bytes.to_vec(), Arc::clone(&settings)));
-        Ok(settings)
-    }
-
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let config: ModuleConfig = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         let count = config.filter_chains.len();
@@ -415,16 +431,21 @@ mod tests {
     }
 
     #[test]
-    fn request_item_size_resolves_independently_of_audit_limits() {
+    fn parser_budgets_resolve_independently_of_audit_limits() {
         use serde_json::json;
         let resolve = |llm| {
             let config = json!({"filterChains":[{"name":"models","parser":{"llm":llm},
                 "filters":[{"audit":{"format":{"json":{"q":"%EVENT(llm.question):2048%"}}}}]}]});
-            Settings::parse(config.to_string().as_bytes())
-                .map(|s| s.chains[0].request_parser().max_item_size)
+            Settings::parse(config.to_string().as_bytes()).map(|s| {
+                let chain = &s.chains[0];
+                (
+                    chain.request_parser().max_item_size,
+                    chain.response_parser().max_content_size,
+                )
+            })
         };
-        for llm in [json!({}), json!({"request":{}})] {
-            assert_eq!(resolve(llm).unwrap(), 1 << 20);
+        for llm in [json!({}), json!({"request":{},"response":{}})] {
+            assert_eq!(resolve(llm).unwrap(), (1 << 20, 1 << 20));
         }
         for (size, bytes) in [
             (json!(1024), 1024),
@@ -434,11 +455,21 @@ mod tests {
         ] {
             assert_eq!(
                 resolve(json!({"request":{"maxItemSize":size}})).unwrap(),
-                bytes
+                (bytes, 1 << 20)
+            );
+            assert_eq!(
+                resolve(json!({"response":{"maxContentSize":size}})).unwrap(),
+                (1 << 20, bytes)
             );
         }
-        for size in [json!(1023), json!("65MiB"), json!("1.5MiB"), json!("4Mb/s")] {
+        for size in [
+            json!(1023),
+            json!((64 << 20) + 1),
+            json!("1.5MiB"),
+            json!("4Mb/s"),
+        ] {
             assert!(resolve(json!({"request":{"maxItemSize":size}})).is_err());
+            assert!(resolve(json!({"response":{"maxContentSize":size}})).is_err());
         }
         assert!(resolve(json!({"response":{"maxItemSize":"2MiB"}})).is_err());
     }

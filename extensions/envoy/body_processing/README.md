@@ -49,14 +49,14 @@ At request headers the module selects the first matching chain and fixes the pro
 
 ### Audit templates
 
-An audit requires a flat `format.json` map. Each key names one output field and each value is one operator. JSON booleans, numbers, arrays and objects retain their types. Dots in output names are literal. Missing values are omitted. A template whose fields are all missing emits `{}`. Each audit in the matched chain writes its own line, in declaration order.
+An audit requires a flat `format.json` map. Each key names one output field. Each value is a string literal or one formatter operator. Use `%%` for a literal percent sign. A literal is written verbatim as a JSON string. Operators that return booleans, numbers, arrays or objects retain those types. Dots in output names are literal. Missing values are omitted. A template whose fields are all missing emits `{}`. Each audit in the matched chain writes its own line, in declaration order.
 
-A template containing only headers, Filter State, dynamic metadata, the path, the chain name or the selected LLM protocol/operation collects all its values at request headers. Envoy writes the resulting line at stream completion. A request with only a question selected needs only the request parser. An answer or usage selection needs the response parser. When an audit selects fields from both bodies, they appear in the same line. For example, a question followed by two SSE answer deltas and a final usage report can produce `{"question":"retry?","answer":"retry once","tokens":14}`.
+A template containing only literals, headers, Filter State, dynamic metadata, the path, the chain name or the selected LLM protocol/operation collects all its values at request headers. Envoy writes the resulting line at stream completion. A request with only a question selected needs only the request parser. An answer or usage selection needs the response parser. When an audit selects fields from both bodies, they appear in the same line. For example, a question followed by two SSE answer deltas and a final usage report can produce `{"question":"retry?","answer":"retry once","tokens":14}`.
 
 | Operator | Value |
 | --- | --- |
 | `%REQ(X-TENANT-ID)%`, `%REQ(PRIMARY?FALLBACK)%` | Read a request header by case-insensitive name. The optional fallback is read only when the primary header is absent. |
-| `%CEL(request.headers['session-id'])%` | Evaluate a CEL expression over request headers and format its scalar result as text. |
+| `%RESPONSE_CODE%` | Final HTTP status as a JSON number, if Envoy received or generated a response. |
 | `%FILTER_STATE(key:PLAIN)%` | Filter State object's string serialization at request headers. |
 | `%DYNAMIC_METADATA(namespace:key)%` | Top-level dynamic metadata string, captured at request headers. |
 | `%DYNAMIC_METADATA_NUMBER(namespace:key)%` | Top-level dynamic metadata number, emitted as a JSON number. |
@@ -72,10 +72,10 @@ A single column can record the session ID sent by either Codex or Claude Code. W
 ```yaml
 format:
   json:
+    gen_ai.span.kind: "LLM"
+    gen_ai.provider.name: "ollama"
     session: "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%"
 ```
-
-The audit compiles CEL when ECDS loads the rules. Its only input is `request.headers`, a map with lowercase names and string values. Repeated headers use the first value seen by the filter. A missing key or a null result omits the column. Strings, numbers and booleans produce JSON strings and accept the usual `:N` field limit. Other evaluation errors omit the column and emit the field name and error kind at debug level. Header expressions alone do not start a body parser.
 
 Choose the metadata operator matching the producer's type. Body Processing reads the selected top-level key at request headers and omits missing keys. For a present value of a different type, Envoy 1.40.2 logs a type error and the audit omits that field. The number operator accepts finite values. The number and boolean operators are specific to Body Processing and reject a byte limit.
 
@@ -91,14 +91,14 @@ Choose the metadata operator matching the producer's type. Body Processing reads
 
 ### Field limits
 
-Append `:N` before the closing `%` to limit a variable-size field. For example, `%EVENT(llm.answer):768%` keeps up to 768 bytes of the answer and `%REQ(X-TENANT-ID):128%` keeps up to 128 bytes of the header. The default for each field is 8,192 bytes. An explicit `N` is a decimal byte count from 1 to 1,048,576. The length suffix follows Envoy’s [formatter syntax](https://www.envoyproxy.io/docs/envoy/v1.40.2/configuration/advanced/substitution_formatter#config-access-log-format-req).
+Append `:N` before the closing `%` to limit a variable-size field. For example, `%EVENT(llm.answer):768%` keeps up to 768 bytes of the answer and `%REQ(X-TENANT-ID):128%` keeps up to 128 bytes of the header. LLM body fields default to 1 MiB and accept an explicit decimal byte count from 1 to 4,194,304 (4 MiB). Context fields such as headers, Filter State and Dynamic Metadata default to 8 KiB and accept up to 1,048,576 bytes (1 MiB). The length suffix follows Envoy’s [formatter syntax](https://www.envoyproxy.io/docs/envoy/v1.40.2/configuration/advanced/substitution_formatter#config-access-log-format-req).
 
 - Strings retain the longest UTF-8 prefix that fits after compact JSON escaping. The surrounding quotes are excluded. A newline costs two bytes and `你` costs three.
 - `llm.request.messages` and `llm.response.messages` count the complete encoded array, including roles, content blocks and JSON punctuation. They keep complete messages in order. For the first message that exceeds the limit, they keep its metadata, preceding complete blocks and the longest fitting prefix of a text or refusal block. If none of its blocks fit, that message is omitted. Tool calls, tool results and provider-specific blocks are atomic. In requests, inline media payloads can be omitted to reserve room for following text and metadata.
 - Other arrays keep a prefix of complete elements. Oversized objects and arrays whose first element cannot fit are omitted.
 - Numbers and booleans retain their JSON types. The numeric operators (including `llm.maxTokens` and usage), `llm.stream`, the byte counters and `%CAPTURE_STATUS(...)%` have fixed representations and reject a length suffix. On an otherwise complete record, a clipped selection yields `truncated` when capture status is selected.
 
-Aliases have independent limits, even if they read the same event. A long answer cannot displace the model, token count or headers. Two selected 8 KiB strings can produce a line larger than 16 KiB once the keys and JSON punctuation are included. The selected fields, their limits and the JSON envelope determine the maximum output size.
+Aliases have independent limits, even if they read the same event. A long answer cannot displace the model, token count or headers. Two body fields at their 1 MiB defaults can produce a line larger than 2 MiB once the keys and JSON punctuation are included. Use explicit field limits to fit the records accepted by your log collector.
 
 For example, a user message containing `天气很好` with `%EVENT(llm.request.messages):62%` and `%CAPTURE_STATUS(request)%` produces the following record. The message array uses 56 bytes for structure and six bytes for the two retained characters.
 
@@ -129,7 +129,16 @@ typed_config:
     value: '{"filterChains":[{"name":"models","parser":{"llm":{}},"filters":[{"audit":{"format":{"json":{"messages":"%EVENT(llm.request.messages):16384%","answer":"%EVENT(llm.answer)%"}}}}]}]}'
 ```
 
-`parser.llm.request.maxItemSize` accepts an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
+`parser.llm.request.maxItemSize` and `parser.llm.response.maxContentSize` accept an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
+
+```yaml
+parser:
+  llm:
+    request:
+      maxItemSize: 1MiB
+    response:
+      maxContentSize: 1MiB
+```
 
 Adding `bodyProcessing` to the effective AgentioConfig triggers an LDS update that installs one ECDS filter slot and one audit access logger on each native HTTP forwarding chain. Removing the field uninstalls both through LDS. To keep both installed while collecting no records, set `bodyProcessing: {}` or `bodyProcessing: {filterChains: []}`.
 
@@ -168,9 +177,13 @@ For Chat files and audio, Responses files and computer screenshots, and Anthropi
 
 Audits in a matched chain share one LLM parser per subscribed direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its selected fields separately. For example, a 2 KiB question field can capture the latest question while an 8 KiB tool field records a schema at the end of the same request, in either the same audit or a second one. Changing their order only changes the order of the output lines. The chain also shares JSON response normalization and SSE framing.
 
-The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxItemSize` to control the compaction budget per request item (default `1MiB`, range `1KiB` to `64MiB`). Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests. JSON responses retain their independent, fixed 1 MiB document budget. Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection and per-field clipping to the parser output. Select `llm.request.retainedText` or `llm.response.retainedText` for a bounded array of text previews. In each direction the preview and the structured messages have independent field limits. Tool results and inline file data are excluded from the request text preview. Question and answer scalars stop at the first missing text segment. The parser continues scanning past omitted attachments for later text and metadata. When the document structure itself exceeds the budget, only selected paths are available for validation. An audit that selects capture status reports `partial` in that case, or `truncated` if one of its selected values was clipped.
+The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxItemSize` to control the compaction budget per request item (default `1MiB`, range `1KiB` to `64MiB`). Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests.
 
-During SSE, each complete frame produces borrowed protocol events in the body callback. The parser dispatches text deltas, usage updates and provider-specific changes to filters in order. Usage updates carry the latest normalized counters. A response audit retains a bounded answer prefix in output order while another can record only usage. A terminal replacement starts a fresh prefix and clipping status for the authoritative answer. Responses text deltas are provisional. The audit takes confirmed item snapshots in output order, then replaces them if the terminal event supplies a nonempty `output`. An empty or omitted terminal `output` keeps the confirmed items. The protocol terminator delivers the completed message and metadata projection. HTTP end validates protocol completion and finalizes the selected fields for the direction. The Envoy access logger writes those records at stream completion.
+Set `parser.llm.response.maxContentSize` to bound the content held for open response items (default `1MiB`, range `1KiB` to `64MiB`). Each completed Chat choice, Responses output item or Anthropic content block is delivered to the audits and releases its parser budget. Concurrently open SSE choices or blocks share that budget. A nonempty Responses terminal output replaces earlier item snapshots. SSE framing and audit field retention use separate memory.
+
+Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection and per-field clipping to the parser output. Select `llm.request.retainedText` or `llm.response.retainedText` for a bounded array of text previews. In each direction the preview and the structured messages have independent field limits. Tool results and inline file data are excluded from the request text preview. Question and answer scalars stop at the first missing text segment. The parser continues scanning past omitted attachments for later text and metadata. When the document structure itself exceeds the budget, only selected paths are available for validation. An audit that selects capture status reports `partial` in that case, or `truncated` if one of its selected values was clipped.
+
+During SSE, each complete frame produces borrowed protocol events in the body callback. The parser dispatches text deltas, usage updates and provider-specific changes to filters in order. Usage updates carry the latest normalized counters. A response audit retains a bounded answer prefix in output order while another can record only usage. A terminal replacement starts a fresh prefix and clipping status for the authoritative answer. Responses text deltas are provisional. The audit takes confirmed item snapshots in output order, then replaces them if the terminal event supplies a nonempty `output`. An empty or omitted terminal `output` keeps the confirmed items. The protocol terminator delivers the final metadata, including stop reasons. HTTP end validates protocol completion and finalizes the selected fields for the direction. The Envoy access logger writes those records at stream completion.
 
 SSE framing accepts multiline data, comments, a leading UTF-8 BOM, and LF, CRLF or CR separators across body callbacks. HTTP EOF ends observation. A missing protocol terminator produces `incomplete_stream`. On premature EOF or transport reset, the audit preserves already framed answer text and reported usage, within their budgets. An unfinished frame contributes no values. A malformed stream retains its parse error and omits its response body fields. An unsupported delta produces a `partial` record with available metadata. Exceeding the retention budget produces `truncated`. Both cases continue parsing subsequent events for usage and errors. Invalid JSON, invalid UTF-8 framing and invalid protocol transitions have distinct error statuses. The shared parser processes up to 64 MiB of SSE input per direction and tracks up to 1,024 choices, blocks or items. Its input limits apply to every consumer. Clipping one audit field leaves later events available, including final usage and terminal replacements.
 

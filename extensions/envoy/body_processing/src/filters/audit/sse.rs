@@ -1,11 +1,14 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::projection::{TextPreview, response_text, response_view};
+use super::{
+    messages::ResponseMessages,
+    projection::{TextPreview, response_view},
+};
 use crate::parser::{
     body::{Content, ParsedBody},
     llm::{
-        Fields, LlmView, answer_parts,
+        ANTHROPIC, Fields, LlmView,
         stream::{AnswerStatus, Event, Output},
     },
 };
@@ -15,6 +18,7 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub(super) struct Projection {
     answer: Answer,
+    messages: ResponseMessages,
     // Unsealed Responses deltas are useful on disconnect. Authoritative items replace them.
     pending: Option<Box<Answer>>,
     usage: Option<Value>,
@@ -26,14 +30,32 @@ struct Answer {
     retained_bytes: usize,
     // A Responses snapshot can repair one output while others still have gaps.
     clipped_parts: BTreeMap<Output, u32>,
+    provisional: bool,
 }
 
 impl Answer {
+    fn pending() -> Box<Self> {
+        Box::new(Self {
+            provisional: true,
+            ..Default::default()
+        })
+    }
+
     fn clipped_from(&self) -> Option<(Output, u32)> {
         self.clipped_parts.first_key_value().map(|(&o, &p)| (o, p))
     }
 
     fn mark_clipped(&mut self, (output, part): (Output, u32)) {
+        // Only pending snapshots can repair one output while another still has
+        // a gap. A committed prefix needs a single cut even for a long JSON array.
+        if !self.provisional
+            && let Some(cut) = self.clipped_from()
+        {
+            if cut <= (output, part) {
+                return;
+            }
+            self.clipped_parts.clear();
+        }
         let first = self.clipped_parts.entry(output).or_insert(part);
         *first = (*first).min(part);
     }
@@ -98,7 +120,7 @@ impl Projection {
         fields: Fields,
         limit: usize,
     ) -> ParsedBody {
-        let (mut result, _) = response_view(view, fields, limit);
+        let mut result = response_view(view, fields, limit);
         if let Some(usage) = self.usage.take() {
             result.document["usage"] = usage;
         }
@@ -161,25 +183,55 @@ impl Projection {
                 text,
                 provisional: true,
             } if (fields.answer && output.answer_candidate) || fields.retained_text => {
-                self.pending.get_or_insert_with(Default::default).append(
+                self.pending.get_or_insert_with(Answer::pending).append(
                     (output, part.unwrap_or(0)),
                     text,
                     limit,
                 );
             }
-            Event::OutputItem { output, message }
-                if (fields.answer && output.answer_candidate) || fields.retained_text =>
-            {
-                if let Some(pending) = self.pending.as_mut() {
+            Event::OutputItem {
+                output,
+                part,
+                value,
+                clipped,
+            } => {
+                if part.is_none()
+                    && let Some(pending) = self.pending.as_mut()
+                {
                     pending.remove_output(output);
                 }
-                for (part, text) in answer_parts(message).enumerate() {
-                    self.answer.append((output, part as u32), text, limit);
+                if fields.output_messages {
+                    let index = part.unwrap_or(output.index);
+                    if let Some(value) = value {
+                        if part.is_some() {
+                            self.messages.block(index, value, limit);
+                        } else {
+                            self.messages.message(index, value, limit);
+                        }
+                    }
+                    if clipped {
+                        self.messages.cut(index);
+                    }
                 }
+            }
+            Event::TextGap { output, part }
+                if (fields.answer && output.answer_candidate) || fields.retained_text =>
+            {
+                let cut = (output, part);
+                while self
+                    .answer
+                    .parts
+                    .last_key_value()
+                    .is_some_and(|(&key, _)| key > cut)
+                {
+                    self.answer.retained_bytes -= self.answer.parts.pop_last().unwrap().1.len();
+                }
+                self.answer.mark_clipped(cut);
             }
             Event::ReplaceOutput => {
                 self.answer = Answer::default();
                 self.pending = None;
+                self.messages = ResponseMessages::default();
             }
             Event::Usage(value) if fields.usage => {
                 self.usage = (!value.is_null()).then(|| value.clone())
@@ -190,23 +242,30 @@ impl Projection {
                 answer,
             } => {
                 self.pending = None;
-                let (mut result, messages_clipped) = response_view(view, fields, limit);
+                let mut result = response_view(view, fields, limit);
                 if let Some(usage) = self.usage.take() {
                     result.document["usage"] = usage;
                 }
                 let saved = std::mem::take(&mut self.answer);
-                let mut clipped = messages_clipped || truncated && fields.output_messages;
+                let mut clipped = truncated && fields.output_messages;
+                if fields.output_messages && view.document.get("outputMessages").is_some() {
+                    let reason = view.document["finishReasons"].get(0);
+                    let (items, shortened) = std::mem::take(&mut self.messages).finish(
+                        view.document["format"] == ANTHROPIC,
+                        reason,
+                        limit,
+                    );
+                    if let Some(items) = items {
+                        result.document["outputMessages"] = items;
+                    }
+                    clipped |= shortened;
+                }
                 if fields.retained_text {
-                    let text = if truncated && matches!(answer, AnswerStatus::Visible) {
-                        let mut text = TextPreview::default();
-                        for part in saved.parts.values() {
-                            text.push(part, limit);
-                        }
-                        text.clipped |= saved.clipped_from().is_some();
-                        text
-                    } else {
-                        response_text(&view.document, limit)
-                    };
+                    let mut text = TextPreview::default();
+                    for part in saved.parts.values() {
+                        text.push(part, limit);
+                    }
+                    text.clipped |= saved.clipped_from().is_some();
                     clipped |= text.publish(&mut result.document);
                 }
                 let answer = match (fields.answer, answer) {
@@ -246,6 +305,16 @@ mod tests {
     use crate::parser::llm::RESPONSES;
 
     #[test]
+    fn closed_json_items_need_only_the_first_text_gap() {
+        let mut answer = Answer::default();
+        for i in 0..2048 {
+            answer.append((Output::new(RESPONSES, i), 0), "xx", 1);
+        }
+        assert_eq!(answer.clipped_parts.len(), 1);
+        assert_eq!(answer.retained_bytes, 1);
+    }
+
+    #[test]
     fn earlier_parts_can_displace_a_clipped_later_part() {
         let mut answer = Answer::default();
         let output = Output::new(RESPONSES, 0);
@@ -270,7 +339,7 @@ mod tests {
         };
         for seal_first in [false, true] {
             let mut projection = Projection::default();
-            let pending = projection.pending.get_or_insert_with(Default::default);
+            let pending = projection.pending.get_or_insert_with(Answer::pending);
             pending.append((first, 0), "ab水", 4);
             if seal_first {
                 pending.append((second, 0), "x", 4);

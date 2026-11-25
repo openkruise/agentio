@@ -49,7 +49,7 @@ fn validate_rules(bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .filter_config
         .ok_or("missing filter_config")?
         .to_msg::<String>()?;
-    Settings::load(rules.as_bytes())?;
+    Settings::parse(rules.as_bytes())?;
     Ok(())
 }
 

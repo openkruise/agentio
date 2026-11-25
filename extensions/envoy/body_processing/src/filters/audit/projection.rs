@@ -307,9 +307,8 @@ impl Projection {
     }
 }
 
-pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> (LlmView, bool) {
+pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> LlmView {
     let value = &source.document;
-    let mut messages_clipped = false;
     let mut view = serde_json::Map::new();
     for (k, v) in value.as_object().unwrap() {
         let keep = match k.as_str() {
@@ -322,43 +321,14 @@ pub(crate) fn response_view(source: &LlmView, fields: Fields, limit: usize) -> (
             view.insert(k.clone(), v.clone());
         }
     }
-    if fields.output_messages
-        && let Some(items) = value.get("outputMessages")
-    {
-        let (messages, clipped) =
-            Messages::project(items.as_array().unwrap(), limit, Side::Response);
-        messages_clipped = clipped;
-        if let Some(messages) = messages {
-            view.insert("outputMessages".into(), messages);
-        }
-    }
     let mut references = ToolProjection::default();
     if fields.tool_call_refs {
         references.observe(&source.tool_refs, limit);
     }
-    (
-        LlmView {
-            document: Value::Object(view),
-            tool_refs: references.refs,
-            partial: source.partial,
-            ..Default::default()
-        },
-        messages_clipped,
-    )
-}
-
-pub(super) fn response_text(value: &Value, limit: usize) -> TextPreview {
-    let mut text = TextPreview::default();
-    if let Some(parts) = value["retainedText"].as_array() {
-        for part in parts.iter().filter_map(Value::as_str) {
-            text.push(part, limit);
-        }
-    } else {
-        for message in value["outputMessages"].as_array().into_iter().flatten() {
-            for part in crate::parser::llm::answer_parts(message) {
-                text.push(part, limit);
-            }
-        }
+    LlmView {
+        document: Value::Object(view),
+        tool_refs: references.refs,
+        partial: source.partial,
+        ..Default::default()
     }
-    text
 }

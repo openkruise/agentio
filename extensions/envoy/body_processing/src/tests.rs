@@ -34,7 +34,7 @@ pub(crate) fn fixture_stream(
 
 fn parser_direction(response: bool) -> ParserDirection {
     if response {
-        ParserDirection::Response
+        ParserDirection::Response(Default::default())
     } else {
         ParserDirection::Request(Default::default())
     }
@@ -556,6 +556,7 @@ fn audit_attribute_expressions_are_checked_at_load() {
     for expression in [
         "prefix %REQ(X-TENANT)%",
         "%REQ(X-A)%%REQ(X-B)%",
+        "100%",
         "%REQ()%",
         "%REQ(x bad)%",
         "%REQ(?X-Backup)%",
@@ -570,13 +571,7 @@ fn audit_attribute_expressions_are_checked_at_load() {
         "%DYNAMIC_METADATA(ns:)%",
         "%DYNAMIC_METADATA_NUMBER(ns:parent:child)%",
         "%DYNAMIC_METADATA_BOOL(:flag)%",
-        "%CEL(request.method)%",
-        "%CEL(response.headers['session-id'])%",
-        "%CEL(true ? 'ok' : request.body)%",
-        "%CEL(request.headers['id'].startsWith(123))%",
-        "%CEL(request.headers['id'].unknown())%",
-        "%CEL(request.headers['id')%",
-        "%CEL(request.headers)%",
+        "%CEL('LLM')%",
     ] {
         let cfg = json!({"filterChains":[{"name":"test","parser":{"llm":{}},
             "filters":[{"audit":{"format":{"json":{"tenant":expression}}}}]}]});
@@ -1155,7 +1150,7 @@ fn oversized_tool_summary_keeps_independent_response_metadata() {
     )
     .unwrap();
     let mut c = crate::tests::fixture_stream(
-        ParserDirection::Response,
+        ParserDirection::Response(Default::default()),
         "application/json",
         "",
         vec![Capture::start(
@@ -1205,15 +1200,19 @@ fn filters_share_input_and_keep_independent_audit_budgets() {
             )
         })
         .collect();
-    let mut stream =
-        crate::tests::fixture_stream(ParserDirection::Response, "text/event-stream", "", captures);
+    let mut stream = crate::tests::fixture_stream(
+        ParserDirection::Response(Default::default()),
+        "text/event-stream",
+        "",
+        captures,
+    );
     for chunk in input.as_bytes().chunks(7) {
         stream.push(chunk);
     }
     let mut ctx = FilterOutput::default();
     stream.finish(true, &mut ctx);
     let records: Vec<Value> = ctx
-        .0
+        .records
         .iter()
         .enumerate()
         .map(|(i, (key, bytes))| {
@@ -1250,8 +1249,12 @@ fn streaming_answer_survives_another_audits_oversized_tool_arguments() {
                 },
             )
         });
-    let mut stream =
-        crate::tests::fixture_stream(ParserDirection::Response, "text/event-stream", "", captures);
+    let mut stream = crate::tests::fixture_stream(
+        ParserDirection::Response(Default::default()),
+        "text/event-stream",
+        "",
+        captures,
+    );
     let delta = json!({"model":"m","choices":[{"index":0,"delta":{
         "tool_calls":[{"index":0,"function":{"arguments":"x".repeat(48<<10)}}]}}]});
     let event = format!("data: {delta}\n\n");
@@ -1261,7 +1264,11 @@ fn streaming_answer_survives_another_audits_oversized_tool_arguments() {
     stream.push(b"data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
     let mut logs = FilterOutput::default();
     stream.finish(true, &mut logs);
-    let logs = logs.0.into_values().map(Value::Object).collect::<Vec<_>>();
+    let logs = logs
+        .records
+        .into_values()
+        .map(Value::Object)
+        .collect::<Vec<_>>();
     assert_eq!(logs[0]["captureStatus"], "truncated");
     assert_eq!(logs[1]["captureStatus"], "complete");
     assert_eq!(logs[1]["llm.answer"], "done");
@@ -1300,14 +1307,18 @@ fn mixed_consumers_match_their_standalone_records_in_either_order() {
                     },
                 )
             });
-            let mut stream =
-                crate::tests::fixture_stream(ParserDirection::Response, media, "", stages);
+            let mut stream = crate::tests::fixture_stream(
+                ParserDirection::Response(Default::default()),
+                media,
+                "",
+                stages,
+            );
             for chunk in body.as_bytes().chunks(7) {
                 stream.push(chunk);
             }
             let mut ctx = FilterOutput::default();
             stream.finish(true, &mut ctx);
-            ctx.0.into_values().collect::<Vec<_>>()
+            ctx.records.into_values().collect::<Vec<_>>()
         };
         let expected: Vec<_> = (0..3).map(|i| run(&[i]).pop().unwrap()).collect();
         for order in [[0, 1, 2], [2, 1, 0]] {
@@ -1503,7 +1514,7 @@ mod gzip {
         }
         let mut ctx = FilterOutput::default();
         stream.finish(complete, &mut ctx);
-        ctx.0.into_values().map(Value::Object).collect()
+        ctx.records.into_values().map(Value::Object).collect()
     }
 
     #[test]

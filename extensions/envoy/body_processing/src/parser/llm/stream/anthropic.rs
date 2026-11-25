@@ -1,7 +1,7 @@
 // Copyright 2026 The Kruise Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Event, Output, Retention, Trailers, obj, string};
+use super::{Event, OpenContent, Output, Retention, Trailers, obj, string};
 use crate::parser::BodyError;
 use crate::parser::llm::{
     ANTHROPIC, ToolKind, anthropic_tool, blocks,
@@ -19,6 +19,7 @@ pub(super) struct Stream {
 }
 
 struct Block {
+    work: OpenContent,
     kind: String,
     source: Value,
     input: String,
@@ -71,13 +72,25 @@ impl Stream {
                         text,
                     });
                 }
-                let kept = if b.take(crate::parser::encoded_len(source)) {
+                let mut work = OpenContent::default();
+                let kept = if kind == "text"
+                    && source.as_object().is_some_and(|o| o.len() == 2)
+                    && source["text"].is_string()
+                {
+                    let envelope = json!({"type":"text","text":""});
+                    if work.take(b, crate::parser::encoded_len(&envelope)) {
+                        json!({"type":"text","text":work.prefix(b,source["text"].as_str().unwrap())})
+                    } else {
+                        Value::Null
+                    }
+                } else if work.take(b, crate::parser::encoded_len(source)) {
                     source.clone()
                 } else {
                     Value::Null
                 };
                 b.tools.anthropic((0, self.blocks.len()), source);
                 self.blocks.push(Block {
+                    work,
                     kind: kind.into(),
                     source: kept,
                     input: String::new(),
@@ -95,13 +108,27 @@ impl Stream {
                 }
                 if kind == "content_block_stop" {
                     block.closed = true;
-                    if !block.input.is_empty() && b.retaining() {
+                    if !block.input.is_empty() && !block.work.clipped && !b.partial {
                         let input: Value = serde_json::from_str(&block.input)
                             .map_err(|_| BodyError::InvalidContent)?;
                         obj(&input)?;
                         block.source["input"] = input;
                     }
-                    block.input.clear();
+                    block.input = String::new();
+                    let source = block.source.take();
+                    let parts = if source.is_null() || (block.work.clipped && block.kind != "text")
+                    {
+                        vec![]
+                    } else {
+                        blocks(&Value::Array(vec![source]), ANTHROPIC)
+                    };
+                    emit(Event::OutputItem {
+                        output: Output::new(ANTHROPIC, 0),
+                        part: Some(i),
+                        value: parts.first(),
+                        clipped: block.work.clipped,
+                    });
+                    block.work.release(b);
                 } else {
                     block.delta(&v["delta"], b)?;
                     if v["delta"]["type"] == "text_delta" {
@@ -159,13 +186,6 @@ impl Stream {
         }
     }
 
-    pub(super) fn discard_content(&mut self) {
-        for block in &mut self.blocks {
-            block.source = Value::Null;
-            block.input = String::new();
-        }
-    }
-
     pub(super) fn observed(self) -> Value {
         super::observed_view(ANTHROPIC, self.model, self.error, self.stop)
     }
@@ -182,8 +202,7 @@ impl Stream {
             json!({"format":ANTHROPIC,"model":self.model.ok_or(BodyError::IncompleteStream)?});
         view["finishReasons"] = json!([reason]);
         if keep {
-            let raw = Value::Array(self.blocks.into_iter().map(|b| b.source).collect());
-            view["outputMessages"] = json!([{"role":"assistant","index":0,"finishReason":reason,"content":blocks(&raw,ANTHROPIC)}]);
+            view["outputMessages"] = json!([]);
         }
         Ok(view)
     }
@@ -200,7 +219,9 @@ impl Block {
                     return Err(BodyError::InvalidContent);
                 }
                 let part = string(&delta["partial_json"])?;
-                b.append(&mut self.input, part);
+                if self.work.take(b, part.len()) {
+                    self.input.push_str(part);
+                }
                 return Ok(());
             }
             Some("citations_delta") => {
@@ -209,7 +230,7 @@ impl Block {
                 }
                 let citation = &delta["citation"];
                 obj(citation)?;
-                if b.retaining() && b.take(crate::parser::encoded_len(citation)) {
+                if self.work.take(b, crate::parser::encoded_len(citation)) {
                     if self.source["citations"].is_null() {
                         self.source["citations"] = json!([]);
                     }
@@ -229,7 +250,14 @@ impl Block {
             return Err(BodyError::InvalidContent);
         }
         let part = string(&delta[field])?;
-        if b.take(part.len()) {
+        let part = if expected == "text" {
+            self.work.prefix(b, part)
+        } else if self.work.take(b, part.len()) {
+            part
+        } else {
+            ""
+        };
+        if !part.is_empty() {
             if self.source[field].is_null() {
                 self.source[field] = "".into();
             }

@@ -4,7 +4,10 @@
 use super::{
     Audit, Source,
     format::Field,
-    limit::{DEFAULT_FIELD_BYTES, MAX_FIELD_BYTES},
+    limit::{
+        DEFAULT_BODY_FIELD_BYTES, DEFAULT_CONTEXT_FIELD_BYTES, MAX_BODY_FIELD_BYTES,
+        MAX_CONTEXT_FIELD_BYTES,
+    },
 };
 use crate::{
     chain::Side,
@@ -94,7 +97,7 @@ impl<'a> Command<'a> {
             .and_then(|s| s.strip_suffix('%'))
             .ok_or("expected a single %COMMAND% or %COMMAND(argument)%")?;
         let (name, argument, suffix) = if let Some((name, rest)) = inner.split_once('(') {
-            let (arg, suffix) = rest.rsplit_once(')').ok_or("missing closing parenthesis")?;
+            let (arg, suffix) = rest.split_once(')').ok_or("missing closing parenthesis")?;
             (name, Some(arg), suffix)
         } else {
             let i = inner.find(':').unwrap_or(inner.len());
@@ -107,8 +110,8 @@ impl<'a> Command<'a> {
                 .strip_prefix(':')
                 .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
                 .and_then(|s| s.parse::<usize>().ok())
-                .filter(|n| (1..=MAX_FIELD_BYTES).contains(n))
-                .ok_or("field limit must be a byte count between 1 and 1048576")?;
+                .filter(|n| *n > 0)
+                .ok_or("field limit must be a positive byte count")?;
             Some(n)
         };
         Ok(Self {
@@ -116,6 +119,16 @@ impl<'a> Command<'a> {
             argument,
             limit,
         })
+    }
+
+    fn field_limit(&self, alias: &str, default: usize, max: usize) -> Result<usize, String> {
+        let limit = self.limit.unwrap_or(default);
+        if limit > max {
+            return Err(format!(
+                "field {alias:?}: field limit must be a byte count between 1 and {max}"
+            ));
+        }
+        Ok(limit)
     }
 }
 
@@ -177,20 +190,31 @@ impl Audit {
     pub(crate) fn compile(expressions: BTreeMap<String, String>) -> Result<Self, String> {
         let mut request = None;
         let mut response = None;
+        let mut response_codes = Vec::new();
+        let mut literals = Map::new();
         let mut context = BTreeMap::new();
         for (alias, expression) in expressions {
             if alias.is_empty() {
                 return Err("empty log field name".into());
             }
+            if expression.split("%%").all(|part| !part.contains('%')) {
+                literals.insert(alias, Value::String(expression.replace("%%", "%")));
+                continue;
+            }
             let command =
                 Command::parse(&expression).map_err(|e| format!("field {alias:?}: {e}"))?;
-            let limit = command.limit.unwrap_or(DEFAULT_FIELD_BYTES);
             let source = match (command.name, command.argument) {
                 ("CHAIN", None) => Source::Chain,
                 ("PATH", None) => Source::Path,
-                ("CEL", Some(expr)) => Source::Cel(
-                    super::cel::compile(expr).map_err(|e| format!("field {alias:?}: CEL: {e}"))?,
-                ),
+                ("RESPONSE_CODE", None) => {
+                    if command.limit.is_some() {
+                        return Err(format!(
+                            "field {alias:?}: RESPONSE_CODE does not take a byte limit"
+                        ));
+                    }
+                    response_codes.push(alias);
+                    continue;
+                }
                 ("EVENT", Some("llm.protocol")) => Source::Protocol,
                 ("EVENT", Some("llm.operation")) => Source::Operation,
                 ("EVENT", Some(name)) => {
@@ -203,6 +227,11 @@ impl Audit {
                             "field {alias:?}: {name} is a scalar and does not take a byte limit"
                         ));
                     }
+                    let limit = command.field_limit(
+                        &alias,
+                        DEFAULT_BODY_FIELD_BYTES,
+                        MAX_BODY_FIELD_BYTES,
+                    )?;
                     let template = match side {
                         Side::Request => &mut request,
                         Side::Response => &mut response,
@@ -243,11 +272,18 @@ impl Audit {
                     ));
                 }
             };
+            let limit = command.field_limit(
+                &alias,
+                DEFAULT_CONTEXT_FIELD_BYTES,
+                MAX_CONTEXT_FIELD_BYTES,
+            )?;
             context.insert(alias, (source, limit));
         }
         Ok(Self {
             request: request.map(Arc::new),
             response: response.map(Arc::new),
+            response_codes: response_codes.into(),
+            literals,
             context,
         })
     }

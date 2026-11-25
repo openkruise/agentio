@@ -135,15 +135,15 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
         - audit:
             format:
               json:
-                stream: "%%CEL(request.headers['x-test-stream'])%%"
+                stream: "%%REQ(X-TEST-STREAM)%%"
+                revision: "%s"
                 %s: "%%EVENT(llm.answer)%%"
 `
 	standby, forward := auditResources(t, "bodyProcessing: {}", "standby")
-	v1, _ := auditResources(t, fmt.Sprintf(rules, "oldAnswer"), "v1")
-	v2, _ := auditResources(t, fmt.Sprintf(rules, "newAnswer"), "v2")
+	v1, _ := auditResources(t, fmt.Sprintf(rules, "v1", "oldAnswer"), "v1")
+	v2, _ := auditResources(t, fmt.Sprintf(rules, "v2", "newAnswer"), "v2")
 	invalid, _ := auditResources(t, "bodyProcessing: {filterChains: null}", "invalid")
-	invalidCEL, _ := auditResources(t, strings.Replace(fmt.Sprintf(rules, "newAnswer"),
-		"request.headers['x-test-stream']", "response.headers['x-test-stream']", 1), "invalid-cel")
+	unsupportedFormatter, _ := auditResources(t, fmt.Sprintf(rules, "%CEL('v2')%", "newAnswer"), "unsupported-formatter")
 
 	const first = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"first"}}]}` + "\n\n"
 	const last = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"last"},"finish_reason":"stop"}]}` +
@@ -243,7 +243,7 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
 		return resp.Body
 	}
 	logs := json.NewDecoder(stdout)
-	finish := func(body io.ReadCloser, id, column string) {
+	finish := func(body io.ReadCloser, id, revision, column string) {
 		t.Helper()
 		defer closeResource(body)
 		if _, err := io.Copy(io.Discard, body); err != nil {
@@ -253,7 +253,7 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
 		if err := logs.Decode(&row); err != nil {
 			t.Fatal(err)
 		}
-		if !maps.Equal(row, map[string]string{"stream": id, column: "firstlast"}) {
+		if !maps.Equal(row, map[string]string{"stream": id, "revision": revision, column: "firstlast"}) {
 			t.Fatalf("stream %s: unexpected audit record %v", id, row)
 		}
 	}
@@ -272,10 +272,10 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
 		t.Fatalf("in-flight stream first frame %q: %v", prefix, err)
 	}
 	control.publish(t, v2, "")
-	finish(open("new"), "new", "newAnswer")
+	finish(open("new"), "new", "v2", "newAnswer")
 	close(release)
-	finish(old, "old", "oldAnswer")
+	finish(old, "old", "v1", "oldAnswer")
 	control.publish(t, invalid, auditExtension+": invalid type: null")
-	control.publish(t, invalidCEL, `field "stream": CEL:`)
-	finish(open("after-nack"), "after-nack", "newAnswer")
+	control.publish(t, unsupportedFormatter, `field "revision": CEL: unsupported audit operator`)
+	finish(open("after-nack"), "after-nack", "v2", "newAnswer")
 }

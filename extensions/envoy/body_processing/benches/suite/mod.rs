@@ -3,7 +3,7 @@
 
 mod workloads;
 
-use super::{Attributes, Audit, Source, capture::Capture, cel::Headers, template::Template};
+use super::{Attributes, Audit, Source, capture::Capture, template::Template};
 use crate::{
     FilterOutput,
     chain::{DirectionStream, Side},
@@ -41,7 +41,7 @@ impl Replay<'_> {
     fn capture(&self, templates: &[Arc<Template>]) -> FilterOutput {
         let side = match self.direction {
             ParserDirection::Request(_) => Side::Request,
-            ParserDirection::Response => Side::Response,
+            ParserDirection::Response(_) => Side::Response,
         };
         let filters = templates
             .iter()
@@ -67,7 +67,7 @@ impl Replay<'_> {
 }
 
 fn message_template(direction: ParserDirection, limit: usize) -> Arc<Template> {
-    let response = matches!(direction, ParserDirection::Response);
+    let response = matches!(direction, ParserDirection::Response(_));
     let side = if response { "response" } else { "request" };
     let mut columns = BTreeMap::from([
         (
@@ -127,7 +127,7 @@ fn benchmark_stream(
         ));
         assert!(row["messages"].as_array().is_some_and(|m| !m.is_empty()));
         assert!(serde_json::to_vec(&row["messages"]).unwrap().len() <= limit);
-        if matches!(direction, ParserDirection::Response) {
+        if matches!(direction, ParserDirection::Response(_)) {
             assert!(row["tokens"].is_number());
         }
         if name == "request_inline_image_50m" {
@@ -190,7 +190,7 @@ fn benchmark_stream(
     }
     group.finish();
 
-    if matches!(direction, ParserDirection::Response) && !sse {
+    if matches!(direction, ParserDirection::Response(_)) && !sse {
         benchmark_response_output(c, &replay, &templates);
     }
 }
@@ -213,7 +213,10 @@ fn benchmark_response_output(c: &mut Criterion, replay: &Replay<'_>, templates: 
         let rows = replay.capture(std::slice::from_ref(t));
         group.bench_function(format!("encode_json_lines_{limit}"), |b| {
             b.iter_batched(
-                || FilterOutput(rows.0.clone()),
+                || FilterOutput {
+                    records: rows.records.clone(),
+                    ..FilterOutput::default()
+                },
                 |rows| rows.into_json_lines().unwrap(),
                 BatchSize::SmallInput,
             )
@@ -224,7 +227,6 @@ fn benchmark_response_output(c: &mut Criterion, replay: &Replay<'_>, templates: 
 
 fn benchmark_session_header(c: &mut Criterion) {
     const ID: &str = "0195bea8-d235-7311-b78b-17e0309ef250";
-    const FALLBACK: &str = "%CEL('session-id' in request.headers ? request.headers['session-id'] : request.headers['x-claude-code-session-id'])%";
     let mut group = c.benchmark_group("audit_session_header");
     for (client, key) in [
         ("codex", "session-id"),
@@ -250,31 +252,19 @@ fn benchmark_session_header(c: &mut Criterion) {
                 "req_fallback",
                 "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%".into(),
             ),
-            ("cel", format!("%CEL(request.headers['{key}'])%")),
-            ("cel_fallback", FALLBACK.into()),
         ] {
             let audit = Audit::compile(BTreeMap::from([("session".into(), expr)])).unwrap();
             let (source, limit) = &audit.context["session"];
+            let Source::RequestHeader(header) = source else {
+                unreachable!()
+            };
             let sample = || {
                 let mut attrs = Attributes::default();
                 let headers = black_box(&headers);
-                match source {
-                    Source::RequestHeader(header) => {
-                        let value = header
-                            .get(|name| headers.iter().find(|(k, _)| *k == name).map(|(_, v)| *v))
-                            .unwrap();
-                        attrs.insert("session", value, *limit);
-                    }
-                    Source::Cel(program) => {
-                        let input = Headers::from_pairs(
-                            headers.iter().map(|(k, v)| (k.as_bytes(), v.as_bytes())),
-                        );
-                        attrs
-                            .capture_cel("session", *limit, program, &input)
-                            .unwrap();
-                    }
-                    _ => unreachable!(),
-                }
+                let value = header
+                    .get(|name| headers.iter().find(|(k, _)| *k == name).map(|(_, v)| *v))
+                    .unwrap();
+                attrs.insert("session", value, *limit);
                 let mut output = FilterOutput::default();
                 *output.audit(0) = attrs.values;
                 output.into_json_lines().unwrap()
@@ -290,7 +280,7 @@ pub fn body_processing_benchmarks(c: &mut Criterion) {
     benchmark_session_header(c);
     let chat = Protocol::OpenaiChatCompletions;
     let request = ParserDirection::Request(Default::default());
-    let response = ParserDirection::Response;
+    let response = ParserDirection::Response(Default::default());
     for (name, size, text) in [
         ("request_text_8k", 8 << 10, "q"),
         (

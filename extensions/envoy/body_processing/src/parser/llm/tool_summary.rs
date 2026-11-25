@@ -21,6 +21,12 @@ pub(crate) struct ToolReference {
     name: Option<String>,
 }
 
+impl ToolReference {
+    pub(super) fn identity_bytes(&self) -> usize {
+        self.id.as_ref().map_or(0, String::len) + self.name.as_ref().map_or(0, String::len)
+    }
+}
+
 // Streamed Chat names arrive as fragments; Responses instead sends item snapshots.
 // Track positions so parallel calls keep their protocol order across callbacks.
 pub(crate) struct ToolSummary {

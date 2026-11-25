@@ -74,6 +74,7 @@ impl BodyFilter for Probe {
             Event::Usage(usage) => json!(["usage", usage]),
             Event::Detail { kind, value } => json!(["detail", kind, value]),
             Event::OutputItem { output, .. } => json!(["item", output.index]),
+            Event::TextGap { .. } => json!("text_gap"),
             Event::ReplaceOutput => json!("replace"),
             Event::Completed { .. } => json!("completed"),
         };
@@ -117,7 +118,7 @@ fn complete_frames_deliver_semantic_events_to_both_filters_before_http_end() {
             })
             .collect();
         let mut stream = DirectionStream::new(
-            ParserDirection::Response,
+            ParserDirection::Response(Default::default()),
             format,
             "text/event-stream",
             "",
@@ -183,7 +184,7 @@ fn complete_frames_deliver_semantic_events_to_both_filters_before_http_end() {
 fn chat_emits_alternatives_with_their_answer_membership() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let mut stream = DirectionStream::new(
-        ParserDirection::Response,
+        ParserDirection::Response(Default::default()),
         Format::Llm(Protocol::OpenaiChatCompletions),
         "text/event-stream",
         "",
