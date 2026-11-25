@@ -129,13 +129,13 @@ typed_config:
     value: '{"filterChains":[{"name":"models","parser":{"llm":{}},"filters":[{"audit":{"format":{"json":{"messages":"%EVENT(llm.request.messages):16384%","answer":"%EVENT(llm.answer)%"}}}}]}]}'
 ```
 
-`parser.llm.request.maxItemSize` and `parser.llm.response.maxContentSize` accept an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
+Set `maxContentSize` independently under `parser.llm.request` and `parser.llm.response`. Each direction defaults to `1MiB` and accepts values from `1KiB` through `64MiB`. Use an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
 
 ```yaml
 parser:
   llm:
     request:
-      maxItemSize: 1MiB
+      maxContentSize: 1MiB
     response:
       maxContentSize: 1MiB
 ```
@@ -177,9 +177,9 @@ For Chat files and audio, Responses files and computer screenshots, and Anthropi
 
 Audits in a matched chain share one LLM parser per subscribed direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its selected fields separately. For example, a 2 KiB question field can capture the latest question while an 8 KiB tool field records a schema at the end of the same request, in either the same audit or a second one. Changing their order only changes the order of the output lines. The chain also shares JSON response normalization and SSE framing.
 
-The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxItemSize` to control the compaction budget per request item (default `1MiB`, range `1KiB` to `64MiB`). Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests.
+The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxContentSize` to control the compaction budget per request item. Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests.
 
-Set `parser.llm.response.maxContentSize` to bound the content held for open response items (default `1MiB`, range `1KiB` to `64MiB`). Each completed Chat choice, Responses output item or Anthropic content block is delivered to the audits and releases its parser budget. Concurrently open SSE choices or blocks share that budget. A nonempty Responses terminal output replaces earlier item snapshots. SSE framing and audit field retention use separate memory.
+Set `parser.llm.response.maxContentSize` to bound the content held for open response items. Each completed Chat choice, Responses output item or Anthropic content block is delivered to the audits and releases its parser budget. Concurrently open SSE choices or blocks share that budget. A nonempty Responses terminal output replaces earlier item snapshots. SSE framing and audit field retention use separate memory.
 
 Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection and per-field clipping to the parser output. Select `llm.request.retainedText` or `llm.response.retainedText` for a bounded array of text previews. In each direction the preview and the structured messages have independent field limits. Tool results and inline file data are excluded from the request text preview. Question and answer scalars stop at the first missing text segment. The parser continues scanning past omitted attachments for later text and metadata. When the document structure itself exceeds the budget, only selected paths are available for validation. An audit that selects capture status reports `partial` in that case, or `truncated` if one of its selected values was clipped.
 

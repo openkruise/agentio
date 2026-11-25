@@ -3,7 +3,7 @@
 
 use crate::{
     FilterOutput,
-    config::{FilterChain, ResponseParserConfig},
+    config::{FilterChain, LlmParserLimits},
     filters::{BodyFilter, RequestHeaders},
     parser::Format,
 };
@@ -26,7 +26,7 @@ pub(crate) struct ActiveChain {
     response: DirectionStream,
     pending: Vec<Box<dyn BodyFilter>>,
     format: Format,
-    response_parser: ResponseParserConfig,
+    response_parser: LlmParserLimits,
 }
 
 fn header(envoy: &impl EnvoyHttpFilter, request: bool, key: &str) -> String {

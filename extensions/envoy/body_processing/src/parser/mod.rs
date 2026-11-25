@@ -7,6 +7,7 @@ mod json;
 pub(crate) mod llm;
 mod multipart;
 
+use crate::config::LlmParserLimits;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -35,8 +36,8 @@ pub(crate) enum BodyEvent<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) enum ParserDirection {
-    Request(crate::config::RequestParserConfig),
-    Response(crate::config::ResponseParserConfig),
+    Request(LlmParserLimits),
+    Response(LlmParserLimits),
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq)]

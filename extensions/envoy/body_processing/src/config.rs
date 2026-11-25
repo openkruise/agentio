@@ -93,39 +93,20 @@ enum ParserConfig {
         #[serde(default)]
         protocol: ProtocolSelection,
         #[serde(default)]
-        request: RequestParserConfig,
+        request: LlmParserLimits,
         #[serde(default)]
-        response: ResponseParserConfig,
+        response: LlmParserLimits,
     },
 }
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct RequestParserConfig {
-    #[serde(deserialize_with = "item_size")]
-    pub max_item_size: usize,
-}
-
-impl Default for RequestParserConfig {
-    fn default() -> Self {
-        Self {
-            max_item_size: DEFAULT_PARSER_BYTES,
-        }
-    }
-}
-
-fn item_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
-    parser_size(d, "maxItemSize")
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct ResponseParserConfig {
+pub(crate) struct LlmParserLimits {
     #[serde(deserialize_with = "content_size")]
     pub max_content_size: usize,
 }
 
-impl Default for ResponseParserConfig {
+impl Default for LlmParserLimits {
     fn default() -> Self {
         Self {
             max_content_size: DEFAULT_PARSER_BYTES,
@@ -134,18 +115,14 @@ impl Default for ResponseParserConfig {
 }
 
 fn content_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
-    parser_size(d, "maxContentSize")
-}
-
-fn parser_size<'de, D: serde::Deserializer<'de>>(d: D, field: &str) -> Result<usize, D::Error> {
     use serde::de::Error;
     let bytes = SizeValue::deserialize(d)?
         .bytes()
         .map_err(D::Error::custom)?;
     if !(1024..=(64 << 20)).contains(&bytes) {
-        return Err(D::Error::custom(format!(
-            "{field} must be between 1 KiB and 64 MiB"
-        )));
+        return Err(D::Error::custom(
+            "maxContentSize must be between 1 KiB and 64 MiB",
+        ));
     }
     Ok(bytes)
 }
@@ -158,12 +135,12 @@ pub struct FilterChain {
 }
 
 impl FilterChain {
-    pub fn request_parser(&self) -> RequestParserConfig {
+    pub fn request_parser(&self) -> LlmParserLimits {
         let ParserConfig::Llm { request, .. } = self.parser;
         request
     }
 
-    pub fn response_parser(&self) -> ResponseParserConfig {
+    pub fn response_parser(&self) -> LlmParserLimits {
         let ParserConfig::Llm { response, .. } = self.parser;
         response
     }
@@ -439,7 +416,7 @@ mod tests {
             Settings::parse(config.to_string().as_bytes()).map(|s| {
                 let chain = &s.chains[0];
                 (
-                    chain.request_parser().max_item_size,
+                    chain.request_parser().max_content_size,
                     chain.response_parser().max_content_size,
                 )
             })
@@ -454,7 +431,7 @@ mod tests {
             (json!("64MiB"), 64 << 20),
         ] {
             assert_eq!(
-                resolve(json!({"request":{"maxItemSize":size}})).unwrap(),
+                resolve(json!({"request":{"maxContentSize":size}})).unwrap(),
                 (bytes, 1 << 20)
             );
             assert_eq!(
@@ -468,10 +445,21 @@ mod tests {
             json!("1.5MiB"),
             json!("4Mb/s"),
         ] {
-            assert!(resolve(json!({"request":{"maxItemSize":size}})).is_err());
+            assert!(resolve(json!({"request":{"maxContentSize":size}})).is_err());
             assert!(resolve(json!({"response":{"maxContentSize":size}})).is_err());
         }
-        assert!(resolve(json!({"response":{"maxItemSize":"2MiB"}})).is_err());
+        assert_eq!(
+            resolve(json!({
+                "request": {"maxContentSize": "2MiB"},
+                "response": {"maxContentSize": "8KiB"}
+            }))
+            .unwrap(),
+            (2 << 20, 8 << 10)
+        );
+        for direction in ["request", "response"] {
+            let error = resolve(json!({direction: {"maxItemSize": "2MiB"}})).unwrap_err();
+            assert!(error.contains("unknown field `maxItemSize`"), "{error}");
+        }
     }
 
     #[test]

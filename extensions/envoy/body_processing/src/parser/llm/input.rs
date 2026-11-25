@@ -60,7 +60,7 @@ impl Parser {
         {
             return Ok(match direction {
                 ParserDirection::Request(config) => {
-                    Self::Request(Request::new(protocol.as_str(), config.max_item_size))
+                    Self::Request(Request::new(protocol.as_str(), config.max_content_size))
                 }
                 ParserDirection::Response(config) => Self::Response(Box::new(Document::new(
                     protocol.as_str(),

@@ -251,6 +251,7 @@ mod tests {
     use crate::{
         FilterOutput,
         chain::{DirectionStream, ParserDirection},
+        config::LlmParserLimits,
         filters::{BodyFilter, Decision},
     };
     use serde_json::json;
@@ -394,8 +395,8 @@ mod tests {
 
     #[test]
     fn parser_compaction_only_truncates_the_selected_request_fields() {
-        let side = ParserDirection::Request(crate::config::RequestParserConfig {
-            max_item_size: 1024,
+        let side = ParserDirection::Request(LlmParserLimits {
+            max_content_size: 1024,
         });
         let question: FormatFields = &[
             ("q", "%EVENT(llm.question)%"),
@@ -608,7 +609,7 @@ mod tests {
             ("u", "%EVENT(llm.usage.totalTokens)%"),
             ("s", status),
         ];
-        let side = ParserDirection::Response(crate::config::ResponseParserConfig {
+        let side = ParserDirection::Response(LlmParserLimits {
             max_content_size: 1024,
         });
         let pieces = ["a".repeat(700), "b".repeat(700)];
@@ -695,7 +696,7 @@ mod tests {
                 Format::Llm(Protocol::OpenaiResponses),
                 media,
                 &body,
-                ParserDirection::Response(crate::config::ResponseParserConfig {
+                ParserDirection::Response(LlmParserLimits {
                     max_content_size: 1024,
                 }),
                 &[fields, structured],
@@ -733,8 +734,8 @@ mod tests {
 
     #[test]
     fn omitted_tool_results_preserve_the_last_question_and_omitted_system_is_absent() {
-        let side = ParserDirection::Request(crate::config::RequestParserConfig {
-            max_item_size: 1024,
+        let side = ParserDirection::Request(LlmParserLimits {
+            max_content_size: 1024,
         });
         let first = json!({"role":"user","content":"What time?"});
         let blocks = vec![json!({"type":"text","text":"ok"}); 80];
@@ -870,8 +871,8 @@ mod tests {
             ),
         ] {
             for limit in [1024, 65536] {
-                let side = ParserDirection::Request(crate::config::RequestParserConfig {
-                    max_item_size: limit,
+                let side = ParserDirection::Request(LlmParserLimits {
+                    max_content_size: limit,
                 });
                 let row = read(
                     &protocol_records(
@@ -1044,8 +1045,8 @@ mod tests {
             let body = json!({"model":"m","messages":[{"role":"user","content":text}]}).to_string();
             chat_records(
                 &body,
-                ParserDirection::Request(crate::config::RequestParserConfig {
-                    max_item_size: 2 << 20,
+                ParserDirection::Request(LlmParserLimits {
+                    max_content_size: 2 << 20,
                 }),
                 &[fields],
                 "",
@@ -1507,8 +1508,8 @@ mod tests {
 
     #[test]
     fn compacted_text_is_a_prefix_and_late_questions_survive_files() {
-        let side = ParserDirection::Request(crate::config::RequestParserConfig {
-            max_item_size: 1024,
+        let side = ParserDirection::Request(LlmParserLimits {
+            max_content_size: 1024,
         });
         let q: FormatFields = &[
             ("q", "%EVENT(llm.question)%"),
@@ -1582,8 +1583,8 @@ mod tests {
         let big =
             json!({"type":"function","function":{"name":"big","parameters":{"properties":props}}});
         let small = json!({"type":"function","function":{"name":"small"}});
-        let side = ParserDirection::Request(crate::config::RequestParserConfig {
-            max_item_size: 1024,
+        let side = ParserDirection::Request(LlmParserLimits {
+            max_content_size: 1024,
         });
         let tools: FormatFields = &[
             ("t", "%EVENT(llm.toolDefinitions)%"),
@@ -1680,8 +1681,8 @@ mod tests {
             Format::Llm(Protocol::OpenaiResponses),
             "application/json",
             &input.to_string(),
-            ParserDirection::Request(crate::config::RequestParserConfig {
-                max_item_size: 1024,
+            ParserDirection::Request(LlmParserLimits {
+                max_content_size: 1024,
             }),
             &[
                 &[
@@ -1707,8 +1708,8 @@ mod tests {
 
     #[test]
     fn responses_files_and_tool_result_identity_are_preserved() {
-        let side = ParserDirection::Request(crate::config::RequestParserConfig {
-            max_item_size: 1024,
+        let side = ParserDirection::Request(LlmParserLimits {
+            max_content_size: 1024,
         });
         let fields: FormatFields = &[
             ("m", "%EVENT(llm.request.messages)%"),

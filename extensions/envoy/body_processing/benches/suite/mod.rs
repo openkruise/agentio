@@ -3,7 +3,9 @@
 
 mod workloads;
 
-use super::{Attributes, Audit, Source, capture::Capture, template::Template};
+use super::{
+    Attributes, Audit, Source, capture::Capture, messages::ResponseMessages, template::Template,
+};
 use crate::{
     FilterOutput,
     chain::{DirectionStream, Side},
@@ -25,15 +27,11 @@ struct Replay<'a> {
 }
 
 impl Replay<'_> {
-    fn parse(&self) -> llm::Outcome {
+    fn parse(&self, mut on_event: impl FnMut(llm::Event<'_>)) -> llm::Outcome {
         let mut parser =
             llm::Parser::new(self.protocol, self.direction, Some(&self.media), "").unwrap();
         for chunk in &self.chunks {
-            parser
-                .push(chunk, &mut |event| {
-                    black_box(event);
-                })
-                .unwrap();
+            parser.push(chunk, &mut on_event).unwrap();
         }
         parser.finish(true).unwrap()
     }
@@ -144,7 +142,13 @@ fn benchmark_stream(
 
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(body.len() as u64));
-    group.bench_function("parser", |b| b.iter(|| replay.parse()));
+    group.bench_function("parser", |b| {
+        b.iter(|| {
+            replay.parse(|event| {
+                black_box(event);
+            })
+        })
+    });
     for (label, selected) in [
         ("one_128b", &templates[..1]),
         ("one_8k", &templates[1..]),
@@ -196,21 +200,31 @@ fn benchmark_stream(
 }
 
 fn benchmark_response_output(c: &mut Criterion, replay: &Replay<'_>, templates: &[Arc<Template>]) {
-    let llm::Outcome::Document { view, .. } = replay.parse() else {
-        unreachable!()
-    };
+    // Collect the Chat fixture's normalized choices outside the timed projection.
+    let mut choices = Vec::new();
+    replay.parse(|event| {
+        if let llm::Event::Response(llm::stream::Event::OutputItem {
+            output,
+            value: Some(message),
+            part: None,
+            clipped: false,
+        }) = event
+        {
+            choices.push((output.index, message.clone()));
+        }
+    });
     let mut group = c.benchmark_group("response_output_256k");
     for (t, limit) in templates.iter().zip([128, 8192]) {
-        group.bench_function(format!("project_messages_{limit}"), |b| {
-            b.iter(|| {
-                super::messages::Messages::project(
-                    black_box(view.document["outputMessages"].as_array().unwrap()),
-                    limit,
-                    Side::Response,
-                )
-            })
-        });
+        let project = || {
+            let mut messages = ResponseMessages::default();
+            for (index, message) in black_box(&choices) {
+                messages.message(*index, message, limit);
+            }
+            messages.finish(false, None, limit)
+        };
         let rows = replay.capture(std::slice::from_ref(t));
+        assert_eq!(project().0.as_ref(), rows.records[&0].get("messages"));
+        group.bench_function(format!("project_messages_{limit}"), |b| b.iter(project));
         group.bench_function(format!("encode_json_lines_{limit}"), |b| {
             b.iter_batched(
                 || FilterOutput {

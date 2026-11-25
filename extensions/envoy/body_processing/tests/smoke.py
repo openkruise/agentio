@@ -96,7 +96,7 @@ def bootstrap(port, upstream):
             *[{"name": name, "matcher": {"paths": ["/" + name]},
                "parser":{"llm":{"protocol":"openai-chat-completions", **options}},
                "filters":[audit(question | request_info),audit(tools | request_info)]}
-              for name, options in (("dual",{}),("dual-small",{"request":{"maxItemSize":"2KiB"}}))],
+              for name, options in (("dual",{}),("dual-small",{"request":{"maxContentSize":"2KiB"}}))],
             *[{"name": host, "matcher": {"hosts": [host]}, "parser": {"llm": llm},
                "filters": [audit({"case": "%REQ(X-LLM-CASE)%",
                                   "output": "%EVENT(llm.response.messages):4194304%"} | response_info)]}
