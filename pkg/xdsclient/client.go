@@ -202,6 +202,19 @@ func (c *Client) Observe(types ...string) (<-chan struct{}, bool) {
 	return c.changed, true
 }
 
+// LookupResource reads one canonical name from the same publication as the
+// returned change signal and usability. Like SnapshotFor, it never subscribes.
+func (c *Client) LookupResource(typ, name string) (*Resource, <-chan struct{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.types[typ]
+	if st == nil {
+		return nil, c.changed, false
+	}
+	c.expireGraceLocked(st)
+	return st.resources[name], c.changed, st.synced || !st.graceUntil.IsZero()
+}
+
 // Snapshot copies the publication maps; resource values are shared and read-only.
 func (c *Client) Snapshot() Snapshot {
 	return c.SnapshotFor(nil)

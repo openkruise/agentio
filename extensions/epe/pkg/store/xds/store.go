@@ -160,19 +160,18 @@ func (s *Store) Read() store.Batch {
 
 // ReadKeys captures a request's pinned resources without copying the entire cache.
 func (s *Store) ReadKeys(keys []store.Key) store.Batch {
-	var snapshot xdsclient.Snapshot
-	if source, ok := s.source.(interface {
-		SnapshotFor(map[string][]string) xdsclient.Snapshot
-	}); ok {
-		names := map[string][]string{}
-		for _, key := range keys {
-			wire := wireType(key.Type)
-			names[wire] = append(names[wire], key.Name)
+	if len(keys) == 1 && keys[0].Type == store.Workload {
+		key := keys[0]
+		value, status := s.lookup(key)
+		view := &selectedSnapshot{}
+		if !status.Ready {
+			view.err = fmt.Errorf("%s xDS is not synchronized", key.Type)
+		} else if value != nil {
+			view.resources = []store.Resource{{Key: key, Value: value.Value}}
 		}
-		snapshot = source.SnapshotFor(names)
-	} else {
-		snapshot = s.source.Snapshot()
+		return store.Batch{Status: status, Snapshots: map[store.Type]store.TypeSnapshot{key.Type: view}}
 	}
+	snapshot := s.snapshotFor(keys)
 	batch := store.Batch{
 		Status:    store.Status{Ready: true, Changed: snapshot.Changed},
 		Snapshots: map[store.Type]store.TypeSnapshot{},
@@ -212,6 +211,32 @@ func (s *Store) ReadKeys(keys []store.Key) store.Batch {
 		batch.Snapshots[typ] = &selectedSnapshot{resources: resources, err: err}
 	}
 	return batch
+}
+
+func (s *Store) lookup(key store.Key) (*xdsclient.Resource, store.Status) {
+	typ := wireType(key.Type)
+	if source, ok := s.source.(interface {
+		LookupResource(string, string) (*xdsclient.Resource, <-chan struct{}, bool)
+	}); ok {
+		value, changed, ready := source.LookupResource(typ, key.Name)
+		return value, store.Status{Ready: ready, Changed: changed}
+	}
+	snapshot := s.snapshotFor([]store.Key{key})
+	return snapshot.Resources[typ][key.Name], store.Status{Ready: snapshot.Usable(typ), Changed: snapshot.Changed}
+}
+
+func (s *Store) snapshotFor(keys []store.Key) xdsclient.Snapshot {
+	if source, ok := s.source.(interface {
+		SnapshotFor(map[string][]string) xdsclient.Snapshot
+	}); ok {
+		names := map[string][]string{}
+		for _, key := range keys {
+			wire := wireType(key.Type)
+			names[wire] = append(names[wire], key.Name)
+		}
+		return source.SnapshotFor(names)
+	}
+	return s.source.Snapshot()
 }
 
 // Selected request sets are small; a slice avoids rebuilding a map and sorted
@@ -262,19 +287,6 @@ func projectType(snapshot, prior xdsclient.Snapshot, typ store.Type, previous st
 	return old.WithChanges(upserts, removed)
 }
 
-// get retrieves a cached resource without initiating a network request.
-func (s *Store) get(key store.Key) (*store.Resource, error) {
-	typeURL := wireType(key.Type)
-	if typeURL == "" {
-		return nil, nil
-	}
-	snapshot := s.snapshot()
-	if !snapshot.Usable(typeURL) {
-		return nil, fmt.Errorf("%s xDS is not synchronized", key.Type)
-	}
-	return toResource(key, snapshot.Resources[typeURL][key.Name]), nil
-}
-
 // Fetch explicitly subscribes to a missing resource. Context bounds the wait.
 func (s *Store) Fetch(ctx context.Context, key store.Key) (*store.Resource, error) {
 	r, release, err := s.Acquire(ctx, key)
@@ -287,6 +299,11 @@ func (s *Store) Fetch(ctx context.Context, key store.Key) (*store.Resource, erro
 // Acquire refreshes hot entries too; immutable aggregate snapshots must not
 // bypass retention or serve resources whose subscriptions have been evicted.
 func (s *Store) Acquire(ctx context.Context, key store.Key) (*store.Resource, func(), error) {
+	value, release, err := s.acquireValue(ctx, key)
+	return toResource(key, value), release, err
+}
+
+func (s *Store) acquireValue(ctx context.Context, key store.Key) (*xdsclient.Resource, func(), error) {
 	typeURL := wireType(key.Type)
 	if typeURL == "" {
 		return nil, nil, nil
@@ -296,11 +313,14 @@ func (s *Store) Acquire(ctx context.Context, key store.Key) (*store.Resource, fu
 		if errors.Is(err, xdsclient.ErrNotFound) {
 			return nil, release, nil
 		}
-		return toResource(key, value), release, err
+		return value, release, err
 	}
-	resource, err := s.get(key)
-	if err != nil || resource != nil {
-		return resource, func() {}, err
+	snapshot := s.snapshot()
+	if !snapshot.Usable(typeURL) {
+		return nil, func() {}, fmt.Errorf("%s xDS is not synchronized", key.Type)
+	}
+	if value := snapshot.Resources[typeURL][key.Name]; value != nil {
+		return value, func() {}, nil
 	}
 	value, err := s.source.Demand(ctx, typeURL, key.Name)
 	if errors.Is(err, xdsclient.ErrNotFound) {
@@ -309,7 +329,7 @@ func (s *Store) Acquire(ctx context.Context, key store.Key) (*store.Resource, fu
 	if err != nil {
 		return nil, nil, err
 	}
-	return toResource(key, value), func() {}, nil
+	return value, func() {}, nil
 }
 
 func wireType(typ store.Type) string {

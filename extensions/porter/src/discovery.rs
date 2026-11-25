@@ -8,7 +8,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -208,7 +208,7 @@ impl Client {
     }
 
     pub(crate) fn current_epoch(&self) -> u64 {
-        self.expire_disconnected();
+        let _state = self.current_state();
         self.epoch.load(Ordering::Acquire)
     }
 
@@ -242,6 +242,7 @@ impl Client {
     }
 
     fn prune(&self, state: &mut State, now: Instant) {
+        let mut evicted = false;
         while let Some((key, last)) = state.idle.peek_lru() {
             let capacity =
                 self.config.max_entries > 0 && Self::size(state) > self.config.max_entries;
@@ -259,21 +260,34 @@ impl Client {
                 })
                 .inc();
             self.remove(state, &key);
+            evicted = true;
         }
-        self.publish_size(state);
+        if evicted {
+            self.publish_size(state);
+        }
     }
 
     fn acquire(self: &Arc<Self>, kind: ResourceKind, name: &str) -> Result<Lease, DemandError> {
         if name.is_empty() || name == "*" {
             return Err(DemandError::InvalidName);
         }
-        self.expire_disconnected();
+        let mut state = self.current_state();
+        let now = Instant::now();
+        self.prune(&mut state, now);
+        Ok(self.acquire_locked(&mut state, kind, name, now))
+    }
+
+    fn acquire_locked(
+        self: &Arc<Self>,
+        state: &mut State,
+        kind: ResourceKind,
+        name: &str,
+        now: Instant,
+    ) -> Lease {
         let key = ResourceKey {
             kind,
             name: name.into(),
         };
-        let mut state = self.state.lock().unwrap();
-        self.prune(&mut state, Instant::now());
         state.idle.pop(&key);
         if !state.types[kind.index()].entries.contains_key(name) {
             state.next_generation += 1;
@@ -294,17 +308,18 @@ impl Client {
             );
             state.types[kind.index()].dirty.insert(name.into());
             self.wake.notify_one();
+            self.prune(state, now);
+            self.publish_size(state);
         }
         let entry = state.types[kind.index()].entries.get_mut(name).unwrap();
         entry.users += 1;
         let generation = entry.generation.clone();
-        self.prune(&mut state, Instant::now());
-        Ok(Lease {
+        Lease {
             client: self.clone(),
             key,
             generation,
             success: false,
-        })
+        }
     }
 
     /// Wait for a resource within the caller's shared request budget.
@@ -317,7 +332,22 @@ impl Client {
         name: &str,
         request_deadline: Option<Instant>,
     ) -> Result<Arc<View>, DemandError> {
-        Ok(self.pin(kind, name, request_deadline).await?.value)
+        if name.is_empty() || name == "*" {
+            return Err(DemandError::InvalidName);
+        }
+        let mut lease = {
+            let mut state = self.current_state();
+            let now = Instant::now();
+            self.prune(&mut state, now);
+            if let Some(value) = self.ready_value(&state, kind, name) {
+                self.refresh_idle(&mut state, kind, name, now);
+                drop(state);
+                self.record_hits(kind, 1);
+                return Ok(value);
+            }
+            self.acquire_locked(&mut state, kind, name, now)
+        };
+        self.wait(&mut lease, request_deadline).await
     }
 
     pub(crate) async fn pin(
@@ -326,11 +356,19 @@ impl Client {
         name: &str,
         request_deadline: Option<Instant>,
     ) -> Result<PinnedView, DemandError> {
-        let mut lease = self.acquire(kind, name)?;
+        self.finish_pin(self.acquire(kind, name)?, request_deadline)
+            .await
+    }
+
+    async fn finish_pin(
+        &self,
+        mut lease: Lease,
+        request_deadline: Option<Instant>,
+    ) -> Result<PinnedView, DemandError> {
         let value = self.wait(&mut lease, request_deadline).await?;
         Ok(PinnedView {
             value,
-            _lease: lease,
+            _lease: Some(lease),
         })
     }
 
@@ -354,18 +392,22 @@ impl Client {
         request_deadline: Option<Instant>,
     ) -> Result<Arc<View>, DemandError> {
         let kind = lease.key.kind;
-        let mut receiver = lease.generation.value.subscribe();
+        let ready = match self.current(&lease.generation.value.borrow()) {
+            Outcome::Ready(value) => Some(value.clone()),
+            _ => None,
+        };
         self.metrics
             .cache_lookups
             .get_or_create(&DemandResult {
                 resource_type: kind.type_url(),
-                result: if matches!(self.current(&receiver.borrow()), Outcome::Ready(_)) {
-                    "hit"
-                } else {
-                    "miss"
-                },
+                result: if ready.is_some() { "hit" } else { "miss" },
             })
             .inc();
+        if let Some(value) = ready {
+            lease.success = true;
+            return Ok(value);
+        }
+        let mut receiver = lease.generation.value.subscribe();
         let mut measurement: Option<WaitMeasurement> = None;
         loop {
             let outcome = self.current(&receiver.borrow_and_update()).clone();
@@ -430,42 +472,182 @@ impl Client {
             .collect()
     }
 
-    fn cached_many(&self, kind: ResourceKind, names: &[String]) -> Option<Vec<Arc<View>>> {
-        self.expire_disconnected();
-        let now = Instant::now();
-        let mut state = self.state.lock().unwrap();
-        self.prune(&mut state, now);
-        let mut values = Vec::with_capacity(names.len());
-        for name in names {
-            let entry = state.types[kind.index()].entries.get(name)?;
-            let value = entry.generation.value.borrow();
-            let Outcome::Ready(value) = self.current(&value) else {
-                return None;
-            };
-            values.push(value.clone());
+    fn ready_value(&self, state: &State, kind: ResourceKind, name: &str) -> Option<Arc<View>> {
+        let entry = state.types[kind.index()].entries.get(name)?;
+        match self.current(&entry.generation.value.borrow()) {
+            Outcome::Ready(value) => Some(value.clone()),
+            _ => None,
         }
-        if self.retained() {
-            for name in names {
-                if state.types[kind.index()].entries[name].users == 0 {
-                    state.idle.put(
-                        ResourceKey {
-                            kind,
-                            name: name.clone(),
-                        },
-                        now,
-                    );
-                }
-            }
-            self.expiry.notify_one();
+    }
+
+    // A retained idle entry is already in the LRU. Promote it without removing
+    // its node; an in-use entry will get its idle timestamp on final release.
+    fn refresh_idle(&self, state: &mut State, kind: ResourceKind, name: &str, now: Instant) {
+        if self.retained()
+            && let Some(last) = state.idle.get_mut(&ResourceKey {
+                kind,
+                name: name.to_owned(),
+            })
+        {
+            *last = now;
         }
-        drop(state);
+    }
+
+    fn record_hits(&self, kind: ResourceKind, count: usize) {
         self.metrics
             .cache_lookups
             .get_or_create(&DemandResult {
                 resource_type: kind.type_url(),
                 result: "hit",
             })
-            .inc_by(names.len() as u64);
+            .inc_by(count as u64);
+    }
+
+    /// Capture a complete ready Workload and its ordered policy dependencies under
+    /// one lock. On a miss, hold the root subscriptions until the caller recaptures.
+    pub(crate) async fn pin_request(
+        self: &Arc<Self>,
+        workload: &str,
+        sandbox: &str,
+        lookup_alias: bool,
+        connection_policy: bool,
+        deadline: Option<Instant>,
+    ) -> Result<PinnedRequest, DemandError> {
+        if workload.is_empty() || workload == "*" || sandbox == "*" {
+            return Err(DemandError::InvalidName);
+        }
+        let (workload_lease, sandbox_lease) = {
+            let mut state = self.current_state();
+            let now = Instant::now();
+            self.prune(&mut state, now);
+            if let Some(hit) = self.cached_request(
+                &mut state,
+                workload,
+                sandbox,
+                lookup_alias,
+                connection_policy,
+                now,
+            ) {
+                drop(state);
+                self.record_hits(ResourceKind::Workload, 1);
+                if hit.sandbox.is_some() {
+                    self.record_hits(ResourceKind::Sandbox, 1);
+                }
+                if let Some(profiles) = &hit.profiles
+                    && !profiles.is_empty()
+                {
+                    self.record_hits(ResourceKind::SecurityProfile, profiles.len());
+                }
+                return Ok(hit);
+            }
+            (
+                self.acquire_locked(&mut state, ResourceKind::Workload, workload, now),
+                (!sandbox.is_empty())
+                    .then(|| self.acquire_locked(&mut state, ResourceKind::Sandbox, sandbox, now)),
+            )
+        };
+        let (workload, sandbox) = match sandbox_lease {
+            Some(lease) => {
+                let (w, s) = tokio::try_join!(
+                    self.finish_pin(workload_lease, deadline),
+                    self.finish_pin(lease, deadline)
+                )?;
+                (w, Some(s))
+            }
+            None => (self.finish_pin(workload_lease, deadline).await?, None),
+        };
+        Ok(PinnedRequest {
+            workload,
+            sandbox,
+            profiles: None,
+        })
+    }
+
+    fn cached_request(
+        &self,
+        state: &mut State,
+        workload: &str,
+        sandbox: &str,
+        lookup_alias: bool,
+        connection_policy: bool,
+        now: Instant,
+    ) -> Option<PinnedRequest> {
+        // An implicit Sandbox lookup needs a live ADS interest to complete here.
+        // Leave its miss to the ordinary subscription path without probing WDS twice.
+        if sandbox.is_empty()
+            && lookup_alias
+            && state.types[ResourceKind::Sandbox.index()]
+                .entries
+                .is_empty()
+        {
+            return None;
+        }
+        let workload_value = self.ready_value(state, ResourceKind::Workload, workload)?;
+        let View::Workload(source) = workload_value.as_ref() else {
+            unreachable!("typed Workload watch")
+        };
+        let references = if connection_policy {
+            source.profiles.as_deref()?
+        } else {
+            &[]
+        };
+        let alias;
+        let sandbox_name = if sandbox.is_empty()
+            && lookup_alias
+            && !source.namespace.is_empty()
+            && !source.name.is_empty()
+        {
+            alias = format!("{}/{}", source.namespace, source.name);
+            &alias
+        } else {
+            sandbox
+        };
+        let sandbox_value = if sandbox_name.is_empty() {
+            None
+        } else {
+            Some(self.ready_value(state, ResourceKind::Sandbox, sandbox_name)?)
+        };
+        let mut profiles = Vec::with_capacity(references.len());
+        for reference in references {
+            profiles.push(self.ready_value(
+                state,
+                ResourceKind::SecurityProfile,
+                &reference.name,
+            )?);
+        }
+        self.refresh_idle(state, ResourceKind::Workload, workload, now);
+        if sandbox_value.is_some() {
+            self.refresh_idle(state, ResourceKind::Sandbox, sandbox_name, now);
+        }
+        for reference in references {
+            self.refresh_idle(state, ResourceKind::SecurityProfile, &reference.name, now);
+        }
+        Some(PinnedRequest {
+            workload: PinnedView {
+                value: workload_value,
+                _lease: None,
+            },
+            sandbox: sandbox_value.map(|value| PinnedView {
+                value,
+                _lease: None,
+            }),
+            profiles: Some(profiles),
+        })
+    }
+
+    fn cached_many(&self, kind: ResourceKind, names: &[String]) -> Option<Vec<Arc<View>>> {
+        let mut state = self.current_state();
+        let now = Instant::now();
+        self.prune(&mut state, now);
+        let mut values = Vec::with_capacity(names.len());
+        for name in names {
+            values.push(self.ready_value(&state, kind, name)?);
+        }
+        for name in names {
+            self.refresh_idle(&mut state, kind, name, now);
+        }
+        drop(state);
+        self.record_hits(kind, names.len());
         Some(values)
     }
 
@@ -482,9 +664,8 @@ impl Client {
 
     pub async fn expire(self: Arc<Self>, stop: CancellationToken) {
         loop {
-            self.expire_disconnected();
             let deadline = {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.current_state();
                 self.prune(&mut state, Instant::now());
                 let idle = if self.config.idle_ttl.is_zero() {
                     None
@@ -520,12 +701,15 @@ impl Client {
         self.expiry.notify_one();
     }
 
-    fn expire_disconnected(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state
-            .grace_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+    fn current_state(&self) -> MutexGuard<'_, State> {
+        loop {
+            let mut state = self.state.lock().unwrap();
+            if state
+                .grace_deadline
+                .is_none_or(|deadline| Instant::now() < deadline)
+            {
+                return state;
+            }
             let retired = self.reset_locked(&mut state);
             drop(state);
             drop(retired);
@@ -834,9 +1018,16 @@ impl Client {
     }
 }
 
+pub(crate) struct PinnedRequest {
+    pub workload: PinnedView,
+    pub sandbox: Option<PinnedView>,
+    /// Present when all dependencies came from one cache publication.
+    pub profiles: Option<Vec<Arc<View>>>,
+}
+
 pub(crate) struct PinnedView {
     pub value: Arc<View>,
-    _lease: Lease,
+    _lease: Option<Lease>,
 }
 
 // Keep dependency interests and terminal failures local to one snapshot construction.
@@ -915,14 +1106,19 @@ impl Drop for Lease {
             if entry.users == 0 && self.client.retained() {
                 if !self.success {
                     self.client.remove(&mut state, &self.key);
+                    self.client.publish_size(&state);
                 } else {
-                    state.idle.put(self.key.clone(), Instant::now());
-                    self.client.prune(&mut state, Instant::now());
+                    let start_timer =
+                        state.idle.is_empty() && !self.client.config.idle_ttl.is_zero();
+                    let now = Instant::now();
+                    state.idle.put(self.key.clone(), now);
+                    self.client.prune(&mut state, now);
+                    if start_timer {
+                        self.client.expiry.notify_one();
+                    }
                 }
             }
         }
-        self.client.publish_size(&state);
-        self.client.expiry.notify_one();
     }
 }
 

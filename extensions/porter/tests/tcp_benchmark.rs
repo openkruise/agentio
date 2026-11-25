@@ -11,7 +11,7 @@ use agentio_porter::wire::agentio::security::{
 use agentio_porter::{
     discovery::{CacheConfig, Client, TransportConfig},
     metrics::Metrics,
-    processor::Processor,
+    processor::{Gateway, Processor},
     wire::{
         ads,
         agentio::extensions::{PolicyReference, PolicyResourceReference, WorkloadMetadata},
@@ -176,8 +176,7 @@ fn inventory(
         }
         let shared = std::env::var("PORTER_BENCH_SHARED").as_deref() == Ok("1");
         let mut references = Vec::new();
-        // The zero-TCP case still has the same eight SNI rules as the inline baseline.
-        for j in 0..policies.max(1) {
+        for j in 0..policies {
             let name = if shared {
                 format!("profiles/shared/{j}")
             } else {
@@ -259,7 +258,7 @@ fn inventory(
     (resources, requests)
 }
 
-fn allowed(response: extproc::ProcessingResponse) {
+fn allowed(response: extproc::ProcessingResponse, profile_count: Option<usize>) {
     assert!(matches!(
         response.response,
         Some(extproc::processing_response::Response::RequestHeaders(_))
@@ -269,6 +268,11 @@ fn allowed(response: extproc::ProcessingResponse) {
         panic!("missing agentio metadata")
     };
     assert!(!agentio.fields.contains_key("tcp") && !agentio.fields.contains_key("sni"));
+    assert!(agentio.fields.contains_key("workload"));
+    let Some(profile_count) = profile_count else {
+        assert!(!agentio.fields.contains_key("connection"));
+        return;
+    };
     let Some(Kind::StructValue(connection)) = &agentio.fields["connection"].kind else {
         panic!("missing connection policy")
     };
@@ -278,7 +282,7 @@ fn allowed(response: extproc::ProcessingResponse) {
     let Some(Kind::ListValue(profiles)) = &policy.fields["profiles"].kind else {
         panic!("missing profiles")
     };
-    assert!(!profiles.values.is_empty());
+    assert_eq!(profiles.values.len(), profile_count);
 }
 
 fn report(case: &str, mode: &str, mut samples: Vec<f64>, elapsed: Duration) {
@@ -295,14 +299,45 @@ fn report(case: &str, mode: &str, mut samples: Vec<f64>, elapsed: Duration) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "performance benchmark; run release build in isolation with --nocapture"]
 async fn connect_tcp_policy_benchmark() {
+    run_cases(
+        Gateway::AgentioEgress,
+        true,
+        &[(0, 0), (1, 16), (8, 16), (8, 128), (32, 32)],
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "performance benchmark; run release build in isolation with --nocapture"]
+async fn workload_delta_benchmark() {
+    run_cases(Gateway::Agentgateway, false, &[(0, 0)]).await;
+    run_cases(
+        Gateway::AgentioEgress,
+        false,
+        &[(0, 0), (1, 16), (8, 16), (8, 128), (32, 32)],
+    )
+    .await;
+}
+
+async fn run_cases(gateway: Gateway, sandbox_mode: bool, cases: &[(usize, usize)]) {
     let samples: usize = std::env::var("PORTER_BENCH_REQUESTS")
         .unwrap_or_else(|_| "5000".into())
         .parse()
         .unwrap();
     assert!(samples >= 100);
-    for (policies, rules) in [(0, 0), (1, 16), (8, 16), (8, 128), (32, 32)] {
-        let case = format!("{policies}x{rules}");
-        let (resources, requests) = inventory(policies, rules, 101);
+    for &(policies, rules) in cases {
+        let case = match gateway {
+            Gateway::Agentgateway => "identity".to_owned(),
+            Gateway::AgentioEgress => format!("{policies}x{rules}"),
+        };
+        // The original alias benchmark includes an SNI-only profile in its zero-TCP case.
+        let profiles = if sandbox_mode {
+            policies.max(1)
+        } else {
+            policies
+        };
+        let profile_count = (gateway == Gateway::AgentioEgress).then_some(profiles);
+        let (resources, requests) = inventory(profiles, rules, 101);
         let stop = CancellationToken::new();
         let directory = tempfile::tempdir().unwrap();
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -336,7 +371,7 @@ async fn connect_tcp_policy_benchmark() {
                 idle_ttl: Duration::from_secs(600),
             },
             Metrics::new(),
-            true,
+            sandbox_mode,
         );
         let discovery = tokio::spawn(client.clone().run(
             TransportConfig {
@@ -360,7 +395,7 @@ async fn connect_tcp_policy_benchmark() {
         .unwrap();
         let processor = Processor {
             authenticator: Arc::new(agentio_porter::identity::Native),
-            gateway: agentio_porter::processor::Gateway::AgentioEgress,
+            gateway,
             client,
             cluster_id: "Kubernetes".into(),
             timeout: Duration::from_secs(4),
@@ -372,18 +407,27 @@ async fn connect_tcp_policy_benchmark() {
         let mut durations = Vec::new();
         for request in &requests[1..] {
             let start = Instant::now();
-            allowed(processor.handle(request.clone()).await.unwrap());
+            allowed(
+                processor.handle(request.clone()).await.unwrap(),
+                profile_count,
+            );
             durations.push(start.elapsed().as_secs_f64() * 1e6);
         }
         report(&case, "cold_handler_tls_ads", durations, begin.elapsed());
         for _ in 0..1000 {
-            allowed(processor.handle(requests[0].clone()).await.unwrap());
+            allowed(
+                processor.handle(requests[0].clone()).await.unwrap(),
+                profile_count,
+            );
         }
         let begin = Instant::now();
         let mut durations = Vec::with_capacity(samples);
         for _ in 0..samples {
             let start = Instant::now();
-            allowed(processor.handle(requests[0].clone()).await.unwrap());
+            allowed(
+                processor.handle(requests[0].clone()).await.unwrap(),
+                profile_count,
+            );
             durations.push(start.elapsed().as_secs_f64() * 1e6);
         }
         report(&case, "hot_handler", durations, begin.elapsed());
@@ -420,7 +464,7 @@ async fn connect_tcp_policy_benchmark() {
                             .await
                             .unwrap()
                             .into_inner();
-                        allowed(stream.message().await.unwrap().unwrap());
+                        allowed(stream.message().await.unwrap().unwrap(), profile_count);
                         assert!(stream.message().await.unwrap().is_none());
                         durations.push(start.elapsed().as_secs_f64() * 1e6);
                     }

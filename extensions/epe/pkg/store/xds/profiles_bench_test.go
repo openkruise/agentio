@@ -21,18 +21,22 @@ import (
 	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
+	"google.golang.org/protobuf/types/known/anypb"
+	"istio.io/istio/pkg/test"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
-	"github.com/openkruise/agentio/pkg/krt"
-
-	"istio.io/istio/pkg/test"
-
+	ext "github.com/openkruise/agentio/api/extensions/v1"
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	wds "github.com/openkruise/agentio/api/workload/v1"
+	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
+	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/securityprofile"
+	workloadpolicy "github.com/openkruise/agentio/extensions/epe/pkg/policy/workload"
+	"github.com/openkruise/agentio/extensions/epe/pkg/store"
 	"github.com/openkruise/agentio/extensions/epe/pkg/subject"
 	"github.com/openkruise/agentio/pkg/demandcache"
 	"github.com/openkruise/agentio/pkg/features"
+	"github.com/openkruise/agentio/pkg/krt"
 	"github.com/openkruise/agentio/pkg/model"
 	"github.com/openkruise/agentio/pkg/xdsclient"
 )
@@ -42,6 +46,10 @@ import (
 type profileBenchSource struct {
 	*fakeSource
 	done chan struct{}
+}
+
+func (s *profileBenchSource) LookupResource(typ, name string) (*xdsclient.Resource, <-chan struct{}, bool) {
+	return s.snapshot.Resources[typ][name], s.snapshot.Changed, s.snapshot.Usable(typ)
 }
 
 func (s *profileBenchSource) SnapshotFor(names map[string][]string) xdsclient.Snapshot {
@@ -166,6 +174,113 @@ func BenchmarkResolveProfilesHot(b *testing.B) {
 					i++
 				}
 			})
+		})
+	}
+}
+
+// Exercise Workload identity and ordered global/namespaced policy bindings with
+// Sandbox discovery disabled. All workers share the normal retention and admission paths.
+func BenchmarkWorkloadDeltaHot(b *testing.B) {
+	test.SetForTest(b, &features.SandboxMode, false)
+	for _, count := range []int{0, 1, 8} {
+		b.Run(fmt.Sprintf("References%d", count), func(b *testing.B) {
+			source := &profileBenchSource{fakeSource: testSource(), done: make(chan struct{})}
+			source.snapshot.Synced[model.SecurityProfileType] = true
+			source.snapshot.Resources[model.SecurityProfileType] = make(map[string]*xdsclient.Resource)
+			binding := &ext.PolicyReference{TypeUrl: model.SecurityProfileType}
+			prepared := make([]securityprofile.Profile, count)
+			for i := range prepared {
+				p := &prepared[i]
+				p.Spec, p.Selector = &agentsv1alpha1.SecurityProfileSpec{}, labels.Nothing()
+				p.Meta.Name = fmt.Sprintf("policy-%d", i)
+				key := "global/" + p.Meta.Name
+				if i%2 == 1 {
+					p.Meta.Namespace = "ns"
+					key = "namespaced/ns/" + p.Meta.Name
+				}
+				binding.Resources = append(binding.Resources, &ext.PolicyResourceReference{Name: key})
+				source.snapshot.Resources[model.SecurityProfileType][key] = &xdsclient.Resource{Value: p}
+			}
+			payload, err := anypb.New(binding)
+			if err != nil {
+				b.Fatal(err)
+			}
+			requests := make([]filter.RequestContext, 128)
+			for i := range requests {
+				name := fmt.Sprintf("pod-%d", i)
+				uid := "edge//Pod/ns/" + name
+				requests[i].Caller.Subject.Workload.UID = uid
+				source.snapshot.Resources[model.WorkloadType][uid] = &xdsclient.Resource{Value: &wds.Workload{
+					Uid:        uid,
+					Namespace:  "ns",
+					Name:       name,
+					Extensions: []*wds.Extension{{Name: "security-profile-reference", Config: payload}},
+				}}
+			}
+			s := New(source)
+			s.cache, err = demandcache.New[*xdsclient.Resource](source, demandcache.Config{IdleTTL: time.Hour})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(s.cache.Close)
+			aggregate := store.NewAggregate(s)
+			workloadpolicy.RegisterQueries(aggregate, "edge")
+			resolveBinding := workloadpolicy.NewContextResolver(aggregate)
+			opts := krt.WithStop(b.Context().Done())
+			raw := krt.NewStaticCollection(nil, prepared, opts)
+			matcher := profilestore.NewXDSStore()
+			reg := matcher.RegisterCollection(
+				profilestore.NewSourceCollection(raw, nil, opts),
+				s.AcquireProfileReferences,
+			)
+			b.Cleanup(reg.UnregisterHandler)
+			if !reg.WaitUntilSynced(b.Context().Done()) {
+				b.Fatal("policy collection did not sync")
+			}
+			for i, req := range requests {
+				got, err := resolveBinding(b.Context(), req)
+				if err != nil || got.Caller.Subject.Workload.UID != req.Caller.Subject.Workload.UID ||
+					len(got.Caller.Subject.Workload.SecurityProfileReferences) != count {
+					b.Fatalf("Workload %d: %v, %v", i, got.Caller.Subject.Workload, err)
+				}
+				profiles, err := matcher.ResolveProfiles(b.Context(), got.Caller.Subject)
+				if err != nil || len(profiles) != count {
+					b.Fatalf("profiles: %v, %v", profiles, err)
+				}
+				for j, p := range profiles {
+					if p.Meta.Name != prepared[j].Meta.Name || p.Meta.Namespace != prepared[j].Meta.Namespace {
+						b.Fatalf("out-of-order profile %d: %v", j, p.Meta)
+					}
+				}
+				requests[i] = got
+			}
+			for _, stage := range []string{"Binding", "Profiles", "BindingAndProfiles"} {
+				b.Run(stage, func(b *testing.B) {
+					b.ReportAllocs()
+					b.RunParallel(func(pb *testing.PB) {
+						i := 0
+						for pb.Next() {
+							req := requests[i%len(requests)]
+							i++
+							if stage != "Profiles" {
+								got, err := resolveBinding(b.Context(), req)
+								if err != nil {
+									b.Error(err)
+									return
+								}
+								req = got
+							}
+							if stage != "Binding" {
+								profiles, err := matcher.ResolveProfiles(b.Context(), req.Caller.Subject)
+								if err != nil || len(profiles) != count {
+									b.Errorf("profiles: %v, %v", profiles, err)
+									return
+								}
+							}
+						}
+					})
+				})
+			}
 		})
 	}
 }

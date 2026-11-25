@@ -79,14 +79,13 @@ func (a *Aggregate) Snapshot() *Snapshot { return a.current.Load() }
 // index. Backends can copy only these keys while preserving source precedence.
 // The returned view has no query indexes or change notification.
 func (a *Aggregate) SnapshotFor(keys []Key) *Snapshot {
+	if len(a.stores) == 1 {
+		batch := readKeys(a.stores[0], keys)
+		return &Snapshot{ready: batch.Ready, types: batch.Snapshots}
+	}
 	view := &Snapshot{ready: true, types: map[Type]TypeSnapshot{}}
 	for _, source := range a.stores {
-		var batch Batch
-		if selected, ok := source.(interface{ ReadKeys([]Key) Batch }); ok {
-			batch = selected.ReadKeys(keys)
-		} else {
-			batch = source.Read()
-		}
+		batch := readKeys(source, keys)
 		view.ready = view.ready && batch.Ready
 		for typ, snapshot := range batch.Snapshots {
 			merged, _ := view.types[typ].(*mergedTypeSnapshot)
@@ -98,6 +97,13 @@ func (a *Aggregate) SnapshotFor(keys []Key) *Snapshot {
 		}
 	}
 	return view
+}
+
+func readKeys(source Store, keys []Key) Batch {
+	if selected, ok := source.(interface{ ReadKeys([]Key) Batch }); ok {
+		return selected.ReadKeys(keys)
+	}
+	return source.Read()
 }
 
 // Ready reads publication readiness without querying or locking backends.

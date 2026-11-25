@@ -6,7 +6,7 @@ use std::{borrow::Cow, sync::Arc, time::Duration};
 use tracing::debug;
 
 use crate::{
-    discovery::{Client, DemandError},
+    discovery::{Client, DemandError, PinnedRequest},
     identity::{Authenticator, ConnectionIdentity, Evidence as IdentityEvidence, WorkloadIdentity},
     view::{ResourceKind, View},
 };
@@ -108,19 +108,21 @@ impl Resolver<'_> {
                 return Err(ResolveError::Deadline);
             }
             let mut sandbox_lookup = Cow::Borrowed(sandbox_id);
-            let workload = self
+            let lookup_alias = self.client.sandbox_mode && self.sandbox_by_workload;
+            let PinnedRequest {
+                workload,
+                mut sandbox,
+                profiles: captured_profiles,
+            } = self
                 .client
-                .pin(ResourceKind::Workload, lookup, Some(request_deadline));
-            let sandbox = async {
-                if sandbox_id.is_empty() {
-                    return Ok(None);
-                }
-                self.client
-                    .pin(ResourceKind::Sandbox, sandbox_id, Some(request_deadline))
-                    .await
-                    .map(Some)
-            };
-            let (workload, mut sandbox) = tokio::try_join!(workload, sandbox)?;
+                .pin_request(
+                    lookup,
+                    sandbox_id,
+                    lookup_alias,
+                    connection_policy,
+                    Some(request_deadline),
+                )
+                .await?;
             let View::Workload(source) = workload.value.as_ref() else {
                 unreachable!("typed Workload watch")
             };
@@ -138,9 +140,9 @@ impl Resolver<'_> {
                 debug!(reason = "fallback_workload_mismatch", "request denied");
                 return Err(ResolveError::Denied);
             }
-            if sandbox_id.is_empty()
-                && self.client.sandbox_mode
-                && self.sandbox_by_workload
+            if captured_profiles.is_none()
+                && sandbox_id.is_empty()
+                && lookup_alias
                 && !source.namespace.is_empty()
                 && !source.name.is_empty()
             {
@@ -179,40 +181,46 @@ impl Resolver<'_> {
             } else {
                 &[]
             };
-            let names: Vec<_> = references.iter().map(|r| r.name.clone()).collect();
-            let profiles = dependencies.resolve(&names).await;
-            let mut keys = vec![(ResourceKind::Workload, lookup)];
-            if !sandbox_lookup.is_empty() {
-                keys.push((ResourceKind::Sandbox, sandbox_lookup.as_ref()));
-            }
-            let profile_offset = keys.len();
-            keys.extend(
-                names
-                    .iter()
-                    .map(|name| (ResourceKind::SecurityProfile, name.as_str())),
-            );
-            let captured = self.client.capture(&keys)?;
-            if !captured[0]
-                .as_ref()
-                .is_some_and(|after| Arc::ptr_eq(&workload.value, after))
-            {
-                continue;
-            }
-            if !sandbox_lookup.is_empty() {
-                match (&sandbox, &captured[1]) {
-                    (Some(before), Some(after)) if Arc::ptr_eq(&before.value, after) => {}
-                    (None, None) => {}
-                    _ => continue,
+            let profiles = if let Some(profiles) = captured_profiles {
+                profiles
+            } else {
+                let names: Vec<_> = references.iter().map(|r| r.name.clone()).collect();
+                let profiles = dependencies.resolve(&names).await;
+                let mut keys = vec![(ResourceKind::Workload, lookup)];
+                let watch_sandbox = !sandbox_lookup.is_empty();
+                if watch_sandbox {
+                    keys.push((ResourceKind::Sandbox, sandbox_lookup.as_ref()));
                 }
-            }
-            let profiles = profiles?;
-            if profiles.iter().enumerate().any(|(i, before)| {
-                !captured[profile_offset + i]
+                let profile_offset = keys.len();
+                keys.extend(
+                    names
+                        .iter()
+                        .map(|name| (ResourceKind::SecurityProfile, name.as_str())),
+                );
+                let captured = self.client.capture(&keys)?;
+                if !captured[0]
                     .as_ref()
-                    .is_some_and(|after| Arc::ptr_eq(before, after))
-            }) {
-                continue;
-            }
+                    .is_some_and(|after| Arc::ptr_eq(&workload.value, after))
+                {
+                    continue;
+                }
+                if watch_sandbox {
+                    match (&sandbox, &captured[1]) {
+                        (Some(before), Some(after)) if Arc::ptr_eq(&before.value, after) => {}
+                        (None, None) => {}
+                        _ => continue,
+                    }
+                }
+                let profiles = profiles?;
+                if profiles.iter().enumerate().any(|(i, before)| {
+                    !captured[profile_offset + i]
+                        .as_ref()
+                        .is_some_and(|after| Arc::ptr_eq(before, after))
+                }) {
+                    continue;
+                }
+                profiles
+            };
             for (reference, profile) in references.iter().zip(&profiles) {
                 let View::SecurityProfile(profile) = profile.as_ref() else {
                     unreachable!("typed SecurityProfile watch")

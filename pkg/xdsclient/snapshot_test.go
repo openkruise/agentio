@@ -14,7 +14,10 @@
 
 package xdsclient
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSnapshotForPinsOnlySelectedValuesAndReadiness(t *testing.T) {
 	policyType := testType + "/policy"
@@ -54,5 +57,33 @@ func TestSnapshotForPinsOnlySelectedValuesAndReadiness(t *testing.T) {
 	}
 	if !view.Connected || !view.Synced[testType] {
 		t.Fatal("old synchronization state mutated")
+	}
+}
+
+func TestLookupResourceCanonicalNameAndGrace(t *testing.T) {
+	old := &Resource{Value: "policy"}
+	st := &typeState{
+		synced:    true,
+		resources: map[string]*Resource{"global/policy": old},
+		aliases:   map[string]string{"alias": "global/policy"},
+	}
+	c := &Client{changed: make(chan struct{}), types: map[string]*typeState{testType: st}}
+	channel := c.changed
+	if v, changed, ready := c.LookupResource(testType, "global/policy"); v != old || changed != channel || !ready {
+		t.Fatal("canonical read did not capture the current publication")
+	}
+	if v, _, ready := c.LookupResource(testType, "alias"); v != nil || !ready {
+		t.Fatal("alias treated as a canonical resource")
+	}
+	st.synced, st.epoch = false, 1
+	st.graceUntil = time.Now().Add(time.Minute)
+	st.graceTimer = time.NewTimer(time.Hour)
+	defer st.graceTimer.Stop()
+	if v, _, ready := c.LookupResource(testType, "global/policy"); v != old || !ready {
+		t.Fatal("usable resource lost during reconnect grace")
+	}
+	st.graceUntil = time.Now().Add(-time.Second)
+	if v, changed, ready := c.LookupResource(testType, "global/policy"); v != nil || changed == channel || ready {
+		t.Fatal("expired publication accepted")
 	}
 }

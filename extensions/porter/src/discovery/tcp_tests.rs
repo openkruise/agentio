@@ -917,3 +917,232 @@ async fn runtime_identity_preserves_binding_and_gateway_constraints() {
     );
     assert!(!is_allowed(p.handle(request("")).await.unwrap()));
 }
+
+// Inspect one retained entry with the same expiry handling as a batch hit.
+impl Client {
+    fn cached_value(&self, kind: ResourceKind, name: &str) -> Option<Arc<View>> {
+        self.cached_many(kind, &[name.to_owned()])?.pop()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn hot_inline_pair_observes_updates_removal_and_binding() {
+    let p = processor();
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        UID,
+        &["/192.0.2.10"],
+        referenced_workload(&[]),
+    );
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        SANDBOX,
+        &[],
+        inline_sandbox(UID),
+    );
+
+    assert_policies(
+        p.handle(request(SANDBOX)).await.unwrap(),
+        &[Some(TcpAction::Deny)],
+    );
+    assert!(
+        p.client
+            .pin_request("/192.0.2.10", SANDBOX, false, true, None)
+            .await
+            .unwrap()
+            .profiles
+            .is_some()
+    );
+    let mut updated = inline_sandbox(UID);
+    updated.extensions = vec![policy(Some(TcpAction::Allow))];
+    seed(&p.client, ResourceKind::Sandbox, SANDBOX, &[], updated);
+    assert_policies(
+        p.handle(request(SANDBOX)).await.unwrap(),
+        &[Some(TcpAction::Allow)],
+    );
+
+    seed(
+        &p.client,
+        ResourceKind::Sandbox,
+        SANDBOX,
+        &[],
+        inline_sandbox("other-workload"),
+    );
+    assert!(!is_allowed(p.handle(request(SANDBOX)).await.unwrap()));
+    seed(
+        &p.client,
+        ResourceKind::Workload,
+        UID,
+        &["/192.0.2.10"],
+        referenced_workload(&["shared"]),
+    );
+    assert!(
+        p.client
+            .pin_request("/192.0.2.10", SANDBOX, false, true, None)
+            .await
+            .unwrap()
+            .profiles
+            .is_none()
+    );
+    p.client
+        .apply(
+            ResourceKind::Sandbox,
+            &Response {
+                type_url: view::SANDBOX.into(),
+                removed_resources: vec![SANDBOX.into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        p.client
+            .cached_value(ResourceKind::Sandbox, SANDBOX)
+            .is_none()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn hot_inline_pair_refreshes_idle_lifetime_for_both_resources() {
+    let c = Client::new(
+        CacheConfig {
+            max_entries: 2,
+            idle_ttl: Duration::from_secs(1),
+        },
+        Metrics::new(),
+        true,
+    );
+    seed(
+        &c,
+        ResourceKind::Workload,
+        UID,
+        &[],
+        referenced_workload(&[]),
+    );
+    seed(&c, ResourceKind::Sandbox, SANDBOX, &[], inline_sandbox(UID));
+    tokio::time::advance(Duration::from_millis(800)).await;
+    assert!(
+        c.pin_request(UID, SANDBOX, false, true, None)
+            .await
+            .unwrap()
+            .profiles
+            .is_some()
+    );
+    tokio::time::advance(Duration::from_millis(500)).await;
+    assert!(
+        c.pin_request(UID, SANDBOX, false, true, None)
+            .await
+            .unwrap()
+            .profiles
+            .is_some()
+    );
+    tokio::time::advance(Duration::from_millis(1001)).await;
+    assert!(c.cached_value(ResourceKind::Workload, UID).is_none());
+    assert!(c.cached_value(ResourceKind::Sandbox, SANDBOX).is_none());
+}
+
+#[tokio::test]
+async fn cold_pair_keeps_both_interests_pinned_above_capacity() {
+    let c = Client::new(
+        CacheConfig {
+            max_entries: 1,
+            idle_ttl: Duration::ZERO,
+        },
+        Metrics::new(),
+        true,
+    );
+    let mut pending = Box::pin(c.pin_request(UID, SANDBOX, false, true, None));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    seed(
+        &c,
+        ResourceKind::Workload,
+        UID,
+        &[],
+        referenced_workload(&[]),
+    );
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    seed(&c, ResourceKind::Sandbox, SANDBOX, &[], inline_sandbox(UID));
+    let pinned = pending.await.unwrap();
+    assert!(pinned.profiles.is_none());
+    assert_eq!(Client::size(&c.state.lock().unwrap()), 2);
+    drop(pinned.workload);
+    assert_eq!(Client::size(&c.state.lock().unwrap()), 1);
+    drop(pinned.sandbox);
+    assert!(c.cached_value(ResourceKind::Sandbox, SANDBOX).is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn disconnect_grace_invalidates_a_hot_inline_pair() {
+    let c = processor().client;
+    seed(
+        &c,
+        ResourceKind::Workload,
+        UID,
+        &[],
+        referenced_workload(&[]),
+    );
+    seed(&c, ResourceKind::Sandbox, SANDBOX, &[], inline_sandbox(UID));
+    c.disconnected();
+    assert!(
+        c.pin_request(UID, SANDBOX, false, true, None)
+            .await
+            .unwrap()
+            .profiles
+            .is_some()
+    );
+    tokio::time::advance(DISCONNECT_GRACE).await;
+    assert!(c.cached_value(ResourceKind::Workload, UID).is_none());
+    assert!(c.cached_value(ResourceKind::Sandbox, SANDBOX).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn hot_workload_snapshot_refreshes_all_shared_interests() {
+    let c = Client::new(
+        CacheConfig {
+            max_entries: 3,
+            idle_ttl: Duration::from_secs(1),
+        },
+        Metrics::new(),
+        false,
+    );
+    seed(
+        &c,
+        ResourceKind::Workload,
+        UID,
+        &[],
+        referenced_workload(&["second", "first"]),
+    );
+    for name in ["first", "second"] {
+        seed(
+            &c,
+            ResourceKind::SecurityProfile,
+            name,
+            &[],
+            shared_profile(name, None),
+        );
+    }
+    let second = c
+        .demand(ResourceKind::SecurityProfile, "second", None)
+        .await
+        .unwrap();
+    for millis in [800, 600] {
+        tokio::time::advance(Duration::from_millis(millis)).await;
+        let hit = c.pin_request(UID, "", false, true, None).await.unwrap();
+        assert!(hit.sandbox.is_none());
+        let profiles = hit.profiles.expect("complete Workload and shared profiles");
+        assert_eq!(profiles.len(), 2);
+        assert!(Arc::ptr_eq(&profiles[0], &second));
+    }
+    tokio::time::advance(Duration::from_millis(1001)).await;
+    let mut pending = Box::pin(c.pin_request(UID, "", false, true, None));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    assert!(
+        c.cached_value(ResourceKind::SecurityProfile, "second")
+            .is_none()
+    );
+    assert!(
+        c.cached_value(ResourceKind::SecurityProfile, "first")
+            .is_none()
+    );
+}
