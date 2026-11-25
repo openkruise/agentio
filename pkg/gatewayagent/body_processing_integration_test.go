@@ -143,7 +143,11 @@ func TestCommunityEnvoyBodyProcessingECDS(t *testing.T) {
 	v1, _ := auditResources(t, fmt.Sprintf(rules, "v1", "oldAnswer"), "v1")
 	v2, _ := auditResources(t, fmt.Sprintf(rules, "v2", "newAnswer"), "v2")
 	invalid, _ := auditResources(t, "bodyProcessing: {filterChains: null}", "invalid")
-	unsupportedFormatter, _ := auditResources(t, fmt.Sprintf(rules, "%CEL('v2')%", "newAnswer"), "unsupported-formatter")
+	unsupportedFormatter, _ := auditResources(
+		t,
+		fmt.Sprintf(rules, "%CEL('v2')%", "newAnswer"),
+		"unsupported-formatter",
+	)
 
 	const first = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"first"}}]}` + "\n\n"
 	const last = `data: {"model":"m","choices":[{"index":0,"delta":{"content":"last"},"finish_reason":"stop"}]}` +
