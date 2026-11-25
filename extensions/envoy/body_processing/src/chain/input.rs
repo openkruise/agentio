@@ -52,15 +52,23 @@ impl Group {
     }
 
     fn finish(
-        self,
+        mut self,
         wire_bytes: usize,
         decoded: Option<usize>,
         complete: bool,
         records: &mut FilterOutput,
     ) -> Decision {
+        let mut decision = Decision::Continue;
         let result = match self.input {
             Input::Failed(error) => Err(error),
-            Input::Llm(parser) => parser.finish(complete).map(BodyResult::Llm),
+            Input::Llm(parser) => parser
+                .finish(complete, &mut |event| {
+                    let event = BodyEvent::Llm(event);
+                    for filter in &mut self.subscribers {
+                        decision = decision.merge(filter.on_event(&event, wire_bytes));
+                    }
+                })
+                .map(BodyResult::Llm),
             _ if !complete => Err(BodyError::Incomplete),
             Input::Count => Ok(BodyResult::Counts),
             Input::Http(reader) => reader
@@ -74,7 +82,7 @@ impl Group {
         };
         self.subscribers
             .into_iter()
-            .fold(Decision::Continue, |decision, filter| {
+            .fold(decision, |decision, filter| {
                 decision.merge(filter.on_end(&end, records))
             })
     }

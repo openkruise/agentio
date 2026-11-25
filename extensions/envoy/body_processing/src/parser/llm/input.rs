@@ -103,19 +103,26 @@ impl Parser {
         }
     }
 
-    pub(crate) fn finish(self, complete: bool) -> Result<Outcome, BodyError> {
+    pub(crate) fn finish(
+        self,
+        complete: bool,
+        emit: &mut impl FnMut(Event<'_>),
+    ) -> Result<Outcome, BodyError> {
         match self {
-            Self::Sse(_, stream) => Ok(match (complete, stream.into_partial()) {
-                (true, None) => Outcome::Sse,
-                (_, partial) => Outcome::InterruptedSse {
-                    reason: if complete {
-                        BodyError::IncompleteStream
-                    } else {
-                        BodyError::Incomplete
+            Self::Sse(_, stream) => {
+                let partial = stream.into_partial(&mut |event| emit(Event::Response(event)));
+                Ok(match (complete, partial) {
+                    (true, None) => Outcome::Sse,
+                    (_, partial) => Outcome::InterruptedSse {
+                        reason: if complete {
+                            BodyError::IncompleteStream
+                        } else {
+                            BodyError::Incomplete
+                        },
+                        partial,
                     },
-                    partial,
-                },
-            }),
+                })
+            }
             _ if !complete => Err(BodyError::Incomplete),
             Self::Request(reader) => Ok(Outcome::Document {
                 loss: CaptureLoss::default(),

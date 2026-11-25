@@ -119,6 +119,10 @@ pub(super) struct ResponseMessages {
 }
 
 impl ResponseMessages {
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(super) fn cut(&mut self, index: u32) {
         self.cut = Some(self.cut.map_or(index, |old| old.min(index)));
         while self

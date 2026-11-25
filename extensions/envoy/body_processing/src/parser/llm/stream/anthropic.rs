@@ -127,6 +127,7 @@ impl Stream {
                         part: Some(i),
                         value: parts.first(),
                         clipped: block.work.clipped,
+                        sealed: true,
                     });
                     block.work.release(b);
                 } else {
@@ -188,6 +189,28 @@ impl Stream {
 
     pub(super) fn observed(self) -> Value {
         super::observed_view(ANTHROPIC, self.model, self.error, self.stop)
+    }
+
+    pub(super) fn interrupted(self, emit: &mut impl FnMut(Event<'_>)) -> Value {
+        for (index, block) in self.blocks.iter().enumerate() {
+            if block.closed || block.kind != "text" {
+                continue;
+            }
+            let value = block.source["text"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .map(|_| &block.source);
+            if value.is_some() || block.work.clipped {
+                emit(Event::OutputItem {
+                    output: Output::new(ANTHROPIC, 0),
+                    part: Some(index as u32),
+                    value,
+                    clipped: block.work.clipped,
+                    sealed: false,
+                });
+            }
+        }
+        self.observed()
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {

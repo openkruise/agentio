@@ -124,6 +124,9 @@ impl Projection {
         if let Some(usage) = self.usage.take() {
             result.document["usage"] = usage;
         }
+        if fields.output_messages && !self.messages.is_empty() {
+            self.publish_messages(&mut result, limit);
+        }
         let mut answer = std::mem::take(&mut self.answer);
         if let Some(pending) = self.pending.take() {
             let cut = pending.clipped_from();
@@ -194,8 +197,10 @@ impl Projection {
                 part,
                 value,
                 clipped,
+                sealed,
             } => {
-                if part.is_none()
+                if sealed
+                    && part.is_none()
                     && let Some(pending) = self.pending.as_mut()
                 {
                     pending.remove_output(output);
@@ -249,16 +254,7 @@ impl Projection {
                 let saved = std::mem::take(&mut self.answer);
                 let mut clipped = truncated && fields.output_messages;
                 if fields.output_messages && view.document.get("outputMessages").is_some() {
-                    let reason = view.document["finishReasons"].get(0);
-                    let (items, shortened) = std::mem::take(&mut self.messages).finish(
-                        view.document["format"] == ANTHROPIC,
-                        reason,
-                        limit,
-                    );
-                    if let Some(items) = items {
-                        result.document["outputMessages"] = items;
-                    }
-                    clipped |= shortened;
+                    clipped |= self.publish_messages(&mut result, limit);
                 }
                 if fields.retained_text {
                     let mut text = TextPreview::default();
@@ -296,6 +292,19 @@ impl Projection {
             _ => {}
         }
         None
+    }
+
+    fn publish_messages(&mut self, result: &mut LlmView, limit: usize) -> bool {
+        let doc = &mut result.document;
+        let (items, clipped) = std::mem::take(&mut self.messages).finish(
+            doc["format"] == ANTHROPIC,
+            doc["finishReasons"].get(0),
+            limit,
+        );
+        if let Some(items) = items {
+            doc["outputMessages"] = items;
+        }
+        clipped
     }
 }
 

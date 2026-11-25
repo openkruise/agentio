@@ -10,17 +10,21 @@ use crate::parser::llm::{
     responses_item,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 #[derive(Default)]
 pub(super) struct Stream {
-    pub(super) view: Option<Value>,
+    view: Option<Value>,
     items: BTreeMap<u32, Item>,
     authoritative: bool,
 }
+#[derive(Default)]
 struct Item {
     id: String,
     closed: bool,
+    text: BTreeMap<(u32, bool), String>,
+    text_bytes: usize,
+    text_cut: Option<(u32, bool)>,
 }
 impl Stream {
     pub(super) fn add(
@@ -113,17 +117,21 @@ impl Stream {
                 if !self.items.contains_key(&i) {
                     b.item()?;
                 }
-                if closed {
-                    sealed(i, item, b, emit)?;
-                }
-                b.tools.responses(i as usize, item);
-                self.items.insert(
+                let previous = self.items.insert(
                     i,
                     Item {
                         id: id.into(),
                         closed,
+                        ..Default::default()
                     },
                 );
+                if let Some(previous) = previous {
+                    b.room += previous.text_bytes;
+                }
+                if closed {
+                    sealed(i, item, b, emit)?;
+                }
+                b.tools.responses(i as usize, item);
             }
             "response.output_text.delta"
             | "response.refusal.delta"
@@ -139,17 +147,30 @@ impl Stream {
             | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done" => {
                 let output = index(&v["output_index"])?;
-                let item = self.items.get(&output).ok_or(BodyError::InvalidContent)?;
+                let item = self
+                    .items
+                    .get_mut(&output)
+                    .ok_or(BodyError::InvalidContent)?;
                 if item.closed || string(&v["item_id"])? != item.id {
                     return Err(BodyError::InvalidContent);
                 }
                 match kind {
                     "response.output_text.delta" | "response.refusal.delta" => {
+                        let part = v.get("content_index").map(index).transpose()?;
+                        let text = string(&v["delta"])?;
+                        if !b.partial {
+                            item.retain_text(
+                                part.unwrap_or_default(),
+                                kind == "response.refusal.delta",
+                                text,
+                                &mut b.room,
+                            );
+                        }
                         emit(Event::TextDelta {
                             provisional: true,
                             output: Output::new(RESPONSES, output),
-                            part: v.get("content_index").map(index).transpose()?,
-                            text: string(&v["delta"])?,
+                            part,
+                            text,
                         });
                         return Ok(None);
                     }
@@ -165,6 +186,37 @@ impl Stream {
         Ok(terminal.then_some(Trailers::Done))
     }
 
+    pub(super) fn interrupted(self, emit: &mut impl FnMut(Event<'_>)) -> Value {
+        for (index, item) in self.items {
+            if item.text.is_empty() && item.text_cut.is_none() {
+                continue;
+            }
+            let content: Vec<_> = item
+                .text
+                .into_iter()
+                .take_while(|(part, _)| item.text_cut.is_none_or(|cut| *part <= cut))
+                .map(|((_, refusal), text)| {
+                    let mut block = json!({"type": if refusal { "refusal" } else { "text" }});
+                    block["text"] = text.into();
+                    block
+                })
+                .collect();
+            let value = (!content.is_empty()).then(|| {
+                let mut message = json!({"index":index,"role":"assistant"});
+                message["content"] = content.into();
+                message
+            });
+            emit(Event::OutputItem {
+                output: Output::new(RESPONSES, index),
+                part: None,
+                value: value.as_ref(),
+                clipped: item.text_cut.is_some(),
+                sealed: false,
+            });
+        }
+        self.view.unwrap_or_else(|| json!({"format": RESPONSES}))
+    }
+
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
         let mut view = self.view.ok_or(BodyError::InvalidContent)?;
         if !self.authoritative && view.get("error").is_none() {
@@ -178,6 +230,35 @@ impl Stream {
             view["outputMessages"] = json!([]);
         }
         Ok(view)
+    }
+}
+
+impl Item {
+    fn retain_text(&mut self, part: u32, refusal: bool, text: &str, room: &mut usize) {
+        if text.is_empty() {
+            return;
+        }
+        let key = (part, refusal);
+        if let Some(cut) = &mut self.text_cut {
+            *cut = (*cut).min(key);
+            return;
+        }
+        // Charge each part for its envelope as well as its text.
+        let entry = self.text.entry(key);
+        let overhead = if matches!(&entry, Entry::Vacant(_)) {
+            r#"{"type":"refusal","text":""},"#.len()
+        } else {
+            0
+        };
+        let keep = text.floor_char_boundary(text.len().min(room.saturating_sub(overhead)));
+        if keep > 0 {
+            entry.or_default().push_str(&text[..keep]);
+            self.text_bytes += overhead + keep;
+            *room -= overhead + keep;
+        }
+        if keep < text.len() {
+            self.text_cut = Some(key);
+        }
     }
 }
 
@@ -207,6 +288,7 @@ fn sealed(i: u32, item: &Value, b: &mut Retention, emit: &mut impl FnMut(Event<'
             part: None,
             value: Some(&message),
             clipped: false,
+            sealed: true,
         });
     }
     Ok(())

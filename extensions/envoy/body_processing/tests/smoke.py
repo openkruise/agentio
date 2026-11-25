@@ -85,6 +85,7 @@ def bootstrap(port, upstream):
             {"name": "chat-choices", "matcher": {"hosts": ["choices.test", "reset.test"]}, "parser": {"llm": {}},
              "filters": [audit({"question": "%EVENT(llm.question)%", "answer": "%EVENT(llm.answer)%",
                                 "input": "%EVENT(llm.request.messages):62%", "requestStatus": "%CAPTURE_STATUS(request)%",
+                                "output": "%EVENT(llm.response.messages)%",
                                 "preview": "%EVENT(llm.response.retainedText)%",
                                 "tokens": "%EVENT(llm.usage.totalTokens)%", "status": "%CAPTURE_STATUS(response)%",
                                 "code": "%RESPONSE_CODE%"})]},
@@ -521,6 +522,10 @@ def check_records(lines, json_bytes):
     reset, = (r for r in choice_records if r["status"] == "incomplete")
     assert reset["question"] == "retry?" and reset["answer"] == "retry" and reset["preview"] == ["retry", "alternate"]
     assert reset["input"] == [{"role": "user", "parts": [{"type": "text", "content": "retry?"}]}]
+    assert reset["output"] == [
+        {"index": index, "role": "assistant", "parts": [{"type": "text", "content": text}]}
+        for index, text in enumerate(["retry", "alternate"])
+    ]
     assert reset["requestStatus"] == "complete"
     assert reset["code"] == 200 and "tokens" not in reset, reset
     for case, (_, make_part) in ATTACHMENTS.items():

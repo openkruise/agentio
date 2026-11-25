@@ -129,6 +129,7 @@ pub(super) fn emit_item(
             part: block,
             value,
             clipped: loss.document,
+            sealed: true,
         });
     } else {
         if loss.answer || loss.exhausted && (has_text || loss.preview) {
@@ -142,6 +143,7 @@ pub(super) fn emit_item(
             part: block,
             value: None,
             clipped: true,
+            sealed: true,
         });
     }
     index

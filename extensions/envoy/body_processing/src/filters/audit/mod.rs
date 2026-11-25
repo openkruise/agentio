@@ -708,6 +708,59 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_responses_reuse_parser_room_and_clip_each_audit() {
+        let provisional = "水\n".repeat(512);
+        let confirmed = json!({"id":"first","type":"message","role":"assistant",
+            "content":[{"type":"output_text","text":"confirmed"}]});
+        let wire: String = [
+            json!({"type":"response.created","response":{"model":"m","status":"in_progress"}}),
+            json!({"type":"response.output_item.added","output_index":0,"item":confirmed}),
+            json!({"type":"response.output_text.delta","output_index":0,"item_id":"first",
+                "content_index":0,"delta":provisional}),
+            json!({"type":"response.output_item.done","output_index":0,"item":confirmed}),
+            json!({"type":"response.output_item.added","output_index":1,
+                "item":{"id":"second","type":"message"}}),
+            json!({"type":"response.output_text.delta","output_index":1,"item_id":"second",
+                "content_index":0,"delta":provisional}),
+        ]
+        .into_iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap()
+            )
+        })
+        .collect();
+        let status = "%CAPTURE_STATUS(response)%";
+        let small: FormatFields = &[("m", "%EVENT(llm.response.messages):192%"), ("s", status)];
+        let full: FormatFields = &[("m", "%EVENT(llm.response.messages):4096%"), ("s", status)];
+        let rows = protocol_records(
+            Format::Llm(Protocol::OpenaiResponses),
+            "text/event-stream",
+            &wire,
+            ParserDirection::Response(LlmParserLimits {
+                max_content_size: 1024,
+            }),
+            &[small, full],
+            "",
+        );
+        let mut prefix_lengths = Vec::new();
+        for (row, limit) in rows.iter().zip([192, 4096]) {
+            let row = read(row);
+            let messages = &row["m"];
+            assert_eq!(row["s"], "incomplete_stream");
+            assert_eq!(messages.as_array().unwrap().len(), 2);
+            assert_eq!(messages[0]["parts"][0]["content"], "confirmed");
+            assert!(serde_json::to_vec(messages).unwrap().len() <= limit);
+            let text = messages[1]["parts"][0]["content"].as_str().unwrap();
+            assert!(provisional.starts_with(text));
+            prefix_lengths.push(text.len());
+        }
+        assert!(prefix_lengths[0] < prefix_lengths[1]);
+        assert!((900..=1024).contains(&prefix_lengths[1]));
+    }
+
+    #[test]
     fn oversized_tool_and_provider_parts_keep_only_preceding_complete_parts() {
         use super::messages::Messages;
         let text = "private".repeat(200);

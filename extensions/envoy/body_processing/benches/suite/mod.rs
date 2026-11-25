@@ -33,7 +33,7 @@ impl Replay<'_> {
         for chunk in &self.chunks {
             parser.push(chunk, &mut on_event).unwrap();
         }
-        parser.finish(true).unwrap()
+        parser.finish(true, &mut on_event).unwrap()
     }
 
     fn capture(&self, templates: &[Arc<Template>]) -> FilterOutput {
@@ -208,6 +208,7 @@ fn benchmark_response_output(c: &mut Criterion, replay: &Replay<'_>, templates: 
             value: Some(message),
             part: None,
             clipped: false,
+            sealed: true,
         }) = event
         {
             choices.push((output.index, message.clone()));

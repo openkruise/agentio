@@ -308,11 +308,16 @@ fn interrupted_sse_preserves_framed_text_and_omits_unseen_usage() {
             path,
             "text/event-stream",
             stream.as_bytes().chunks(3),
-            &json!({"fieldBytes":1024,"fields":{"answer":true}}),
+            &json!({"fieldBytes":1024,"fields":{"answer":true,"outputMessages":true}}),
             false,
         );
         assert_eq!(r["captureStatus"], "incomplete", "{path}");
         assert_eq!(r["llm.answer"], text, "{path}");
+        assert_eq!(
+            r["gen_ai.output.messages"],
+            json!([{"index":0,"role":"assistant","parts":[{"type":"text","content":text}]}]),
+            "{path}"
+        );
         if path == "/v1/chat/completions" {
             assert_eq!(r["gen_ai.response.model"], "m");
             assert!(r.get("agentio.usage.total_tokens").is_none());
@@ -332,14 +337,78 @@ fn interrupted_sse_preserves_framed_text_and_omits_unseen_usage() {
 }
 
 #[test]
+fn interrupted_sse_keeps_sealed_tools_and_skips_open_tools() {
+    let fields = json!({"fieldBytes":4096,"fields":{"outputMessages":true}});
+    for (path, wire, tool_end, terminal, id) in [
+        (
+            "/v1/messages",
+            include_str!("../../testdata/anthropic.sse"),
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}",
+            "event: message_delta",
+            "tool_1",
+        ),
+        (
+            "/v1/responses",
+            include_str!("../../testdata/responses.sse"),
+            "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":1,",
+            "event: response.completed",
+            "call_1",
+        ),
+    ] {
+        for (boundary, complete, tool_sealed) in [(tool_end, false, false), (terminal, true, true)]
+        {
+            let body = wire.split_once(boundary).unwrap().0;
+            let row = configured_record(
+                "response",
+                path,
+                "text/event-stream",
+                body.as_bytes().chunks(11),
+                &fields,
+                complete,
+            );
+            let status = if complete {
+                "incomplete_stream"
+            } else {
+                "incomplete"
+            };
+            assert_eq!(row["captureStatus"], status, "{path}");
+            let messages = row["gen_ai.output.messages"].as_array().unwrap();
+            assert_eq!(messages[0]["parts"][0]["content"], "你好");
+            let call = messages
+                .iter()
+                .flat_map(|msg| msg["parts"].as_array().unwrap())
+                .find(|part| part["type"] == "tool_call");
+            if tool_sealed {
+                let call = call.unwrap();
+                assert_eq!(call["id"], id);
+                assert_eq!(call["name"], "lookup");
+                assert_eq!(call["arguments"], json!({"city":"北京"}));
+            } else {
+                assert!(call.is_none(), "{path}");
+            }
+        }
+    }
+}
+
+#[test]
 fn responses_empty_or_omitted_terminal_output_keeps_the_confirmed_item_once() {
     let wire =
         include_str!("../../testdata/responses-refusal.sse").replace(",\"content_index\":0", "");
-    for body in [
-        wire.clone(),
-        wire.replace(
-            "\"output\":[],\"status\":\"completed\"",
-            "\"status\":\"completed\"",
+    for (body, complete) in [
+        (wire.clone(), true),
+        (
+            wire.replace(
+                "\"output\":[],\"status\":\"completed\"",
+                "\"status\":\"completed\"",
+            ),
+            true,
+        ),
+        (
+            wire.split_once("event: response.output_item.done")
+                .unwrap()
+                .0
+                .to_owned(),
+            false,
         ),
     ] {
         let record = configured_record(
@@ -347,10 +416,19 @@ fn responses_empty_or_omitted_terminal_output_keeps_the_confirmed_item_once() {
             "/v1/responses",
             "text/event-stream",
             body.as_bytes().chunks(1),
-            &json!({"fieldBytes":2048,"fields":{"answer":true}}),
-            true,
+            &json!({"fieldBytes":2048,"fields":{"answer":true,"outputMessages":true}}),
+            complete,
         );
         assert_eq!(record["llm.answer"], "I cannot help with that.");
-        assert_eq!(record["captureStatus"], "complete");
+        assert_eq!(
+            record["captureStatus"],
+            if complete { "complete" } else { "incomplete" }
+        );
+        let messages = record["gen_ai.output.messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0]["parts"],
+            json!([{"type":"refusal","text":"I cannot help with that."}])
+        );
     }
 }

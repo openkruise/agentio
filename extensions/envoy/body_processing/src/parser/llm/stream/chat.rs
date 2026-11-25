@@ -222,13 +222,14 @@ impl Stream {
                 let mut sealed = std::mem::take(c);
                 sealed.work.release(b);
                 let clipped = sealed.work.clipped;
-                let m = sealed.message(i, f);
+                let m = sealed.message(i, Some(f));
                 emit(Event::OutputItem {
                     output,
                     part: None,
                     value: (!clipped || m["content"].as_array().is_some_and(|v| !v.is_empty()))
                         .then_some(&m),
                     clipped,
+                    sealed: true,
                 });
                 c.finish = Some(f.into());
             }
@@ -238,6 +239,28 @@ impl Stream {
     pub(super) fn observed(self) -> Value {
         let reasons = self.choices.into_values().filter_map(|c| c.finish);
         super::observed_view(CHAT, self.model, self.error, reasons)
+    }
+
+    pub(super) fn interrupted(mut self, emit: &mut impl FnMut(Event<'_>)) -> Value {
+        for (&index, choice) in &mut self.choices {
+            if choice.finish.is_some() {
+                continue;
+            }
+            let choice = std::mem::take(choice);
+            let clipped = choice.work.clipped;
+            let message = choice.message(index, None);
+            let value = (!message["content"].as_array().unwrap().is_empty()).then_some(&message);
+            if value.is_some() || clipped {
+                emit(Event::OutputItem {
+                    output: Output::new(CHAT, index),
+                    part: None,
+                    value,
+                    clipped,
+                    sealed: false,
+                });
+            }
+        }
+        self.observed()
     }
 
     pub(super) fn finish(self, keep: bool) -> Result<Value> {
@@ -263,13 +286,14 @@ impl Stream {
 }
 
 impl Choice {
-    fn message(self, index: u32, reason: &str) -> Value {
+    fn message(self, index: u32, reason: Option<&str>) -> Value {
         let mut blocks = vec![];
         if !self.text.is_empty() {
             blocks.push(json!({"type":"text","text":self.text}));
         }
         for (idx, t) in self.tools {
-            if self.text_clipped || self.tool_cut.is_some_and(|cut| idx >= cut) {
+            if reason.is_none() || self.text_clipped || self.tool_cut.is_some_and(|cut| idx >= cut)
+            {
                 break;
             }
             if let Some(f) = t.function {
@@ -285,7 +309,8 @@ impl Choice {
                 blocks.push(json!({"type":"provider_content","format":CHAT,"data":raw}));
             }
         }
-        if !self.text_clipped
+        if reason.is_some()
+            && !self.text_clipped
             && self.tool_cut.is_none()
             && !self.legacy_clipped
             && let Some(f) = self.legacy
@@ -299,6 +324,10 @@ impl Choice {
         {
             blocks.push(json!({"type":"refusal","text":self.refusal}));
         }
-        json!({"index":index,"role":self.role.as_deref().unwrap_or("assistant"),"content":blocks,"finishReason":reason})
+        let mut message = json!({"index":index,"role":self.role.as_deref().unwrap_or("assistant"),"content":blocks});
+        if let Some(reason) = reason {
+            message["finishReason"] = reason.into();
+        }
+        message
     }
 }

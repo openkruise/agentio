@@ -37,13 +37,14 @@ pub(crate) enum Event<'a> {
         provisional: bool,
     },
     Usage(&'a Value),
-    // A sealed message, or a single block of the Anthropic assistant message.
+    // A message or Anthropic block. Unsealed snapshots are emitted on interruption.
     // A missing value represents a gap where no structured prefix could be retained.
     OutputItem {
         output: Output,
         part: Option<u32>,
         value: Option<&'a Value>,
         clipped: bool,
+        sealed: bool,
     },
     TextGap {
         output: Output,
@@ -228,15 +229,13 @@ impl Stream {
         Ok(())
     }
 
-    /// Metadata observed before a stream ended without its protocol terminator.
-    pub fn into_partial(self) -> Option<(LlmView, bool)> {
+    /// Publish open text and return the metadata observed before interruption.
+    pub fn into_partial(self, emit: &mut impl FnMut(Event<'_>)) -> Option<(LlmView, bool)> {
         let (provider, retention) = self.active?;
         let mut view = match provider {
-            Provider::Responses(s) => s
-                .view
-                .unwrap_or_else(|| serde_json::json!({"format": RESPONSES})),
-            Provider::Chat(s) => s.observed(),
-            Provider::Anthropic(s) => s.observed(),
+            Provider::Responses(s) => s.interrupted(emit),
+            Provider::Chat(s) => s.interrupted(emit),
+            Provider::Anthropic(s) => s.interrupted(emit),
         };
         if let Some(id) = retention.response_id {
             view["responseId"] = id.into();
@@ -310,6 +309,7 @@ mod tests {
                                 part,
                                 value: Some(item),
                                 clipped,
+                                sealed: true,
                             } = event
                             {
                                 let value = if part.is_some() {
