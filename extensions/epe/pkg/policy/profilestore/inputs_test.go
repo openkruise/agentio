@@ -64,9 +64,11 @@ func TestXDSInputsUseEPEConfigMapsAndPinRequestValues(t *testing.T) {
 		Data:       map[string]string{"value": "first"},
 	}
 	cms.UpdateObject(cm)
+	// The collection dispatches updates to the matcher asynchronously.
+	// Wait for the publication a request will actually read.
 	testutil.Eventually(t, func() bool {
-		p := collection.GetKey(profile.ResourceName())
-		return p != nil && p.InputsError == ""
+		installed := matcher.List()
+		return len(installed) == 1 && installed[0].InputsError == ""
 	}, "input creation published without a request")
 	first, err := matcher.ResolveProfiles(t.Context(), subj)
 	if err != nil || first[0].InputsError != "" || first[0].Inputs["settings"].(map[string]string)["value"] != "first" {
@@ -76,8 +78,8 @@ func TestXDSInputsUseEPEConfigMapsAndPinRequestValues(t *testing.T) {
 	cm.Data["value"] = "second"
 	cms.UpdateObject(cm)
 	testutil.Eventually(t, func() bool {
-		p := collection.GetKey(profile.ResourceName())
-		return p != nil && p.Inputs["settings"].(map[string]string)["value"] == "second"
+		installed := matcher.List()
+		return len(installed) == 1 && installed[0].Inputs["settings"].(map[string]string)["value"] == "second"
 	}, "input update published without a request")
 	second, err := matcher.ResolveProfiles(t.Context(), subj)
 	if err != nil || second[0].Inputs["settings"].(map[string]string)["value"] != "second" ||
@@ -87,8 +89,8 @@ func TestXDSInputsUseEPEConfigMapsAndPinRequestValues(t *testing.T) {
 	}
 	cms.DeleteObject("ns/settings")
 	testutil.Eventually(t, func() bool {
-		p := collection.GetKey(profile.ResourceName())
-		return p != nil && p.InputsError != ""
+		installed := matcher.List()
+		return len(installed) == 1 && installed[0].InputsError != ""
 	}, "input deletion published without a request")
 	deleted, err := matcher.ResolveProfiles(t.Context(), subj)
 	if err != nil || deleted[0].InputsError == "" || deleted[0].Inputs != nil {

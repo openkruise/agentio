@@ -213,15 +213,6 @@ func (s *Store) AcquireProfileReferences(
 	if subj.Workload.SecurityProfileReferences == nil {
 		return nil, nil, fmt.Errorf("SecurityProfile binding has not been resolved")
 	}
-	keys := make([]store.Key, 0, len(subj.Workload.SecurityProfileReferences)+1)
-	seen := map[string]bool{}
-	for _, name := range subj.Workload.SecurityProfileReferences {
-		if name == "" || seen[name] {
-			return nil, nil, fmt.Errorf("invalid SecurityProfile reference %q", name)
-		}
-		seen[name] = true
-		keys = append(keys, store.Key{Type: store.SecurityProfile, Name: name})
-	}
 	sandboxName := ""
 	if subj.Sandbox != nil {
 		if !features.SandboxMode {
@@ -234,10 +225,38 @@ func (s *Store) AcquireProfileReferences(
 	} else if features.SandboxMode && subj.Workload.Namespace != "" && subj.Workload.Name != "" {
 		sandboxName = subj.Workload.Namespace + "/" + subj.Workload.Name
 	}
+	shared := subj.Workload.SecurityProfileReferences
+	if sandboxName == "" && len(shared) == 0 {
+		return nil, func() {}, nil
+	}
+	if s.cache != nil {
+		switch {
+		case len(shared) == 0 && subj.Sandbox != nil:
+			return s.acquireSingleProfile(ctx, store.Key{Type: store.Sandbox, Name: sandboxName}, subj.Workload.UID)
+		case len(shared) == 1 && sandboxName == "":
+			if shared[0] == "" {
+				return nil, nil, fmt.Errorf("invalid SecurityProfile reference %q", shared[0])
+			}
+			return s.acquireSingleProfile(
+				ctx,
+				store.Key{Type: store.SecurityProfile, Name: shared[0]},
+				subj.Workload.UID,
+			)
+		}
+	}
+	keys := make([]store.Key, 0, len(shared)+1)
+	seen := map[string]bool{}
+	for _, name := range shared {
+		if name == "" || seen[name] {
+			return nil, nil, fmt.Errorf("invalid SecurityProfile reference %q", name)
+		}
+		seen[name] = true
+		keys = append(keys, store.Key{Type: store.SecurityProfile, Name: name})
+	}
 	if sandboxName != "" {
 		keys = append(keys, store.Key{Type: store.Sandbox, Name: sandboxName})
 	}
-	var releases []func()
+	releases := make([]func(), 0, len(keys))
 	cleanup := func() {
 		for _, release := range releases {
 			release()
@@ -250,7 +269,7 @@ func (s *Store) AcquireProfileReferences(
 		}
 	}()
 	for i, key := range keys {
-		resource, release, err := s.Acquire(ctx, key)
+		resource, release, err := s.acquireValue(ctx, key)
 		if release != nil {
 			releases = append(releases, release)
 		}
@@ -264,51 +283,102 @@ func (s *Store) AcquireProfileReferences(
 			}
 			return nil, nil, &store.MissingResource{Key: key}
 		}
-		if key.Type == store.Sandbox && subj.Sandbox == nil {
-			// Pin the canonical resource returned for the namespace/name alias.
-			keys[i].Name = resource.Value.(*sandboxProfiles).value.Uid
+		if key.Type == store.Sandbox {
+			sandbox := resource.Value.(*sandboxProfiles)
+			if subj.Sandbox != nil && sandbox.value.Uid != key.Name {
+				return nil, nil, fmt.Errorf("Sandbox resource name does not match its body")
+			}
+			keys[i].Name = sandbox.value.Uid
 		}
+	}
+	if len(keys) == 0 {
+		return nil, cleanup, nil
 	}
 	references, err := s.readProfileReferences(keys, subj.Workload.UID)
 	return references, cleanup, err
 }
 
-func (s *Store) readProfileReferences(keys []store.Key, workloadUID string) ([]*securityprofile.Meta, error) {
-	batch := s.ReadKeys(keys)
-	if !batch.Ready {
-		return nil, fmt.Errorf("SecurityProfile xDS is not synchronized")
+// Resolve a single required source while keeping its lease through admission.
+func (s *Store) acquireSingleProfile(
+	ctx context.Context,
+	key store.Key,
+	workloadUID string,
+) ([]*securityprofile.Meta, func(), error) {
+	value, release, err := s.acquireValue(ctx, key)
+	if err != nil {
+		return nil, nil, err
 	}
-	var references []*securityprofile.Meta
+	if value != nil {
+		// A lease can resolve an alias. A required binding names a canonical resource.
+		var status store.Status
+		value, status = s.lookup(key)
+		if !status.Ready {
+			release()
+			return nil, nil, fmt.Errorf("SecurityProfile xDS is not synchronized")
+		}
+	}
+	if value == nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, &store.MissingResource{Key: key}
+	}
+	refs, err := appendProfileReference(nil, key, value, workloadUID)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return refs, release, nil
+}
+
+func (s *Store) readProfileReferences(keys []store.Key, workloadUID string) ([]*securityprofile.Meta, error) {
+	snapshot := s.snapshotFor(keys)
 	for _, key := range keys {
-		resource, err := batch.Snapshots[key.Type].Get(key.Name)
+		if !snapshot.Usable(wireType(key.Type)) {
+			return nil, fmt.Errorf("SecurityProfile xDS is not synchronized")
+		}
+	}
+	references := make([]*securityprofile.Meta, 0, len(keys))
+	for _, key := range keys {
+		value := snapshot.Resources[wireType(key.Type)][key.Name]
+		if value == nil {
+			return nil, &store.MissingResource{Key: key}
+		}
+		var err error
+		references, err = appendProfileReference(references, key, value, workloadUID)
 		if err != nil {
 			return nil, err
 		}
-		if resource == nil {
-			return nil, &store.MissingResource{Key: key}
-		}
-		if key.Type == store.SecurityProfile {
-			profile := resource.Value.(*securityprofile.Profile)
-			name := "global/" + profile.Meta.Name
-			if profile.Meta.Namespace != "" {
-				name = "namespaced/" + profile.Meta.Namespace + "/" + profile.Meta.Name
-			}
-			if key.Name != name {
-				return nil, fmt.Errorf("SecurityProfile resource name does not match its body")
-			}
-			references = append(references, &profile.Meta)
-		} else {
-			sandbox := resource.Value.(*sandboxProfiles)
-			if sandbox.value.Uid != key.Name {
-				return nil, fmt.Errorf("Sandbox resource name does not match its body")
-			}
-			if workloadUID == "" || sandbox.value.GetAttester().GetWorkloadUid() != workloadUID {
-				return nil, fmt.Errorf("Sandbox %q is not hosted by workload %q", key.Name, workloadUID)
-			}
-			if sandbox.profile != nil {
-				references = append(references, &sandbox.profile.Meta)
-			}
-		}
 	}
 	return references, nil
+}
+
+func appendProfileReference(
+	refs []*securityprofile.Meta,
+	key store.Key,
+	value *xdsclient.Resource,
+	workloadUID string,
+) ([]*securityprofile.Meta, error) {
+	if key.Type == store.Sandbox {
+		sandbox := value.Value.(*sandboxProfiles)
+		if sandbox.value.Uid != key.Name {
+			return nil, fmt.Errorf("Sandbox resource name does not match its body")
+		}
+		if workloadUID == "" || sandbox.value.GetAttester().GetWorkloadUid() != workloadUID {
+			return nil, fmt.Errorf("Sandbox %q is not hosted by workload %q", key.Name, workloadUID)
+		}
+		if sandbox.profile != nil {
+			refs = append(refs, &sandbox.profile.Meta)
+		}
+		return refs, nil
+	}
+	profile := value.Value.(*securityprofile.Profile)
+	name := "global/" + profile.Meta.Name
+	if profile.Meta.Namespace != "" {
+		name = "namespaced/" + profile.Meta.Namespace + "/" + profile.Meta.Name
+	}
+	if key.Name != name {
+		return nil, fmt.Errorf("SecurityProfile resource name does not match its body")
+	}
+	return append(refs, &profile.Meta), nil
 }
