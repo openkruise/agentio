@@ -42,6 +42,8 @@ type Client interface {
 // controllers that can start after an optional API is installed.
 type CrdWatcher interface {
 	HasSynced() bool
+	// Synced is closed when the watcher has processed its initial CRD events.
+	Synced() <-chan struct{}
 	KnownOrCallback(schema.GroupVersionResource, func(stop <-chan struct{})) bool
 	WaitForCRD(schema.GroupVersionResource, <-chan struct{}) bool
 	Run(stop <-chan struct{})

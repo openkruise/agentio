@@ -332,6 +332,12 @@ type stubCrdWatcher struct {
 
 func (s *stubCrdWatcher) HasSynced() bool { return true }
 
+func (s *stubCrdWatcher) Synced() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 func (s *stubCrdWatcher) KnownOrCallback(gvr schema.GroupVersionResource, _ func(stop <-chan struct{})) bool {
 	s.requested = gvr
 	return s.found

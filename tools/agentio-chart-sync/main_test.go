@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -655,9 +656,11 @@ func TestPreparedSandboxControllerBundleCreatesConsumableTrafficProxyConfig(t *t
 		!slices.Equal(security.Capabilities.Drop, []corev1.Capability{"ALL"}) {
 		t.Fatalf("firewall-enabled traffic-proxy security context = %+v, capabilities = %+v", security, security.Capabilities)
 	}
-	if slices.Contains(proxy.VolumeMounts, corev1.VolumeMount{
-		Name:      "agentio-sandbox-state",
-		MountPath: "/var/lib/ztunnel/sandbox",
+	if slices.ContainsFunc(proxy.VolumeMounts, func(mount corev1.VolumeMount) bool {
+		return reflect.DeepEqual(mount, corev1.VolumeMount{
+			Name:      "agentio-sandbox-state",
+			MountPath: "/var/lib/ztunnel/sandbox",
+		})
 	}) {
 		t.Fatal("default traffic-proxy unexpectedly mounts Sandbox state")
 	}

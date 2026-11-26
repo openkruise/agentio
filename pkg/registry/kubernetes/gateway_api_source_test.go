@@ -62,6 +62,12 @@ func newFakeGatewayCRDWatcher(resources ...schema.GroupVersionResource) *fakeGat
 
 func (w *fakeGatewayCRDWatcher) HasSynced() bool { return true }
 
+func (w *fakeGatewayCRDWatcher) Synced() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 func (w *fakeGatewayCRDWatcher) KnownOrCallback(
 	resource schema.GroupVersionResource,
 	callback func(<-chan struct{}),

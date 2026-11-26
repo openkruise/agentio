@@ -518,9 +518,11 @@ func TestInjectSandboxMode(t *testing.T) {
 				pod := injectTestPod(t, webhook, testPod())
 				proxy := FindContainer("agentio-proxy", pod.Spec.Containers)
 				enabled := want == "true"
-				if mounted := slices.Contains(proxy.VolumeMounts, corev1.VolumeMount{
-					Name:      "agentio-sandbox-state",
-					MountPath: "/var/lib/ztunnel/sandbox",
+				if mounted := slices.ContainsFunc(proxy.VolumeMounts, func(mount corev1.VolumeMount) bool {
+					return reflect.DeepEqual(mount, corev1.VolumeMount{
+						Name:      "agentio-sandbox-state",
+						MountPath: "/var/lib/ztunnel/sandbox",
+					})
 				}); mounted != enabled {
 					t.Fatalf("Sandbox state mounted = %v, want %v", mounted, enabled)
 				}

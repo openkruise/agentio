@@ -55,7 +55,22 @@ type delayedInformer[T controllers.ComparableObject] struct {
 	mu       sync.Mutex
 	handlers []delayedHandler
 	indexes  []*delayedIndex[T]
-	stop     <-chan struct{}
+	lifetime delayedInformerLifetime
+}
+
+// Closing started publishes the stop channel to handlers registered before Start.
+type delayedInformerLifetime struct {
+	started chan struct{}
+	stop    <-chan struct{}
+}
+
+func (l *delayedInformerLifetime) stopChannel() <-chan struct{} {
+	select {
+	case <-l.started:
+		return l.stop
+	default:
+		return nil
+	}
 }
 
 type delayedHandler struct {
@@ -64,15 +79,107 @@ type delayedHandler struct {
 }
 
 type delayedHandlerRegistration struct {
-	hasSynced atomic.Pointer[func() bool]
-	inner     atomic.Pointer[cache.ResourceEventHandlerRegistration]
+	mu            sync.Mutex
+	inner         cache.ResourceEventHandlerRegistration
+	attached      chan struct{}
+	watcherSynced <-chan struct{}
+	lifetime      *delayedInformerLifetime
+
+	checkerOnce sync.Once
+	checkerDone chan struct{}
 }
 
 func (r *delayedHandlerRegistration) HasSynced() bool {
-	if synced := r.hasSynced.Load(); synced != nil {
-		return (*synced)()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hasSyncedLocked()
+}
+
+func (r *delayedHandlerRegistration) hasSyncedLocked() bool {
+	if r.inner != nil {
+		return r.inner.HasSynced()
 	}
-	return false
+	select {
+	case <-r.watcherSynced:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *delayedHandlerRegistration) attach(inner cache.ResourceEventHandlerRegistration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inner = inner
+	close(r.attached)
+}
+
+func (r *delayedHandlerRegistration) registration() cache.ResourceEventHandlerRegistration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inner
+}
+
+// Checkers acquired before attachment retain their one-shot completion.
+// Callers after attachment must wait for the actual handler to sync.
+func (r *delayedHandlerRegistration) HasSyncedChecker() cache.DoneChecker {
+	if inner := r.registration(); inner != nil {
+		return inner.HasSyncedChecker()
+	}
+	return r
+}
+
+func (r *delayedHandlerRegistration) Name() string { return "delayed informer registration" }
+
+func (r *delayedHandlerRegistration) Done() <-chan struct{} {
+	r.checkerOnce.Do(func() {
+		r.checkerDone = make(chan struct{})
+		if !r.finishIfSyncedOrStopped() {
+			go r.waitForSync()
+		}
+	})
+	return r.checkerDone
+}
+
+// A watcher notification can arrive after attachment. Check the current
+// registration under the attachment lock before reporting completion.
+func (r *delayedHandlerRegistration) finishIfSyncedOrStopped() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	select {
+	case <-r.lifetime.stopChannel():
+		return true
+	default:
+	}
+	if !r.hasSyncedLocked() {
+		return false
+	}
+	close(r.checkerDone)
+	return true
+}
+
+func (r *delayedHandlerRegistration) waitForSync() {
+	var started, attached <-chan struct{} = r.lifetime.started, r.attached
+	synced := r.watcherSynced
+	var stop <-chan struct{}
+	for {
+		select {
+		case <-started:
+			started = nil
+			stop = r.lifetime.stopChannel()
+		case <-stop:
+			return
+		case <-attached:
+			attached = nil
+			synced = r.registration().HasSyncedChecker().Done()
+		case <-synced:
+			if r.finishIfSyncedOrStopped() {
+				return
+			}
+			// A watcher signal raced with attachment. Wait for the handler signal.
+			synced = nil
+		}
+	}
 }
 
 type delayedIndex[T any] struct {
@@ -113,6 +220,9 @@ func NewDelayedInformerFor[T controllers.ComparableObject](
 	resource := registration.Resource
 	delayed := &delayedInformer[T]{
 		watcher: client.CrdWatcher(),
+		lifetime: delayedInformerLifetime{
+			started: make(chan struct{}),
+		},
 	}
 	build := func(<-chan struct{}) {
 		delayed.set(newFilteredFor[T](client, registration, filter))
@@ -136,9 +246,7 @@ func (d *delayedInformer[T]) set(active *activeInformer[T]) {
 		return
 	}
 	for _, pending := range d.handlers {
-		registration := active.AddEventHandler(pending.handler)
-		pending.registration.inner.Store(&registration)
-		pending.registration.hasSynced.Store(ptr.Of(registration.HasSynced))
+		pending.registration.attach(active.AddEventHandler(pending.handler))
 	}
 	d.handlers = nil
 	for _, pending := range d.indexes {
@@ -147,7 +255,7 @@ func (d *delayedInformer[T]) set(active *activeInformer[T]) {
 	}
 	d.indexes = nil
 	d.active.Store(active)
-	stop := d.stop
+	stop := d.lifetime.stop
 	d.mu.Unlock()
 	if stop != nil {
 		active.Start(stop)
@@ -156,7 +264,11 @@ func (d *delayedInformer[T]) set(active *activeInformer[T]) {
 
 func (d *delayedInformer[T]) Start(stop <-chan struct{}) {
 	d.mu.Lock()
-	d.stop = stop
+	if d.lifetime.stop == nil && stop != nil {
+		d.lifetime.stop = stop
+		close(d.lifetime.started)
+	}
+	stop = d.lifetime.stop
 	active := d.active.Load()
 	d.mu.Unlock()
 	if active != nil {
@@ -187,8 +299,11 @@ func (d *delayedInformer[T]) AddEventHandler(handler cache.ResourceEventHandler)
 	if active := d.active.Load(); active != nil {
 		return active.AddEventHandler(handler)
 	}
-	registration := &delayedHandlerRegistration{}
-	registration.hasSynced.Store(ptr.Of(d.watcher.HasSynced))
+	registration := &delayedHandlerRegistration{
+		attached:      make(chan struct{}),
+		watcherSynced: d.watcher.Synced(),
+		lifetime:      &d.lifetime,
+	}
 	d.handlers = append(d.handlers, delayedHandler{
 		handler:      handler,
 		registration: registration,
@@ -212,13 +327,13 @@ func (d *delayedInformer[T]) HasSyncedIgnoringHandlers() bool {
 
 func (d *delayedInformer[T]) ShutdownHandler(registration cache.ResourceEventHandlerRegistration) {
 	if delayed, ok := registration.(*delayedHandlerRegistration); ok {
-		if inner := delayed.inner.Load(); inner != nil {
-			if active := d.active.Load(); active != nil {
-				active.ShutdownHandler(*inner)
-			}
+		d.mu.Lock()
+		if inner := delayed.registration(); inner != nil {
+			active := d.active.Load()
+			d.mu.Unlock()
+			active.ShutdownHandler(inner)
 			return
 		}
-		d.mu.Lock()
 		defer d.mu.Unlock()
 		for i, pending := range d.handlers {
 			if pending.registration == delayed {
