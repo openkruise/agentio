@@ -60,10 +60,14 @@ func (ca SigningCA) IssueSubCA(
 		return SigningCA{}, err
 	}
 	template := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "Agentio MITM Sub CA"},
-		NotBefore: now.Add(-ClockSkew), NotAfter: minTime(now.Add(lifetime), ca.chainNotAfter),
-		IsCA: true, BasicConstraintsValid: true, MaxPathLenZero: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "Agentio MITM Sub CA"},
+		NotBefore:             now.Add(-ClockSkew),
+		NotAfter:              minTime(now.Add(lifetime), ca.chainNotAfter),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	if ocspURL != "" {
 		template.OCSPServer = []string{ocspURL}
@@ -82,8 +86,11 @@ func (ca SigningCA) SignOCSP(child *x509.Certificate, hash crypto.Hash, now time
 		return nil, err
 	}
 	return ocsp.CreateResponse(ca.certificate, ca.certificate, ocsp.Response{
-		Status: ocsp.Good, SerialNumber: child.SerialNumber, IssuerHash: hash,
-		ThisUpdate: now.Add(-ClockSkew), NextUpdate: minTime(now.Add(24*time.Hour), ca.chainNotAfter),
+		Status:       ocsp.Good,
+		SerialNumber: child.SerialNumber,
+		IssuerHash:   hash,
+		ThisUpdate:   now.Add(-ClockSkew),
+		NextUpdate:   minTime(now.Add(24*time.Hour), ca.chainNotAfter),
 	}, ca.privateKey)
 }
 

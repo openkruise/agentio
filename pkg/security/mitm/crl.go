@@ -49,10 +49,11 @@ const (
 )
 
 type crlPublisher struct {
-	origin, namespace string
-	maps              krt.Collection[*corev1.ConfigMap]
-	client            kube.Client
-	managed           bool
+	origin    string
+	namespace string
+	maps      krt.Collection[*corev1.ConfigMap]
+	client    kube.Client
+	managed   bool
 }
 
 func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, error) {
@@ -65,8 +66,11 @@ func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, er
 		return nil, fmt.Errorf("MITM CRL publisher requires a ConfigMap collection")
 	}
 	return &crlPublisher{
-		origin: "http://" + u.Host, namespace: o.Namespace, maps: o.ConfigMaps, client: client,
-		managed: o.Mode == MITMSignModeSelfSign || o.SubCAEnabled,
+		origin:    "http://" + u.Host,
+		namespace: o.Namespace,
+		maps:      o.ConfigMaps,
+		client:    client,
+		managed:   o.Mode == MITMSignModeSelfSign || o.SubCAEnabled,
 	}, nil
 }
 
@@ -254,8 +258,11 @@ func (p *crlPublisher) reconcile(ctx context.Context, ca pki.SigningCA, now time
 		}
 	}
 	template := &x509.RevocationList{
-		Number: new(big.Int).Add(old.Number, big.NewInt(1)), ThisUpdate: thisUpdate, NextUpdate: next,
-		RevokedCertificateEntries: entries, ExtraExtensions: extensions,
+		Number:                    new(big.Int).Add(old.Number, big.NewInt(1)),
+		ThisUpdate:                thisUpdate,
+		NextUpdate:                next,
+		RevokedCertificateEntries: entries,
+		ExtraExtensions:           extensions,
 	}
 	der, err := ca.SignCRL(template)
 	if err != nil {

@@ -74,7 +74,8 @@ func (s *MITMSigner) parseSubCA(secret *corev1.Secret, parent pki.SigningCA, now
 
 func (s *MITMSigner) subCACollection(ctx context.Context) krt.Singleton[caState] {
 	client := kclient.NewFiltered[*corev1.Secret](s.client, kclient.Filter{
-		Namespace: s.options.Namespace, FieldSelector: "metadata.name=" + subCASecretName,
+		Namespace:     s.options.Namespace,
+		FieldSelector: "metadata.name=" + subCASecretName,
 	})
 	secrets := krt.WrapClient(client, s.options.KrtOptions.WithName("MITM_Sub_CA_Secret")...)
 	client.Start(ctx.Done())
@@ -218,9 +219,9 @@ func (s *MITMSigner) publishSubCAStatus(
 			return fmt.Errorf("managed Sub CA lost its published CRL")
 		}
 		der, err := ca.SignCRL(&x509.RevocationList{
-			Number: big.NewInt(
-				1,
-			), ThisUpdate: now.Add(-pki.ClockSkew), NextUpdate: minTime(now.Add(crlLifetime), ca.NotAfter()),
+			Number:     big.NewInt(1),
+			ThisUpdate: now.Add(-pki.ClockSkew),
+			NextUpdate: minTime(now.Add(crlLifetime), ca.NotAfter()),
 		})
 		if err != nil {
 			return err

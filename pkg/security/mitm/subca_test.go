@@ -77,8 +77,14 @@ func TestManagedSubCA(t *testing.T) {
 			maps := krt.NewInformer[*corev1.ConfigMap](client, krt.WithStop(ctx.Done()))
 			go client.Run(ctx.Done())
 			options := MITMSignerOptions{
-				Mode: MITMSignModeSecret, Namespace: "system", SecretNamespace: root.Namespace, SecretName: root.Name,
-				SubCAEnabled: tc.enabled, CRLOrigin: tc.origin, ConfigMaps: maps, LeafExpiryMargin: time.Minute,
+				Mode:             MITMSignModeSecret,
+				Namespace:        "system",
+				SecretNamespace:  root.Namespace,
+				SecretName:       root.Name,
+				SubCAEnabled:     tc.enabled,
+				CRLOrigin:        tc.origin,
+				ConfigMaps:       maps,
+				LeafExpiryMargin: time.Minute,
 			}
 			signer, err := NewMITMSigner(ctx, client, options)
 			if err != nil {
@@ -211,8 +217,11 @@ func TestManagedSubCA(t *testing.T) {
 				t.Fatal(err)
 			}
 			status, err := ocsp.CreateResponse(parent.Certificate(), parent.Certificate(), ocsp.Response{
-				Status: ocsp.Revoked, SerialNumber: sub.SerialNumber, RevokedAt: now.Add(-time.Minute),
-				ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour),
+				Status:       ocsp.Revoked,
+				SerialNumber: sub.SerialNumber,
+				RevokedAt:    now.Add(-time.Minute),
+				ThisUpdate:   now.Add(-time.Minute),
+				NextUpdate:   now.Add(time.Hour),
 			}, key)
 			if err != nil {
 				t.Fatal(err)
@@ -246,8 +255,9 @@ func TestSubCARenewalPreservesPublishedRevocations(t *testing.T) {
 	}
 	client := kube.NewFakeClient()
 	signer := &MITMSigner{
-		client: client, options: MITMSignerOptions{Namespace: "system"},
-		crls: &crlPublisher{origin: "http://pki.test"},
+		client:  client,
+		options: MITMSignerOptions{Namespace: "system"},
+		crls:    &crlPublisher{origin: "http://pki.test"},
 	}
 	if err := signer.reconcileSubCA(ctx, parent, now); err != nil {
 		t.Fatal(err)
@@ -269,7 +279,9 @@ func TestSubCARenewalPreservesPublishedRevocations(t *testing.T) {
 	oldResponses := len(cm.BinaryData)
 	file := ca.CRLKeyID() + ".crl"
 	cm.BinaryData[file], err = ca.SignCRL(&x509.RevocationList{
-		Number: big.NewInt(10), ThisUpdate: now, NextUpdate: now.Add(crlLifetime),
+		Number:                    big.NewInt(10),
+		ThisUpdate:                now,
+		NextUpdate:                now.Add(crlLifetime),
 		RevokedCertificateEntries: []x509.RevocationListEntry{{SerialNumber: big.NewInt(42), RevocationTime: now}},
 	})
 	if err != nil {

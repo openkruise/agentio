@@ -49,7 +49,9 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 	maps := krt.NewMutableCollection(nil, []*corev1.ConfigMap{cm})
 	signer := newInstalledMITMSigner(t, ca, "issuer", time.Minute)
 	p, err := newCRLPublisher(MITMSignerOptions{
-		Mode: MITMSignModeSelfSign, Namespace: cm.Namespace, CRLOrigin: "http://pki.test",
+		Mode:       MITMSignModeSelfSign,
+		Namespace:  cm.Namespace,
+		CRLOrigin:  "http://pki.test",
 		ConfigMaps: maps.AsCollection(),
 	}, client)
 	if err != nil {
@@ -84,7 +86,9 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 	revokedAt := now.Add(-time.Minute)
 	seedExpiry := now.Add(5 * time.Minute)
 	seed, err := ca.SignCRL(&x509.RevocationList{
-		Number: big.NewInt(7), ThisUpdate: revokedAt, NextUpdate: seedExpiry,
+		Number:     big.NewInt(7),
+		ThisUpdate: revokedAt,
+		NextUpdate: seedExpiry,
 		RevokedCertificateEntries: []x509.RevocationListEntry{
 			{SerialNumber: big.NewInt(42), RevocationTime: revokedAt, ReasonCode: 1},
 		},
@@ -180,7 +184,9 @@ func TestCRLDownloadAfterSigningKeyChange(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			der, err := previous.SignCRL(&x509.RevocationList{
-				Number: big.NewInt(7), ThisUpdate: publishedAt, NextUpdate: tc.expiry,
+				Number:     big.NewInt(7),
+				ThisUpdate: publishedAt,
+				NextUpdate: tc.expiry,
 				RevokedCertificateEntries: []x509.RevocationListEntry{
 					{SerialNumber: big.NewInt(42), RevocationTime: publishedAt},
 				},
@@ -234,8 +240,12 @@ func TestCRLServiceAcrossCASecrets(t *testing.T) {
 	const origin = "http://pki.test"
 	for _, secret := range []*corev1.Secret{before, after} {
 		signer, err := NewMITMSigner(ctx, client, MITMSignerOptions{
-			Mode: MITMSignModeSecret, Namespace: cm.Namespace, SecretNamespace: secret.Namespace,
-			SecretName: secret.Name, ConfigMaps: maps, CRLOrigin: origin,
+			Mode:            MITMSignModeSecret,
+			Namespace:       cm.Namespace,
+			SecretNamespace: secret.Namespace,
+			SecretName:      secret.Name,
+			ConfigMaps:      maps,
+			CRLOrigin:       origin,
 		})
 		if err != nil {
 			t.Fatal(err)
