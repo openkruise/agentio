@@ -32,7 +32,6 @@ import (
 )
 
 const (
-	localJWTKeyLifetime     = 5 * time.Minute
 	localJWTRefreshInterval = 5 * time.Second
 	localJWTRequestTimeout  = 5 * time.Second
 )
@@ -40,12 +39,13 @@ const (
 // LocalJWTAuthenticator verifies Pod-bound credentials against the configured cluster.
 // Resource collections must belong to that same cluster and share its client lifecycle.
 type LocalJWTAuthenticator struct {
-	client   rest.Interface
-	pods     krt.Collection[*corev1.Pod]
-	accounts krt.Collection[*corev1.ServiceAccount]
-	issuer   string
-	audience string
-	now      func() time.Time
+	client      rest.Interface
+	pods        krt.Collection[*corev1.Pod]
+	accounts    krt.Collection[*corev1.ServiceAccount]
+	issuer      string
+	audience    string
+	keyLifetime time.Duration
+	now         func() time.Time
 
 	mu          sync.RWMutex
 	keys        jose.JSONWebKeySet
@@ -73,12 +73,14 @@ type localJWTClaims struct {
 
 // NewLocalJWTAuthenticator loads discovery and signing keys through the authenticated
 // Kubernetes client. It registers no informers and does not wait for their initial sync.
+// keyLifetime must be at least the five-second key-refresh interval.
 func NewLocalJWTAuthenticator(
 	ctx context.Context,
 	client rest.Interface,
 	pods krt.Collection[*corev1.Pod],
 	accounts krt.Collection[*corev1.ServiceAccount],
 	audience string,
+	keyLifetime time.Duration,
 ) (*LocalJWTAuthenticator, error) {
 	data, err := client.Get().AbsPath("/.well-known/openid-configuration").Timeout(localJWTRequestTimeout).DoRaw(ctx)
 	if err != nil {
@@ -95,12 +97,13 @@ func NewLocalJWTAuthenticator(
 		return nil, fmt.Errorf("Kubernetes discovery must publish an HTTPS issuer URL")
 	}
 	a := &LocalJWTAuthenticator{
-		client:   client,
-		pods:     pods,
-		accounts: accounts,
-		issuer:   discovery.Issuer,
-		audience: audience,
-		now:      time.Now,
+		client:      client,
+		pods:        pods,
+		accounts:    accounts,
+		issuer:      discovery.Issuer,
+		audience:    audience,
+		keyLifetime: keyLifetime,
+		now:         time.Now,
 	}
 	if _, err := a.refreshKeys(ctx, 0); err != nil {
 		return nil, err
@@ -138,7 +141,7 @@ func (a *LocalJWTAuthenticator) refreshKeys(ctx context.Context, generation uint
 	}
 	a.keys = keys
 	a.generation++
-	a.validUntil = a.now().Add(localJWTKeyLifetime)
+	a.validUntil = a.now().Add(a.keyLifetime)
 	return keys, nil
 }
 

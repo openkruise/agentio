@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"istio.io/istio/pkg/env"
 )
@@ -65,6 +66,11 @@ var (
 		"local",
 		"Kubernetes workload authentication: tokenreview or local. Local JWT verification requires active Pod and ServiceAccount bindings.",
 	).Get()
+	KubernetesJWKSCacheTTL, kubernetesJWKSCacheTTLErr = time.ParseDuration(env.Register(
+		"AGENTIO_KUBERNETES_JWKS_CACHE_TTL",
+		"5m",
+		"Public signing-key cache lifetime for local Kubernetes JWT authentication. Must be at least 5s, matching the key-refresh rate limit. Longer lifetimes delay recognition of removed signing keys.",
+	).Get())
 	ServiceName = env.Register(
 		"AGENTIO_SERVICE_NAME",
 		"agentiod",
@@ -110,6 +116,12 @@ func validateControlPlane() error {
 	}
 	if KubernetesWorkloadAuthMode != "tokenreview" && KubernetesWorkloadAuthMode != "local" {
 		return fmt.Errorf("unsupported Kubernetes workload authentication mode %q", KubernetesWorkloadAuthMode)
+	}
+	if kubernetesJWKSCacheTTLErr != nil {
+		return fmt.Errorf("parse AGENTIO_KUBERNETES_JWKS_CACHE_TTL: %w", kubernetesJWKSCacheTTLErr)
+	}
+	if KubernetesJWKSCacheTTL < 5*time.Second {
+		return fmt.Errorf("AGENTIO_KUBERNETES_JWKS_CACHE_TTL must be at least 5s")
 	}
 	if strings.TrimSpace(TokenAudience) == "" {
 		return fmt.Errorf("token audience is required")
