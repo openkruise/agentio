@@ -280,6 +280,8 @@ kubectl -n "$system_ns" create configmap agentio-mitm-ca-crls --from-file="$id.c
 
 To add a new issuer or replace one signed file in an existing ConfigMap, update the corresponding `binaryData` key and retain the other issuers' files.
 
+Agentiod parses published CRLs and verifies the active issuer's signature when the ConfigMap or signing CA changes. Downloads, leaf issuance, and CRL renewal reuse this immutable cache. Downloads and leaf issuance check freshness on every use, so an expired list is rejected without waiting for an update. Invalid replacements and deletions do not fall back to previously valid data.
+
 In `SELF_SIGN` mode, Agentiod renews one signed list per issuer with the same revocation entries. The renewed CRL is valid for up to 24 hours after publication, capped by CA expiry. A new leaf expires no later than the current CRL's `NextUpdate`. Renewing the CA certificate with the same signing key keeps the CRL URL. When switching signing keys, publish the new key's CRL before switching the CA Secret, and keep the previous key's CRL until its leaves expire.
 
 In `SECRET` mode, the CA owner supplies signed replacements and chooses their validity, including for retired issuers whose leaves are still valid. An issuer without a valid published CRL cannot issue new leaves carrying that distribution point. The ConfigMap is subject to the Kubernetes 1 MiB size limit.

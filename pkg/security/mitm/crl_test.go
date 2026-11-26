@@ -16,6 +16,7 @@ package mitm
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -58,6 +59,7 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 		t.Fatal(err)
 	}
 	signer.crls = p
+	p.publication = p.watch(signer.caSingleton, krt.WithStop(ctx.Done()))
 	download := func(path string, want int) []byte {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -74,7 +76,12 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 			t.Fatal(err)
 		}
 		maps.Reset([]*corev1.ConfigMap{stored})
+		testutil.Eventually(t, func() bool {
+			publication := p.publication.Get()
+			return publication != nil && publication.configMap == stored
+		}, "validate updated CRL publication")
 	}
+	testutil.Eventually(t, func() bool { return p.publication.Get() != nil }, "load CRL publication")
 	if err := p.reconcile(ctx, ca, now); err == nil {
 		t.Fatal("renewed without a signed source")
 	}
@@ -115,6 +122,10 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 		t.Fatal(err)
 	}
 	maps.Reset([]*corev1.ConfigMap{stored})
+	testutil.Eventually(t, func() bool {
+		publication := p.publication.Get()
+		return publication != nil && publication.configMap == stored
+	}, "validate renewed CRL publication")
 	regular, err := parseFullCRL(download(urlPath, http.StatusOK), id)
 	if err != nil || ca.VerifyCRL(regular) != nil ||
 		!regular.NextUpdate.Equal(now.Add(24*time.Hour)) || regular.Number.Cmp(big.NewInt(8)) != 0 ||
@@ -173,6 +184,7 @@ func TestCRLDownloadAfterSigningKeyChange(t *testing.T) {
 	maps := krt.NewMutableCollection(nil, []*corev1.ConfigMap{cm})
 	signer := newInstalledMITMSigner(t, active, "active", time.Minute)
 	signer.crls = &crlPublisher{namespace: cm.Namespace, maps: maps.AsCollection(), managed: true}
+	signer.crls.publication = signer.crls.watch(signer.caSingleton, krt.WithStop(t.Context().Done()))
 
 	for _, tc := range []struct {
 		name   string
@@ -197,6 +209,10 @@ func TestCRLDownloadAfterSigningKeyChange(t *testing.T) {
 			stored := cm.DeepCopy()
 			stored.BinaryData = map[string][]byte{file: der}
 			maps.Reset([]*corev1.ConfigMap{stored})
+			testutil.Eventually(t, func() bool {
+				publication := signer.crls.publication.Get()
+				return publication != nil && publication.configMap == stored
+			}, "validate previous issuer's CRL publication")
 			rec := httptest.NewRecorder()
 			signer.CRLHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/crl/"+file, nil))
 			if rec.Code != tc.status || (tc.status == http.StatusOK && !bytes.Equal(rec.Body.Bytes(), der)) {
@@ -207,6 +223,165 @@ func TestCRLDownloadAfterSigningKeyChange(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCRLPublicationUpdatesAndExpiry(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	ca, err := pki.NewSelfSignedCA("issuer", 72*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := ca.CRLKeyID() + ".crl"
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "system", Name: crlConfigMapName}}
+	maps := krt.NewMutableCollection[*corev1.ConfigMap](nil, nil)
+	signer := newInstalledMITMSigner(t, ca, "issuer", time.Minute)
+	p := &crlPublisher{namespace: cm.Namespace, maps: maps.AsCollection(), managed: true}
+	p.publication = p.watch(signer.caSingleton, krt.WithStop(t.Context().Done()))
+	signer.crls = p
+	handler := signer.CRLHandler()
+	assertDownload := func(t *testing.T, status int, der []byte) {
+		t.Helper()
+		testutil.Eventually(t, func() bool {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/crl/"+file, nil))
+			return rec.Code == status && (der == nil || bytes.Equal(rec.Body.Bytes(), der))
+		}, fmt.Sprintf("download CRL with status %d and current published bytes", status))
+	}
+	assertDownload(t, http.StatusServiceUnavailable, nil)
+	for i, tc := range []struct {
+		name   string
+		der    []byte
+		status int
+	}{
+		{"valid", nil, http.StatusOK},
+		{"updated", nil, http.StatusOK},
+		{"bad signature", nil, http.StatusServiceUnavailable},
+		{"malformed", []byte("invalid DER"), http.StatusServiceUnavailable},
+		{"empty", []byte{}, http.StatusNotFound},
+		{"restored", nil, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			der := tc.der
+			if der == nil {
+				var err error
+				der, err = ca.SignCRL(&x509.RevocationList{
+					Number:     big.NewInt(int64(i + 1)),
+					ThisUpdate: now,
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: big.NewInt(42), RevocationTime: now},
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.name == "bad signature" {
+					der[len(der)-1] ^= 1
+				}
+			}
+			updated := cm.DeepCopy()
+			updated.BinaryData = map[string][]byte{file: der}
+			maps.Reset([]*corev1.ConfigMap{updated})
+			testutil.Eventually(t, func() bool {
+				publication := p.publication.Get()
+				return publication != nil && publication.configMap == updated
+			}, "replace cached validation with current publication")
+			var want []byte
+			if tc.status == http.StatusOK {
+				want = der
+			}
+			assertDownload(t, tc.status, want)
+			_, err := p.issuanceHorizon(ca, now)
+			if (err == nil) != (tc.status == http.StatusOK) {
+				t.Fatalf("issuance did not use current CRL validation: %v", err)
+			}
+		})
+	}
+	maps.Reset([]*corev1.ConfigMap{cm})
+	assertDownload(t, http.StatusNotFound, nil)
+	maps.Reset(nil)
+	assertDownload(t, http.StatusServiceUnavailable, nil)
+
+	expiry := time.Now().UTC().Truncate(time.Second).Add(2 * time.Second)
+	der, err := ca.SignCRL(&x509.RevocationList{Number: big.NewInt(3), ThisUpdate: now, NextUpdate: expiry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recreated := cm.DeepCopy()
+	recreated.BinaryData = map[string][]byte{file: der}
+	maps.Reset([]*corev1.ConfigMap{recreated})
+	assertDownload(t, http.StatusOK, der)
+	if _, err := p.issuanceHorizon(ca, expiry); err == nil {
+		t.Fatal("issued a leaf past cached CRL expiry")
+	}
+	assertDownload(t, http.StatusServiceUnavailable, nil)
+}
+
+func TestCRLPublicationRevalidatesSigningCA(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	ca, err := pki.NewSelfSignedCA("issuer", 72*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := ca.SignCRL(&x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := ca.CRLKeyID() + ".crl"
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "system", Name: crlConfigMapName},
+		BinaryData: map[string][]byte{file: der},
+	}
+	maps := krt.NewMutableCollection(nil, []*corev1.ConfigMap{cm})
+	signer := newInstalledMITMSigner(t, ca, "issuer", time.Minute)
+	p := &crlPublisher{namespace: cm.Namespace, maps: maps.AsCollection()}
+	p.publication = p.watch(signer.caSingleton, krt.WithStop(t.Context().Done()))
+	signer.crls = p
+	handler := signer.CRLHandler()
+	assertDownload := func(status int) {
+		t.Helper()
+		testutil.Eventually(t, func() bool {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/crl/"+file, nil))
+			return rec.Code == status
+		}, fmt.Sprintf("revalidate published CRL with status %d", status))
+	}
+	assertDownload(http.StatusOK)
+
+	// Replace the CA certificate with the same key and SKI but no cRLSign.
+	// The unchanged CRL must be checked against the new certificate's key usage.
+	block, _ := pem.Decode(ca.PrivateKeyPEM())
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := *ca.Certificate()
+	cert.KeyUsage &^= x509.KeyUsageCRLSign
+	certDER, err := x509.CreateCertificate(rand.Reader, &cert, &cert, cert.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := pki.ParseSigningCABundle(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+		ca.PrivateKeyPEM(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := signer.caSingleton.(krt.StaticSingleton[caState])
+	generation.Set(&caState{ca: replacement})
+	assertDownload(http.StatusServiceUnavailable)
+	testutil.Eventually(t, func() bool {
+		publication := p.publication.Get()
+		return publication != nil && publication.caRevision == replacement.Revision()
+	}, "validate CA replacement without ConfigMap update")
+	if _, err := p.issuanceHorizon(replacement, now); err == nil {
+		t.Fatal("issued with a CRL whose current CA lacks cRLSign")
+	}
+	generation.Set(&caState{ca: ca})
+	assertDownload(http.StatusOK)
 }
 
 func TestCRLServiceAcrossCASecrets(t *testing.T) {
@@ -252,7 +427,11 @@ func TestCRLServiceAcrossCASecrets(t *testing.T) {
 		}
 		testutil.Eventually(
 			t,
-			func() bool { return signer.State().Get() != nil },
+			func() bool {
+				state := signer.State().Get()
+				publication := signer.crls.publication.Get()
+				return state != nil && publication != nil && publication.caRevision == state.Revision
+			},
 			"load CA Secret from its own namespace",
 		)
 		issued, err := signer.SignDNS(ctx, "app.example", 15*time.Minute)

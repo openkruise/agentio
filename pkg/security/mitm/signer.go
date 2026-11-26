@@ -152,6 +152,10 @@ func NewMITMSigner(
 		signer.caSingleton = signer.subCACollection(ctx)
 		go signer.runSubCAMaintenance(ctx)
 	}
+	if signer.crls != nil {
+		signer.crls.publication = signer.crls.watch(signer.caSingleton,
+			options.KrtOptions.WithName("MITM_CRL_Publication")...)
+	}
 	signer.caSingleton.Register(func(event krt.Event[caState]) {
 		if event.New == nil {
 			signer.setUnavailable("")

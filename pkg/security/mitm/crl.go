@@ -49,11 +49,33 @@ const (
 )
 
 type crlPublisher struct {
-	origin    string
-	namespace string
-	maps      krt.Collection[*corev1.ConfigMap]
-	client    kube.Client
-	managed   bool
+	origin      string
+	namespace   string
+	maps        krt.Collection[*corev1.ConfigMap]
+	client      kube.Client
+	managed     bool
+	publication krt.Singleton[crlPublication]
+}
+
+// crlPublication is an immutable view of one committed ConfigMap, validated
+// against one signing CA generation. Invalid replacements retain their error,
+// rather than falling back to a previously valid list.
+type crlPublication struct {
+	configMap  *corev1.ConfigMap
+	caRevision string
+	lists      map[string]cachedCRL
+}
+
+type cachedCRL struct {
+	list *x509.RevocationList
+	err  error
+}
+
+func (crlPublication) ResourceName() string { return "mitm-crl-publication" }
+
+func (p crlPublication) Equals(other crlPublication) bool {
+	// Informer objects are immutable; their identity covers all published bytes.
+	return p.configMap == other.configMap && p.caRevision == other.caRevision
 }
 
 func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, error) {
@@ -80,6 +102,35 @@ func (p *crlPublisher) configMap() (*corev1.ConfigMap, error) {
 		return nil, fmt.Errorf("CRL ConfigMap %s/%s is unavailable", p.namespace, crlConfigMapName)
 	}
 	return *cm, nil
+}
+
+func (p *crlPublisher) watch(
+	ca krt.Singleton[caState],
+	opts ...krt.CollectionOption,
+) krt.Singleton[crlPublication] {
+	return krt.NewSingleton(func(ctx krt.HandlerContext) *crlPublication {
+		active := krt.FetchOne(ctx, ca.AsCollection())
+		cm := krt.FetchOne(ctx, p.maps, krt.FilterKey(p.namespace+"/"+crlConfigMapName))
+		if cm == nil {
+			return nil
+		}
+		publication := &crlPublication{configMap: *cm, lists: make(map[string]cachedCRL)}
+		if active != nil {
+			publication.caRevision = active.ca.Revision()
+		}
+		for file, der := range (*cm).BinaryData {
+			id, ok := strings.CutSuffix(file, ".crl")
+			if !ok || len(der) == 0 {
+				continue
+			}
+			list, err := parseFullCRL(der, id)
+			if err == nil && active != nil && active.ca.CRLKeyID() == id {
+				err = active.ca.VerifyCRL(list)
+			}
+			publication.lists[file] = cachedCRL{list: list, err: err}
+		}
+		return publication
+	}, opts...)
 }
 
 // parseFullCRL accepts one direct, complete list per issuer.
@@ -111,29 +162,29 @@ func freshCRL(list *x509.RevocationList, now time.Time) bool {
 	return !now.Before(list.ThisUpdate) && now.Before(list.NextUpdate)
 }
 
-func publishedCRL(cm *corev1.ConfigMap, id string) (*x509.RevocationList, error) {
-	der := cm.BinaryData[id+".crl"]
-	if len(der) == 0 {
-		return nil, fmt.Errorf("issuer %s has no signed CRL in binaryData", id)
+func (p *crlPublisher) currentCRL(ca pki.SigningCA) (*corev1.ConfigMap, *x509.RevocationList, error) {
+	publication := p.publication.Get()
+	if publication == nil {
+		return nil, nil, fmt.Errorf("CRL ConfigMap %s/%s is unavailable", p.namespace, crlConfigMapName)
 	}
-	return parseFullCRL(der, id)
+	if publication.caRevision != ca.Revision() {
+		return nil, nil, fmt.Errorf("CRL validation for the current signing CA is pending")
+	}
+	id := ca.CRLKeyID()
+	cached, ok := publication.lists[id+".crl"]
+	if !ok {
+		return nil, nil, fmt.Errorf("issuer %s has no signed CRL in binaryData", id)
+	}
+	return publication.configMap, cached.list, cached.err
 }
 
 func (p *crlPublisher) issuanceHorizon(ca pki.SigningCA, now time.Time) (time.Time, error) {
-	cm, err := p.configMap()
-	if err != nil {
-		return time.Time{}, err
-	}
-	id := ca.CRLKeyID()
-	list, err := publishedCRL(cm, id)
+	_, list, err := p.currentCRL(ca)
 	if err != nil {
 		return time.Time{}, err
 	}
 	if !freshCRL(list, now) {
-		return time.Time{}, fmt.Errorf("issuer %s has no current CRL", id)
-	}
-	if err := ca.VerifyCRL(list); err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("issuer %s has no current CRL", ca.CRLKeyID())
 	}
 	if !p.managed {
 		// The external authority continues publishing through the lifetime of its leaves.
@@ -157,27 +208,25 @@ func (s *MITMSigner) CRLHandler() http.Handler {
 }
 
 func (s *MITMSigner) downloadCRL(w http.ResponseWriter, r *http.Request) {
-	cm, err := s.crls.configMap()
-	if err != nil {
+	publication := s.crls.publication.Get()
+	if publication == nil {
 		http.Error(w, "CRL publisher unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	file := r.PathValue("file")
-	id, ok := strings.CutSuffix(file, ".crl")
-	if !ok || len(cm.BinaryData[file]) == 0 {
+	cached, ok := publication.lists[file]
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	now := time.Now()
-	list, err := publishedCRL(cm, id)
 	active := s.caSingleton.Get()
-	if err == nil && active != nil && active.ca.CRLKeyID() == id {
-		err = active.ca.VerifyCRL(list)
-	}
-	if err != nil || !freshCRL(list, now) {
+	if cached.err != nil || (active != nil && active.ca.Revision() != publication.caRevision) ||
+		!freshCRL(cached.list, now) {
 		http.Error(w, "CRL unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	list := cached.list
 	w.Header().Set("Content-Type", "application/pkix-crl")
 	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", min(60, int(list.NextUpdate.Sub(now).Seconds()))))
 	http.ServeContent(w, r, file, time.Time{}, bytes.NewReader(list.Raw))
@@ -208,21 +257,11 @@ func (p *crlPublisher) run(ctx context.Context, ca krt.Singleton[caState]) {
 }
 
 func (p *crlPublisher) reconcile(ctx context.Context, ca pki.SigningCA, now time.Time) error {
-	cm, err := p.configMap()
+	cm, old, err := p.currentCRL(ca)
 	if err != nil {
 		return err
 	}
 	id := ca.CRLKeyID()
-	if id == "" {
-		return fmt.Errorf("MITM CA needs a subject key identifier for CRL publication")
-	}
-	old, err := publishedCRL(cm, id)
-	if err != nil {
-		return err
-	}
-	if err := ca.VerifyCRL(old); err != nil {
-		return err
-	}
 	if now.Before(old.ThisUpdate) {
 		return fmt.Errorf("published CRL has a future thisUpdate")
 	}
