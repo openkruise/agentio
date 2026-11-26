@@ -316,6 +316,7 @@ func newWorkloadAuthenticator(
 			registry.Pods,
 			accounts,
 			features.TokenAudience,
+			features.KubernetesJWKSCacheTTL,
 		)
 		authenticationSynced = accounts.HasSynced
 	} else {

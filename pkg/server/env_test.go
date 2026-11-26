@@ -189,6 +189,53 @@ func environmentWithout(environment []string, names ...string) []string {
 	return result
 }
 
+func TestAgentioJWKSCacheTTLEnvironment(t *testing.T) {
+	const variable = "AGENTIO_KUBERNETES_JWKS_CACHE_TTL"
+	const helper = "AGENTIO_JWKS_CACHE_TTL_TEST_EXPECTED"
+	if expected := os.Getenv(helper); expected != "" {
+		err := features.Validate()
+		if expected == "invalid" {
+			if err == nil || !strings.Contains(err.Error(), variable) {
+				t.Fatalf("Validate() = %v, want %s error", err, variable)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := features.KubernetesJWKSCacheTTL.String(); got != expected {
+			t.Fatalf("JWKS cache TTL = %s, want %s", got, expected)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name     string
+		value    string
+		expected string
+	}{
+		{"default", "", "5m0s"},
+		{"override", "1h", "1h0m0s"},
+		{"short", "30s", "30s"},
+		{"minimum", "5s", "5s"},
+		{"empty", "", "invalid"},
+		{"malformed", "not-a-duration", "invalid"},
+		{"zero", "0s", "invalid"},
+		{"negative", "-1m", "invalid"},
+		{"below refresh interval", "1s", "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "-test.run=^TestAgentioJWKSCacheTTLEnvironment$")
+			command.Env = append(environmentWithout(os.Environ(), variable, helper), helper+"="+tc.expected)
+			if tc.name != "default" {
+				command.Env = append(command.Env, variable+"="+tc.value)
+			}
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("environment test: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 	var out strings.Builder
 	if err := PrintEnvironment(&out); err != nil {
@@ -200,6 +247,7 @@ func TestPrintEnvironmentListsRegisteredVariables(t *testing.T) {
 		"AGENTIO_TOKEN_AUDIENCE",
 		"AGENTIO_ENABLE_POLICY_STATUS",
 		"AGENTIO_KUBERNETES_WORKLOAD_AUTH_MODE",
+		"AGENTIO_KUBERNETES_JWKS_CACHE_TTL",
 		"AGENTIO_SCOPED_SECRETS",
 		"AGENTIO_CONFIGMAP_NAME",
 		"AGENTIO_ENABLE_DEBUG_ON_HTTP",

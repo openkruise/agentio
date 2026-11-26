@@ -55,7 +55,7 @@ type localJWTFixture struct {
 	client   rest.Interface
 }
 
-func newLocalJWTFixture(t *testing.T) *localJWTFixture {
+func newLocalJWTFixture(t *testing.T, keyLifetime time.Duration) *localJWTFixture {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -124,13 +124,14 @@ func newLocalJWTFixture(t *testing.T) *localJWTFixture {
 		f.pods.AsCollection(),
 		f.accounts.AsCollection(),
 		"agentio-ca",
+		keyLifetime,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.auth.now = func() time.Time { return f.now }
 	f.auth.nextRefresh = f.now.Add(localJWTRefreshInterval)
-	f.auth.validUntil = f.now.Add(localJWTKeyLifetime)
+	f.auth.validUntil = f.now.Add(f.auth.keyLifetime)
 	return f
 }
 
@@ -158,7 +159,7 @@ func signLocalJWT(t *testing.T, key any, id string, c localJWTClaims) string {
 }
 
 func TestLocalJWTAuthenticatesWithoutPerRequestKubernetesCalls(t *testing.T) {
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	token := signLocalJWT(t, f.key, "first", f.claims)
 	for range 5 {
 		peer, err := f.auth.Authenticate(bearerContext(token))
@@ -199,7 +200,7 @@ func TestLocalJWTRejectsInvalidCredentials(t *testing.T) {
 		{"missing SA UID", func(c *localJWTClaims) { c.Kubernetes.ServiceAccount.UID = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newLocalJWTFixture(t)
+			f := newLocalJWTFixture(t, 5*time.Minute)
 			tc.mutate(&f.claims)
 			_, err := f.auth.Authenticate(bearerContext(signLocalJWT(t, f.key, "first", f.claims)))
 			if err == nil || errors.Is(err, ErrUnsupportedCredentials) {
@@ -207,7 +208,7 @@ func TestLocalJWTRejectsInvalidCredentials(t *testing.T) {
 			}
 		})
 	}
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	for _, raw := range []string{"malformed", signLocalJWT(t, f.key, "first", f.claims) + "x", signLocalJWT(t, []byte(strings.Repeat("s", 32)), "first", f.claims)} {
 		if _, err := f.auth.Authenticate(bearerContext(raw)); err == nil || errors.Is(err, ErrUnsupportedCredentials) {
 			t.Fatalf("accepted invalid bearer: %v", err)
@@ -264,7 +265,7 @@ func TestLocalJWTRechecksResourceBindings(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newLocalJWTFixture(t)
+			f := newLocalJWTFixture(t, 5*time.Minute)
 			ctx := bearerContext(signLocalJWT(t, f.key, "first", f.claims))
 			if _, err := f.auth.Authenticate(ctx); err != nil {
 				t.Fatal(err)
@@ -283,7 +284,7 @@ func (localJWTUnsynced) HasSynced() bool                      { return false }
 func (localJWTUnsynced) WaitUntilSynced(<-chan struct{}) bool { return false }
 
 func TestLocalJWTRejectsBeforeInitialSync(t *testing.T) {
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	f.auth.accounts = krt.NewStaticCollection[*corev1.ServiceAccount](localJWTUnsynced{}, nil)
 	if _, err := f.auth.Authenticate(bearerContext(signLocalJWT(t, f.key, "first", f.claims))); err == nil {
 		t.Fatal("unsynced identity collection accepted")
@@ -291,7 +292,7 @@ func TestLocalJWTRejectsBeforeInitialSync(t *testing.T) {
 }
 
 func TestLocalJWTKeyRotationAndRefreshFailures(t *testing.T) {
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	old := signLocalJWT(t, f.key, "first", f.claims)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -325,7 +326,7 @@ func TestLocalJWTKeyRotationAndRefreshFailures(t *testing.T) {
 		t.Fatalf("failed verification bypassed refresh limit: %d", got)
 	}
 	f.fail.Store(true)
-	f.now = f.now.Add(localJWTKeyLifetime)
+	f.now = f.now.Add(f.auth.keyLifetime)
 	if _, err := f.auth.Authenticate(bearerContext(rotated)); err == nil {
 		t.Fatal("expired signing key cache accepted during outage")
 	}
@@ -346,7 +347,7 @@ func TestLocalJWTKeyRotationAndRefreshFailures(t *testing.T) {
 }
 
 func TestLocalJWTInitializationFailsWithoutSigningKeys(t *testing.T) {
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	f.mu.Lock()
 	f.keys = jose.JSONWebKeySet{}
 	f.mu.Unlock()
@@ -356,6 +357,7 @@ func TestLocalJWTInitializationFailsWithoutSigningKeys(t *testing.T) {
 		f.pods.AsCollection(),
 		f.accounts.AsCollection(),
 		"agentio-ca",
+		5*time.Minute,
 	); err == nil {
 		t.Fatal("empty JWKS accepted at startup")
 	}
@@ -366,13 +368,14 @@ func TestLocalJWTInitializationFailsWithoutSigningKeys(t *testing.T) {
 		f.pods.AsCollection(),
 		f.accounts.AsCollection(),
 		"agentio-ca",
+		5*time.Minute,
 	); err == nil {
 		t.Fatal("JWKS outage accepted at startup")
 	}
 }
 
 func TestLocalJWTUsesUnexpiredKeysDuringAPIOutage(t *testing.T) {
-	f := newLocalJWTFixture(t)
+	f := newLocalJWTFixture(t, 5*time.Minute)
 	token := signLocalJWT(t, f.key, "first", f.claims)
 	f.fail.Store(true)
 	f.now = f.now.Add(localJWTRefreshInterval)
@@ -388,5 +391,31 @@ func TestLocalJWTUsesUnexpiredKeysDuringAPIOutage(t *testing.T) {
 	}
 	if got := f.requests.Load(); got != 2 {
 		t.Fatalf("JWKS requests = %d, want initial fetch and one failed refresh", got)
+	}
+}
+
+func TestLocalJWTConfiguredKeyLifetime(t *testing.T) {
+	f := newLocalJWTFixture(t, time.Hour)
+	f.claims.Expiry = jwt.NewNumericDate(f.now.Add(3 * time.Hour))
+	token := signLocalJWT(t, f.key, "first", f.claims)
+	f.fail.Store(true)
+	f.now = f.now.Add(30 * time.Minute)
+	if _, err := f.auth.Authenticate(bearerContext(token)); err != nil {
+		t.Fatalf("configured cache lifetime did not preserve keys: %v", err)
+	}
+	if got := f.requests.Load(); got != 1 {
+		t.Fatalf("unexpired keys triggered %d JWKS requests, want only initial fetch", got)
+	}
+	f.now = f.now.Add(30 * time.Minute)
+	if _, err := f.auth.Authenticate(bearerContext(token)); err == nil {
+		t.Fatal("expired signing key cache accepted during outage")
+	}
+	f.fail.Store(false)
+	f.now = f.now.Add(localJWTRefreshInterval)
+	if _, err := f.auth.Authenticate(bearerContext(token)); err != nil {
+		t.Fatalf("cache refresh did not recover: %v", err)
+	}
+	if got := f.auth.validUntil.Sub(f.now); got != time.Hour {
+		t.Fatalf("refreshed key lifetime = %s, want 1h", got)
 	}
 }
