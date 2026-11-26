@@ -131,6 +131,10 @@ spec:
               value: {{ .Values.agentiod.mitm.secretNamespace | quote }}
             - name: AGENTIO_MITM_SIGN_MODE
               value: {{ .Values.agentiod.mitm.signMode | quote }}
+            {{- if .Values.agentiod.mitm.subCAEnabled }}
+            - name: AGENTIO_MITM_SUB_CA_ENABLED
+              value: "true"
+            {{- end }}
             {{- with .Values.agentiod.mitm.crlOrigin }}
             - name: AGENTIO_MITM_CRL_ORIGIN
               value: {{ . | quote }}

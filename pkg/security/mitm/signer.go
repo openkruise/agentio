@@ -62,6 +62,7 @@ const (
 
 type MITMSignerOptions struct {
 	Mode                  MITMSignMode
+	SubCAEnabled          bool
 	Namespace             string // Agentio system namespace.
 	SecretNamespace       string // Defaults to Namespace.
 	SecretName            string
@@ -95,6 +96,7 @@ type MITMSigner struct {
 	client      kube.Client
 	options     MITMSignerOptions
 	caSingleton krt.Singleton[caState]
+	parentCA    krt.Singleton[caState]
 	signerState krt.StaticSingleton[SignerState]
 	trustBundle krt.StaticSingleton[TrustBundle]
 	crls        *crlPublisher
@@ -145,6 +147,11 @@ func NewMITMSigner(
 		options.KrtOptions.WithName("MITM_Signer_State")...)
 	signer.trustBundle = krt.NewStatic[TrustBundle](nil, true, options.KrtOptions.WithName("MITM_Trust_Bundle")...)
 	signer.caSingleton = newDelayedCASecretSingleton(client, options)
+	if options.SubCAEnabled {
+		signer.parentCA = signer.caSingleton
+		signer.caSingleton = signer.subCACollection(ctx)
+		go signer.runSubCAMaintenance(ctx)
+	}
 	signer.caSingleton.Register(func(event krt.Event[caState]) {
 		if event.New == nil {
 			signer.setUnavailable("")
@@ -189,6 +196,9 @@ func applyMITMSignerDefaults(options *MITMSignerOptions) {
 }
 
 func validateMITMSignerOptions(options MITMSignerOptions) error {
+	if options.SubCAEnabled && options.Mode != MITMSignModeSecret {
+		return fmt.Errorf("MITM Sub CA requires SECRET mode")
+	}
 	if options.Namespace == "" || options.SecretName == "" {
 		return fmt.Errorf("MITM signer system namespace and CA Secret name are required")
 	}
@@ -218,7 +228,10 @@ func newDelayedCASecretSingleton(
 	}
 	// Retry non-authoritative read errors so delayed RBAC is not mistaken for a missing Secret.
 	waitForReadPermission := func(ctx context.Context) bool {
-		_, err := client.Kube().CoreV1().Secrets(options.SecretNamespace).Get(ctx, options.SecretName, metav1.GetOptions{})
+		_, err := client.Kube().
+			CoreV1().
+			Secrets(options.SecretNamespace).
+			Get(ctx, options.SecretName, metav1.GetOptions{})
 		return err == nil || apierrors.IsNotFound(err)
 	}
 	syncer := krt.NewPollingSyncer("MITM_Secret", waitForReadPermission, 30*time.Second)
@@ -245,7 +258,15 @@ func newCASecretSingleton(
 		}
 		ca, err := pki.ParseSigningCABundle(secret.Data[mitmCACertKey], secret.Data[mitmCAKeyKey], time.Now())
 		if err != nil {
-			log.Error("parse MITM CA Secret", "namespace", options.SecretNamespace, "secret", options.SecretName, "error", err)
+			log.Error(
+				"parse MITM CA Secret",
+				"namespace",
+				options.SecretNamespace,
+				"secret",
+				options.SecretName,
+				"error",
+				err,
+			)
 			return nil
 		}
 		return &caState{ca: ca, secretUID: secret.UID}
@@ -280,6 +301,13 @@ func (s *MITMSigner) SignDNS(ctx context.Context, domain string, lifetime time.D
 		horizon, err := s.crls.issuanceHorizon(ca, now)
 		if err != nil {
 			return SignedCertificate{}, fmt.Errorf("MITM CRL unavailable: %w", err)
+		}
+		if s.options.SubCAEnabled {
+			statusExpiry, err := s.subCAStatusExpiry(ca, now)
+			if err != nil {
+				return SignedCertificate{}, fmt.Errorf("MITM Sub CA status unavailable: %w", err)
+			}
+			horizon = minTime(horizon, statusExpiry)
 		}
 		distributionPoints = []string{s.crls.origin + "/crl/" + ca.CRLKeyID() + ".crl"}
 		lifetime = min(lifetime, horizon.Sub(now))
@@ -399,7 +427,10 @@ func (s *MITMSigner) reconcileSelfSignedCA(ctx context.Context) error {
 	if s.currentRevision() != "" {
 		return nil
 	}
-	_, err := s.client.Kube().CoreV1().Secrets(s.options.SecretNamespace).Get(ctx, s.options.SecretName, metav1.GetOptions{})
+	_, err := s.client.Kube().
+		CoreV1().
+		Secrets(s.options.SecretNamespace).
+		Get(ctx, s.options.SecretName, metav1.GetOptions{})
 	if !apierrors.IsNotFound(err) {
 		if err != nil {
 			return fmt.Errorf("read MITM CA Secret %s/%s: %w", s.options.SecretNamespace, s.options.SecretName, err)

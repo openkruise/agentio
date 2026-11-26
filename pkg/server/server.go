@@ -557,13 +557,14 @@ func (p *controlPlane) startDiscovery(
 
 func (p *controlPlane) newDomainSigner(ctx context.Context) (mitm.DomainSignerSource, error) {
 	if p.composition.domainSigner != nil {
-		if features.MITMCRLOrigin != "" {
+		if features.MITMCRLOrigin != "" || features.MITMSubCAEnabled {
 			return mitm.DomainSignerSource{}, fmt.Errorf("MITM CRL publication requires the built-in domain signer")
 		}
 		return *p.composition.domainSigner, nil
 	}
 	builtInSigner, err := mitm.NewMITMSigner(ctx, p.kubeClient, mitm.MITMSignerOptions{
 		Mode:                  mitm.MITMSignMode(features.MITMSignMode),
+		SubCAEnabled:          features.MITMSubCAEnabled,
 		Namespace:             p.options.RootNamespace,
 		SecretNamespace:       strings.TrimSpace(features.MITMCASecretNamespace),
 		SecretName:            features.MITMCASecretName,

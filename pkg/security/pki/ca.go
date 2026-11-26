@@ -61,6 +61,11 @@ func (ca SigningCA) NotAfter() time.Time {
 	return ca.certificate.NotAfter
 }
 
+// ChainNotAfter is the earliest expiry on the supplied signing path.
+func (ca SigningCA) ChainNotAfter() time.Time {
+	return ca.chainNotAfter
+}
+
 // Revision identifies the ordered certificate bundle semantically, independent
 // of PEM formatting. It changes when either the active CA or a trailing CA
 // changes, so consumers never reuse a leaf with an obsolete chain.
@@ -79,10 +84,17 @@ func (ca SigningCA) CertificatePEM() []byte {
 	return append([]byte(nil), ca.certificatePEM...)
 }
 
+// Certificate returns the immutable signing certificate. Callers must treat it as read-only.
+func (ca SigningCA) Certificate() *x509.Certificate {
+	return ca.certificate
+}
+
+// CRLKeyID returns the hexadecimal subject key identifier used in CRL URLs.
 func (ca SigningCA) CRLKeyID() string {
 	return hex.EncodeToString(ca.certificate.SubjectKeyId)
 }
 
+// VerifyCRL checks the list's issuer identity and signature against this CA.
 func (ca SigningCA) VerifyCRL(list *x509.RevocationList) error {
 	if !bytes.Equal(list.RawIssuer, ca.certificate.RawSubject) ||
 		!bytes.Equal(list.AuthorityKeyId, ca.certificate.SubjectKeyId) {
@@ -91,6 +103,7 @@ func (ca SigningCA) VerifyCRL(list *x509.RevocationList) error {
 	return list.CheckSignatureFrom(ca.certificate)
 }
 
+// SignCRL returns a DER-encoded revocation list signed by this CA.
 func (ca SigningCA) SignCRL(list *x509.RevocationList) ([]byte, error) {
 	return x509.CreateRevocationList(rand.Reader, list, ca.certificate, ca.privateKey)
 }

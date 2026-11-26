@@ -129,6 +129,10 @@ spec:
               value: {{ .Values.agentio.agentiod.mitm.secretNamespace | quote }}
             - name: AGENTIO_MITM_SIGN_MODE
               value: {{ .Values.agentio.agentiod.mitm.signMode | quote }}
+            {{- if .Values.agentio.agentiod.mitm.subCAEnabled }}
+            - name: AGENTIO_MITM_SUB_CA_ENABLED
+              value: "true"
+            {{- end }}
             {{- with .Values.agentio.agentiod.mitm.crlOrigin }}
             - name: AGENTIO_MITM_CRL_ORIGIN
               value: {{ . | quote }}

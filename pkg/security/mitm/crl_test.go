@@ -97,7 +97,11 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 	store(seeded)
 	nearExpiry, err := signer.SignDNS(ctx, "one.example", 15*time.Minute)
 	if err != nil || !nearExpiry.NotAfter.Equal(seedExpiry) {
-		t.Fatalf("certificate validity exceeds the current CRL window or issuance failed: expiry %v, err %v", nearExpiry.NotAfter, err)
+		t.Fatalf(
+			"certificate validity exceeds the current CRL window or issuance failed: expiry %v, err %v",
+			nearExpiry.NotAfter,
+			err,
+		)
 	}
 	if err := p.reconcile(ctx, ca, now); err != nil {
 		t.Fatal(err)
@@ -133,7 +137,8 @@ func TestCRLRenewalUsesSignedList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(leaf.CRLDistributionPoints) != 1 || leaf.CRLDistributionPoints[0] != p.origin+urlPath || len(leaf.OCSPServer) != 0 {
+	if len(leaf.CRLDistributionPoints) != 1 || leaf.CRLDistributionPoints[0] != p.origin+urlPath ||
+		len(leaf.OCSPServer) != 0 {
 		t.Fatalf("unexpected status URLs: %v %v", leaf.CRLDistributionPoints, leaf.OCSPServer)
 	}
 	corrupt := stored.DeepCopy()
@@ -212,7 +217,9 @@ func TestCRLServiceAcrossCASecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		der, err := ca.SignCRL(&x509.RevocationList{Number: big.NewInt(1), ThisUpdate: now, NextUpdate: now.Add(time.Hour)})
+		der, err := ca.SignCRL(
+			&x509.RevocationList{Number: big.NewInt(1), ThisUpdate: now, NextUpdate: now.Add(time.Hour)},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +240,11 @@ func TestCRLServiceAcrossCASecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		testutil.Eventually(t, func() bool { return signer.State().Get() != nil }, "load CA Secret from its own namespace")
+		testutil.Eventually(
+			t,
+			func() bool { return signer.State().Get() != nil },
+			"load CA Secret from its own namespace",
+		)
 		issued, err := signer.SignDNS(ctx, "app.example", 15*time.Minute)
 		if err != nil {
 			t.Fatal(err)

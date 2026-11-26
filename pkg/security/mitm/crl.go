@@ -66,7 +66,7 @@ func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, er
 	}
 	return &crlPublisher{
 		origin: "http://" + u.Host, namespace: o.Namespace, maps: o.ConfigMaps, client: client,
-		managed: o.Mode == MITMSignModeSelfSign,
+		managed: o.Mode == MITMSignModeSelfSign || o.SubCAEnabled,
 	}, nil
 }
 
@@ -138,12 +138,17 @@ func (p *crlPublisher) issuanceHorizon(ca pki.SigningCA, now time.Time) (time.Ti
 	return list.NextUpdate, nil
 }
 
+// CRLHandler serves signed revocation status, or returns nil when publication is disabled.
 func (s *MITMSigner) CRLHandler() http.Handler {
 	if s.crls == nil {
 		return nil
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /crl/{file}", s.downloadCRL)
+	if s.options.SubCAEnabled {
+		mux.HandleFunc("GET /ocsp/{request...}", s.downloadOCSP)
+		mux.HandleFunc("POST /ocsp", s.downloadOCSP)
+	}
 	return mux
 }
 

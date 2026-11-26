@@ -118,6 +118,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often each replica checks whether the control-plane-managed MITM root CA needs CAS renewal. |
 | <code>AGENTIO_MITM_SIGN_CONCURRENCY</code> | Integer | <code>8</code> | Maximum number of on-demand certificates signed concurrently. |
 | <code>AGENTIO_MITM_SIGN_MODE</code> | String | <code>SELF&#95;SIGN</code> | MITM CA ownership mode: SECRET reads an externally managed Secret; SELF&#95;SIGN persists a control-plane-managed self-signed CA. |
+| <code>AGENTIO_MITM_SUB_CA_ENABLED</code> | Boolean | <code>false</code> | Derive a managed MITM Sub CA from the configured SECRET CA. Setting MITM&#95;CRL&#95;ORIGIN also publishes its OCSP status and leaf CRLs. |
 | <code>AGENTIO_NATIVE_SIDECARS</code> | String | <code>auto</code> | Native sidecar injection mode: true, false, or auto (per-node kubelet version detection). |
 | <code>AGENTIO_PRIMARY_CONFIGMAP_NAME</code> | String | <code>agentio-config-primary</code> | ConfigMap name of primary Agentio configuration. Empty disables the primary overlay. |
 | <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for initializing streams, background pushes, and streams awaiting xDS acknowledgements, with independent admission, initial-response, established-request, and background-response pools. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
@@ -233,6 +234,30 @@ agentiod:
 ```
 
 The Secret must contain `ca.crt` and `ca.key`. Keep the Secret namespace and the configured egress-gateway identity scope consistent.
+
+### Derive a managed MITM Sub CA
+
+`AGENTIO_MITM_SUB_CA_ENABLED` defaults to `false`. Enable it with `SECRET` mode. The configured CA Secret becomes the parent issuer. Agentiod generates an independent Sub CA key and persists the signing chain and key in `agentio-mitm-sub-ca` in its system namespace. Replicas and process restarts reuse this Secret.
+
+`AGENTIO_MITM_CRL_ORIGIN` is optional. When set, it enables automatic CRL and OCSP publication for the Sub CA chain and must be reachable by clients. Without it, Agentiod generates a Sub CA with CRL-signing capability and issues leaves without status URLs. Clients requiring online revocation status need publication enabled.
+
+```yaml
+agentiod:
+  mitm:
+    signMode: SECRET
+    secretNamespace: pki-system
+    secretName: mitm-parent-ca
+    subCAEnabled: true
+    crlOrigin: http://agentiod-crl.agentio-system.svc.cluster.local
+```
+
+The parent needs certificate-signing permission and a path-length constraint that permits a Sub CA. The Sub CA has `CA:TRUE`, `pathlen:0`, `keyCertSign` and `cRLSign`. Its lifetime is one year, capped by the parent chain's expiry. Agentiod renews it within 30 days of expiry and retains its key. A parent key change creates a new Sub CA key. Preserve both the Sub CA Secret and `agentio-mitm-ca-crls` across upgrades. The ServiceAccount needs read access to the configured parent Secret and create, read, list, watch and update access to Secrets and ConfigMaps in the system namespace.
+
+Issued leaves contain the Sub CA's CRL URL. Agentiod initializes a signed empty CRL for a newly generated key and renews the committed CRL while preserving its entries. Publish a full CRL signed by the Sub CA to add revocations. Missing published history for an existing Sub CA prevents signing.
+
+The Sub CA contains an OCSP AIA pointing at `<crlOrigin>/ocsp`. Agentiod signs its status with the parent key and serves pre-produced OCSP responses for SHA-1 and SHA-256 CertIDs over HTTP GET and POST. Responses cover the managed Sub CA and remain valid for up to 24 hours. Earlier signed responses are retained through their validity when a Sub CA is renewed or its parent changes. Clients continue trusting the parent Root and receive the Sub CA chain with the leaf. Clients must be able to reach both the CRL and OCSP URLs.
+
+Turning the flag off switches new issuance back to the configured parent. Keep publishing status for any outstanding Sub CA chains during a rollback. Parent-chain revocation above the configured issuer remains the parent owner's responsibility.
 
 ### Publish a MITM certificate revocation list
 

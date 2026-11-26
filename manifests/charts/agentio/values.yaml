@@ -106,6 +106,8 @@ agentiod:
     secretName: agentio-mitm-ca
     secretNamespace: ""
     signMode: SELF_SIGN
+    # SECRET mode derives a shared Sub CA and publishes OCSP and CRLs at crlOrigin.
+    subCAEnabled: false
     # Client-reachable HTTP origin for signed CRLs advertised in new certificates.
     crlOrigin: ""
   config:
