@@ -111,7 +111,6 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_CA_SECRET_NAMESPACE</code> | String | empty | Namespace of the MITM CA Secret. Empty uses the control-plane root namespace. |
 | <code>AGENTIO_MITM_CRL_ORIGIN</code> | String | empty | HTTP origin advertised in newly issued MITM certificates. Empty disables CRL publication. |
 | <code>AGENTIO_MITM_LEAF_LIFETIME</code> | Duration | <code>15m0s</code> | Validity of on-demand domain certificates. |
-| <code>AGENTIO_MITM_OCSP_STAPLING_ENABLED</code> | Boolean | <code>false</code> | Attach a signed OCSP response to each on-demand MITM server certificate. CRL publication remains optional. |
 | <code>AGENTIO_MITM_RENEW_BEFORE</code> | Duration | <code>1m0s</code> | How long before expiry SDS TTL removes an on-demand certificate; new demand re-issues it. |
 | <code>AGENTIO_MITM_RESOURCE_TTL</code> | Duration | <code>15m0s</code> | Maximum SDS residency from certificate signing time; replay never extends this deadline. |
 | <code>AGENTIO_MITM_ROOT_LIFETIME</code> | Duration | <code>87600h0m0s</code> | Validity of the control-plane-managed root CA in MITM SELF&#95;SIGN mode. |
@@ -259,16 +258,6 @@ Issued leaves contain the Sub CA's CRL URL. Agentiod initializes a signed empty 
 The Sub CA contains an OCSP AIA pointing at `<crlOrigin>/ocsp`. Agentiod signs its status with the parent key and serves pre-produced OCSP responses for SHA-1 and SHA-256 CertIDs over HTTP GET and POST. Responses cover the managed Sub CA and remain valid for up to 24 hours. Earlier signed responses are retained through their validity when a Sub CA is renewed or its parent changes. Clients continue trusting the parent Root and receive the Sub CA chain with the leaf. Clients must be able to reach both the CRL and OCSP URLs.
 
 Turning the flag off switches new issuance back to the configured parent. Keep publishing status for any outstanding Sub CA chains during a rollback. Parent-chain revocation above the configured issuer remains the parent owner's responsibility.
-
-### Staple MITM server certificate status
-
-`AGENTIO_MITM_OCSP_STAPLING_ENABLED` defaults to `false`. Set `agentiod.mitm.ocspStaplingEnabled: true` to issue a signed OCSP response alongside each on-demand server certificate. Agentiod sends the response in the same SDS Secret; Envoy staples it when the client requests certificate status. The response is signed by the leaf's issuer and expires with the leaf. Existing cache and SDS deadlines rotate the certificate and response together.
-
-The issuer needs `digitalSignature` key usage. Managed Sub CAs gain this usage by renewal with the same key, preserving their CRL identity and published revocations. The parent CA Secret is unchanged. External CA Secrets remain read-only and must already allow digital signatures.
-
-CRL publication is optional. With `crlOrigin` configured, leaves keep their CRL distribution point for clients that do not use stapling. Leaf lifetime is capped by the current CRL's `NextUpdate`, including in `SECRET` mode. Replacing or removing the active issuer's CRL invalidates the signing generation, cached leaves and delivered SDS Secrets, so the gateway stops serving the old certificate and its good staple. New demand can issue a new certificate under the existing gateway authorization. Unrelated status records do not invalidate this issuer. Already delivered OCSP responses remain cryptographically valid through their expiry; revocation is not instantaneous for clients holding such responses.
-
-Without `crlOrigin`, no CRL is required or advertised and there is no CRL-driven invalidation. A client that requires revocation status must support stapling for this configuration to work. Sub CA status remains a separate chain-validation step using its existing OCSP URL. This feature does not staple intermediate certificates or eliminate their online checks. Envoy uses its default `LENIENT_STAPLING` policy, permitting the existing CRL fallback when a staple is unavailable.
 
 ### Publish a MITM certificate revocation list
 

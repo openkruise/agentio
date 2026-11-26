@@ -54,7 +54,6 @@ type crlPublisher struct {
 	maps      krt.Collection[*corev1.ConfigMap]
 	client    kube.Client
 	managed   bool
-	stapling  bool
 }
 
 func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, error) {
@@ -72,7 +71,6 @@ func newCRLPublisher(o MITMSignerOptions, client kube.Client) (*crlPublisher, er
 		maps:      o.ConfigMaps,
 		client:    client,
 		managed:   o.Mode == MITMSignModeSelfSign || o.SubCAEnabled,
-		stapling:  o.OCSPStaplingEnabled,
 	}, nil
 }
 
@@ -137,7 +135,7 @@ func (p *crlPublisher) issuanceHorizon(ca pki.SigningCA, now time.Time) (time.Ti
 	if err := ca.VerifyCRL(list); err != nil {
 		return time.Time{}, err
 	}
-	if !p.managed && !p.stapling {
+	if !p.managed {
 		// The external authority continues publishing through the lifetime of its leaves.
 		return ca.NotAfter(), nil
 	}

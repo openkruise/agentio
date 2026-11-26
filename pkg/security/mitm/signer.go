@@ -16,7 +16,6 @@ package mitm
 
 import (
 	"context"
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -64,7 +63,6 @@ const (
 type MITMSignerOptions struct {
 	Mode                  MITMSignMode
 	SubCAEnabled          bool
-	OCSPStaplingEnabled   bool
 	Namespace             string // Agentio system namespace.
 	SecretNamespace       string // Defaults to Namespace.
 	SecretName            string
@@ -78,9 +76,8 @@ type MITMSignerOptions struct {
 }
 
 type caState struct {
-	ca          pki.SigningCA
-	secretUID   types.UID
-	crlRevision string
+	ca        pki.SigningCA
+	secretUID types.UID
 }
 
 func (caState) ResourceName() string {
@@ -88,14 +85,7 @@ func (caState) ResourceName() string {
 }
 
 func (c caState) Equals(other caState) bool {
-	return c.secretUID == other.secretUID && c.ca.Equal(other.ca) && c.crlRevision == other.crlRevision
-}
-
-func (c caState) revision() string {
-	if c.crlRevision == "" {
-		return c.ca.Revision()
-	}
-	return c.ca.Revision() + ":" + c.crlRevision
+	return c.secretUID == other.secretUID && c.ca.Equal(other.ca)
 }
 
 // MITMSigner signs on-demand DNS certificates from CA material whose ownership
@@ -161,9 +151,6 @@ func NewMITMSigner(
 		signer.parentCA = signer.caSingleton
 		signer.caSingleton = signer.subCACollection(ctx)
 		go signer.runSubCAMaintenance(ctx)
-	}
-	if options.OCSPStaplingEnabled && signer.crls != nil {
-		signer.caSingleton = signer.withCRLRevision(signer.caSingleton)
 	}
 	signer.caSingleton.Register(func(event krt.Event[caState]) {
 		if event.New == nil {
@@ -304,15 +291,10 @@ func (s *MITMSigner) SignDNS(ctx context.Context, domain string, lifetime time.D
 	}
 	generation := s.caSingleton.Get()
 	state := s.signerState.Get()
-	if s.unavailable.Load() || generation == nil || state == nil || state.Revision != generation.revision() {
+	if s.unavailable.Load() || generation == nil || state == nil || state.Revision != generation.ca.Revision() {
 		return SignedCertificate{}, fmt.Errorf("MITM CA is not loaded")
 	}
 	ca := generation.ca
-	if s.options.OCSPStaplingEnabled && ca.Certificate().KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		return SignedCertificate{}, fmt.Errorf(
-			"MITM OCSP stapling requires a signing CA with digitalSignature key usage",
-		)
-	}
 	now := time.Now()
 	var distributionPoints []string
 	if s.crls != nil {
@@ -351,20 +333,12 @@ func (s *MITMSigner) SignDNS(ctx context.Context, domain string, lifetime time.D
 	if err != nil {
 		return SignedCertificate{}, fmt.Errorf("sign MITM certificate for %s: %w", domain, err)
 	}
-	var staple []byte
-	if s.options.OCSPStaplingEnabled {
-		staple, err = ca.SignOCSP(issued.Certificate, crypto.SHA1, now, issued.NotAfter)
-		if err != nil {
-			return SignedCertificate{}, fmt.Errorf("sign MITM OCSP response for %s: %w", domain, err)
-		}
-	}
 	return SignedCertificate{
 		CertificateChain: pki.AppendCertificateChain(issued.CertificatePEM, ca.BundlePEM()),
 		PrivateKey:       pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
-		OCSPStaple:       staple,
 		NotAfter:         issued.NotAfter,
 		SignedAt:         issued.IssuedAt,
-		SignerRevision:   state.Revision,
+		SignerRevision:   ca.Revision(),
 	}, nil
 }
 
@@ -389,7 +363,7 @@ func (s *MITMSigner) setUnavailable(uid types.UID) {
 }
 
 func (s *MITMSigner) acceptAvailable(state caState) bool {
-	uid, revision := state.secretUID, state.revision()
+	uid, revision := state.secretUID, state.ca.Revision()
 	s.availabilityMu.Lock()
 	defer s.availabilityMu.Unlock()
 	if current := s.caSingleton.Get(); current == nil || !current.Equals(state) {
@@ -404,7 +378,7 @@ func (s *MITMSigner) acceptAvailable(state caState) bool {
 	if current == nil || current.Revision != revision {
 		s.signerState.Set(&SignerState{Revision: revision})
 	}
-	bundle := TrustBundle{PEM: string(state.ca.BundlePEM()), Revision: state.ca.Revision()}
+	bundle := TrustBundle{PEM: string(state.ca.BundlePEM()), Revision: revision}
 	if current := s.trustBundle.Get(); current == nil || !current.Equals(bundle) {
 		s.trustBundle.Set(&bundle)
 	}

@@ -66,9 +66,6 @@ func (s *MITMSigner) parseSubCA(secret *corev1.Secret, parent pki.SigningCA, now
 		!slices.Equal(cert.OCSPServer, s.subCAOCSPURLs()) {
 		return pki.SigningCA{}, fmt.Errorf("Sub CA has unexpected constraints, key usage or OCSP origin")
 	}
-	if s.options.OCSPStaplingEnabled && cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		return pki.SigningCA{}, fmt.Errorf("Sub CA needs digitalSignature key usage for OCSP stapling")
-	}
 	if !bytes.Equal(ca.BundlePEM(), pki.AppendCertificateChain(ca.CertificatePEM(), parent.BundlePEM())) {
 		return pki.SigningCA{}, fmt.Errorf("Sub CA bundle differs from the configured parent chain")
 	}
@@ -254,7 +251,7 @@ func (s *MITMSigner) publishSubCAStatus(
 		if err == nil && response.NextUpdate.Sub(now) > 8*time.Hour {
 			continue
 		}
-		cm.BinaryData[key], err = parent.SignOCSP(cert, hash, now, now.Add(24*time.Hour))
+		cm.BinaryData[key], err = parent.SignOCSP(cert, hash, now)
 		if err != nil {
 			return err
 		}

@@ -107,8 +107,6 @@ agentio:
       signMode: SELF_SIGN
       # SECRET mode derives a shared Sub CA and publishes OCSP and CRLs at crlOrigin.
       subCAEnabled: false
-      # Attach a signed OCSP response to each on-demand server certificate.
-      ocspStaplingEnabled: false
       # Client-reachable HTTP origin for signed CRLs advertised in new certificates.
       crlOrigin: ""
     config:

@@ -22,12 +22,6 @@ import (
 )
 
 var (
-	// MITMOCSPStaplingEnabled attaches signed leaf status to on-demand SDS certificates.
-	MITMOCSPStaplingEnabled = env.Register(
-		"AGENTIO_MITM_OCSP_STAPLING_ENABLED",
-		false,
-		"Attach a signed OCSP response to each on-demand MITM server certificate. CRL publication remains optional.",
-	).Get()
 	// MITMSubCAEnabled derives a managed Sub CA from the configured parent CA.
 	MITMSubCAEnabled = env.Register(
 		"AGENTIO_MITM_SUB_CA_ENABLED",

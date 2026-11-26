@@ -67,7 +67,7 @@ func (ca SigningCA) IssueSubCA(
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLenZero:        true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	if ocspURL != "" {
 		template.OCSPServer = []string{ocspURL}
@@ -81,7 +81,7 @@ func (ca SigningCA) IssueSubCA(
 }
 
 // SignOCSP signs the status of a certificate directly issued by this parent.
-func (ca SigningCA) SignOCSP(child *x509.Certificate, hash crypto.Hash, now, nextUpdate time.Time) ([]byte, error) {
+func (ca SigningCA) SignOCSP(child *x509.Certificate, hash crypto.Hash, now time.Time) ([]byte, error) {
 	if err := child.CheckSignatureFrom(ca.certificate); err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (ca SigningCA) SignOCSP(child *x509.Certificate, hash crypto.Hash, now, nex
 		SerialNumber: child.SerialNumber,
 		IssuerHash:   hash,
 		ThisUpdate:   now.Add(-ClockSkew),
-		NextUpdate:   minTime(nextUpdate, minTime(child.NotAfter, ca.chainNotAfter)),
+		NextUpdate:   minTime(now.Add(24*time.Hour), ca.chainNotAfter),
 	}, ca.privateKey)
 }
 

@@ -204,7 +204,6 @@ func (i *OnDemandIssuer) Get(ctx context.Context, scope model.ClientScope, name 
 func cloneSignedCertificate(certificate SignedCertificate) SignedCertificate {
 	certificate.CertificateChain = append([]byte(nil), certificate.CertificateChain...)
 	certificate.PrivateKey = append([]byte(nil), certificate.PrivateKey...)
-	certificate.OCSPStaple = append([]byte(nil), certificate.OCSPStaple...)
 	return certificate
 }
 

@@ -24,8 +24,6 @@ import (
 type SignedCertificate struct {
 	CertificateChain []byte
 	PrivateKey       []byte
-	// OCSPStaple is a DER response valid through NotAfter, for the first certificate in the chain.
-	OCSPStaple []byte
 	// UsableUntil is the fixed SDS deadline set by the issuer; cache hits never extend it.
 	UsableUntil    time.Time
 	NotAfter       time.Time
@@ -37,7 +35,7 @@ type DomainCertificateSigner interface {
 	SignDNS(context.Context, string, time.Duration) (SignedCertificate, error)
 }
 
-// SignerState is the committed CA and revocation generation. A nil singleton value means
+// SignerState is the committed signing generation. A nil singleton value means
 // signing is unavailable; Revision identifies every certificate produced by
 // the active generation.
 type SignerState struct {
