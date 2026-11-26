@@ -145,12 +145,16 @@ func (g *SDSGenerator) Generate(ctx context.Context, request GenerationRequest) 
 			result.denied = append(result.denied, generatedDenial{name: name, err: err})
 			continue
 		}
+		tlsCertificate := &tlsv3.TlsCertificate{
+			CertificateChain: inlineDataSource(certificate.CertificateChain),
+			PrivateKey:       inlineDataSource(certificate.PrivateKey),
+		}
+		if len(certificate.OCSPStaple) != 0 {
+			tlsCertificate.OcspStaple = inlineDataSource(certificate.OCSPStaple)
+		}
 		secret := &tlsv3.Secret{
 			Name: name,
-			Type: &tlsv3.Secret_TlsCertificate{TlsCertificate: &tlsv3.TlsCertificate{
-				CertificateChain: inlineDataSource(certificate.CertificateChain),
-				PrivateKey:       inlineDataSource(certificate.PrivateKey),
-			}},
+			Type: &tlsv3.Secret_TlsCertificate{TlsCertificate: tlsCertificate},
 		}
 		value, err := anypb.New(secret)
 		if err != nil {

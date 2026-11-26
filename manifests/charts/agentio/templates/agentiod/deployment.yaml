@@ -135,6 +135,10 @@ spec:
             - name: AGENTIO_MITM_SUB_CA_ENABLED
               value: "true"
             {{- end }}
+            {{- if .Values.agentiod.mitm.ocspStaplingEnabled }}
+            - name: AGENTIO_MITM_OCSP_STAPLING_ENABLED
+              value: "true"
+            {{- end }}
             {{- with .Values.agentiod.mitm.crlOrigin }}
             - name: AGENTIO_MITM_CRL_ORIGIN
               value: {{ . | quote }}

@@ -70,6 +70,7 @@ func TestSDSGeneratorBuildsEnvoySecret(t *testing.T) {
 	certificate := mitm.SignedCertificate{
 		CertificateChain: []byte("certificate-chain"),
 		PrivateKey:       []byte("private-key"),
+		OCSPStaple:       []byte("signed-ocsp-response"),
 		UsableUntil:      time.Now().Add(59 * time.Minute),
 		NotAfter:         time.Now().Add(time.Hour),
 		SignedAt:         time.Now(),
@@ -104,6 +105,9 @@ func TestSDSGeneratorBuildsEnvoySecret(t *testing.T) {
 	}
 	if got := secret.GetTlsCertificate().GetPrivateKey().GetInlineBytes(); string(got) != "private-key" {
 		t.Fatalf("private key = %q, want private-key", got)
+	}
+	if got := secret.GetTlsCertificate().GetOcspStaple().GetInlineBytes(); string(got) != "signed-ocsp-response" {
+		t.Fatalf("OCSP staple = %q, want signed-ocsp-response", got)
 	}
 }
 
