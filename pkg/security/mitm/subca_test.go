@@ -121,7 +121,9 @@ func TestManagedSubCA(t *testing.T) {
 			for _, c := range certs[1:] {
 				intermediates.AddCert(c)
 			}
-			if _, err := certs[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "app.example"}); err != nil {
+			if _, err := certs[0].Verify(
+				x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "app.example"},
+			); err != nil {
 				t.Fatal(err)
 			}
 			secrets := client.Kube().CoreV1().Secrets("system")
