@@ -54,6 +54,12 @@ type knownCRDWatcher map[schema.GroupVersionResource]struct{}
 
 func (w knownCRDWatcher) HasSynced() bool { return true }
 
+func (w knownCRDWatcher) Synced() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 func (w knownCRDWatcher) KnownOrCallback(resource schema.GroupVersionResource, _ func(<-chan struct{})) bool {
 	_, found := w[resource]
 	return found

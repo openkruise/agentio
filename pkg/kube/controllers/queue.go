@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/atomic"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 
@@ -32,7 +31,7 @@ type ReconcilerFn func(key types.NamespacedName) error
 // Items enqueued are deduplicated; this generally means relying on ordering of events in the queue is not feasible.
 type Queue struct {
 	queue       workqueue.TypedRateLimitingInterface[any]
-	initialSync *atomic.Bool
+	initialSync chan struct{}
 	name        string
 	maxAttempts int
 	workFn      func(key any) error
@@ -84,7 +83,7 @@ func NewQueue(name string, options ...func(*Queue)) Queue {
 	q := Queue{
 		name:        name,
 		closed:      make(chan struct{}),
-		initialSync: atomic.NewBool(false),
+		initialSync: make(chan struct{}),
 	}
 	for _, o := range options {
 		o(&q)
@@ -151,8 +150,16 @@ var defaultSyncSignal = syncSignal{}
 // processed all events that were added prior to Run() being called Warning: these items will be
 // processed at least once, but may have failed.
 func (q Queue) HasSynced() bool {
-	return q.initialSync.Load()
+	select {
+	case <-q.Synced():
+		return true
+	default:
+		return false
+	}
 }
+
+// Synced is closed when the queue finishes processing its initial items.
+func (q Queue) Synced() <-chan struct{} { return q.initialSync }
 
 // Closed returns a chan that will be signaled when the Instance has stopped processing tasks.
 func (q Queue) Closed() <-chan struct{} {
@@ -171,7 +178,7 @@ func (q Queue) processNextItem() bool {
 	// We got the sync signal. This is not a real event, so we exit early after signaling we are synced
 	if key == defaultSyncSignal {
 		q.logger.Info("queue synced")
-		q.initialSync.Store(true)
+		close(q.initialSync)
 		return true
 	}
 

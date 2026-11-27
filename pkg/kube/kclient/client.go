@@ -305,6 +305,12 @@ type neverSynced struct{}
 
 func (neverSynced) HasSynced() bool { return false }
 
+func (neverSynced) HasSyncedChecker() cache.DoneChecker { return neverSynced{} }
+
+func (neverSynced) Name() string { return "stopped informer registration" }
+
+func (neverSynced) Done() <-chan struct{} { return nil }
+
 // keyFunc renders the cache key as "namespace/name", or "name" when the
 // namespace is empty. An already-joined key passed as name therefore round-trips
 // unchanged.

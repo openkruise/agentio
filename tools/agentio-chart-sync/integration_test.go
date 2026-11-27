@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -223,9 +224,11 @@ func TestControllerUsesMasterBootstrapOverrides(t *testing.T) {
 			t.Errorf("proxy-init %s = %s, want %s", name, got, want)
 		}
 	}
-	if !slices.Contains(proxy.VolumeMounts, corev1.VolumeMount{
-		Name:      "agentio-sandbox-state",
-		MountPath: "/var/lib/ztunnel/sandbox",
+	if !slices.ContainsFunc(proxy.VolumeMounts, func(mount corev1.VolumeMount) bool {
+		return reflect.DeepEqual(mount, corev1.VolumeMount{
+			Name:      "agentio-sandbox-state",
+			MountPath: "/var/lib/ztunnel/sandbox",
+		})
 	}) || !slices.ContainsFunc(config.Volumes, func(v corev1.Volume) bool {
 		return v.Name == "agentio-sandbox-state" && v.EmptyDir != nil
 	}) {

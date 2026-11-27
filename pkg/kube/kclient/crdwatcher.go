@@ -279,6 +279,8 @@ func (c *crdWatcher) HasSynced() bool {
 	return c.queue.HasSynced()
 }
 
+func (c *crdWatcher) Synced() <-chan struct{} { return c.queue.Synced() }
+
 // Run starts the controller. This must be called.
 func (c *crdWatcher) Run(stop <-chan struct{}) {
 	c.mutex.Lock()

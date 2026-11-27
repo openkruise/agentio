@@ -95,7 +95,14 @@ func makeCRD(t *testing.T, fmc *metadatafake.FakeMetadataClient, g schema.GroupV
 func runWatcher(t *testing.T, w kclient.CrdWatcher, stop <-chan struct{}) {
 	t.Helper()
 	go w.Run(stop)
-	testutil.WaitFor(t, 10*time.Second, w.HasSynced, "crd watcher did not sync")
+	select {
+	case <-w.Synced():
+		if !w.HasSynced() {
+			t.Fatal("CRD watcher's sync signal fired before it synced")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CRD watcher did not sync")
+	}
 }
 
 // TestCRDWatcherRace verifies callbacks added during a handler run are not skipped.
