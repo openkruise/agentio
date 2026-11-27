@@ -173,7 +173,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 					toolName = decoded
 				} else {
 					// Invalid encoding: cannot evaluate from header, fall back to body.
-					return filter.NeedBody(), nil
+					return filter.NeedBody(filter.CompleteBody), nil
 				}
 				rc := f.rule
 				if decision := evaluate(rc.Cfg, method, toolName); decision != actionAllow {
@@ -189,7 +189,7 @@ func (f *Filter) OnRequestHeaders(ctx context.Context, st *filter.Stream) (filte
 
 	// Pre-2026-07-28, absent/incomplete GA headers, or allow pending
 	// body verification: method is only knowable from the JSON-RPC body.
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 // OnRequestBody applies the rule's policy to the single JSON-RPC message

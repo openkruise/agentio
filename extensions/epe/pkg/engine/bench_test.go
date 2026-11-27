@@ -80,7 +80,7 @@ func (benchResponseStop) OnResponseHeaders(context.Context, *filter.Stream) (fil
 type benchNeedBody struct{ filter.PassThrough }
 
 func (benchNeedBody) OnRequestHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (benchNeedBody) OnRequestBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {
@@ -90,7 +90,7 @@ func (benchNeedBody) OnRequestBody(context.Context, *filter.Stream, filter.Body)
 type benchResponseNeedBody struct{ filter.PassThrough }
 
 func (benchResponseNeedBody) OnResponseHeaders(context.Context, *filter.Stream) (filter.Action, error) {
-	return filter.NeedBody(), nil
+	return filter.NeedBody(filter.CompleteBody), nil
 }
 
 func (benchResponseNeedBody) OnResponseBody(context.Context, *filter.Stream, filter.Body) (filter.Action, error) {

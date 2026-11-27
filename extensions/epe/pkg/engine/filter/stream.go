@@ -15,15 +15,13 @@ package filter
 
 import "github.com/openkruise/agentio/extensions/epe/pkg/httpreq"
 
-// Body is the complete buffered view of one direction's body; both
-// OnRequestBody and OnResponseBody receive it.
+// Body is one direction's original body input. Complete-body consumers receive
+// it once; explicitly incremental consumers may receive multiple chunks.
+// Bytes is read-only. A filter retaining it beyond the callback must copy it.
 type Body struct {
 	Bytes []byte
-	// Complete reports that Bytes is the whole body. The adapter only ever
-	// dispatches whole bodies — it requests Envoy's BUFFERED mode, which
-	// delivers the body in one message — so this is always true in practice.
-	// The field lets a filter that must not decide on a fragment reject one
-	// explicitly rather than assuming.
+	// Complete marks the final input. In buffered delivery Bytes is the whole
+	// body; in incremental delivery it is only the final chunk, possibly empty.
 	Complete bool
 }
 
@@ -56,6 +54,8 @@ type Stream struct {
 type StreamRuntime struct {
 	// Upstream changes while routing, then authorization pins the final destination.
 	Upstream *UpstreamTarget
+	// Response is populated from OnResponseHeaders onward.
 	Response httpreq.HTTPResponse
-	Info     *StreamInfo
+	// Info holds execution records and content observations for stream loggers.
+	Info *StreamInfo
 }
