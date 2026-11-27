@@ -28,3 +28,20 @@ spec:
       targetPort: https-webhook
 {{- end -}}
 {{ include "agentiod.service" . }}
+{{- if .Values.agentiod.mitm.crlOrigin }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentiod.fullname" . | trunc 59 | trimSuffix "-" }}-crl
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentiod.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "agentiod.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http-crl
+      port: 80
+      targetPort: http-crl
+{{- end }}

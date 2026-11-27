@@ -22,6 +22,18 @@ import (
 )
 
 var (
+	// MITMSubCAEnabled derives a managed Sub CA from the configured parent CA.
+	MITMSubCAEnabled = env.Register(
+		"AGENTIO_MITM_SUB_CA_ENABLED",
+		false,
+		"Derive a managed MITM Sub CA from the configured SECRET CA. Setting MITM_CRL_ORIGIN also publishes its OCSP status and leaf CRLs.",
+	).Get()
+	// MITMCRLOrigin is the client-reachable HTTP origin for revocation status.
+	MITMCRLOrigin = env.Register(
+		"AGENTIO_MITM_CRL_ORIGIN",
+		"",
+		"HTTP origin advertised in newly issued MITM certificates. Empty disables CRL publication.",
+	).Get()
 	MITMCASecretName = env.Register(
 		"AGENTIO_MITM_CA_SECRET_NAME",
 		"agentio-mitm-ca",
@@ -85,6 +97,9 @@ var (
 )
 
 func validateMITM() error {
+	if MITMSubCAEnabled && MITMSignMode != "SECRET" {
+		return fmt.Errorf("MITM Sub CA requires SECRET mode")
+	}
 	switch MITMSignMode {
 	case "SECRET":
 	case "SELF_SIGN":

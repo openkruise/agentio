@@ -36,6 +36,9 @@
 {{- end -}}
 
 {{- define "agentio.validate" -}}
+{{- if and .Values.agentio.agentiod.mitm.subCAEnabled (ne .Values.agentio.agentiod.mitm.signMode "SECRET") -}}
+{{- fail "agentiod.mitm.subCAEnabled requires signMode=SECRET" -}}
+{{- end -}}
 {{- if and .Values.agentio.egressGateway.enabled (ne (include "agentio.gateway.serviceAccountName" .) (include "agentio.gateway.fullname" .)) -}}
 {{- fail "egressGateway.serviceAccount.name must match the gateway name; set egressGateway.fullnameOverride to rename the gateway and its identity together" -}}
 {{- end -}}

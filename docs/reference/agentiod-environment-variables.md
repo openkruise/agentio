@@ -110,6 +110,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_CACHE_MAX_ENTRIES</code> | Integer | <code>10000</code> | Maximum number of on-demand certificates the cache may hold; the entry closest to eviction makes room when full. |
 | <code>AGENTIO_MITM_CA_SECRET_NAME</code> | String | <code>agentio-mitm-ca</code> | Secret holding the CA that signs on-demand domain certificates. SECRET mode reads it; SELF&#95;SIGN mode owns it. |
 | <code>AGENTIO_MITM_CA_SECRET_NAMESPACE</code> | String | empty | Namespace of the MITM CA Secret. Empty uses the control-plane root namespace. |
+| <code>AGENTIO_MITM_CRL_ORIGIN</code> | String | empty | HTTP origin advertised in newly issued MITM certificates. Empty disables CRL publication. |
 | <code>AGENTIO_MITM_LEAF_LIFETIME</code> | Duration | <code>15m0s</code> | Validity of on-demand domain certificates. |
 | <code>AGENTIO_MITM_RENEW_BEFORE</code> | Duration | <code>1m0s</code> | How long before expiry SDS TTL removes an on-demand certificate; new demand re-issues it. |
 | <code>AGENTIO_MITM_RESOURCE_TTL</code> | Duration | <code>15m0s</code> | Maximum SDS residency from certificate signing time; replay never extends this deadline. |
@@ -118,6 +119,7 @@ Policy-event debounce applies only to TrafficPolicy and SecurityProfile events, 
 | <code>AGENTIO_MITM_ROTATION_CHECK_INTERVAL</code> | Duration | <code>1h0m0s</code> | How often each replica checks whether the control-plane-managed MITM root CA needs CAS renewal. |
 | <code>AGENTIO_MITM_SIGN_CONCURRENCY</code> | Integer | <code>8</code> | Maximum number of on-demand certificates signed concurrently. |
 | <code>AGENTIO_MITM_SIGN_MODE</code> | String | <code>SELF&#95;SIGN</code> | MITM CA ownership mode: SECRET reads an externally managed Secret; SELF&#95;SIGN persists a control-plane-managed self-signed CA. |
+| <code>AGENTIO_MITM_SUB_CA_ENABLED</code> | Boolean | <code>false</code> | Derive a managed MITM Sub CA from the configured SECRET CA. Setting MITM&#95;CRL&#95;ORIGIN also publishes its OCSP status and leaf CRLs. |
 | <code>AGENTIO_NATIVE_SIDECARS</code> | String | <code>auto</code> | Native sidecar injection mode: true, false, or auto (per-node kubelet version detection). |
 | <code>AGENTIO_PRIMARY_CONFIGMAP_NAME</code> | String | <code>agentio-config-primary</code> | ConfigMap name of primary Agentio configuration. Empty disables the primary overlay. |
 | <code>AGENTIO_PUSH_CONCURRENCY</code> | Integer | <code>automatic (see description)</code> | Concurrency limit for initializing streams, background pushes, and streams awaiting xDS acknowledgements, with independent admission, initial-response, established-request, and background-response pools. Defaults to min(15 + 5 &#42; GOMAXPROCS, 100). |
@@ -241,6 +243,59 @@ agentiod:
 ```
 
 The Secret must contain `ca.crt` and `ca.key`. Keep the Secret namespace and the configured egress-gateway identity scope consistent.
+
+### Derive a managed MITM Sub CA
+
+`AGENTIO_MITM_SUB_CA_ENABLED` defaults to `false`. Enable it with `SECRET` mode. The configured CA Secret becomes the parent issuer. Agentiod generates an independent Sub CA key and persists the signing chain and key in `agentio-mitm-sub-ca` in its system namespace. Replicas and process restarts reuse this Secret.
+
+`AGENTIO_MITM_CRL_ORIGIN` is optional. When set, it enables automatic CRL and OCSP publication for the Sub CA chain and must be reachable by clients. Without it, Agentiod generates a Sub CA with CRL-signing capability and issues leaves without status URLs. Clients requiring online revocation status need publication enabled.
+
+```yaml
+agentiod:
+  mitm:
+    signMode: SECRET
+    secretNamespace: pki-system
+    secretName: mitm-parent-ca
+    subCAEnabled: true
+    crlOrigin: http://agentiod-crl.agentio-system.svc.cluster.local
+```
+
+The parent needs certificate-signing permission and a path-length constraint that permits a Sub CA. The Sub CA has `CA:TRUE`, `pathlen:0`, `keyCertSign` and `cRLSign`. Its lifetime is one year, capped by the parent chain's expiry. Agentiod renews it within 30 days of expiry and retains its key. A parent key change creates a new Sub CA key. Preserve both the Sub CA Secret and `agentio-mitm-ca-crls` across upgrades. The ServiceAccount needs read access to the configured parent Secret and create, read, list, watch and update access to Secrets and ConfigMaps in the system namespace.
+
+Issued leaves contain the Sub CA's CRL URL. Agentiod initializes a signed empty CRL for a newly generated key and renews the committed CRL while preserving its entries. Publish a full CRL signed by the Sub CA to add revocations. Missing published history for an existing Sub CA prevents signing.
+
+The Sub CA contains an OCSP AIA pointing at `<crlOrigin>/ocsp`. Agentiod signs its status with the parent key and serves pre-produced OCSP responses for SHA-1 and SHA-256 CertIDs over HTTP GET and POST. Responses cover the managed Sub CA and remain valid for up to 24 hours. Earlier signed responses are retained through their validity when a Sub CA is renewed or its parent changes. Clients continue trusting the parent Root and receive the Sub CA chain with the leaf. Clients must be able to reach both the CRL and OCSP URLs.
+
+Turning the flag off switches new issuance back to the configured parent. Keep publishing status for any outstanding Sub CA chains during a rollback. Parent-chain revocation above the configured issuer remains the parent owner's responsibility.
+
+### Publish a MITM certificate revocation list
+
+Set `agentiod.mitm.crlOrigin` to an HTTP origin reachable by the clients that validate the certificates. For example, in-cluster clients can use `http://agentiod-crl.agentio-system.svc.cluster.local`. For clients outside the cluster, point a reachable DNS name and HTTP route at the same Service. The chart exposes only the CRL listener on port 80 of `<agentiod-service-name>-crl`. If client egress goes through Envoy, allow a normal HTTP GET to this destination. EPE can apply the existing egress policy.
+
+Both `SELF_SIGN` and `SECRET` support this setting. Newly issued gateway leaves carry one CRL distribution point. The feature does not advertise OCSP. Certificates already cached at gateways acquire the extension on reissuance. Each issuer needs a distinct subject key identifier and permission to sign CRLs. If the MITM signer is an intermediate CA, its parent publishes the revocation status of the intermediate certificate.
+
+Agentiod uses `agentio-mitm-ca-crls` in its system namespace (`--namespace`, the Helm release namespace, default `agentio-system`). Under `binaryData`, each issuer has a key named `<id>.crl`, where `<id>` is the lowercase hexadecimal subject key identifier of the signing CA. The value is a full DER CRL signed by that CA. All replicas download from the same object and serve the committed bytes at `/crl/<id>.crl`.
+
+To bootstrap an issuer, obtain its signed CRL from the CA owner. A CA that has no revocations can publish a signed empty list. For an existing CA, use a current full list with all applicable revocations. If the owner uses OpenSSL with an existing CA configuration and index, it can generate the file with `openssl ca -config ca.cnf -gencrl -crlhours 24` and convert it to DER with `openssl crl -outform DER`. The file needs a CRL number and the issuer's authority key identifier.
+
+For the first issuer in a new installation, apply the signed file using the system namespace and the CA certificate:
+
+```sh
+system_ns=agentio-system
+id=$(openssl x509 -in ca.pem -noout -ext subjectKeyIdentifier |
+  tail -1 | tr -d ' :\r\n' | tr A-F a-f)
+kubectl -n "$system_ns" create configmap agentio-mitm-ca-crls --from-file="$id.crl=issuer.crl"
+```
+
+To add a new issuer or replace one signed file in an existing ConfigMap, update the corresponding `binaryData` key and retain the other issuers' files.
+
+Agentiod parses published CRLs and verifies the active issuer's signature when the ConfigMap or signing CA changes. Downloads, leaf issuance, and CRL renewal reuse this immutable cache. Downloads and leaf issuance check freshness on every use, so an expired list is rejected without waiting for an update. Invalid replacements and deletions do not fall back to previously valid data.
+
+In `SELF_SIGN` mode, Agentiod renews one signed list per issuer with the same revocation entries. The renewed CRL is valid for up to 24 hours after publication, capped by CA expiry. A new leaf expires no later than the current CRL's `NextUpdate`. Renewing the CA certificate with the same signing key keeps the CRL URL. When switching signing keys, publish the new key's CRL before switching the CA Secret, and keep the previous key's CRL until its leaves expire.
+
+In `SECRET` mode, the CA owner supplies signed replacements and chooses their validity, including for retired issuers whose leaves are still valid. An issuer without a valid published CRL cannot issue new leaves carrying that distribution point. The ConfigMap is subject to the Kubernetes 1 MiB size limit.
+
+To turn off CRLs, clear `agentiod.mitm.crlOrigin`. After all Agentiod replicas have rolled out, roll the gateways to replace their cached SDS certificates. Strict revocation checks for certificates carrying the original URL can fail between removing the CRL Service and replacing those certificates.
 
 ## Inspect the effective Pod environment
 

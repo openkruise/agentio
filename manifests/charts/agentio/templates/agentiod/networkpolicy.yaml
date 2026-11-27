@@ -17,6 +17,9 @@ spec:
         - port: 15012
         - port: 15014
         - port: 15017
+        {{- if .Values.agentiod.mitm.crlOrigin }}
+        - port: 15018
+        {{- end }}
 {{- end }}
 {{- end -}}
 {{ include "agentiod.networkpolicy" . }}

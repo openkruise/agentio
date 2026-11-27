@@ -66,6 +66,11 @@ spec:
             - name: http-monitoring
               containerPort: 15014
               protocol: TCP
+            {{- if .Values.agentio.agentiod.mitm.crlOrigin }}
+            - name: http-crl
+              containerPort: 15018
+              protocol: TCP
+            {{- end }}
             - name: https-webhook
               containerPort: 15017
               protocol: TCP
@@ -124,6 +129,14 @@ spec:
               value: {{ .Values.agentio.agentiod.mitm.secretNamespace | quote }}
             - name: AGENTIO_MITM_SIGN_MODE
               value: {{ .Values.agentio.agentiod.mitm.signMode | quote }}
+            {{- if .Values.agentio.agentiod.mitm.subCAEnabled }}
+            - name: AGENTIO_MITM_SUB_CA_ENABLED
+              value: "true"
+            {{- end }}
+            {{- with .Values.agentio.agentiod.mitm.crlOrigin }}
+            - name: AGENTIO_MITM_CRL_ORIGIN
+              value: {{ . | quote }}
+            {{- end }}
             - name: AGENTIO_MESH_INTERNAL_TRAFFIC_POLICY
               value: {{ .Values.agentio.agentiod.meshInternalTrafficPolicy | quote }}
             - name: AGENTIO_ENABLE_SNI_TRAFFIC_POLICY

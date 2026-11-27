@@ -97,6 +97,9 @@ func TestMITMSignerPreservesCertificateContractAndCapsExpiry(t *testing.T) {
 	if err := leaf.VerifyHostname("api.example.com"); err != nil {
 		t.Fatal(err)
 	}
+	if len(leaf.CRLDistributionPoints) != 0 || signer.CRLHandler() != nil {
+		t.Fatal("CRL publication should be opt-in")
+	}
 	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Fatalf("ExtKeyUsage = %v, want only ServerAuth", leaf.ExtKeyUsage)
 	}
@@ -309,7 +312,7 @@ func TestSelfSignDeletionFailsClosedBeforeRecreation(t *testing.T) {
 	signer := newInstalledMITMSigner(t, ca, secret.UID, time.Hour)
 	signer.client = client
 	signer.options.Mode = MITMSignModeSelfSign
-	signer.options.Namespace = secret.Namespace
+	signer.options.SecretNamespace = secret.Namespace
 	signer.options.SecretName = secret.Name
 	signer.options.RootLifetime = 24 * time.Hour
 	signer.options.RootRenewBefore = time.Hour

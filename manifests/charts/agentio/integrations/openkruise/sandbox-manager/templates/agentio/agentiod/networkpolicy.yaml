@@ -18,6 +18,9 @@ spec:
         - port: 15012
         - port: 15014
         - port: 15017
+        {{- if .Values.agentio.agentiod.mitm.crlOrigin }}
+        - port: 15018
+        {{- end }}
 {{- end }}
 {{- end -}}
 {{- if .Values.agentio.enabled }}
