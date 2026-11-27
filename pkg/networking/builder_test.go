@@ -258,7 +258,7 @@ func TestBuildGatewayFormatWithoutTelemetryInputs(t *testing.T) {
 	)
 	logs := findHCM(t, listeners[MainForward]).GetAccessLog()
 	if len(logs) != 1 {
-		t.Fatalf("HTTP logs = %d, want 1", len(logs))
+		t.Fatalf("HTTP logs = %d, want one telemetry logger", len(logs))
 	}
 	fileLog := &fileaccesslogv3.FileAccessLog{}
 	if err := logs[0].GetTypedConfig().UnmarshalTo(fileLog); err != nil {
@@ -316,7 +316,8 @@ func TestBuildInstallsTelemetryOnForwardAndConnectTerminationPaths(t *testing.T)
 			filters[0] != "envoy.filters.http.dynamic_modules" {
 			t.Fatalf("%s HTTP telemetry = %v", listenerName, hcm)
 		}
-		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter) != routerIndex-2 {
+		if listenerName == MainForward && slices.Index(filters, connectProxyTLSIdentityFilter)+1 !=
+			slices.Index(filters, "agentio.egress_authorization") {
 			t.Fatal("proxy TLS identity must precede authorization")
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	internallistener "github.com/envoyproxy/go-control-plane/envoy/extensions/bootstrap/internal_listener/v3"
+	validator "github.com/envoyproxy/go-control-plane/envoy/extensions/config/validators/dynamic_modules/v3"
 	httpupstreamv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -52,6 +53,18 @@ func TestCommunityBootstrap(t *testing.T) {
 		}
 		if internal.GetBufferSizeKb().GetValue() != 64 {
 			t.Fatal("internal listener buffer must retain the 64 KiB backpressure threshold")
+		}
+		validators := b.GetDynamicResources().GetAdsConfig().GetConfigValidators()
+		if len(validators) != 1 {
+			t.Fatalf("ADS validators = %v", validators)
+		}
+		body := &validator.DynamicModuleConfigValidator{}
+		if err := validators[0].GetTypedConfig().UnmarshalTo(body); err != nil {
+			t.Fatal(err)
+		}
+		if body.GetExtensionName() != "agentio.body_processing" || len(body.GetTypeUrls()) != 1 ||
+			body.GetTypeUrls()[0] != extensionType {
+			t.Fatalf("unexpected Body Processing validator %v", body)
 		}
 		if b.GetApplicationLogConfig().GetLogFormat().GetJsonFormat() == nil {
 			t.Fatal("missing JSON application logs")

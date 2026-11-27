@@ -46,6 +46,12 @@ sandboxExtProc:
 
 The Helm-only merge happens earlier: `.Values.agentiod.config.values` is merged over the chart-generated base document, with maps deep-merged and lists replaced. The resulting YAML becomes `agentio-config`; runtime precedence between the base and primary ConfigMaps then follows the rules above.
 
+## Global HTTP content auditing
+
+Set `bodyProcessing.filterChains` in the effective configuration to audit LLM traffic on native egress gateways. At request headers the Rust module selects the first matching chain by host, path and Filter State. Each audit template selects the request, response and gateway fields for one JSON line per downstream HTTP stream. The chain shares one LLM parser for each direction whose body events are needed. Field size limits apply independently.
+
+Adding or removing the `bodyProcessing` field installs or removes the filter and audit logger through LDS. With the field present, rule changes update only ECDS. Set `bodyProcessing: {}` or `bodyProcessing: {filterChains: []}` to pause auditing and keep the gateway ready for rule updates. Existing streams retain the rules they started with. The gateway rejects invalid audit rules before updating its ECDS cache. Listener updates continue using the last accepted rules. For the initial rollout, deploy a gateway image containing `/usr/local/lib/libenvoy_agentio_body_processing.so` before installing the control plane that references it. See the [configuration example and matching semantics](../../extensions/envoy/body_processing/README.md#configuration).
+
 ## Configure the Helm-managed base
 
 Use the chart's task-oriented values for common settings and `agentiod.config.values` for the raw configuration API:

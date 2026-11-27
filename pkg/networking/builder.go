@@ -28,6 +28,7 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	meshv1alpha1 "istio.io/api/mesh/v1alpha1"
 
 	"github.com/openkruise/agentio/pkg/features"
@@ -61,6 +62,7 @@ type Inputs struct {
 	Gateway                    model.Gateway
 	GlobalExtProc              *configv1.ExtProcProvider
 	AdditionalExtProcs         []*configv1.ExtProcProvider
+	BodyProcessing             *structpb.Struct
 	EgressAuthorization        *configv1.EgressAuthorization
 	Services                   []model.Service
 	Endpoints                  []model.Endpoint
@@ -77,11 +79,12 @@ type Inputs struct {
 }
 
 type effectiveConfig struct {
-	gateway            *configv1.EgressGateway
-	gatewayIdentity    string
-	extProc            *configv1.ExtProcProvider
-	additionalExtProcs []*configv1.ExtProcProvider
-	telemetry          *telemetry.Output
+	gateway               *configv1.EgressGateway
+	gatewayIdentity       string
+	extProc               *configv1.ExtProcProvider
+	additionalExtProcs    []*configv1.ExtProcProvider
+	bodyProcessingEnabled bool
+	telemetry             *telemetry.Output
 }
 
 // GatewayCompilation retains static resources and accepted Service bindings for independent EDS updates.
@@ -149,6 +152,7 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 	if err != nil {
 		return nil, err
 	}
+	effective.bodyProcessingEnabled = inputs.BodyProcessing != nil
 	if err := model.ValidateAdditionalExtProcs(inputs.AdditionalExtProcs); err != nil {
 		return nil, err
 	}
@@ -188,6 +192,13 @@ func BuildGateway(inputs Inputs) (*GatewayCompilation, error) {
 		return nil, err
 	}
 	extensionConfigurations := b.extensions
+	if !inputs.LegacyGateway {
+		extension, err := b.bodyProcessingExtension(inputs.BodyProcessing)
+		if err != nil {
+			return nil, fmt.Errorf("build body processing extension: %w", err)
+		}
+		extensionConfigurations = append(extensionConfigurations, extension)
+	}
 	if len(inputs.GatewayPatches) > 0 {
 		patches := envoyfilterpatch.NewPatchSet(inputs.GatewayPatches)
 		clusters, err = envoyfilterpatch.ApplyClusters(patches, clusters)

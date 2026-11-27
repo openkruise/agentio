@@ -145,6 +145,7 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 			directory := t.TempDir()
+			ecds := bodyProcessingFile(t)
 			cdsPath, ldsPath := filepath.Join(directory, "cds.json"), filepath.Join(directory, "lds.json")
 			writeResources := func(path, typeURL, version string, resources ...*anypb.Any) {
 				t.Helper()
@@ -176,6 +177,7 @@ func TestEnvoyEgressAuthorizationUpdate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				setBodyProcessingSource(manager, ecds)
 				manager.RouteSpecifier = &hcmv3.HttpConnectionManager_RouteConfig{
 					RouteConfig: b.buildForwardRoute(HTTPForwardProxy, settings.gateway),
 				}

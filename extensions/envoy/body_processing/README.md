@@ -1,0 +1,261 @@
+# Body Processing
+
+Body Processing is an Envoy HTTP dynamic module for request and response bodies. Install it before the router. Each matched `audit` emits one JSON line per downstream HTTP stream. Its template can combine request, response and gateway fields. The module retains the selected values within their individual limits and hands the lines to the Envoy access logger at stream completion. Forwarded body slices pass through unchanged.
+
+Agentio delivers the `body_processing` filter configuration through the `agentio.body_processing` ECDS resource. At configuration load the module resolves each template expression to its source. A matched chain runs one LLM parser for each direction that has event consumers. Consumers share request gzip decoding and response SSE framing. The native gateway registers the module as an ADS validator for its Body Processing ECDS resource. Invalid audit rules receive an xDS NACK before Envoy updates its subscription cache. Existing and newly installed listeners continue using the last accepted rules.
+
+## Configuration
+
+Set `bodyProcessing` in AgentioConfig (Helm: `agentiod.config.values.bodyProcessing`) to configure the audit rules on native gateways. The gateway image must contain the module. It observes forwarded cleartext HTTP and HTTP after TLS termination. CONNECT setup, TLS passthrough, legacy gateways and streams terminated by an earlier filter bypass it.
+
+```yaml
+bodyProcessing:
+  filterChains:
+    - name: sandbox-model-calls
+      matcher:
+        hosts: [api.example.com]
+        paths: [/v1/chat/completions, /v1/responses, /v1/messages]
+        filterState: [{key: agentio.sandbox.id}]
+      parser: {llm: {}}
+      filters:
+        - audit:
+            format:
+              json:
+                requestStatus: "%CAPTURE_STATUS(request)%"
+                responseStatus: "%CAPTURE_STATUS(response)%"
+                requestID: "%REQ(X-REQUEST-ID)%"
+                tenant: "%REQ(X-TENANT-ID):128%"
+                sandbox: "%FILTER_STATE(agentio.sandbox.id:PLAIN)%"
+                namespace: "%FILTER_STATE(agentio.workload.namespace:PLAIN)%"
+                requestedModel: "%EVENT(llm.request.model)%"
+                servedModel: "%EVENT(llm.response.model)%"
+                prompt: "%EVENT(llm.question)%"
+                answer: "%EVENT(llm.answer):768%"
+                tokens: "%EVENT(llm.usage.totalTokens)%"
+        - audit:
+            format:
+              json:
+                tools: "%EVENT(llm.toolDefinitions):16384%"
+                status: "%CAPTURE_STATUS(request)%"
+```
+
+At request headers the module selects the first matching chain and fixes the protocol for both directions. All configured conditions must hold. Unmatched streams are forwarded without audit records. An omitted or empty matcher matches everything and belongs last. Each chain requires a unique, nonempty name (at most 256 bytes as a serialized JSON string, including quotes) and a nonempty list of filters. This release supports the `llm` parser and the `audit` filter.
+
+| Match field | Semantics |
+| --- | --- |
+| `hosts` | Any listed host may match. Matching ignores ASCII case, the authority port and one trailing DNS root dot. A leading `*.` matches one or more complete labels. |
+| `paths` | Any listed path may match. Paths are absolute and case-sensitive. Both the matcher and LLM auto-detection ignore the request query and one trailing slash. For example, `/upload/?part=1` matches `/upload`. Configured paths must be exact, without a wildcard, query or fragment. |
+| `filterState` | Every entry must match. `{key: agentio.sandbox.id}` checks for the key's existence, including an empty value. `{key: agentio.sandbox.id, values: [box-a, box-b]}` matches either serialized string exactly. An explicit `values` requires a nonempty list. |
+
+### Audit templates
+
+An audit requires a flat `format.json` map. Each key names one output field. Each value is a string literal or one formatter operator. Use `%%` for a literal percent sign. A literal is written verbatim as a JSON string. Operators that return booleans, numbers, arrays or objects retain those types. Dots in output names are literal. Missing values are omitted. A template whose fields are all missing emits `{}`. Each audit in the matched chain writes its own line, in declaration order.
+
+Request headers, Filter State, dynamic metadata, the path, the chain name and the selected LLM protocol/operation are sampled at request headers. Response headers and StreamInfo fields are read at stream completion. Environment variables are captured when the configuration loads. These fields can be selected without body parsing. A question selection needs the request parser. An answer or usage selection needs the response parser. When an audit selects fields from both bodies, they appear in the same line. For example, a question followed by two SSE answer deltas and a final usage report can produce `{"question":"retry?","answer":"retry once","tokens":14}`.
+
+| Operator | Value |
+| --- | --- |
+| `%REQ(X-TENANT-ID)%`, `%REQ(PRIMARY?FALLBACK)%` | Read a request header by case-insensitive name. The optional fallback is read only when the primary header is absent. |
+| `%RESP(header)%`, `%RESP(PRIMARY?FALLBACK)%` | Read a response header at stream completion. |
+| `%START_TIME%` | Request start time in UTC, such as `2026-11-25T03:22:51.123Z`. Custom strftime formats are accepted, including `%START_TIME(%Y/%m/%dT%H:%M:%S%z)%`, `%START_TIME(%s)%` and fractional seconds with `%f`, `%3f`, `%6f` or `%9f`. The JSON value is a string. |
+| `%DURATION%` | Total request duration through stream completion, as a JSON number of milliseconds. |
+| `%REQUEST_DURATION%` | Milliseconds from request start to the last downstream request byte received. |
+| `%RESPONSE_DURATION%` | Milliseconds from request start to the first upstream response byte received. |
+| `%RESPONSE_CODE%` | Final HTTP status as a JSON number, if Envoy received or generated a response. |
+| `%RESPONSE_FLAGS%` | Envoy's comma-separated short response flags, or `-` when no flags are set. |
+| `%RESPONSE_CODE_DETAILS%` | Envoy's reason for the final HTTP response code. |
+| `%TRACE_ID%`, `%SPAN_ID%` | Trace and span IDs from Envoy's active downstream span, when tracing supplies them. |
+| `%ENVIRONMENT(name)%` | Gateway process environment variable, sampled at configuration load. An unset variable emits `-`. |
+| `%FILTER_STATE(key:PLAIN)%` | Filter State object's string serialization at request headers. |
+| `%DYNAMIC_METADATA(namespace:key)%` | Top-level dynamic metadata string, captured at request headers. |
+| `%DYNAMIC_METADATA_NUMBER(namespace:key)%` | Top-level dynamic metadata number, emitted as a JSON number. |
+| `%DYNAMIC_METADATA_BOOL(namespace:key)%` | Top-level dynamic metadata boolean, emitted as JSON `true` or `false`. |
+| `%CHAIN%`, `%PATH%` | Chain name and request path without the query. |
+| `%BYTES_SEEN(request)%`, `%BYTES_SEEN(response)%` | Wire bytes observed in the chosen direction. A wire counter alone reads chunk lengths. |
+| `%DECODED_BYTES(request)%`, `%DECODED_BYTES(response)%` | Decoded bytes when decompression ran. This version decompresses gzip requests. |
+| `%CAPTURE_STATUS(request)%`, `%CAPTURE_STATUS(response)%` | Opt in to protocol validation and the capture outcome for that direction. Clipping a selected request header or other request context affects the request status. A transport interruption reports `incomplete`, including when response headers never arrived. |
+| `%EVENT(llm.field)%` | Value from the LLM protocol parser, projected for this audit. |
+
+`REQ` and `RESP` accept the same optional fallback and `:N` limit. String StreamInfo fields accept a `:N` limit. Durations and other numeric fields reject a limit. Unavailable fields are omitted. Duration measurements use Envoy's nanosecond timing data converted to integer milliseconds, and remain unavailable until Envoy records the corresponding event. `RESPONSE_DURATION` measures the upstream first byte, including headers.
+
+`RESPONSE_CODE_DETAILS` replaces whitespace with underscores, following the native formatter.
+
+For an audit with gateway timing and model correlation:
+
+```yaml
+format:
+  json:
+    timestamp: "%START_TIME%"
+    duration_ms: "%DURATION%"
+    request_duration_ms: "%REQUEST_DURATION%"
+    response_duration_ms: "%RESPONSE_DURATION%"
+    http.response.status_code: "%RESPONSE_CODE%"
+    upstream_request_id: "%RESP(REQUEST-ID?X-REQUEST-ID)%"
+    trace_id: "%TRACE_ID%"
+    span_id: "%SPAN_ID%"
+    cluster.id: "%ENVIRONMENT(CLUSTER_ID)%"
+    gen_ai.input.messages: "%EVENT(llm.request.messages)%"
+    gen_ai.output.messages: "%EVENT(llm.response.messages)%"
+```
+
+A single column can record the session ID sent by either Codex or Claude Code. When both headers are present, the primary wins, even if its value is empty. When both are absent, the column is omitted.
+
+```yaml
+format:
+  json:
+    gen_ai.span.kind: "LLM"
+    gen_ai.provider.name: "ollama"
+    session: "%REQ(SESSION-ID?X-CLAUDE-CODE-SESSION-ID)%"
+```
+
+Choose the metadata operator matching the producer's type. Body Processing reads the selected top-level key at request headers and omits missing keys. For a present value of a different type, Envoy 1.40.2 logs a type error and the audit omits that field. The number operator accepts finite values. The number and boolean operators are specific to Body Processing and reject a byte limit.
+
+| Direction | Event names (omit the common `llm.` prefix in this table) |
+| --- | --- |
+| Stream | `protocol`, `operation` |
+| Request or response | `request.model` / `response.model`, `request.messages` / `response.messages`, `request.toolCallRefs` / `response.toolCallRefs`, `request.retainedText` / `response.retainedText` |
+| Request | `question`, `toolDefinitions`, `systemInstructions`, `stream`, `maxTokens`, `conversationId`, `previousResponseId` |
+| Response | `answer`, `responseId`, `finishReasons`, `status`, `incompleteReason`, `error`, `errorType`, `errorCode` |
+| Response usage | `usage.inputTokens`, `usage.outputTokens`, `usage.cachedInputTokens`, `usage.cacheCreationInputTokens`, `usage.reasoningTokens`, `usage.totalTokens` |
+
+`llm.question` selects text from the latest user message with visible text, skipping tool results. `llm.answer` collects visible assistant text and refusals, using choice zero for Chat Completions. `llm.request.messages` and `llm.response.messages` preserve structured parts and provider-specific content. Tool references carry call/result IDs and names and can be selected independently of message bodies. `llm.status` is the provider's response status. Use the direction-specific `%CAPTURE_STATUS(...)%` operator to report a capture outcome.
+
+### Field limits
+
+Append `:N` before the closing `%` to limit a variable-size field. For example, `%EVENT(llm.answer):768%` keeps up to 768 bytes of the answer and `%REQ(X-TENANT-ID):128%` keeps up to 128 bytes of the header. LLM body fields default to 1 MiB and accept an explicit decimal byte count from 1 to 4,194,304 (4 MiB). Context fields such as headers, Filter State and Dynamic Metadata default to 8 KiB and accept up to 1,048,576 bytes (1 MiB). The length suffix follows Envoy’s [formatter syntax](https://www.envoyproxy.io/docs/envoy/v1.40.2/configuration/advanced/substitution_formatter#config-access-log-format-req).
+
+- Strings retain the longest UTF-8 prefix that fits after compact JSON escaping. The surrounding quotes are excluded. A newline costs two bytes and `你` costs three.
+- `llm.request.messages` and `llm.response.messages` count the complete encoded array, including roles, content blocks and JSON punctuation. They keep complete messages in order. For the first message that exceeds the limit, they keep its metadata, preceding complete blocks and the longest fitting prefix of a text or refusal block. If none of its blocks fit, that message is omitted. Tool calls, tool results and provider-specific blocks are atomic. In requests, inline media payloads can be omitted to reserve room for following text and metadata.
+- Other arrays keep a prefix of complete elements. Oversized objects and arrays whose first element cannot fit are omitted.
+- Numbers and booleans retain their JSON types. The numeric operators (including `llm.maxTokens` and usage), `llm.stream`, the byte counters and `%CAPTURE_STATUS(...)%` have fixed representations and reject a length suffix. On an otherwise complete record, a clipped selection yields `truncated` when capture status is selected.
+
+Aliases have independent limits, even if they read the same event. A long answer cannot displace the model, token count or headers. Two body fields at their 1 MiB defaults can produce a line larger than 2 MiB once the keys and JSON punctuation are included. Use explicit field limits to fit the records accepted by your log collector.
+
+For example, a user message containing `天气很好` with `%EVENT(llm.request.messages):62%` and `%CAPTURE_STATUS(request)%` produces the following record. The message array uses 56 bytes for structure and six bytes for the two retained characters.
+
+```json
+{"messages":[{"parts":[{"content":"天气","type":"text"}],"role":"user"}],"status":"truncated"}
+```
+
+If the parser exhausts its own budget and only has a text preview, `messages` is unavailable. Select `llm.answer` or the direction's `retainedText` to log the available text.
+
+The template is compiled when ECDS loads the rule. Each operator retains its typed JSON value until encoding. Envoy also parses commands into providers and supports typed values in `json_format`. Its request header formatter limits the raw value. This module counts JSON escaping so a field limit describes the bytes written for that value. [Envoy format API](https://www.envoyproxy.io/docs/envoy/v1.40.2/api-v3/config/core/v3/substitution_format_string.proto#config-core-v3-substitutionformatstring) · [Command parsing](https://github.com/envoyproxy/envoy/blob/v1.40.2/source/common/formatter/substitution_formatter.cc#L244-L278) · [Header formatting](https://github.com/envoyproxy/envoy/blob/v1.40.2/source/common/formatter/http_specific_formatter.cc#L66-L94)
+
+In `auto` mode the parser matches the paths `/v1/chat/completions`, `/v1/responses` and `/v1/messages`. For a custom path select `openai-chat-completions`, `openai-responses` or `anthropic-messages`. Unknown paths in auto mode report `unknown_protocol`. The response content type selects JSON or SSE.
+
+### Standalone Envoy configuration
+
+The following filter records the input messages and the answer in one line. A request-only audit selects request fields.
+
+```yaml
+name: envoy.filters.http.dynamic_modules
+typed_config:
+  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+  dynamic_module_config:
+    name: envoy_agentio_body_processing
+    do_not_close: true
+  filter_name: body_processing
+  filter_config:
+    "@type": type.googleapis.com/google.protobuf.StringValue
+    value: '{"filterChains":[{"name":"models","parser":{"llm":{}},"filters":[{"audit":{"format":{"json":{"messages":"%EVENT(llm.request.messages):16384%","answer":"%EVENT(llm.answer)%"}}}}]}]}'
+```
+
+Set `maxContentSize` independently under `parser.llm.request` and `parser.llm.response`. Each direction defaults to `1MiB` and accepts values from `1KiB` through `64MiB`. Use an integer byte count or a string with a whole number and a unit. Decimal `KB` (also `kB`) and `MB` use powers of 1,000. Binary `KiB` and `MiB` (also `Ki` and `Mi`) use powers of 1,024. Bare numbers and `B` denote bytes.
+
+```yaml
+parser:
+  llm:
+    request:
+      maxContentSize: 1MiB
+    response:
+      maxContentSize: 1MiB
+```
+
+Adding `bodyProcessing` to the effective AgentioConfig triggers an LDS update that installs one ECDS filter slot and one audit access logger on each native HTTP forwarding chain. Removing the field uninstalls both through LDS. To keep both installed while collecting no records, set `bodyProcessing: {}` or `bodyProcessing: {filterChains: []}`.
+
+While the field is present, adding, changing or clearing rules updates only ECDS. New HTTP streams pick up the updated rules, including streams on an existing HTTP/2 connection. In-flight streams retain their selected configuration. On first installation the filter can forward traffic with an empty chain list until it receives its rules.
+
+For standalone Envoy, install this logger alongside the module. At stream completion the module publishes the completed records under one stream-local Filter State key, in filter declaration order. Each JSON record includes one trailing newline. The text formatter writes the value verbatim.
+
+```yaml
+access_log:
+  - name: envoy.access_loggers.stdout
+    filter:
+      extension_filter:
+        name: envoy.access_loggers.extension_filters.cel
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
+          expression: "'agentio.body_processing.audit' in filter_state"
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+      log_format:
+        text_format_source:
+          inline_string: "%FILTER_STATE(agentio.body_processing.audit:PLAIN)%"
+```
+
+Set `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib` and install the shared library there. To correlate records from multiple audits on the same stream, select `%REQ(X-REQUEST-ID)%` in each template.
+
+## Capture behavior
+
+| Input | Logged content |
+| --- | --- |
+| LLM JSON requests | Auto mode recognizes the three standard paths listed above. Captures normalized messages, tool definitions, calls and results. Provider-specific blocks remain structured. |
+| LLM JSON and SSE responses | Uses the same protocol selected at request headers. Reconstructs output messages, calls, arguments, finish reasons and reported usage. Responses also carries provider status, error and incomplete reason when available. |
+
+The LLM parser normalizes image references from Chat Completions, Responses and Anthropic Messages. In `%EVENT(llm.request.messages)%`, audit renders them as `file` (file ID), `uri` (URL) or `blob` (inline base64). It includes `detail` when supplied. An inline image whose data exceeds the capture budget can still appear with its MIME type and detail.
+
+For Chat files and audio, Responses files and computer screenshots, and Anthropic documents, the parser identifies inline payloads in the provider part. A request messages field that cannot fit an attachment can omit its payload and still capture the following text. The log preserves the provider's part shape and a recognized data URI's MIME prefix. A second audit with a larger field limit can retain any payload still available from the parser.
+
+Audits in a matched chain share one LLM parser per subscribed direction. Request messages and tool definitions are delivered to each audit as they arrive. Each audit retains its selected fields separately. For example, a 2 KiB question field can capture the latest question while an 8 KiB tool field records a schema at the end of the same request, in either the same audit or a second one. Changing their order only changes the order of the output lines. The chain also shares JSON response normalization and SSE framing.
+
+The parser bounds its working JSON representation independently of any log configuration. Set `parser.llm.request.maxContentSize` to control the compaction budget per request item. Each message, Responses input item, tool definition or legacy function starts a fresh budget, even when it spans several HTTP chunks. A standalone Responses input string, instructions value or Anthropic system value each count as one item. All audits on the chain see the resulting item. The budget applies to the decoded JSON for gzip requests.
+
+Set `parser.llm.response.maxContentSize` to bound the content held for open response items. Each completed Chat choice, Responses output item or Anthropic content block is delivered to the audits and releases its parser budget. Concurrently open SSE choices, items or blocks share that budget. A nonempty Responses terminal output replaces earlier item snapshots. SSE framing and audit field retention use separate memory.
+
+Oversized strings can be shortened and inline media can be omitted while later items continue to be parsed. Each audit applies its own field selection and per-field clipping to the parser output. Select `llm.request.retainedText` or `llm.response.retainedText` for a bounded array of text previews. In each direction the preview and the structured messages have independent field limits. Tool results and inline file data are excluded from the request text preview. Question and answer scalars stop at the first missing text segment. The parser continues scanning past omitted attachments for later text and metadata. When the document structure itself exceeds the budget, only selected paths are available for validation. An audit that selects capture status reports `partial` in that case, or `truncated` if one of its selected values was clipped.
+
+During SSE, each complete frame produces borrowed protocol events in the body callback. The parser dispatches text deltas, usage updates and provider-specific changes to filters in order. Usage updates carry the latest normalized counters. A response audit retains a bounded answer prefix in output order while another can record only usage. A terminal replacement starts a fresh prefix and clipping status for the authoritative answer. Responses text deltas are provisional. The audit takes confirmed item snapshots in output order, then replaces them if the terminal event supplies a nonempty `output`. An empty or omitted terminal `output` keeps the confirmed items. The protocol terminator delivers the final metadata, including stop reasons. HTTP end validates protocol completion and finalizes the selected fields for the direction. The Envoy access logger writes those records at stream completion.
+
+SSE framing accepts multiline data, comments, a leading UTF-8 BOM, and LF, CRLF or CR separators across body callbacks. HTTP EOF ends observation. A missing protocol terminator at HTTP EOF produces `incomplete_stream`. A transport reset produces `incomplete`. In both cases, `llm.response.messages` includes completed items and available text or refusals from open items, within the parser and field budgets. Structured tool calls enter the log when their item or block completes. The answer and usage fields contain the text and counters observed in complete SSE frames. A malformed stream retains its parse error and omits its response body fields. An unsupported delta produces a `partial` record with available metadata. Exceeding the retention budget produces `truncated`. Both cases continue parsing subsequent events for usage and errors. Invalid JSON, invalid UTF-8 framing and invalid protocol transitions have distinct error statuses. The shared parser processes up to 64 MiB of SSE input per direction and tracks up to 1,024 choices, blocks or items. Its input limits apply to every consumer. Clipping one audit field leaves later events available, including final usage and terminal replacements.
+
+Unsupported encodings, unsupported media types and parse failures have distinct statuses. These statuses apply to audit output only. For requests with a single `Content-Encoding: gzip`, the chain incrementally decompresses an audit copy for all interested filters. Envoy forwards the original body and headers. The request wire counter counts compressed bytes. Its decoded counter counts plaintext delivered before capture stopped. Records without gzip decoding omit `decodedBytes`. The chain enforces a separate 64 MiB ceiling across all gzip members; exceeding it produces `too_large`. A corrupt or unfinished gzip member at normal HTTP end produces `invalid_encoding`. Gzip-encoded responses and stacked encodings produce `unsupported_encoding`.
+
+Each audit filter publishes one record per matched stream. The native access logger owns buffering, output and file reopening. Access logging retains the selected request fields for the lifetime of a long-running response. The `body_processing_publish_errors` counter reports a Filter State publication failure. Delivery and retention after the access logger writes depend on the configured sink.
+
+## Build
+
+Build on Linux with Rust 1.93 or newer and libclang. The build fetches the Envoy 1.40.2 SDK to match the runtime image.
+
+```sh
+cd extensions/envoy/body_processing
+./build.sh
+docker build -t envoy-body-processing .
+```
+
+## Rust benchmarks
+
+After the build has fetched the SDK, run Criterion from this directory. Pass a group name to measure one workload.
+
+```sh
+cargo bench --locked --features bench --bench body_processing
+cargo bench --locked --features bench --bench body_processing -- sse_chat_64x128
+```
+
+Each iteration replays one body in memory. JSON arrives in 16 KiB chunks and SSE arrives one frame at a time. The suite covers plain and escaped text, an inline image followed by text, a JSON response, and streams from all three LLM protocols. Compare the parser alone with one audit at a 128 B or 8 KiB messages field limit, two audits with independent limits, or a usage-only SSE audit. The audit benchmarks include JSON Lines encoding. Separate cases time SSE framing with JSON decoding, message projection, and final JSON encoding.
+
+The harness builds fixtures and compiles templates before timing. It checks the emitted records and verifies that two audits produce the same bytes as running each separately. Envoy callbacks, network I/O and the access log sink are outside the measured path. Criterion writes its estimates under `target/criterion`. On macOS, prefix the command with `RUSTFLAGS='-C link-arg=-Wl,-undefined,dynamic_lookup'` to allow the module's Envoy host symbols to resolve at load time.
+
+## Streaming audit E2E
+
+On Linux, run `python3 tests/smoke.py envoy-body-processing` after building the image. This starts a fixture upstream and Envoy, sends OpenAI Chat Completions, OpenAI Responses and Anthropic Messages requests, and checks the forwarded bytes and Envoy's stdout audit records.
+
+The upstream and client can also run as separate processes. Use the `streaming` chain from `tests/smoke.py` and route the host `stream.llm.test` to the fixture upstream, including the client's `/_fixture/continue/` handshake. The client uses a second connection to release the Chat stream after receiving its first event and part of the next UTF-8 character.
+
+```sh
+python3 tests/llm_streaming.py serve --listen 0.0.0.0 --port 9000
+# In another terminal, point the client at the gateway.
+python3 tests/llm_streaming.py client --gateway 127.0.0.1:8080
+python3 tests/llm_streaming.py check-logs < envoy-audit.jsonl
+```
+
+The upstream accepts streaming POST requests on the three provider paths. It replays the default fixture for each path. The test client sends `X-LLM-Case` to select individual fixtures. The log check expects one client run and verifies the answer and usage/tool audit lines separately, including a revised terminal answer, a clipped 80 KiB Chat answer with its model, late usage and a separately clipped header in the same line, missing stream termination and malformed event JSON.

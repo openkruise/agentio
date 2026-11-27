@@ -1,0 +1,36 @@
+[package]
+name = "agentio-envoy-body-processing"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "envoy_agentio_body_processing"
+crate-type = ["cdylib", "rlib"]
+bench = false
+doctest = false
+
+[features]
+bench = ["dep:criterion"]
+
+[[bench]]
+name = "body_processing"
+harness = false
+required-features = ["bench"]
+
+[dependencies]
+envoy-proxy-dynamic-modules-rust-sdk = { path = ".envoy-sdk/source/extensions/dynamic_modules/sdk/rust" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+mime = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+memchr = "2"
+base64 = "0.22"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+prost = "0.14"
+prost-types = "0.14"
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"], optional = true }
+
+[workspace]

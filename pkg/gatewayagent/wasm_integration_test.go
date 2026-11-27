@@ -46,13 +46,37 @@ var wasmFixture []byte
 
 const extensionType = "type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig"
 
-type wasmDiscovery struct {
+type extensionDiscovery struct {
 	discovery.UnimplementedAggregatedDiscoveryServiceServer
-	updates chan []byte
+	updates chan *discovery.Resource
 	acks    chan *discovery.DeltaDiscoveryRequest
 }
 
-func (s *wasmDiscovery) DeltaAggregatedResources(
+func newExtensionDiscovery() *extensionDiscovery {
+	return &extensionDiscovery{
+		updates: make(chan *discovery.Resource, 1),
+		acks:    make(chan *discovery.DeltaDiscoveryRequest, 1),
+	}
+}
+
+func (s *extensionDiscovery) publish(t *testing.T, res *discovery.Resource, wantError string) {
+	t.Helper()
+	s.updates <- res
+	select {
+	case ack := <-s.acks:
+		if wantError == "" {
+			if ack.ErrorDetail != nil {
+				t.Fatalf("ECDS %s version %s NACK: %v", res.Name, res.Version, ack.ErrorDetail)
+			}
+		} else if !strings.Contains(ack.GetErrorDetail().GetMessage(), wantError) {
+			t.Fatalf("ECDS %s version %s: expected NACK containing %q, got %v", res.Name, res.Version, wantError, ack)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("no ECDS acknowledgement for %s version %s", res.Name, res.Version)
+	}
+}
+
+func (s *extensionDiscovery) DeltaAggregatedResources(
 	stream discovery.AggregatedDiscoveryService_DeltaAggregatedResourcesServer,
 ) error {
 	request, err := stream.Recv()
@@ -62,34 +86,18 @@ func (s *wasmDiscovery) DeltaAggregatedResources(
 	if request.TypeUrl != extensionType {
 		return fmt.Errorf("unexpected subscription %s", request.TypeUrl)
 	}
-	for revision := 1; ; revision++ {
-		var code []byte
+	for {
+		var resource *discovery.Resource
 		select {
-		case code = <-s.updates:
+		case resource = <-s.updates:
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		}
-		filter, err := anypb.New(&wasmhttp.Wasm{Config: &wasm.PluginConfig{
-			Name:   "header-test",
-			RootId: "header-test",
-			Vm: &wasm.PluginConfig_VmConfig{VmConfig: &wasm.VmConfig{
-				VmId:    fmt.Sprint(revision),
-				Runtime: "envoy.wasm.runtime.v8",
-				Code:    &core.AsyncDataSource{Specifier: &core.AsyncDataSource_Local{Local: inlineBytes(code)}},
-			}}}})
-		if err != nil {
-			return err
-		}
-		resource, err := anypb.New(&core.TypedExtensionConfig{Name: "agentio.test.wasm", TypedConfig: filter})
-		if err != nil {
-			return err
-		}
-		nonce := fmt.Sprint(revision)
 		if err := stream.Send(
 			&discovery.DeltaDiscoveryResponse{
 				TypeUrl:   extensionType,
-				Nonce:     nonce,
-				Resources: []*discovery.Resource{{Name: "agentio.test.wasm", Version: nonce, Resource: resource}},
+				Nonce:     resource.Version,
+				Resources: []*discovery.Resource{resource},
 			},
 		); err != nil {
 			return err
@@ -99,7 +107,7 @@ func (s *wasmDiscovery) DeltaAggregatedResources(
 			if err != nil {
 				return err
 			}
-			if ack.ResponseNonce == nonce {
+			if ack.ResponseNonce == resource.Version {
 				select {
 				case s.acks <- ack:
 				case <-stream.Context().Done():
@@ -119,7 +127,7 @@ func TestCommunityEnvoyWasmECDS(t *testing.T) {
 		t.Skip("set AGENTIO_TEST_ENVOY_BINARY to test the final Envoy image")
 	}
 	c := testConfig(t)
-	fixture := &wasmDiscovery{updates: make(chan []byte, 1), acks: make(chan *discovery.DeltaDiscoveryRequest, 2)}
+	fixture := newExtensionDiscovery()
 	upstream := grpc.NewServer()
 	discovery.RegisterAggregatedDiscoveryServiceServer(upstream, fixture)
 	server := httptest.NewUnstartedServer(upstream)
@@ -194,16 +202,28 @@ func TestCommunityEnvoyWasmECDS(t *testing.T) {
 			t.Log(logs.String())
 		}
 	}()
-	for _, version := range []string{"wasm-v1", "wasm-v2"} {
-		fixture.updates <- bytes.ReplaceAll(wasmFixture, []byte("wasm-v1"), []byte(version))
-		select {
-		case ack := <-fixture.acks:
-			if ack.ErrorDetail != nil {
-				t.Fatalf("Wasm ECDS NACK: %v", ack.ErrorDetail)
-			}
-		case <-time.After(20 * time.Second):
-			t.Fatal("Wasm ECDS ACK timed out")
+	for i, version := range []string{"wasm-v1", "wasm-v2"} {
+		code := bytes.ReplaceAll(wasmFixture, []byte("wasm-v1"), []byte(version))
+		filter, err := anypb.New(&wasmhttp.Wasm{Config: &wasm.PluginConfig{
+			Name:   "header-test",
+			RootId: "header-test",
+			Vm: &wasm.PluginConfig_VmConfig{VmConfig: &wasm.VmConfig{
+				VmId:    fmt.Sprint(i + 1),
+				Runtime: "envoy.wasm.runtime.v8",
+				Code:    &core.AsyncDataSource{Specifier: &core.AsyncDataSource_Local{Local: inlineBytes(code)}},
+			}}}})
+		if err != nil {
+			t.Fatal(err)
 		}
+		resource, err := anypb.New(&core.TypedExtensionConfig{Name: "agentio.test.wasm", TypedConfig: filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.publish(
+			t,
+			&discovery.Resource{Name: "agentio.test.wasm", Version: fmt.Sprint(i + 1), Resource: resource},
+			"",
+		)
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			client := http.Client{Timeout: time.Second}
