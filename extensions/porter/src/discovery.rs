@@ -38,6 +38,8 @@ pub use transport::TransportConfig;
 #[cfg(test)]
 mod query_tests;
 #[cfg(test)]
+mod query_corpus;
+#[cfg(test)]
 mod tcp_tests;
 #[cfg(test)]
 mod tests;
@@ -172,7 +174,7 @@ impl Default for CacheConfig {
 }
 
 pub struct Client {
-    query: Option<sandbox_query::SandboxQuery>,
+    query: Option<Arc<sandbox_query::SandboxQuery>>,
     pub(crate) sandbox_mode: bool,
     state: Mutex<State>,
     epoch: AtomicU64,
@@ -196,8 +198,13 @@ impl Client {
         query: Option<TransportConfig>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            query: query
-                .map(|transport| sandbox_query::SandboxQuery::new(transport, config.max_entries)),
+            query: query.map(|transport| {
+                Arc::new(sandbox_query::SandboxQuery::new(
+                    transport,
+                    config.max_entries,
+                    metrics.clone(),
+                ))
+            }),
             sandbox_mode,
             state: Mutex::new(State {
                 types: Default::default(),

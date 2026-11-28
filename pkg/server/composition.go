@@ -79,22 +79,39 @@ func WithTrafficPolicySource(c krt.Collection[model.TrafficPolicy]) Option {
 	})
 }
 
-// WithSandboxLookup reads and compiles one Sandbox for each authenticated RPC.
-// lookup receives its canonical UID or workload namespace/name. Return nil, nil for absence.
-func WithSandboxLookup(lookup func(context.Context, model.ClientScope, string) (*model.Sandbox, error)) Option {
+// SandboxSource resolves the current host binding and inline policy inputs for
+// a canonical UID or workload namespace/name in the authenticated scope.
+// The adapter assembles a complete result when its upstream stores these
+// separately. A nil Sandbox and nil error means authoritative absence.
+type SandboxSource interface {
+	LookupSandbox(ctx context.Context, scope model.ClientScope, name string) (*model.Sandbox, error)
+}
+
+// WithSandboxLookup reads and compiles one Sandbox for each authenticated GetSandbox RPC.
+func WithSandboxLookup(source SandboxSource) Option {
 	return func(cmp *composition) {
-		cmp.sandboxLookup = func(ctx context.Context, scope model.ClientScope, name string) (*sandboxv1.Sandbox, error) {
-			row, err := lookup(ctx, scope, name)
-			if err != nil || row == nil {
-				return nil, err
-			}
-			payload, err := compiler.CompileSandboxPayload(*row)
-			if err != nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "compile Sandbox %q: %v", name, err)
-			}
-			return payload, nil
-		}
+		cmp.sandboxLookup = compiledSandboxLookup{source: source}
 	}
+}
+
+type compiledSandboxLookup struct {
+	source SandboxSource
+}
+
+func (l compiledSandboxLookup) LookupSandbox(
+	ctx context.Context,
+	scope model.ClientScope,
+	name string,
+) (*sandboxv1.Sandbox, string, error) {
+	sandbox, err := l.source.LookupSandbox(ctx, scope, name)
+	if err != nil || sandbox == nil {
+		return nil, "", err
+	}
+	payload, err := compiler.CompileSandboxPayload(*sandbox)
+	if err != nil {
+		return nil, "", status.Errorf(codes.FailedPrecondition, "compile Sandbox %q: %v", name, err)
+	}
+	return payload, sandbox.SourceIdentity.UID, nil
 }
 
 func WithAuthenticator(a attestation.Authenticator) Option {

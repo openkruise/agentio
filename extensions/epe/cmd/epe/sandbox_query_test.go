@@ -59,6 +59,30 @@ func (queryPeer) Authenticate(ctx context.Context) (model.PeerIdentity, error) {
 	return model.PeerIdentity{AttestedBy: model.AttestationKubernetes}, nil
 }
 
+type queryLookup struct{ reads atomic.Int32 }
+
+func (l *queryLookup) LookupSandbox(_ context.Context, _ model.ClientScope, name string) (*sandboxv1.Sandbox, string, error) {
+	l.reads.Add(1)
+	uid, host := "sandbox", "work"
+	switch name {
+	case "ns/work", "sandbox", "wrong-uid":
+	case "wrong-host":
+		uid, host = "wrong-host", "other"
+	case "missing", "ns/missing":
+		return nil, "", nil
+	default:
+		return nil, "", errors.New("backend unavailable")
+	}
+	payload, err := compiler.CompileSandboxPayload(model.Sandbox{
+		UID:            uid,
+		Name:           "inline",
+		Attester:       &model.Attester{WorkloadUID: host},
+		SourceIdentity: model.SourceIdentity{UID: "policy-source"},
+		Policies:       &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{}},
+	})
+	return payload, "policy-source", err
+}
+
 func TestEPEAcquiresInlinePolicyOverRPC(t *testing.T) {
 	scopes := xds.ScopeFuncs{
 		model.AttestationKubernetes: func(node *core.Node, _ model.PeerIdentity) (model.ClientScope, error) {
@@ -87,27 +111,7 @@ func TestEPEAcquiresInlinePolicyOverRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(cp.Close)
-	var reads atomic.Int32
-	lookup := func(_ context.Context, _ model.ClientScope, name string) (*sandboxv1.Sandbox, error) {
-		reads.Add(1)
-		uid, host := "sandbox", "work"
-		switch name {
-		case "ns/work", "sandbox", "wrong-uid":
-		case "wrong-host":
-			uid, host = "wrong-host", "other"
-		case "missing", "ns/missing":
-			return nil, nil
-		default:
-			return nil, errors.New("backend unavailable")
-		}
-		return compiler.CompileSandboxPayload(model.Sandbox{
-			UID:            uid,
-			Name:           "inline",
-			Attester:       &model.Attester{WorkloadUID: host},
-			SourceIdentity: model.SourceIdentity{UID: "policy-source"},
-			Policies:       &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{}},
-		})
-	}
+	lookup := &queryLookup{}
 	g := grpc.NewServer()
 	sandboxv1.RegisterSandboxQueryServiceServer(g, cp.SandboxQuery(lookup, nil, time.Minute))
 	srv := httptest.NewUnstartedServer(g)
@@ -187,7 +191,7 @@ func TestEPEAcquiresInlinePolicyOverRPC(t *testing.T) {
 	check("", false, false)
 	check("failure", false, true)
 	check("failure", false, true)
-	if n := reads.Load(); n != 8 {
+	if n := lookup.reads.Load(); n != 8 {
 		t.Fatalf("GetSandbox calls = %d, want 8", n)
 	}
 }

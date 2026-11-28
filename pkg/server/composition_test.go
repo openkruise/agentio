@@ -24,6 +24,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	agentsv1alpha1 "github.com/openkruise/agents-api/agents/v1alpha1"
 
@@ -36,36 +37,67 @@ import (
 	"github.com/openkruise/agentio/pkg/xds"
 )
 
+type sandboxSourceFunc func(context.Context, model.ClientScope, string) (*model.Sandbox, error)
+
+func (f sandboxSourceFunc) LookupSandbox(ctx context.Context, scope model.ClientScope, name string) (*model.Sandbox, error) {
+	return f(ctx, scope, name)
+}
+
 func TestWithSandboxLookupCompilesCurrentRow(t *testing.T) {
 	row := &model.Sandbox{
-		UID:      "vm:one",
-		Name:     "tenant-rule",
-		Attester: &model.Attester{WorkloadUID: "vm-host"},
-		Policies: &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{}},
+		UID:            "vm:one",
+		Name:           "tenant-rule",
+		SourceIdentity: model.SourceIdentity{UID: "vm:one"},
+		Attester:       &model.Attester{WorkloadUID: "vm-host"},
+		Policies:       &model.SandboxPolicies{SecurityProfile: &agentsv1alpha1.SecurityProfileSpec{}},
 	}
-	read := func(_ context.Context, scope model.ClientScope, key string) (*model.Sandbox, error) {
+	read := sandboxSourceFunc(func(_ context.Context, scope model.ClientScope, key string) (*model.Sandbox, error) {
 		if key != "vm:one" || scope.Class != model.ClientEPE {
 			t.Fatal(key, scope)
 		}
 		return row, nil
-	}
+	})
 	lookup := applyOptions([]Option{WithSandboxLookup(read)}).sandboxLookup
 	scope := model.ClientScope{Class: model.ClientEPE}
-	got, err := lookup(t.Context(), scope, "vm:one")
-	if err != nil || got.GetAttester().GetWorkloadUid() != "vm-host" || len(got.Extensions) != 1 {
-		t.Fatal(got, err)
+	got, version, err := lookup.LookupSandbox(t.Context(), scope, "vm:one")
+	if err != nil || version != "vm:one" || got.GetAttester().GetWorkloadUid() != "vm-host" || len(got.Extensions) != 1 {
+		t.Fatal(got, version, err)
 	}
 	profile := &securityv1.SecurityProfile{}
 	if err := got.Extensions[0].UnmarshalTo(profile); err != nil || profile.Name != "tenant-rule" {
 		t.Fatal(profile, err)
 	}
+
+	// A split source resolves the alias before reading policies by canonical UID.
+	binding := *row
+	binding.Policies = nil
+	policies := map[string]*model.SandboxPolicies{binding.UID: row.Policies}
+	var policyErr error
+	split := sandboxSourceFunc(func(_ context.Context, scope model.ClientScope, key string) (*model.Sandbox, error) {
+		if key != "ns/vm-host" || scope.Class != model.ClientEPE {
+			t.Fatal(key, scope)
+		}
+		resolved := binding
+		resolved.Policies = policies[resolved.UID]
+		return &resolved, policyErr
+	})
+	splitLookup := applyOptions([]Option{WithSandboxLookup(split)}).sandboxLookup
+	fromSplit, splitVersion, err := splitLookup.LookupSandbox(t.Context(), scope, "ns/vm-host")
+	if err != nil || splitVersion != "vm:one" || !proto.Equal(fromSplit, got) {
+		t.Fatal(fromSplit, splitVersion, err)
+	}
+	policyErr = errors.New("policy source unavailable")
+	if partial, _, err := splitLookup.LookupSandbox(t.Context(), scope, "ns/vm-host"); partial != nil || !errors.Is(err, policyErr) {
+		t.Fatal(partial, err)
+	}
+
 	row.Policies.InputError = "invalid rule in database"
-	if _, err := lookup(t.Context(), scope, "vm:one"); status.Code(err) != codes.FailedPrecondition {
+	if _, _, err := lookup.LookupSandbox(t.Context(), scope, "vm:one"); status.Code(err) != codes.FailedPrecondition {
 		t.Fatal(err)
 	}
 	row = nil
-	if got, err := lookup(t.Context(), scope, "vm:one"); got != nil || err != nil {
-		t.Fatal(got, err)
+	if got, version, err := lookup.LookupSandbox(t.Context(), scope, "vm:one"); got != nil || version != "" || err != nil {
+		t.Fatal(got, version, err)
 	}
 }
 

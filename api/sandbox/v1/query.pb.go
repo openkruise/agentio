@@ -104,7 +104,10 @@ type GetSandboxResponse struct {
 	// Unset when the name has no binding. Lookup failures use gRPC status.
 	Sandbox *Sandbox `protobuf:"bytes,1,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	// Applies to both present and absent bindings. Zero requires a fresh lookup.
-	CacheTtl      *duration.Duration `protobuf:"bytes,2,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`
+	CacheTtl *duration.Duration `protobuf:"bytes,2,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`
+	// Opaque identity of the source object behind this answer. It changes when
+	// the source is replaced (delete + recreate) and is empty when unknown.
+	Version       string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -153,6 +156,13 @@ func (x *GetSandboxResponse) GetCacheTtl() *duration.Duration {
 	return nil
 }
 
+func (x *GetSandboxResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
 var File_api_sandbox_v1_query_proto protoreflect.FileDescriptor
 
 const file_api_sandbox_v1_query_proto_rawDesc = "" +
@@ -161,10 +171,11 @@ const file_api_sandbox_v1_query_proto_rawDesc = "" +
 	"\x11GetSandboxRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12<\n" +
-	"\rnode_metadata\x18\x03 \x01(\v2\x17.google.protobuf.StructR\fnodeMetadata\"\x80\x01\n" +
+	"\rnode_metadata\x18\x03 \x01(\v2\x17.google.protobuf.StructR\fnodeMetadata\"\x9a\x01\n" +
 	"\x12GetSandboxResponse\x122\n" +
 	"\asandbox\x18\x01 \x01(\v2\x18.agentio.sandbox.SandboxR\asandbox\x126\n" +
-	"\tcache_ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bcacheTtl2l\n" +
+	"\tcache_ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bcacheTtl\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion2l\n" +
 	"\x13SandboxQueryService\x12U\n" +
 	"\n" +
 	"GetSandbox\x12\".agentio.sandbox.GetSandboxRequest\x1a#.agentio.sandbox.GetSandboxResponseB8Z6github.com/openkruise/agentio/api/sandbox/v1;sandboxv1b\x06proto3"

@@ -63,6 +63,7 @@ impl SandboxQueryService for Query {
         Ok(Response::new(GetSandboxResponse {
             sandbox: None,
             cache_ttl: Some(Default::default()),
+            ..Default::default()
         }))
     }
 }

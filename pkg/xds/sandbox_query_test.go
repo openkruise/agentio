@@ -17,6 +17,10 @@ package xds
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,8 +29,15 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
 )
+
+type sandboxLookupFunc func(context.Context, model.ClientScope, string) (*sandboxv1.Sandbox, string, error)
+
+func (f sandboxLookupFunc) LookupSandbox(ctx context.Context, scope model.ClientScope, name string) (*sandboxv1.Sandbox, string, error) {
+	return f(ctx, scope, name)
+}
 
 func TestSandboxQueryPublishedSnapshot(t *testing.T) {
 	sb := sandboxResourceWithAttester(t, "uid", "host")
@@ -54,7 +65,7 @@ func TestSandboxQueryPublishedSnapshot(t *testing.T) {
 			if r.Sandbox != nil {
 				t.Fatal(r)
 			}
-		} else if r.GetSandbox().GetUid() != "uid" || r.Sandbox.GetAttester().GetWorkloadUid() != "host" {
+		} else if r.GetSandbox().GetUid() != "uid" || r.Sandbox.GetAttester().GetWorkloadUid() != "host" || r.GetVersion() != "" {
 			t.Fatal(r)
 		}
 	}
@@ -97,17 +108,17 @@ func TestSandboxQueryReadsOneKeyAfterAuthentication(t *testing.T) {
 	value := &sandboxv1.Sandbox{Uid: "one"}
 	calls := 0
 	var sourceErr error
-	lookup := func(ctx context.Context, got model.ClientScope, name string) (*sandboxv1.Sandbox, error) {
+	lookup := func(ctx context.Context, got model.ClientScope, name string) (*sandboxv1.Sandbox, string, error) {
 		calls++
 		if got.Class != scope.Class || got.WorkloadUID != scope.WorkloadUID || name != "one" {
 			t.Fatal(got, name)
 		}
-		return value, sourceErr
+		return value, "source-v1", sourceErr
 	}
-	q := server.SandboxQuery(lookup, nil, 0)
+	q := server.SandboxQuery(sandboxLookupFunc(lookup), nil, 0)
 	for range 2 {
 		r, err := q.GetSandbox(t.Context(), req)
-		if err != nil || !proto.Equal(r.GetSandbox(), value) || r.CacheTtl.AsDuration() != 0 {
+		if err != nil || !proto.Equal(r.GetSandbox(), value) || r.GetVersion() != "source-v1" || r.CacheTtl.AsDuration() != 0 {
 			t.Fatal(r, err)
 		}
 	}
@@ -131,4 +142,91 @@ func TestSandboxQueryReadsOneKeyAfterAuthentication(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("backend reads = %d, want 3", calls)
 	}
+}
+
+func TestSandboxQueryPublishedSourceVersion(t *testing.T) {
+	base := sandboxResourceWithAttester(t, "uid", "host")
+	facts := base.Facts
+	facts.SourceIdentity = model.SourceIdentity{UID: "source-uid"}
+	resource, err := model.NewResource(base.Key, base.XDSName, testResourceContents(testResourceValue(base)), nil, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, gatewayScope(), []model.Resource{resource}, nil)
+	source := sourceReaderFunc(func(key model.ResourceKey) (model.SourceIdentity, bool) {
+		return model.SourceIdentity{UID: "source-uid"}, key == resource.Key
+	})
+	q := server.server.SandboxQuery(nil, source, 0)
+	r, err := q.GetSandbox(t.Context(), &sandboxv1.GetSandboxRequest{Name: "uid"})
+	if err != nil || r.GetSandbox().GetUid() != "uid" || r.GetVersion() != "source-uid" {
+		t.Fatal(r, err)
+	}
+	// Without a source reader the published payload carries no known version.
+	q = server.server.SandboxQuery(nil, nil, 0)
+	r, err = q.GetSandbox(t.Context(), &sandboxv1.GetSandboxRequest{Name: "uid"})
+	if err != nil || r.GetSandbox().GetUid() != "uid" || r.GetVersion() != "" {
+		t.Fatal(r, err)
+	}
+}
+
+func TestSandboxQueryUnaryAdmission(t *testing.T) {
+	previousMetrics := metrics.Default
+	registry := metrics.NewRegistry()
+	metrics.Default = registry
+	t.Cleanup(func() { metrics.Default = previousMetrics })
+
+	server := newTestServer(t, gatewayScope(), nil, nil)
+	config := defaultFlowControlConfig(1, 0)
+	config.unaryConcurrency = 1
+	config.admissionWait = 10 * time.Millisecond
+	server.server.flow = newFlowController(config)
+	authenticator := &countingAuthenticator{caller: model.PeerIdentity{AttestedBy: model.AttestationKubernetes}}
+	server.server.authenticator = authenticator
+	q := server.server.SandboxQuery(sandboxLookupFunc(
+		func(context.Context, model.ClientScope, string) (*sandboxv1.Sandbox, string, error) {
+			return &sandboxv1.Sandbox{Uid: "one"}, "v1", nil
+		}), nil, 0)
+	req := &sandboxv1.GetSandboxRequest{Name: "one"}
+
+	server.server.flow.unarySlots <- struct{}{}
+	_, err := q.GetSandbox(t.Context(), req)
+	if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "unary admission") {
+		t.Fatalf("saturated unary admission = %v, want ResourceExhausted", err)
+	}
+	if authenticator.calls != 0 {
+		t.Fatal("unary overload reached authentication")
+	}
+	requireSandboxCounter(t, registry, "agentio_xds_request_rejections_total", 1)
+	requireSandboxCounter(t, registry, "agentio_sandbox_queries_total", 1)
+
+	// A canceled caller surfaces its own context error, not the pool limit.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := q.GetSandbox(ctx, req); status.Code(err) != codes.Canceled {
+		t.Fatalf("canceled unary admission = %v, want Canceled", err)
+	}
+
+	<-server.server.flow.unarySlots
+	r, err := q.GetSandbox(t.Context(), req)
+	if err != nil || r.GetSandbox().GetUid() != "one" || r.GetVersion() != "v1" {
+		t.Fatal(r, err)
+	}
+	if len(server.server.flow.unarySlots) != 0 {
+		t.Fatal("unary admission leaked its slot")
+	}
+	requireSandboxCounter(t, registry, "agentio_xds_request_rejections_total", 2)
+	requireSandboxCounter(t, registry, "agentio_sandbox_queries_total", 3)
+}
+
+func requireSandboxCounter(t *testing.T, registry *metrics.Registry, name string, want uint64) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	registry.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	line := fmt.Sprintf("%s %d", name, want)
+	for candidate := range strings.SplitSeq(recorder.Body.String(), "\n") {
+		if strings.TrimSpace(candidate) == line {
+			return
+		}
+	}
+	t.Fatalf("missing metric line %q", line)
 }

@@ -25,12 +25,16 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
+	"github.com/openkruise/agentio/pkg/metrics"
 	"github.com/openkruise/agentio/pkg/model"
 )
 
 // SandboxLookup reads one UID or workload alias in the authenticated scope.
-// A nil Sandbox and nil error means authoritative absence.
-type SandboxLookup func(context.Context, model.ClientScope, string) (*sandboxv1.Sandbox, error)
+// A nil Sandbox and nil error means authoritative absence. The string result is
+// an opaque source version for cache validation, empty when unknown.
+type SandboxLookup interface {
+	LookupSandbox(ctx context.Context, scope model.ClientScope, name string) (*sandboxv1.Sandbox, string, error)
+}
 
 type sandboxQuery struct {
 	sandboxv1.UnimplementedSandboxQueryServiceServer
@@ -46,47 +50,70 @@ func (s *Server) SandboxQuery(
 	ttl time.Duration,
 ) sandboxv1.SandboxQueryServiceServer {
 	if lookup == nil {
-		lookup = func(_ context.Context, scope model.ClientScope, name string) (*sandboxv1.Sandbox, error) {
-			var found *sandboxv1.Sandbox
-			pending := false
-			for _, resource := range s.resources.Snapshot().Lookup(model.SandboxType, name) {
-				if !matchesSource(resource, source) {
-					// The alias may still point at a previous incarnation of a live source.
-					_, live := source.Lookup(resource.Key)
-					pending = pending || live
-					continue
-				}
-				if found != nil {
-					return nil, status.Error(codes.FailedPrecondition, "ambiguous Sandbox name")
-				}
-				encoded, err := resource.Encode(scope, model.SandboxType)
-				if err != nil {
-					return nil, status.Error(codes.Internal, err.Error())
-				}
-				found = new(sandboxv1.Sandbox)
-				if err := encoded.Value.UnmarshalTo(found); err != nil {
-					return nil, status.Error(codes.Internal, err.Error())
-				}
-			}
-			if found == nil && source != nil {
-				if _, live := source.Lookup(model.ResourceKey{TypeURL: model.SandboxType, Name: name}); live ||
-					pending {
-					return nil, status.Error(codes.Unavailable, "Sandbox is awaiting publication")
-				}
-			}
-			return found, nil
-		}
+		lookup = publishedSandboxLookup{resources: s.resources, source: source}
 	}
 	return &sandboxQuery{server: s, lookup: lookup, ttl: ttl}
+}
+
+type publishedSandboxLookup struct {
+	resources ResourceStore
+	source    model.SourceReader
+}
+
+func (l publishedSandboxLookup) LookupSandbox(
+	_ context.Context,
+	scope model.ClientScope,
+	name string,
+) (*sandboxv1.Sandbox, string, error) {
+	var found *sandboxv1.Sandbox
+	version := ""
+	pending := false
+	for _, resource := range l.resources.Snapshot().Lookup(model.SandboxType, name) {
+		if !matchesSource(resource, l.source) {
+			// The alias may still point at a previous incarnation of a live source.
+			_, live := l.source.Lookup(resource.Key)
+			pending = pending || live
+			continue
+		}
+		if found != nil {
+			return nil, "", status.Error(codes.FailedPrecondition, "ambiguous Sandbox name")
+		}
+		encoded, err := resource.Encode(scope, model.SandboxType)
+		if err != nil {
+			return nil, "", status.Error(codes.Internal, err.Error())
+		}
+		found = new(sandboxv1.Sandbox)
+		if err := encoded.Value.UnmarshalTo(found); err != nil {
+			return nil, "", status.Error(codes.Internal, err.Error())
+		}
+		if l.source != nil {
+			if identity, live := l.source.Lookup(resource.Key); live {
+				version = identity.UID
+			}
+		}
+	}
+	if found == nil && l.source != nil {
+		if _, live := l.source.Lookup(model.ResourceKey{TypeURL: model.SandboxType, Name: name}); live || pending {
+			return nil, "", status.Error(codes.Unavailable, "Sandbox is awaiting publication")
+		}
+	}
+	return found, version, nil
 }
 
 func (q *sandboxQuery) GetSandbox(
 	ctx context.Context,
 	req *sandboxv1.GetSandboxRequest,
 ) (*sandboxv1.GetSandboxResponse, error) {
+	metrics.Default.RecordSandboxQuery()
 	if !q.server.ready() {
 		return nil, status.Error(codes.Unavailable, "server is not ready")
 	}
+	release, err := q.server.flow.admitUnary(ctx)
+	if err != nil {
+		metrics.Default.RecordXDSRequestRejection()
+		return nil, err
+	}
+	defer release()
 	peer, err := q.server.authenticate(ctx)
 	if err != nil {
 		return nil, err
@@ -103,7 +130,7 @@ func (q *sandboxQuery) GetSandbox(
 	default:
 		return nil, status.Error(codes.PermissionDenied, "Sandbox queries require a gateway or EPE identity")
 	}
-	value, err := q.lookup(ctx, scope, req.Name)
+	value, version, err := q.lookup.LookupSandbox(ctx, scope, req.Name)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, status.FromContextError(err).Err()
@@ -113,5 +140,5 @@ func (q *sandboxQuery) GetSandbox(
 		}
 		return nil, status.Errorf(codes.Unavailable, "read Sandbox: %v", err)
 	}
-	return &sandboxv1.GetSandboxResponse{Sandbox: value, CacheTtl: durationpb.New(q.ttl)}, nil
+	return &sandboxv1.GetSandboxResponse{Sandbox: value, Version: version, CacheTtl: durationpb.New(q.ttl)}, nil
 }

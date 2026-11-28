@@ -105,6 +105,25 @@ func compile(uid string, body []byte) (*sandbox.Sandbox, error) {
 	)
 }
 
+type postgresSandboxLookup struct {
+	pool  *pgxpool.Pool
+	count *counts
+}
+
+func (l postgresSandboxLookup) LookupSandbox(ctx context.Context, _ model.ClientScope, uid string) (*sandbox.Sandbox, string, error) {
+	l.count.sql.Add(1)
+	var body []byte
+	err := l.pool.QueryRow(ctx, "SELECT body FROM sandbox_policy WHERE uid=$1", uid).Scan(&body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	payload, err := compile(uid, body)
+	return payload, uid, err
+}
+
 func must(err error) {
 	if err != nil {
 		log.Fatal(err)
@@ -130,18 +149,7 @@ func main() {
 	var resources []model.Resource
 	switch *backend {
 	case "db":
-		lookup = func(ctx context.Context, _ model.ClientScope, uid string) (*sandbox.Sandbox, error) {
-			count.sql.Add(1)
-			var body []byte
-			err := pool.QueryRow(ctx, "SELECT body FROM sandbox_policy WHERE uid=$1", uid).Scan(&body)
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, nil
-			}
-			if err != nil {
-				return nil, err
-			}
-			return compile(uid, body)
-		}
+		lookup = postgresSandboxLookup{pool: pool, count: count}
 	case "snapshot":
 		rows, err := pool.Query(ctx, "SELECT uid,body FROM sandbox_policy ORDER BY uid LIMIT $1", *n)
 		must(err)

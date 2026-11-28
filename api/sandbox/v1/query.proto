@@ -40,4 +40,7 @@ message GetSandboxResponse {
   Sandbox sandbox = 1;
   // Applies to both present and absent bindings. Zero requires a fresh lookup.
   google.protobuf.Duration cache_ttl = 2;
+  // Opaque identity of the source object behind this answer. It changes when
+  // the source is replaced (delete + recreate) and is empty when unknown.
+  string version = 3;
 }
