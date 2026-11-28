@@ -27,6 +27,10 @@ import (
 )
 
 func benchmarkClient(b *testing.B, wildcard bool) *Client {
+	return benchmarkWatch(b, Watch{TypeURL: testType, Wildcard: wildcard})
+}
+
+func benchmarkWatch(b *testing.B, watch Watch) *Client {
 	b.Helper()
 	conn, err := grpc.NewClient("passthrough:///unused", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -39,7 +43,7 @@ func benchmarkClient(b *testing.B, wildcard bool) *Client {
 	})
 	c, err := New(
 		conn,
-		Config{Node: &core.Node{Id: "benchmark"}, Watches: []Watch{{TypeURL: testType, Wildcard: wildcard}}},
+		Config{Node: &core.Node{Id: "benchmark"}, Watches: []Watch{watch}},
 	)
 	if err != nil {
 		b.Fatal(err)

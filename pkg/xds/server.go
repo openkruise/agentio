@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -223,18 +224,9 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 		return err
 	}
 	defer releaseAdmission()
-	caller, err := s.authenticator.Authenticate(stream.Context())
+	caller, err := s.authenticate(stream.Context())
 	if err != nil {
-		if stream.Context().Err() != nil {
-			return status.FromContextError(stream.Context().Err()).Err()
-		}
-		if errors.Is(err, attestation.ErrTokenReviewUnavailable) {
-			return status.Error(codes.Unavailable, err.Error())
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return status.FromContextError(err).Err()
-		}
-		return status.Error(codes.Unauthenticated, err.Error())
+		return err
 	}
 
 	requests := make(chan streamRequest, s.queueSize)
@@ -254,15 +246,9 @@ func (s *Server) serveDelta(stream DeltaStream) (err error) {
 	if first.request == nil || first.request.GetNode() == nil {
 		return status.Error(codes.InvalidArgument, "first DeltaDiscoveryRequest must include node metadata")
 	}
-	scope, err := s.scopeFuncs.ResolveScope(stream.Context(), first.request.GetNode(), caller)
+	scope, err := s.resolveScope(stream.Context(), first.request.GetNode(), caller)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return status.FromContextError(err).Err()
-		}
-		return status.Error(codes.PermissionDenied, err.Error())
-	}
-	if err := scope.Validate(); err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
+		return err
 	}
 	if scope.Class == model.ClientDedicatedZTunnel {
 		releaseStream, err := s.flow.admitPodStream()
@@ -358,4 +344,39 @@ func receive(stream DeltaStream, target chan<- streamRequest) {
 			return
 		}
 	}
+}
+
+func (s *Server) authenticate(ctx context.Context) (model.PeerIdentity, error) {
+	caller, err := s.authenticator.Authenticate(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return model.PeerIdentity{}, status.FromContextError(ctx.Err()).Err()
+		}
+		if errors.Is(err, attestation.ErrTokenReviewUnavailable) {
+			return model.PeerIdentity{}, status.Error(codes.Unavailable, err.Error())
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return model.PeerIdentity{}, status.FromContextError(err).Err()
+		}
+		return model.PeerIdentity{}, status.Error(codes.Unauthenticated, err.Error())
+	}
+	return caller, nil
+}
+
+func (s *Server) resolveScope(
+	ctx context.Context,
+	node *corev3.Node,
+	caller model.PeerIdentity,
+) (model.ClientScope, error) {
+	scope, err := s.scopeFuncs.ResolveScope(ctx, node, caller)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return model.ClientScope{}, status.FromContextError(err).Err()
+		}
+		return model.ClientScope{}, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if err := scope.Validate(); err != nil {
+		return model.ClientScope{}, status.Error(codes.PermissionDenied, err.Error())
+	}
+	return scope, nil
 }

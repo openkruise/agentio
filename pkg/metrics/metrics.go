@@ -112,6 +112,7 @@ type Registry struct {
 	xdsStaleNonces    atomic.Uint64
 	xdsPushes         atomic.Uint64
 	xdsRequestRejects atomic.Uint64
+	sandboxQueries    atomic.Uint64
 	xdsDeniedResource atomic.Uint64
 	caLeader          atomic.Int64
 	onDemandCerts     atomic.Int64
@@ -341,6 +342,10 @@ func (r *Registry) RecordKRTTransform(slow bool) {
 // labels, so reconnect storms cannot grow metric cardinality.
 func (r *Registry) RecordXDSRequestRejection() { r.xdsRequestRejects.Add(1) }
 
+// RecordSandboxQuery counts one GetSandbox RPC at entry. It has no labels, so
+// per-Sandbox names from untrusted clients cannot grow metric cardinality.
+func (r *Registry) RecordSandboxQuery() { r.sandboxQueries.Add(1) }
+
 // RecordXDSDeniedResource counts resources omitted from a response because the
 // subscribing client may not have them.
 func (r *Registry) RecordXDSDeniedResource() { r.xdsDeniedResource.Add(1) }
@@ -375,7 +380,8 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, _ *http.Request) {
 		{"agentio_xds_acks_total", "Received ACKs matching the latest response for the stream and resource type.", "counter", r.xdsACKs.Load()},
 		{"agentio_xds_stale_nonces_total", "ACK/NACK requests whose nonempty nonce does not match the latest response for the stream and resource type.", "counter", r.xdsStaleNonces.Load()},
 		{"agentio_xds_nacks_total", "Total xDS NACKs.", "counter", r.xdsNACKs.Load()},
-		{"agentio_xds_request_rejections_total", "New xDS streams rejected by request admission.", "counter", r.xdsRequestRejects.Load()},
+		{"agentio_xds_request_rejections_total", "xDS streams and unary queries rejected by admission.", "counter", r.xdsRequestRejects.Load()},
+		{"agentio_sandbox_queries_total", "GetSandbox unary RPCs received.", "counter", r.sandboxQueries.Load()},
 		{"agentio_xds_denied_resources_total", "Resources omitted from responses because the client may not receive them.", "counter", r.xdsDeniedResource.Load()},
 		{"agentio_ca_leader", "Whether this replica owns the CA rotation lease.", "gauge", r.caLeader.Load()},
 		{"agentio_on_demand_certificates", "Certificates in the on-demand SDS cache.", "gauge", r.onDemandCerts.Load()},

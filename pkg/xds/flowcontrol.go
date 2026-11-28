@@ -32,6 +32,7 @@ var errRequestRateLimited = errors.New("request rate limit exceeded")
 
 type flowControlConfig struct {
 	concurrency      int
+	unaryConcurrency int
 	requestRateLimit float64
 	admissionWait    time.Duration
 	rateLimitWait    time.Duration
@@ -42,7 +43,10 @@ type flowControlConfig struct {
 
 func defaultFlowControlConfig(concurrency int, requestRateLimit float64) flowControlConfig {
 	return flowControlConfig{
-		concurrency:      concurrency,
+		concurrency: concurrency,
+		// Unary queries never borrow stream capacity: deployments may run a tiny
+		// pushConcurrency while still serving a large bounded query fan-in.
+		unaryConcurrency: 256,
 		requestRateLimit: requestRateLimit,
 		admissionWait:    10 * time.Second,
 		rateLimitWait:    3 * time.Second,
@@ -59,6 +63,7 @@ type flowController struct {
 	initialSlots      chan struct{}
 	requestSlots      chan struct{}
 	pushSlots         chan struct{}
+	unarySlots        chan struct{}
 	streams           chan struct{}
 }
 
@@ -72,6 +77,7 @@ func newFlowController(config flowControlConfig) *flowController {
 		initialSlots: make(chan struct{}, config.concurrency),
 		requestSlots: make(chan struct{}, config.concurrency),
 		pushSlots:    make(chan struct{}, config.concurrency),
+		unarySlots:   make(chan struct{}, config.unaryConcurrency),
 	}
 	if config.maxPodStreams > 0 {
 		f.streams = make(chan struct{}, config.maxPodStreams)
@@ -107,6 +113,29 @@ func (f *flowController) admitInitial(ctx context.Context) (func(), error) {
 			return nil, status.FromContextError(ctx.Err()).Err()
 		}
 		return nil, status.Error(codes.ResourceExhausted, "xDS initial admission concurrency limit exceeded")
+	}
+}
+
+// admitUnary bounds unary query RPCs on their own pool so a query burst neither
+// starves stream admission nor is throttled by a small pushConcurrency.
+func (f *flowController) admitUnary(ctx context.Context) (func(), error) {
+	// Every unary RPC pays this cost: the uncontended path must not allocate a
+	// timeout context or OnceFunc. The release is deferred exactly once.
+	select {
+	case f.unarySlots <- struct{}{}:
+		return func() { <-f.unarySlots }, nil
+	default:
+	}
+	wait, cancel := context.WithTimeout(ctx, f.config.admissionWait)
+	defer cancel()
+	select {
+	case f.unarySlots <- struct{}{}:
+		return func() { <-f.unarySlots }, nil
+	case <-wait.Done():
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, status.Error(codes.ResourceExhausted, "xDS unary admission concurrency limit exceeded")
 	}
 }
 

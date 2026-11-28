@@ -36,6 +36,20 @@ pub struct TransportConfig {
     pub node: Node,
 }
 
+impl TransportConfig {
+    pub(super) async fn bearer(&self) -> Result<tonic::metadata::AsciiMetadataValue> {
+        let token = tokio::fs::read_to_string(&self.token_path)
+            .await
+            .with_context(|| format!("read ADS token {}", self.token_path))?;
+        if token.trim().is_empty() {
+            bail!("empty ADS token");
+        }
+        format!("Bearer {}", token.trim())
+            .parse()
+            .context("invalid bearer token metadata")
+    }
+}
+
 // Match gateway-agent's logging policy without changing reconnect behavior.
 fn expected_ads_closure(error: &anyhow::Error) -> bool {
     let Some(status) = error.downcast_ref::<tonic::Status>() else {
@@ -82,12 +96,7 @@ impl Client {
         let roots = tokio::fs::read(&transport.root_path)
             .await
             .with_context(|| format!("read ADS roots {}", transport.root_path))?;
-        let token = tokio::fs::read_to_string(&transport.token_path)
-            .await
-            .with_context(|| format!("read ADS token {}", transport.token_path))?;
-        if token.trim().is_empty() {
-            bail!("empty ADS token");
-        }
+        let token = transport.bearer().await?;
         let channel = Endpoint::from_shared(format!("https://{}", transport.address))
             .context("invalid ADS address")?
             .connect_timeout(CONNECT_TIMEOUT)
@@ -127,12 +136,10 @@ impl Client {
             }
         };
         let mut request = tonic::Request::new(outbound);
-        request.metadata_mut().insert(
-            "authorization",
-            format!("Bearer {}", token.trim())
-                .parse()
-                .context("invalid ADS token metadata")?,
-        );
+        request.metadata_mut().insert("authorization", token);
+        if let Some(query) = &self.query {
+            query.connected(channel.clone());
+        }
         let mut responses =
             ads::aggregated_discovery_service_client::AggregatedDiscoveryServiceClient::new(
                 channel,
@@ -147,7 +154,8 @@ impl Client {
         self.established();
         info!("ADS stream established");
         while let Some(response) = responses.message().await.context("receive ADS response")? {
-            let kind = ResourceKind::from_type_url(&response.type_url);
+            let kind =
+                ResourceKind::from_type_url(&response.type_url).filter(|k| self.uses_ads(*k));
             let applied = match kind {
                 Some(kind) => self.apply(kind, &response),
                 None => Err(anyhow!("unexpected discovery type {}", response.type_url)),

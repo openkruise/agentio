@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	ext "github.com/openkruise/agentio/api/extensions/v1"
-	sandboxv1 "github.com/openkruise/agentio/api/sandbox/v1"
 	wds "github.com/openkruise/agentio/api/workload/v1"
 	"github.com/openkruise/agentio/extensions/epe/pkg/engine/filter"
 	"github.com/openkruise/agentio/extensions/epe/pkg/policy/profilestore"
@@ -100,7 +99,8 @@ func BenchmarkResolveProfilesHot(b *testing.B) {
 				uid := fmt.Sprintf("sandbox-%d", i)
 				host := fmt.Sprintf("host-%d", i)
 				source.snapshot.Resources[model.SandboxType][uid] = &xdsclient.Resource{Value: &sandboxProfiles{
-					value: &sandboxv1.Sandbox{Uid: uid, Attester: &sandboxv1.Sandbox_Attester{WorkloadUid: host}},
+					uid:         uid,
+					workloadUID: host,
 					profile: &securityprofile.Profile{
 						Meta: securityprofile.Meta{Name: uid, SandboxUID: uid, Match: securityprofile.MatchSandbox},
 						Spec: &agentsv1alpha1.SecurityProfileSpec{},

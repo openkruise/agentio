@@ -39,8 +39,9 @@ import (
 )
 
 type sandboxProfiles struct {
-	value   *sandboxv1.Sandbox
-	profile *securityprofile.Profile
+	uid         string
+	workloadUID string
+	profile     *securityprofile.Profile
 }
 
 // ProfileSource publishes accepted xDS candidates into the common collection.
@@ -173,11 +174,12 @@ func (s *ProfileSource) Watches(regs []filter.Registration) []xdsclient.Watch {
 }
 
 func decodeSandboxProfiles(value *anypb.Any, regs []filter.Registration) (*sandboxProfiles, error) {
-	result := &sandboxProfiles{value: &sandboxv1.Sandbox{}}
-	if err := value.UnmarshalTo(result.value); err != nil {
+	var sandbox sandboxv1.Sandbox
+	if err := value.UnmarshalTo(&sandbox); err != nil {
 		return nil, err
 	}
-	for _, extension := range result.value.Extensions {
+	result := &sandboxProfiles{uid: sandbox.Uid, workloadUID: sandbox.GetAttester().GetWorkloadUid()}
+	for _, extension := range sandbox.Extensions {
 		switch extension.GetTypeUrl() {
 		case model.SecurityProfileType:
 			payload := &securityv1.SecurityProfile{}
@@ -185,9 +187,9 @@ func decodeSandboxProfiles(value *anypb.Any, regs []filter.Registration) (*sandb
 				return nil, err
 			}
 			if result.profile != nil {
-				return nil, fmt.Errorf("duplicate profile in Sandbox %q", result.value.Uid)
+				return nil, fmt.Errorf("duplicate profile in Sandbox %q", sandbox.Uid)
 			}
-			compiled, err := securityprofile.FromXDS(payload, result.value.Uid, regs)
+			compiled, err := securityprofile.FromXDS(payload, sandbox.Uid, regs)
 			if err != nil {
 				return nil, err
 			}
@@ -285,10 +287,10 @@ func (s *Store) AcquireProfileReferences(
 		}
 		if key.Type == store.Sandbox {
 			sandbox := resource.Value.(*sandboxProfiles)
-			if subj.Sandbox != nil && sandbox.value.Uid != key.Name {
+			if subj.Sandbox != nil && sandbox.uid != key.Name {
 				return nil, nil, fmt.Errorf("Sandbox resource name does not match its body")
 			}
-			keys[i].Name = sandbox.value.Uid
+			keys[i].Name = sandbox.uid
 		}
 	}
 	if len(keys) == 0 {
@@ -361,10 +363,10 @@ func appendProfileReference(
 ) ([]*securityprofile.Meta, error) {
 	if key.Type == store.Sandbox {
 		sandbox := value.Value.(*sandboxProfiles)
-		if sandbox.value.Uid != key.Name {
+		if sandbox.uid != key.Name {
 			return nil, fmt.Errorf("Sandbox resource name does not match its body")
 		}
-		if workloadUID == "" || sandbox.value.GetAttester().GetWorkloadUid() != workloadUID {
+		if workloadUID == "" || sandbox.workloadUID != workloadUID {
 			return nil, fmt.Errorf("Sandbox %q is not hosted by workload %q", key.Name, workloadUID)
 		}
 		if sandbox.profile != nil {

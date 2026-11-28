@@ -39,13 +39,19 @@ pub async fn run(config: Config, logging: crate::telemetry::Logging) -> Result<(
         worker_threads = config.worker_threads,
         enable_sni_traffic_policy = config.enable_sni_traffic_policy,
         sandbox_mode = config.sandbox_mode,
+        sandbox_rpc = config.sandbox_rpc,
         request_timeout_seconds = config.request_timeout.as_secs_f64(),
         cache_idle_ttl_seconds = config.cache.idle_ttl.as_secs_f64(),
         cache_max_entries = config.cache.max_entries,
         "starting Porter"
     );
     let metrics = Metrics::new();
-    let client = Client::new(config.cache, metrics.clone(), config.sandbox_mode);
+    let client = Client::new_with_query(
+        config.cache,
+        metrics.clone(),
+        config.sandbox_mode,
+        config.sandbox_rpc.then(|| config.transport.clone()),
+    );
     let processor = Processor {
         authenticator: Arc::new(agentio_porter::identity::Native),
         gateway: config.gateway,

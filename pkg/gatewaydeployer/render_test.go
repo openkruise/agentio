@@ -322,7 +322,12 @@ func TestRenderPassesFeatureFlagsToPorter(t *testing.T) {
 	input := buildTemplateInput(gw, builtinClasses["agentio-egress"], "test-cluster", parityKubeVersion, "")
 	for _, enabled := range []bool{false, true} {
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			sandboxSource := "xds"
+			if enabled {
+				sandboxSource = "rpc"
+			}
 			overlay := mergeMaps(parityValuesOverlay(), map[string]any{
+				"global": map[string]any{"porter": map[string]any{"sandboxSource": sandboxSource}},
 				"agentio": map[string]any{"env": map[string]any{
 					"AGENTIO_SANDBOX_MODE":              enabled,
 					"AGENTIO_ENABLE_SNI_TRAFFIC_POLICY": enabled,
@@ -334,6 +339,9 @@ func TestRenderPassesFeatureFlagsToPorter(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := strings.Join(docs, "\n---\n")
+			if strings.Contains(got, "--sandbox-source=rpc") != enabled {
+				t.Fatal("Porter Sandbox query flag mismatch")
+			}
 			for _, want := range []string{
 				"name: agentio-porter",
 				"--grpc-port=9002",

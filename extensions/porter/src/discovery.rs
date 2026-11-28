@@ -31,9 +31,16 @@ use crate::{
 
 const DISCONNECT_GRACE: Duration = Duration::from_secs(5);
 
+mod sandbox_query;
 mod transport;
 pub use transport::TransportConfig;
 
+#[cfg(test)]
+mod query_tests;
+#[cfg(test)]
+mod query_corpus;
+#[cfg(test)]
+mod query_bench;
 #[cfg(test)]
 mod tcp_tests;
 #[cfg(test)]
@@ -51,6 +58,8 @@ enum Outcome {
 pub enum DemandError {
     #[error("invalid resource name")]
     InvalidName,
+    #[error("Sandbox query failed: {0}")]
+    Query(tonic::Code),
     #[error("resource not found")]
     NotFound,
     #[error("resource alias is ambiguous")]
@@ -167,6 +176,7 @@ impl Default for CacheConfig {
 }
 
 pub struct Client {
+    query: Option<Arc<sandbox_query::SandboxQuery>>,
     pub(crate) sandbox_mode: bool,
     state: Mutex<State>,
     epoch: AtomicU64,
@@ -180,7 +190,23 @@ pub struct Client {
 
 impl Client {
     pub fn new(config: CacheConfig, metrics: Arc<Metrics>, sandbox_mode: bool) -> Arc<Self> {
+        Self::new_with_query(config, metrics, sandbox_mode, None)
+    }
+
+    pub fn new_with_query(
+        config: CacheConfig,
+        metrics: Arc<Metrics>,
+        sandbox_mode: bool,
+        query: Option<TransportConfig>,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            query: query.map(|transport| {
+                Arc::new(sandbox_query::SandboxQuery::new(
+                    transport,
+                    config.max_entries,
+                    metrics.clone(),
+                ))
+            }),
             sandbox_mode,
             state: Mutex::new(State {
                 types: Default::default(),
@@ -197,6 +223,10 @@ impl Client {
             ready: watch::channel(false).0,
             metrics,
         })
+    }
+
+    pub(crate) fn uses_ads(&self, kind: ResourceKind) -> bool {
+        kind != ResourceKind::Sandbox || (self.sandbox_mode && self.query.is_none())
     }
 
     pub fn readiness(&self) -> watch::Receiver<bool> {
@@ -332,6 +362,9 @@ impl Client {
         name: &str,
         request_deadline: Option<Instant>,
     ) -> Result<Arc<View>, DemandError> {
+        if !self.uses_ads(kind) {
+            return Ok(self.pin(kind, name, request_deadline).await?.value);
+        }
         if name.is_empty() || name == "*" {
             return Err(DemandError::InvalidName);
         }
@@ -356,6 +389,17 @@ impl Client {
         name: &str,
         request_deadline: Option<Instant>,
     ) -> Result<PinnedView, DemandError> {
+        if kind == ResourceKind::Sandbox
+            && let Some(query) = &self.query
+        {
+            if name.is_empty() || name == "*" {
+                return Err(DemandError::InvalidName);
+            }
+            return Ok(PinnedView {
+                value: query.get(name).await?,
+                _lease: None,
+            });
+        }
         self.finish_pin(self.acquire(kind, name)?, request_deadline)
             .await
     }
@@ -513,6 +557,17 @@ impl Client {
         connection_policy: bool,
         deadline: Option<Instant>,
     ) -> Result<PinnedRequest, DemandError> {
+        if !sandbox.is_empty() && !self.uses_ads(ResourceKind::Sandbox) {
+            let (w, s) = tokio::try_join!(
+                self.pin(ResourceKind::Workload, workload, deadline),
+                self.pin(ResourceKind::Sandbox, sandbox, deadline)
+            )?;
+            return Ok(PinnedRequest {
+                workload: w,
+                sandbox: Some(s),
+                profiles: None,
+            });
+        }
         if workload.is_empty() || workload == "*" || sandbox == "*" {
             return Err(DemandError::InvalidName);
         }
@@ -576,9 +631,10 @@ impl Client {
         // Leave its miss to the ordinary subscription path without probing WDS twice.
         if sandbox.is_empty()
             && lookup_alias
-            && state.types[ResourceKind::Sandbox.index()]
-                .entries
-                .is_empty()
+            && (!self.uses_ads(ResourceKind::Sandbox)
+                || state.types[ResourceKind::Sandbox.index()]
+                    .entries
+                    .is_empty())
         {
             return None;
         }
@@ -779,7 +835,7 @@ impl Client {
         let mut state = self.state.lock().unwrap();
         ResourceKind::ALL
             .into_iter()
-            .filter(|kind| *kind != ResourceKind::Sandbox || self.sandbox_mode)
+            .filter(|kind| self.uses_ads(*kind))
             .map(|kind| {
                 let type_state = &mut state.types[kind.index()];
                 let mut request = Request {
@@ -995,7 +1051,7 @@ impl Client {
         self.publish_size(&state);
         let ready = ResourceKind::ALL
             .into_iter()
-            .filter(|kind| *kind != ResourceKind::Sandbox || self.sandbox_mode)
+            .filter(|kind| self.uses_ads(*kind))
             .all(|kind| state.types[kind.index()].synced);
         self.ready.send_if_modified(|old| {
             if *old == ready {
@@ -1043,6 +1099,14 @@ impl DependencySet {
     pub async fn resolve(&mut self, names: &[String]) -> Result<Vec<Arc<View>>, DemandError> {
         if names.is_empty() {
             return Ok(Vec::new());
+        }
+        if self.kind == ResourceKind::Sandbox && self.client.query.is_some() {
+            return try_join_all(
+                names
+                    .iter()
+                    .map(|name| self.client.demand(self.kind, name, self.deadline)),
+            )
+            .await;
         }
         for name in names {
             if let Some(error) = self.failures.get(name) {

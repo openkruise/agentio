@@ -56,6 +56,9 @@ spec:
             - --discovery-address=:15012
             - --monitoring-address=:15014
             - --cluster-id={{ .Values.global.clusterId }}
+            {{- if eq .Values.sandbox.policySource "rpc" }}
+            - --sandbox-query-ttl={{ .Values.sandbox.queryTTL }}
+            {{- end }}
             - --namespace={{ .Release.Namespace }}
             - --domain={{ .Values.global.clusterDomain }}
             - --trust-domain={{ .Values.global.trustDomain }}

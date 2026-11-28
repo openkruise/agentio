@@ -133,6 +133,9 @@ spec:
             - --cluster-id={{ .Values.global.clusterId }}
             - --grpc-port=9002
             - --grpc-health-port=9003
+            {{- if eq .Values.sandbox.policySource "rpc" }}
+            - --sandbox-source=rpc
+            {{- end }}
             - --xds-cache-idle-ttl={{ .Values.egressGateway.porter.cache.idleTTL }}
             - --xds-cache-max-entries={{ .Values.egressGateway.porter.cache.maxEntries }}
           env:

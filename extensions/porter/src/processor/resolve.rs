@@ -187,7 +187,8 @@ impl Resolver<'_> {
                 let names: Vec<_> = references.iter().map(|r| r.name.clone()).collect();
                 let profiles = dependencies.resolve(&names).await;
                 let mut keys = vec![(ResourceKind::Workload, lookup)];
-                let watch_sandbox = !sandbox_lookup.is_empty();
+                let watch_sandbox =
+                    !sandbox_lookup.is_empty() && self.client.uses_ads(ResourceKind::Sandbox);
                 if watch_sandbox {
                     keys.push((ResourceKind::Sandbox, sandbox_lookup.as_ref()));
                 }

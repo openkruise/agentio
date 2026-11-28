@@ -38,6 +38,7 @@ const (
 // Each subscription is a generation. Waiters keep their generation even after
 // the name has been released and reused, so they cannot miss its deletion.
 type subscription struct {
+	query      *queryEntry
 	err        error
 	done       chan struct{}
 	changed    chan struct{} // Created only when a caller needs to wait.
@@ -119,11 +120,16 @@ func (s *Subscription) Release() {
 		sub.err = ErrReleased
 		close(sub.done)
 		delete(st.names, s.name)
-		st.pending[s.name] = struct{}{}
-		delete(st.removed, s.name)
-		st.releaseResource(s.name)
-		st.releaseRejections(s.name, sub)
-		c.wakeSubscriptions()
+		if st.watch.Query != nil {
+			st.releaseQuery(sub)
+			st.releaseRejections(s.name, sub)
+		} else {
+			st.pending[s.name] = struct{}{}
+			delete(st.removed, s.name)
+			st.releaseResource(s.name)
+			st.releaseRejections(s.name, sub)
+			c.wakeSubscriptions()
+		}
 	}
 	sub.notify()
 	c.notifyLocked()
@@ -148,7 +154,7 @@ func (c *Client) subscribeLocked(typ, name string) (*typeState, *subscription, e
 }
 
 func (c *Client) activateLocked(st *typeState, name string, sub *subscription) {
-	if !sub.active {
+	if !sub.active && st.watch.Query == nil {
 		sub.active = true
 		st.pending[name] = struct{}{}
 		c.wakeSubscriptions()
@@ -330,6 +336,9 @@ func (c *Client) waitLocked(
 	sub *subscription,
 	owner *Subscription,
 ) (_ *Resource, err error) {
+	if st.watch.Query != nil {
+		return c.queryLocked(ctx, st, name, sub, owner)
+	}
 	var started time.Time
 	for {
 		if sub.err != nil {
@@ -394,6 +403,9 @@ func (c *Client) initialRequests(sent map[string]map[string]*subscription) []*di
 	c.mu.Lock()
 	initial := make([]*discovery.DeltaDiscoveryRequest, 0, len(c.types))
 	for typ, st := range c.types {
+		if st.watch.Query != nil {
+			continue
+		}
 		req := &discovery.DeltaDiscoveryRequest{Node: c.cfg.Node, TypeUrl: typ}
 		sent[typ] = map[string]*subscription{}
 		st.pending = map[string]struct{}{}
@@ -424,6 +436,9 @@ func (c *Client) pendingRequests(sent map[string]map[string]*subscription) []*di
 	c.mu.Lock()
 	requests := []*discovery.DeltaDiscoveryRequest{}
 	for typ, st := range c.types {
+		if st.watch.Query != nil {
+			continue
+		}
 		req := &discovery.DeltaDiscoveryRequest{TypeUrl: typ}
 		for name := range st.pending {
 			sub := st.names[name]

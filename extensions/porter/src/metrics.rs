@@ -25,6 +25,11 @@ pub struct DemandResult {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct SandboxResult {
+    pub result: &'static str,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ConnectResult {
     pub protocol: &'static str,
     pub result: &'static str,
@@ -50,6 +55,7 @@ pub struct Metrics {
     pub wait: Family<DemandResult, Histogram, fn() -> Histogram>,
     pub connect_results: Family<ConnectResult, Counter>,
     pub cache_lookups: Family<DemandResult, Counter>,
+    pub sandbox_queries: Family<SandboxResult, Counter>,
     pub cache_evictions: Family<Eviction, Counter>,
     pub reconnects: Counter,
     pub nacks: Family<ResourceType, Counter>,
@@ -65,6 +71,7 @@ impl Metrics {
         let waiters = Family::default();
         let connect_results = Family::default();
         let cache_lookups = Family::default();
+        let sandbox_queries = Family::default();
         let cache_evictions = Family::default();
         let reconnects = Counter::default();
         let nacks = Family::default();
@@ -78,6 +85,11 @@ impl Metrics {
             "agentio_porter_demand_cache_lookups",
             "Demand calls with a ready cached value (hit) or without one (miss), counted once per call",
             cache_lookups.clone(),
+        );
+        registry.register(
+            "agentio_porter_sandbox_query",
+            "Sandbox query calls by outcome: cache hit, fetched miss, stale fallback, backoff fast-fail, absent, or error",
+            sandbox_queries.clone(),
         );
         registry.register(
             "agentio_porter_demand_cache_evictions",
@@ -127,6 +139,7 @@ impl Metrics {
             waiters,
             connect_results,
             cache_lookups,
+            sandbox_queries,
             cache_evictions,
             reconnects,
             nacks,

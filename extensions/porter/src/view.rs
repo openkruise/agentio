@@ -217,18 +217,19 @@ pub fn decode(kind: ResourceKind, value: &Any) -> Result<View> {
                 profiles: profile_references(&values)?,
             }))
         }
-        ResourceKind::Sandbox => {
-            let sandbox = Sandbox::decode(value.value.as_slice())?;
-            Ok(View::Sandbox(SandboxView {
-                uid: sandbox.uid,
-                workload_uid: sandbox.attester.map(|a| a.workload_uid).unwrap_or_default(),
-                profile: inline_profile(&sandbox.extensions)?,
-            }))
-        }
+        ResourceKind::Sandbox => sandbox_view(Sandbox::decode(value.value.as_slice())?),
         ResourceKind::SecurityProfile => Ok(View::SecurityProfile(SecurityProfileView::compile(
             SecurityProfile::decode(value.value.as_slice())?,
         )?)),
     }
+}
+
+pub(crate) fn sandbox_view(sandbox: Sandbox) -> Result<View> {
+    Ok(View::Sandbox(SandboxView {
+        uid: sandbox.uid,
+        workload_uid: sandbox.attester.map(|a| a.workload_uid).unwrap_or_default(),
+        profile: inline_profile(&sandbox.extensions)?,
+    }))
 }
 
 fn profile_references(values: &[Any]) -> Result<Option<Vec<PolicyResourceReference>>> {

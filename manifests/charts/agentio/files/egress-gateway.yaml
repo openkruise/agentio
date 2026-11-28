@@ -249,6 +249,9 @@ spec:
           - --cluster-id={{ .ClusterID }}
           - --grpc-port=9002
           - --grpc-health-port=9003
+          {{- if eq ($porter.sandboxSource | default "xds") "rpc" }}
+          - --sandbox-source=rpc
+          {{- end }}
           - --xds-cache-idle-ttl={{ valueOrDefault $porterCache.idleTTL "10m" }}
           - --xds-cache-max-entries={{ valueOrDefault $porterCache.maxEntries 0 }}
         env:

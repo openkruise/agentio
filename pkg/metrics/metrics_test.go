@@ -316,6 +316,18 @@ func TestHistogramIsSafeUnderConcurrentObservation(t *testing.T) {
 	requireLine(t, body, fmt.Sprintf("agentio_xds_push_duration_seconds_count{} %d", goroutines*each))
 }
 
+// Sandbox query volume stays a single unlabelled series: per-Sandbox names must
+// never become label values.
+func TestSandboxQueriesTotalIsUnlabelled(t *testing.T) {
+	registry := NewRegistry()
+	registry.RecordSandboxQuery()
+	registry.RecordSandboxQuery()
+
+	body := scrape(t, registry)
+	requireLine(t, body, "# TYPE agentio_sandbox_queries_total counter")
+	requireLine(t, body, "agentio_sandbox_queries_total 2")
+}
+
 func TestCALeaderAndOnDemandGauges(t *testing.T) {
 	registry := NewRegistry()
 	registry.SetCALeader(true)

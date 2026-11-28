@@ -336,6 +336,19 @@ func TestSandboxModePropagation(t *testing.T) {
 	requireRenderError(t, "boolean", "--set-string", "sandbox.enabled=true")
 }
 
+func TestSandboxPolicyQuery(t *testing.T) {
+	args := []string{
+		"--set",
+		"sandbox.enabled=true,sandbox.policySource=rpc,sandbox.queryTTL=30s,epe.mode=managed,egressGateway.enabled=true",
+	}
+	requireRenderError(t, "requires epe.securityProfileSource=xds", args...)
+	rendered := renderAgentio(t, append(args, "--set", "epe.securityProfileSource=xds")...)
+	requireContains(t, rendered, "--sandbox-query-ttl=30s", "sandboxSource: rpc")
+	if strings.Count(rendered, "\n            - --sandbox-source=rpc\n") != 2 {
+		t.Fatal("both managed EPE and Porter must query Sandbox over RPC")
+	}
+}
+
 func TestSidecarProfile(t *testing.T) {
 	for _, tc := range []struct {
 		name string

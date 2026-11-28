@@ -75,6 +75,35 @@ Sandbox settings are also chart-owned. External EPE must be configured separatel
 Restart existing injected Pods after changing the switch; Helm updates the
 injection template, not existing Pods.
 
+#### On-demand Sandbox policy
+
+Set the following Helm values to use the unary `GetSandbox` RPC in Porter and managed EPE.
+
+```yaml
+sandbox:
+  enabled: true
+  policySource: rpc
+  queryTTL: 10s
+epe:
+  mode: managed
+  securityProfileSource: xds
+```
+
+Porter and EPE query agentiod on the first use of a Sandbox UID or workload
+namespace/name. Each process caches the binding and inline policies, including an
+absent binding, for the TTL in the response. The next access after expiry reads
+again. A zero TTL forces a fresh read, and a failed lookup fails the current
+resolution and can be retried on the next access. Changes to active connections
+are subject to the existing enforcement points. Workload identity and referenced
+administrator SecurityProfiles continue to use Delta ADS.
+
+For standalone binaries set `--sandbox-source=rpc` on Porter and EPE, enable
+`AGENTIO_SANDBOX_MODE=true`, and use `--security-profile-source=xds` on EPE.
+Agentiod serves the RPC on its discovery listener and sets the response TTL with
+`--sandbox-query-ttl`. By default it reads the compiled Kubernetes snapshot.
+An embedding can supply `server.WithSandboxLookup` to read one `model.Sandbox`
+per query from a database. Agentiod runs the same Sandbox compiler used for ADS.
+
 Token reading still requires `SANDBOX_TOKEN_ENABLED=true` and a mounted token
 directory supplied by the credential producer; see
 [CredentialProvider](../../docs/reference/credential-provider.md).
