@@ -40,6 +40,8 @@ mod query_tests;
 #[cfg(test)]
 mod query_corpus;
 #[cfg(test)]
+mod query_bench;
+#[cfg(test)]
 mod tcp_tests;
 #[cfg(test)]
 mod tests;

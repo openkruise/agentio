@@ -119,11 +119,18 @@ func (f *flowController) admitInitial(ctx context.Context) (func(), error) {
 // admitUnary bounds unary query RPCs on their own pool so a query burst neither
 // starves stream admission nor is throttled by a small pushConcurrency.
 func (f *flowController) admitUnary(ctx context.Context) (func(), error) {
+	// Every unary RPC pays this cost: the uncontended path must not allocate a
+	// timeout context or OnceFunc. The release is deferred exactly once.
+	select {
+	case f.unarySlots <- struct{}{}:
+		return func() { <-f.unarySlots }, nil
+	default:
+	}
 	wait, cancel := context.WithTimeout(ctx, f.config.admissionWait)
 	defer cancel()
 	select {
 	case f.unarySlots <- struct{}{}:
-		return sync.OnceFunc(func() { <-f.unarySlots }), nil
+		return func() { <-f.unarySlots }, nil
 	case <-wait.Done():
 		if ctx.Err() != nil {
 			return nil, status.FromContextError(ctx.Err()).Err()
